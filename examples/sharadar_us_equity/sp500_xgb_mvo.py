@@ -169,6 +169,11 @@ def index_dataset() -> SharadarStockDataset:
     ))
 
 
+def masked_index() -> BadPrintMaskedDataset:
+    """The index prices with their bad prints masked (#223): the factors' and the label's."""
+    return BadPrintMaskedDataset([index_dataset()])
+
+
 def index_membership() -> SharadarSP500ConstituentDataset:
     """The point-in-time S&P 500 membership (``is_member``) on the permaticker axis."""
     return SharadarSP500ConstituentDataset(ConstituentDatasetConfig(
@@ -184,17 +189,17 @@ def factors_and_label() -> tuple[list, list]:
     (``MembershipMaskedLabel``).
     """
     alpha101 = Alpha101Stock(FactorConfig(
-        warmup_bars=400, dataset=index_dataset(), mode="batch",
+        warmup_bars=400, dataset=masked_index(), mode="batch",
         data_columns=ALPHA_COLUMNS, file_path=str(store_path(FACTORS, "alpha101")),
         njobs=16,
     ))
     alpha158 = Alpha158Stock(FactorConfig(
-        warmup_bars=400, dataset=index_dataset(), mode="batch",
+        warmup_bars=400, dataset=masked_index(), mode="batch",
         data_columns=ALPHA_COLUMNS, file_path=str(store_path(FACTORS, "alpha158")),
         njobs=16,
     ))
     label = Return(FactorConfig(
-        warmup_bars=2 * HORIZON + 5, dataset=index_dataset(), mode="batch",
+        warmup_bars=2 * HORIZON + 5, dataset=masked_index(), mode="batch",
         data_columns=("adjOpen",), kwargs={"n_forward_periods": HORIZON},
         file_path=str(store_path(LABELS, f"ret_{HORIZON}")),
         njobs=16,

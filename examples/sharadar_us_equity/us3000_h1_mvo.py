@@ -7,11 +7,11 @@ R223L5C5, rebuilt from library components only:
   (the 3,000 largest domestic common stocks by the previous bar's cap), on
   the #223 bad-print-masked Barra store;
 - features (N1): Alpha101 and Alpha158 neutralised on FF48 industry and log
-  cap (``NeutralizedFactor``), and the 12 Barra styles read straight from the
+  cap (``NeutralizedFactor``), on prices and caps with bad prints masked, and the 12 Barra styles read straight from the
   masked store on the roster (``RosterFactor``; the experiment trained on the
   unmasked ones, ``train-cv`` retrains the CV on them);
-- label: ``Return``, the open-to-open return from t+1 to t+2, kept where the
-  symbol is a member at t (``MembershipMaskedLabel``);
+- label: ``Return``, the open-to-open return from t+1 to t+2 on the masked
+  prices, kept where the symbol is a member at t (``MembershipMaskedLabel``);
 - model: the experiment's ``XGBoostRegressor`` and walk-forward CV (ten
   expanding folds from START, one year of tests each, from FIRST_TEST
   through 2026-10-02, the experiment's test folds), retrained on these
@@ -236,21 +236,28 @@ def membership() -> EstuConstituentDataset:
 
 
 def price_dataset() -> RosterDataset:
-    """SEP on the roster: the alphas', the label's and the backtest's prices."""
+    """SEP on the roster: the backtest's prices (every print, as the vendor reports it)."""
     return RosterDataset(sep(), membership())
+
+
+def masked_prices() -> RosterDataset:
+    """SEP with its bad prints masked (#223), on the roster: the alphas' and the label's prices."""
+    return RosterDataset(BadPrintMaskedDataset([sep()]), membership())
 
 
 def features() -> list:
     """N1: the neutralised Alpha101/158 and the 12 styles."""
-    exposures = [
+    # The cap of a bad print is masked with its price (SEP gives the rule its prices).
+    exposures = BadPrintMaskedDataset([
+        sep(),
         SharadarDailyDataset(SharadarDailyConfig(
             zarr_file_path=str(store_path(SHARADAR, "sharadar_daily_1d")), raw_data_dir_path=str(VENDOR))),
         SharadarIndustryDataset(SharadarIndustryConfig(
             zarr_file_path=str(store_path(SHARADAR, "sharadar_industry_1d")), raw_data_dir_path=str(VENDOR))),
-    ]
+    ])
     alphas = [
         cls(FactorConfig(
-            warmup_bars=400, dataset=price_dataset(), mode="batch",
+            warmup_bars=400, dataset=masked_prices(), mode="batch",
             data_columns=ALPHA_COLUMNS, file_path=str(store_path(FACTORS, name)), njobs=64,
         ))
         for cls, name in ((Alpha101Stock, "alpha101"), (Alpha158Stock, "alpha158"))
@@ -268,7 +275,7 @@ def features() -> list:
 def label() -> MembershipMaskedLabel:
     """The return on every roster symbol, kept where the symbol is a member at t."""
     ret = Return(FactorConfig(
-        warmup_bars=2 * HORIZON + 5, dataset=price_dataset(), mode="batch",
+        warmup_bars=2 * HORIZON + 5, dataset=masked_prices(), mode="batch",
         data_columns=("adjOpen",), kwargs={"n_forward_periods": HORIZON},
         file_path=str(store_path(LABELS, f"ret_{HORIZON}")), njobs=64,
     ))
