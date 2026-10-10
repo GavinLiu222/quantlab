@@ -125,7 +125,7 @@ RISK = DATA_ROOT / "risk" / "use4"
 #: Data window (the factor warm-up is read before START), training window
 #: and out-of-sample test window, all inclusive. The estimate store must
 #: cover the test window.
-START, END = "2012-01-01", "2024-12-31"
+START, END = "2000-01-03", "2024-12-31"
 TRAIN_START, TRAIN_END = "2012-01-01", "2019-12-31"
 TEST_START, TEST_END = "2020-01-01", "2024-12-31"
 #: Label horizon in bars: open-to-open return from t+1 to t+1+HORIZON. The

@@ -58,8 +58,8 @@ model = Use4RiskModel(Use4RiskConfig(
     regression_path="risk/use4/regression/regression.zarr",
     estimate_path="risk/use4/estimate/estimate.zarr",
 ))
-model.regression.build("2001-01-03", "2026-10-02")
-model.estimate.build("2007-07-13", "2026-10-02")   # after the 1637-bar warm-up
+model.regression.build("2000-02-03", "2026-10-08")
+model.estimate.build("2006-08-10", "2026-10-08")   # after the 1637-bar warm-up
 ```
 
 `quantlab.risk.base.FactorRiskModel` is the contract every factor risk

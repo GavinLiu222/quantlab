@@ -35,7 +35,7 @@ from quantlab.dataset.base import IndexConstituentDataset
 __all__ = ["ESTU_COVERAGE_START", "EstuConstituentDataset"]
 
 #: The first bar of the Sharadar BarraStyle store's ``estu``.
-ESTU_COVERAGE_START = "2001-01-02"
+ESTU_COVERAGE_START = "2000-02-02"
 
 
 class EstuConstituentDataset(IndexConstituentDataset):

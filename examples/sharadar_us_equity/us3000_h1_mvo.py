@@ -29,7 +29,7 @@ membership as securities enter. The alphas and label are the us3000
 universe's (``factors/us3000``, ``labels/us3000``), from PRICE_START (the
 first bar of the Barra store) for the membership and from START for the
 features and label; the CV and the live runs are this strategy's
-(``runs/h1_daily_mvo/us3000_2001``).
+(``runs/h1_daily_mvo/us3000_2000``).
 
 Steps::
 
@@ -126,8 +126,8 @@ FRED_RAW = DATA_ROOT / "downloads" / "fred"
 UNIVERSE = DATA_ROOT / "universe" / "us3000"
 FACTORS = DATA_ROOT / "factors" / "us3000"
 LABELS = DATA_ROOT / "labels" / "us3000"
-#: This strategy's runs on the universe since 2001: the walk-forward CV and the live runs.
-H1 = DATA_ROOT / "runs" / "h1_daily_mvo" / "us3000_2001"
+#: This strategy's runs on the universe since 2000: the walk-forward CV and the live runs.
+H1 = DATA_ROOT / "runs" / "h1_daily_mvo" / "us3000_2000"
 #: The Barra exposures (with ``estu``) and USE4 stores, bad prints masked since #223.
 EXPOSURES = DATA_ROOT / "factors" / "market" / "barra_style" / "barra_style.zarr"
 RISK = DATA_ROOT / "risk" / "use4"
@@ -158,9 +158,9 @@ MEMBERSHIP = store_path(UNIVERSE, "membership_estu")
 #: The price-return VT benchmark (scripts/sharadar/price_return_benchmark.py).
 BENCHMARK = store_path(BENCHMARKS, "sharadar_vt_pr_1d")
 
-#: The membership (the roster) from the Barra store's first bar; features and
-#: label from START, after 500 bars of the alphas' 400-bar warm-up.
-PRICE_START, START, END = "2001-01-01", "2003-01-01", "2026-10-02"
+#: The membership (the roster), features and label from the Barra store's
+#: first bar; the alphas' 400-bar warm-up is read from SEP (from 1997-12-31).
+PRICE_START, START, END = "2000-02-02", "2000-02-02", "2026-10-02"
 HORIZON = 1
 ALPHA_COLUMNS = ("adjOpen", "adjHigh", "adjLow", "adjClose", "adjVolume")
 PARAMETERS = BarraStyleParameters(risk_free_symbol="DTB3")

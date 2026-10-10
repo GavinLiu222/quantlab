@@ -75,7 +75,7 @@ factor = BarraStyle(FactorConfig(
     file_path="factors/market/barra_style/barra_style.zarr",
     kwargs={"risk_free_symbol": "DTB3"},
 ))
-factor.build("2001-01-02", "2026-10-02")
+factor.build("2000-02-02", "2026-10-08")
 ```
 
 ## Pipeline on each bar

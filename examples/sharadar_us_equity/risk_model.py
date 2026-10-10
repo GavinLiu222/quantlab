@@ -72,11 +72,11 @@ def describe(folder: Path, text: str) -> None:
 
 #: The regression's range: from the second bar of the exposures store (the
 #: first regression reads the exposures of the bar before) to its end.
-REGRESSION_START, END = "2001-01-03", "2026-10-02"
+REGRESSION_START, END = "2000-02-03", "2026-10-08"
 #: The estimates' range: the correlation window (1512 bars) and the volatility
 #: regime adjustment's 126 bars of regression rows fit before it, so no
 #: estimate uses a shortened window.
-ESTIMATE_START = "2007-07-13"
+ESTIMATE_START = "2006-08-10"
 #: Bars per outcome of the bias statistics: one bar, and a month as USE4 tests.
 #: Each rolls over about a year of outcomes (252 / horizon), as USE4's 12 months.
 HORIZONS = (1, 21)
