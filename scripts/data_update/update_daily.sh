@@ -6,7 +6,7 @@
 #
 #   0 * * * * $HOME/projects/quantlab2/scripts/data_update/update_daily.sh
 #
-# At 06 ET on a weekday it runs the update, which retries the vendor download every
+# At 04 ET on a weekday it runs the update, which retries the vendor download every
 # 15 minutes until 08:30 ET while the day's bar is not published, and writes
 # <data-dir>/update_status.json; the paper trading (quantlab-ibkr live_daily.sh) waits
 # for "done" on its day. `update_daily.sh now` runs it at once.
@@ -66,7 +66,7 @@ case "${1:-cron}" in
     now) run_update ;;
     cron)
         [ "$(ny +%u)" -le 5 ] || exit 0
-        [ "$(ny +%H)" = 06 ] && run_update
+        [ "$(ny +%H)" = 04 ] && run_update
         ;;
     *) echo "usage: $0 [cron|now]" >&2; exit 2 ;;
 esac

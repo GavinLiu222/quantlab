@@ -101,7 +101,7 @@ holiday, but not a done day). `--check` exits 1 when it finds a problem.
 ## Schedule
 
 `scripts/data_update/update_daily.sh` is the cron entry. cron calls it every hour and it checks the time in
-New York itself, so daylight-saving changes need no edit; at 06 ET on a weekday it runs the update,
+New York itself, so daylight-saving changes need no edit; at 04 ET on a weekday it runs the update,
 with `SHARADAR_API_KEY` from `~/.config/quantlab/sharadar.env`, on NUMA Node 1, under a lock, and
 logs to `<data-dir>/logs/data_update/<date>.log`:
 
