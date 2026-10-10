@@ -211,6 +211,9 @@ class S3ObjectStore:
         The S3 key id and secret.
     max_connections : int, default 16
         The connection pool's size; at least the streams in flight.
+    read_timeout : float, default 30
+        Seconds a stream may send nothing before it is given up as stalled;
+        the range then resumes from the bytes it wrote.
     client : botocore S3 client, optional
         A client to use instead of one made from ``credentials``.
     today : callable, optional
@@ -228,6 +231,7 @@ class S3ObjectStore:
         credentials: MassiveCredentials,
         *,
         max_connections: int = 16,
+        read_timeout: float = 30.0,
         client: Any | None = None,
         today: Callable[[], date] | None = None,
     ) -> None:
@@ -247,7 +251,7 @@ class S3ObjectStore:
             config=Config(
                 signature_version="s3v4",
                 retries={"max_attempts": 1},
-                read_timeout=300,
+                read_timeout=read_timeout,
                 max_pool_connections=max_connections,
             ),
         )
@@ -427,6 +431,10 @@ class MassiveClient:
         the others being verified (one core each).
     part_bytes : int, default 32 MiB
         Size of one byte range.
+    read_timeout : float, default 30
+        Seconds a stream may send nothing before it is given up and its
+        range resumed; passed to the ``S3ObjectStore`` made when ``store``
+        is omitted.
     retries : int, default 5
         Attempts after the first for a transport error; a range whose
         stream breaks after delivering bytes resumes at once and does not
@@ -460,6 +468,7 @@ class MassiveClient:
         streams: int = 16,
         files: int = 4,
         part_bytes: int = 32 << 20,
+        read_timeout: float = 30.0,
         retries: int = 5,
         backoff: float = 2.0,
         sleep: Callable[[float], None] = time.sleep,
@@ -474,7 +483,9 @@ class MassiveClient:
         self.files = files
         self.part_bytes = part_bytes
         self.credentials = credentials if credentials is not None else MassiveCredentials.from_env()
-        self.store = store if store is not None else S3ObjectStore(self.credentials, max_connections=streams)
+        self.store = store if store is not None else S3ObjectStore(
+            self.credentials, max_connections=streams, read_timeout=read_timeout
+        )
         self.http_get = http_get if http_get is not None else rest_get
         self.retries = retries
         self.backoff = backoff
@@ -748,6 +759,7 @@ class MassiveClient:
                         )
                 except MassiveTransportError as error:
                     if position > before:
+                        logger.warning(f"Massive: {error}; resuming at byte {position} of {first}-{stop - 1}.")
                         attempt, wait_seconds = 0, self.backoff
                         continue
                     if attempt == self.retries or aborted():

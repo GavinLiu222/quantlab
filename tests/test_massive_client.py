@@ -587,3 +587,29 @@ def test_a_run_up_to_today_stops_at_the_newest_published_day(env, tmp_path):
 def test_concurrency_settings_are_checked(env):
     with pytest.raises(ValueError, match="streams"):
         _client(FakeStore({}), streams=0)
+
+
+def test_a_stalled_stream_times_out_soon_and_its_resume_is_logged(env, tmp_path):
+    from loguru import logger
+
+    from quantlab.acquisition.massive.client import (
+        MassiveClient,
+        MassiveCredentials,
+        S3ObjectStore,
+    )
+
+    # A stream that stops sending is given up after read_timeout seconds, not five minutes.
+    store = S3ObjectStore(MassiveCredentials("k", "i", "s"), read_timeout=30)
+    assert store._client.meta.config.read_timeout == 30
+    assert MassiveClient(read_timeout=12).store._client.meta.config.read_timeout == 12
+
+    # A break after some bytes resumes at once, and says so: stalls are counted in the log.
+    messages: list[str] = []
+    sink = logger.add(messages.append, level="WARNING")
+    try:
+        body = _big_body()
+        store = FakeStore({KEY: body}, breaks={KEY: [300]})
+        _client(store, streams=1, part_bytes=len(body)).download_day("trades", DAY, tmp_path)
+    finally:
+        logger.remove(sink)
+    assert any("resuming at byte 300" in message for message in messages)
