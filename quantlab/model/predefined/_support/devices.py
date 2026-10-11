@@ -44,6 +44,29 @@ def resolve_device(requested: str | None, default) -> str:
     return default() if requested is None else requested
 
 
+def cuda_free_bytes(device: str) -> int:
+    """Return the free memory of the CUDA ``device`` in bytes, as torch reads it.
+
+    Parameters
+    ----------
+    device : str
+        A CUDA device, ``"cuda"`` (the current one) or ``"cuda:<index>"``.
+
+    Returns
+    -------
+    int
+        The bytes the CUDA driver reports free on the device.
+
+    Examples
+    --------
+    >>> cuda_free_bytes("cuda") > 0  # on a machine with CUDA
+    True
+    """
+    import torch
+
+    return int(torch.cuda.mem_get_info(torch.device(device))[0])
+
+
 def torch_default_device() -> str:
     """Return ``"cuda"`` when torch sees a CUDA device, else ``"cpu"``.
 

@@ -24,7 +24,11 @@ from quantlab.model.config import ModelConfig
 from quantlab.tracking.base import TrackingRun
 from quantlab.model.library_model import LibraryModel
 from quantlab.model.library_model import Rows
-from quantlab.model.predefined._support.devices import resolve_device, xgboost_default_device
+from quantlab.model.predefined._support.devices import (
+    cuda_free_bytes,
+    resolve_device,
+    xgboost_default_device,
+)
 
 #: scikit-learn style aliases mapped to the native ``xgb.train`` parameter
 #: names. Aliases are rewritten on the user's dict before it is merged with
@@ -461,6 +465,14 @@ def record_feature_importance(
             )
 
 
+#: Device bytes xgboost takes per feature value to predict a host ``DMatrix``
+#: on CUDA, rounded up from 7.64 measured (xgboost 3.4.1, RTX 5090 D, 350
+#: features, 1 to 4 million rows, 5% missing; it grows with the rows).
+PREDICT_BYTES_PER_VALUE = 8
+#: Share of the device's free memory one CUDA prediction batch may take.
+PREDICT_MEMORY_SHARE = 0.9
+
+
 class XGBoostRegressor(LibraryModel):
     """Predict future returns with an XGBoost Booster.
 
@@ -751,20 +763,37 @@ class XGBoostRegressor(LibraryModel):
         )
         self.model.set_param({"device": self._device})
 
+    def _predict_batch_rows(self, num_features: int) -> int:
+        """Rows of one prediction batch on the CUDA Booster: as many as its free memory holds.
+
+        ``PREDICT_MEMORY_SHARE`` of the device's free memory, read now,
+        divided by ``PREDICT_BYTES_PER_VALUE`` per feature value; at least one.
+        """
+        free = cuda_free_bytes(self._device) * PREDICT_MEMORY_SHARE
+        return max(1, int(free // (PREDICT_BYTES_PER_VALUE * max(1, num_features))))
+
     def _forward(self, x: np.ndarray) -> np.ndarray:
         """Predict ``[n, L]`` from ``[n, F]`` feature rows.
 
         On a CUDA Booster the rows go through a ``DMatrix``, which xgboost
         copies to the GPU without the device-mismatch warning
-        ``inplace_predict`` raises for host arrays. Otherwise
+        ``inplace_predict`` raises for host arrays. The copy takes device
+        memory in proportion to the rows, so they are predicted in
+        consecutive batches as large as the free memory holds
+        (``_predict_batch_rows``). Otherwise
         ``inplace_predict``, which skips building a ``DMatrix``, is tried
         first. Boosters that do not support it
         (``gblinear``) fall back to ``predict`` on a ``DMatrix``. NaN is
         treated as missing on both paths.
         """
         if self._device not in (None, "cpu"):
-            pred = self.model.predict(xgb.DMatrix(x))  # type: ignore[union-attr]
-            return np.asarray(pred).reshape(len(x), -1)
+            # ``_forward_rows`` never passes an empty batch.
+            rows = self._predict_batch_rows(x.shape[1])
+            batches = (x[start:start + rows] for start in range(0, len(x), rows))
+            return np.concatenate([
+                np.asarray(self.model.predict(xgb.DMatrix(batch))).reshape(len(batch), -1)  # type: ignore[union-attr]
+                for batch in batches
+            ])
         try:
             pred = self.model.inplace_predict(x)  # type: ignore[union-attr]
         except xgb.core.XGBoostError as exc:

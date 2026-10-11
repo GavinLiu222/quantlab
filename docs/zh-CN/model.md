@@ -881,7 +881,7 @@ MASTER 与官方代码一样按训练损失停止：第一个训练损失不超�
 
 - torch 模型头询问 PyTorch（`TorchModel.device`）；除 `panel_device` 外没有其他可配置项（见“把训练面板放在 GPU 上”）。
 - `RealMLPRegressor` 在 PyTorch 看到 CUDA 设备时把 pytabkit 的构造参数 `device` 设为 `"cuda"`，否则设为 `"cpu"`。`device=None` 视同未设置，因为 pytabkit 自己的 `None` 在 Mac 上会选 MPS。
-- `XGBoostRegressor` 在安装的 xgboost 是 CUDA 版本、且 CUDA 驱动报告有可见设备时（遵守 `CUDA_VISIBLE_DEVICES`）把 xgboost 的 `device` 设为 `"cuda"`，否则设为 `"cpu"`。检查读取 `xgboost.build_info()` 并通过 `ctypes` 询问驱动，不导入 PyTorch。
+- `XGBoostRegressor` 在安装的 xgboost 是 CUDA 版本、且 CUDA 驱动报告有可见设备时（遵守 `CUDA_VISIBLE_DEVICES`）把 xgboost 的 `device` 设为 `"cuda"`，否则设为 `"cpu"`。检查读取 `xgboost.build_info()` 并通过 `ctypes` 询问驱动，不导入 PyTorch。在 CUDA 上它把行分成连续的若干批来预测，每批取空闲显存能容纳的最大行数：空闲显存（预测开始时通过 PyTorch 读取）的 90%，按每个特征值 8 字节计算（实测 7.64）；结果与一次性预测全部行相同。
 - `XGBTDRegressor` 按 `XGBoostRegressor` 的规则确定设备。pytabkit 不会把设备转交给 xgboost，所以模型头把它合并进 pytabkit 内部 `xgboost.train` 调用的参数；pytabkit 自己的 `device` 参数保持未设置。
 
 训练好的模型在同一进程里的评估和后续预测中留在训练设备上。只有检查点从 CPU 写出（RealMLP 网络为写入移到 CPU 再移回，xgboost 的 Booster 以 `device="cpu"` 保存），因此在 GPU 上训练的模型能在没有 GPU 的机器上加载并预测。`load` 按同一规则把模型放到加载机器选出的设备上。
