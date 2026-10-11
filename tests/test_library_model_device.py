@@ -31,6 +31,7 @@ import pytest
 import torch
 import xarray as xr
 
+import quantlab.model.predefined.xgb as xgb_head
 from quantlab.model.config import ModelConfig
 from quantlab.model.predefined._support import devices
 from quantlab.model.predefined.realmlp import RealMLPRegressor
@@ -74,11 +75,15 @@ def _head(cls, tmp_path, hyperparameters=None):
 
 @pytest.fixture
 def cuda(monkeypatch):
-    """Return a setter that makes CUDA look available or not, to both libraries."""
+    """Return a setter that makes CUDA look available or not, to both libraries.
+
+    An available device reports 32 GB free to the XGBoost head's prediction batches.
+    """
 
     def set_available(available: bool) -> None:
         monkeypatch.setattr(torch.cuda, "is_available", lambda: available)
         monkeypatch.setattr(devices, "xgboost_cuda_available", lambda: available)
+        monkeypatch.setattr(xgb_head, "cuda_free_bytes", lambda device: 32e9 if available else None)
 
     return set_available
 

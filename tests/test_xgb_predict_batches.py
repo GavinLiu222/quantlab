@@ -8,7 +8,8 @@ What is locked here, and what turns it red:
   every row is predicted once and in order, and the predictions equal one
   prediction of all the rows.
 - With room for every row it is one batch; with room for less than one row it
-  still predicts one row at a time.
+  still predicts one row at a time; when torch sees no CUDA device (xgboost
+  then predicts on the CPU) it is one batch.
 
 Everything is synthetic and runs on the CPU: the Booster is wrapped so that
 its `predict` records each batch, and the free memory is a stand-in.
@@ -55,10 +56,14 @@ def _rows_fitting(rows: int) -> float:
     return rows * PREDICT_BYTES_PER_VALUE * N_FEATURES / PREDICT_MEMORY_SHARE + 1
 
 
-@pytest.mark.parametrize("room, batches", [(130, [130, 130, 130, 110]), (10_000, [500]), (0, [1] * 500)])
+@pytest.mark.parametrize(
+    "room, batches",
+    [(130, [130, 130, 130, 110]), (10_000, [500]), (0, [1] * 500), (None, [500])],
+)
 def test_cuda_prediction_runs_in_batches_that_fit_the_free_memory(cuda_head, monkeypatch, room, batches):
     head, booster = cuda_head
-    monkeypatch.setattr(xgb_head, "cuda_free_bytes", lambda device: _rows_fitting(room) if room else 0)
+    free = room if room in (None, 0) else _rows_fitting(room)
+    monkeypatch.setattr(xgb_head, "cuda_free_bytes", lambda device: free)
     x = np.random.default_rng(1).standard_normal((500, N_FEATURES)).astype(np.float32)
     x[::7, 1] = np.nan
 

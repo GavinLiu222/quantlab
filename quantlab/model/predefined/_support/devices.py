@@ -44,8 +44,11 @@ def resolve_device(requested: str | None, default) -> str:
     return default() if requested is None else requested
 
 
-def cuda_free_bytes(device: str) -> int:
+def cuda_free_bytes(device: str) -> int | None:
     """Return the free memory of the CUDA ``device`` in bytes, as torch reads it.
+
+    None when torch sees no CUDA device (a CPU-only torch build, or no
+    device): a CUDA-configured xgboost then runs on the CPU.
 
     Parameters
     ----------
@@ -54,8 +57,8 @@ def cuda_free_bytes(device: str) -> int:
 
     Returns
     -------
-    int
-        The bytes the CUDA driver reports free on the device.
+    int or None
+        The bytes the CUDA driver reports free on the device, or None.
 
     Examples
     --------
@@ -64,6 +67,8 @@ def cuda_free_bytes(device: str) -> int:
     """
     import torch
 
+    if not torch.cuda.is_available():
+        return None
     return int(torch.cuda.mem_get_info(torch.device(device))[0])
 
 

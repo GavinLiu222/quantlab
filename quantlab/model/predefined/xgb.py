@@ -763,14 +763,18 @@ class XGBoostRegressor(LibraryModel):
         )
         self.model.set_param({"device": self._device})
 
-    def _predict_batch_rows(self, num_features: int) -> int:
+    def _predict_batch_rows(self, num_rows: int, num_features: int) -> int:
         """Rows of one prediction batch on the CUDA Booster: as many as its free memory holds.
 
         ``PREDICT_MEMORY_SHARE`` of the device's free memory, read now,
-        divided by ``PREDICT_BYTES_PER_VALUE`` per feature value; at least one.
+        divided by ``PREDICT_BYTES_PER_VALUE`` per feature value; at least
+        one. All ``num_rows`` when torch sees no CUDA device, since xgboost
+        then predicts on the CPU.
         """
-        free = cuda_free_bytes(self._device) * PREDICT_MEMORY_SHARE
-        return max(1, int(free // (PREDICT_BYTES_PER_VALUE * max(1, num_features))))
+        free = cuda_free_bytes(self._device)
+        if free is None:
+            return max(1, num_rows)
+        return max(1, int(free * PREDICT_MEMORY_SHARE // (PREDICT_BYTES_PER_VALUE * max(1, num_features))))
 
     def _forward(self, x: np.ndarray) -> np.ndarray:
         """Predict ``[n, L]`` from ``[n, F]`` feature rows.
@@ -788,7 +792,7 @@ class XGBoostRegressor(LibraryModel):
         """
         if self._device not in (None, "cpu"):
             # ``_forward_rows`` never passes an empty batch.
-            rows = self._predict_batch_rows(x.shape[1])
+            rows = self._predict_batch_rows(*x.shape)
             batches = (x[start:start + rows] for start in range(0, len(x), rows))
             return np.concatenate([
                 np.asarray(self.model.predict(xgb.DMatrix(batch))).reshape(len(batch), -1)  # type: ignore[union-attr]
