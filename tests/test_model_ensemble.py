@@ -139,7 +139,7 @@ def test_combine_drives_prediction_and_evaluation_files(tmp_path):
     )
 
     first = members[0]
-    data = first.data_backend.get_xarray_dataset(["timestamp", "symbol"])
+    data = first.collected_panel.data
     own = first.predict_panel(data)
     saved = xr.open_zarr(run_dir / "test_predictions.zarr").load()
     np.testing.assert_allclose(

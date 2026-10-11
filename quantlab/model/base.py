@@ -38,7 +38,6 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from quantlab.backend.zarr import XrBackend
 from quantlab.core.component import Component, walk_components
 from quantlab.dataset.base import InsufficientHistoryError
 from quantlab.tracking.base import NullRun, Tracker, TrackingRun
@@ -53,8 +52,10 @@ from quantlab.model.evaluation import Segments, evaluate
 from quantlab.runs.record import DataRecorder, code_of
 from quantlab.utils.symbol_axis import sort_symbol_axis
 from quantlab.model.split import purge_segments
+from quantlab.utils.jsonable import to_jsonable
 from quantlab.utils.timer import Timer
 from quantlab.model.split import Fold
+from quantlab.model.collected_panel import CollectedPanel, sorted_panel, to_array
 from quantlab.model.walk_forward_training import fold_config, train_walk_forward
 
 from quantlab.model.config import ModelConfig
@@ -140,8 +141,9 @@ class BaseModel(Component, ABC):
     model : object or None
         The fitted model (an ``nn.Module`` or a library model object), or
         None before ``train()`` or ``load()``.
-    data_backend : XrBackend
-        Holds the panel built by ``collect()``.
+    collected_panel : CollectedPanel or None
+        What ``collect()`` read (or the panel ``use_panel()`` handed over),
+        None before either.
 
     Raises
     ------
@@ -175,13 +177,10 @@ class BaseModel(Component, ABC):
         # The window `train()` fitted or `load()` read; see fitted_train_bounds.
         self._fitted_window: tuple | None = None
 
-        self.data_backend = XrBackend()
+        self.collected_panel: CollectedPanel | None = None
         # The open tracking run while training, a NullRun otherwise, so heads
         # write to it without checking that one is open.
         self._run: TrackingRun = NullRun()
-        # What the last collect() read, recorded on the unit train() or
-        # train_cv() writes; see training_record.
-        self._training_record: dict = {}
 
     #: The config class every model accepts; the config loader reads it from
     #: the class to rebuild a model from ``config.json``.
@@ -360,9 +359,7 @@ class BaseModel(Component, ABC):
         >>> model.num_times
         40
         """
-        return self.data_backend.get_xarray_dataset(
-            ["timestamp", "symbol"]
-        ).timestamp.size
+        return self._panel_data().timestamp.size
 
     @property
     def class_name(self) -> str:
@@ -384,9 +381,7 @@ class BaseModel(Component, ABC):
         >>> model.num_symbols
         3
         """
-        return self.data_backend.get_xarray_dataset(
-            ["timestamp", "symbol"]
-        ).symbol.size
+        return self._panel_data().symbol.size
 
     @property
     def symbols(self) -> list[str]:
@@ -397,9 +392,7 @@ class BaseModel(Component, ABC):
         >>> model.symbols
         ['S0', 'S1', 'S2']
         """
-        return self.data_backend.get_xarray_dataset(
-            ["timestamp", "symbol"]
-        ).symbol.values.tolist()
+        return self._panel_data().symbol.values.tolist()
 
     @property
     def num_null(self) -> int:
@@ -411,7 +404,7 @@ class BaseModel(Component, ABC):
         0
         """
         return int(
-            self.data_backend.get_xarray_dataset(["timestamp", "symbol"])
+            self._panel_data()
             .isnull()
             .sum()
             .to_dataarray()
@@ -569,7 +562,7 @@ class BaseModel(Component, ABC):
     def collect(
         self,
     ) -> Self:
-        """Load features and labels into the model's data backend.
+        """Read the features and labels into the model's collected panel.
 
         The hyperparameters are checked first (``check_hyperparameters``),
         so an invalid one fails before any data is read. Each factor and label is asked for its panel from ``start_date`` to
@@ -578,8 +571,9 @@ class BaseModel(Component, ABC):
         ``"cal"``. Factor panels start ``warmup_bars`` bars earlier (see
         ``_collect_all_features``); labels do not, so they are NaN on those
         bars. The factor and label panels are merged on the union of their
-        ``(timestamp, symbol)`` coordinates, sorted on both axes, and stored
-        in ``self.data_backend``. Call this before ``train()`` or ``train_cv()``.
+        ``(timestamp, symbol)`` coordinates, sorted on both axes, and kept
+        as ``collected_panel`` (a ``CollectedPanel``). Call this before
+        ``train()`` or ``train_cv()``.
 
         What it reads is recorded by a ``DataRecorder`` keyed by component
         path within the model (``factors.0.dataset``), and written into the
@@ -602,8 +596,75 @@ class BaseModel(Component, ABC):
         40
         """
         self.check_hyperparameters()
-        self._training_record = record_training_reads(self)
+        record = record_training_reads(self)
+        self.collected_panel = self.collected_panel.with_record(record)
         return self
+
+    def use_panel(self, panel: CollectedPanel) -> Self:
+        """Take ``panel``, collected by a model reading the same data, as this model's collected panel.
+
+        The models then share the panel and every array built from it (each
+        fit converts it once in all), and this model's ``training_record`` is
+        the panel's. The panel must have been read for the same factor and
+        label configs over the same ``start_date`` and ``end_date``, with the
+        same warm-up and read strategies; other hyperparameters and the seed
+        may differ.
+
+        Parameters
+        ----------
+        panel : CollectedPanel
+            Another model's ``collected_panel``.
+
+        Returns
+        -------
+        Self
+            The model itself, for chaining.
+
+        Raises
+        ------
+        ValueError
+            If ``panel`` was collected for other factors, labels or dates.
+
+        Examples
+        --------
+        >>> deep = MyHead(dataclasses.replace(config, hyperparameters={"max_depth": 6}))
+        >>> deep.use_panel(model.collect().collected_panel).collected_panel is model.collected_panel
+        True
+        """
+        if panel.source != self._panel_source():
+            raise ValueError(
+                f"{self.class_name}.use_panel: the panel was collected for other "
+                f"factors, labels or dates than this model reads"
+            )
+        self.collected_panel = panel
+        return self
+
+    def _panel_source(self) -> dict:
+        """What this model's collected panel is read for: everything that changes what ``collect()`` reads."""
+        config = self.config
+        return to_jsonable({
+            "factors": [factor.get_config() for factor in config.factors],
+            "labels": [label.get_config() for label in config.labels],
+            "start_date": config.start_date,
+            "end_date": config.end_date,
+            "warmup_bars": self.warmup_bars,
+            "factor_data_strategy": config.factor_data_strategy,
+            "label_data_strategy": config.label_data_strategy,
+        })
+
+    def _panel_data(self) -> xr.Dataset:
+        """The collected panel's data, sorted on ``(timestamp, symbol)``.
+
+        Raises
+        ------
+        ValueError
+            Before ``collect()`` or ``use_panel()``.
+        """
+        if self.collected_panel is None:
+            raise ValueError(
+                f"{self.class_name}: no collected panel; call collect() or use_panel() first"
+            )
+        return self.collected_panel.data
 
     @property
     def training_record(self) -> dict:
@@ -618,7 +679,7 @@ class BaseModel(Component, ABC):
         >>> sorted(model.collect().training_record)
         ['factors.0.dataset', 'labels.0.factor.dataset']
         """
-        return dict(self._training_record)
+        return {} if self.collected_panel is None else self.collected_panel.record
 
     def provenance(self) -> dict:
         """What the top unit records about its data and its code.
@@ -635,7 +696,7 @@ class BaseModel(Component, ABC):
         return {"data_fingerprint": self.training_record, "code": code_of(self)}
 
     def _collect(self) -> None:
-        """Read the features and labels into ``data_backend``; see ``collect``.
+        """Read the features and labels into ``collected_panel``; see ``collect``.
 
         Records nothing itself: ``collect`` opens the recorder, and an
         ensemble collecting its members opens its own.
@@ -646,7 +707,7 @@ class BaseModel(Component, ABC):
             # Outer join: the features may start the model's warm-up earlier.
             d = xr.combine_by_coords([feature, label], join="outer")
             d = d.sortby(["timestamp", "symbol"])
-        self.data_backend.to_internal(d)  # type: ignore
+        self.collected_panel = CollectedPanel(d, source=self._panel_source())
 
     @staticmethod
     def _variable_names(obj) -> tuple[str, ...]:
@@ -798,7 +859,9 @@ class BaseModel(Component, ABC):
         features = self._collect_all_features(start, end)
         return self.predict_panel(features).sel(timestamp=slice(start, end))
 
-    def to_array(self, data: xr.Dataset, variables: list[str]) -> np.ndarray:
+    def to_array(
+        self, data: xr.Dataset, variables: list[str], dtype: "np.typing.DTypeLike | None" = None
+    ) -> np.ndarray:
         """Convert a panel to a ``[num_times, num_symbols, len(variables)]`` array.
 
         Both axes are sorted, and the last axis follows the order of
@@ -811,28 +874,21 @@ class BaseModel(Component, ABC):
             A dataset indexed by ``(timestamp, symbol)``.
         variables : list[str]
             The data variables to stack, in the wanted order.
+        dtype : numpy dtype, optional
+            The array's type; by default the variables' common type.
 
         Examples
         --------
-        >>> panel = model.data_backend.get_xarray_dataset(["timestamp", "symbol"])
+        >>> panel = model.collected_panel.data
         >>> x = model.to_array(panel, ["f_b", "f_a"])
         >>> x.shape
         (40, 3, 2)
         >>> np.allclose(x[..., 0], panel["f_b"].values)
         True
+        >>> model.to_array(panel, ["f_b", "f_a"], dtype=np.float32).dtype
+        dtype('float32')
         """
-        # One preallocated array filled a variable at a time: the peak is the
-        # result itself, not the several full copies of a stacked DataArray.
-        data = data[variables]
-        if not all(data.indexes[axis].is_monotonic_increasing for axis in ("timestamp", "symbol")):
-            data = data.sortby(["timestamp", "symbol"])
-        out = np.empty(
-            (data.sizes["timestamp"], data.sizes["symbol"], len(variables)),
-            dtype=np.result_type(*(data[name].dtype for name in variables)),
-        )
-        for i, name in enumerate(variables):
-            out[..., i] = data[name].transpose("timestamp", "symbol").values
-        return out
+        return to_array(data, variables, dtype)
 
     @staticmethod
     def _jsonable_symbol(symbol):
@@ -916,7 +972,7 @@ class BaseModel(Component, ABC):
         test = (config.test_start, config.test_end)
         if None in (*train, *test):
             return train
-        data = self.data_backend.get_xarray_dataset(["timestamp", "symbol"])
+        data = self._panel_data()
         usable, _ = purge_segments(
             np.sort(data.timestamp.values), [train, test], self.purge_bars
         )
@@ -1127,7 +1183,6 @@ class BaseModel(Component, ABC):
         ({'timestamp': 5, 'symbol': 3}, ['ret'])
         """
         factors = self.get_factor_names()
-        labels = self.get_label_names()
         missing = [name for name in factors if name not in features.data_vars]
         if missing:
             raise ValueError(
@@ -1135,16 +1190,40 @@ class BaseModel(Component, ABC):
                 f"variable(s) {missing}"
             )
 
+        data = sorted_panel(features[factors])
+        return self._predict_arrays(
+            to_array(data, factors), data.timestamp.values, data.symbol.values
+        )
+
+    def predict_collected(self) -> xr.Dataset:
+        """Predict the whole collected panel, as ``predict_panel`` would, from the panel's feature array.
+
+        The array is the ``collected_panel``'s, built once in the panel's own
+        type and shared by every caller, so evaluating after each fit does
+        not convert the panel again.
+
+        Returns
+        -------
+        xr.Dataset
+            One variable per label on the collected panel's coordinates.
+
+        Examples
+        --------
+        >>> model.collect().train()
+        >>> dict(model.predict_collected().sizes)
+        {'timestamp': 40, 'symbol': 3}
+        """
+        self._panel_data()
+        return self._predict_arrays(*self.collected_panel.array(self.get_factor_names()))
+
+    def _predict_arrays(self, x: np.ndarray, timestamps: np.ndarray, symbols: np.ndarray) -> xr.Dataset:
+        """Predict a ``[T, S, F]`` feature array on its coordinates; see ``predict_panel``."""
+        labels = self.get_label_names()
         if self.model is None:
             raise ValueError(
                 "Model not initialized, please call load() or train() first"
             )
-        feats = features[factors].sortby(["timestamp", "symbol"])
-        x = self.to_array(feats, factors)
-        y = np.asarray(
-            self._predict_panel_array(x, feats.timestamp.values, feats.symbol.values),
-            dtype=np.float64,
-        )
+        y = np.asarray(self._predict_panel_array(x, timestamps, symbols), dtype=np.float64)
         expected = (x.shape[0], x.shape[1], len(labels))
         if y.shape != expected:
             raise ValueError(
@@ -1159,10 +1238,7 @@ class BaseModel(Component, ABC):
                 name: (("timestamp", "symbol"), y[..., i])
                 for i, name in enumerate(labels)
             },
-            coords={
-                "timestamp": feats.timestamp.values,
-                "symbol": feats.symbol.values,
-            },
+            coords={"timestamp": timestamps, "symbol": symbols},
         )
 
     def _predict_panel_array(
@@ -1310,16 +1386,14 @@ class BaseModel(Component, ABC):
         ``label_scales``. The same predictions give the metrics,
         ``ic_series.csv`` and ``test_predictions.zarr`` in ``run_dir``.
         """
-        data = self.data_backend.get_xarray_dataset(["timestamp", "symbol"]).sortby(
-            ["timestamp", "symbol"]
-        )
+        data = self._panel_data()
         labels = {
             str(name): label
             for label in self.config.labels
             for name in self._variable_names(label)
         }
         return evaluate(
-            self.predict_panel(data),
+            self.predict_collected(),
             data,
             labels=labels,
             label_scales=self.label_scales,
@@ -1356,7 +1430,7 @@ class BaseModel(Component, ABC):
         >>> [split for split, _ in segments.splits()]
         ['train', 'test']
         """
-        data = self.data_backend.get_xarray_dataset(["timestamp", "symbol"])
+        data = self._panel_data()
         train, val, test = (part.timestamp.values for part in self._fit_segments(data))
         return Segments(train=train, val=val, test=test)
 
@@ -1492,7 +1566,7 @@ class BaseModel(Component, ABC):
         30
         """
         start_date, end_date = self.config.start_date, self.config.end_date
-        data = self.data_backend.get_xarray_dataset(["timestamp", "symbol"])
+        data = self._panel_data()
         return data.sel(timestamp=slice(start_date, end_date)).timestamp.values
 
     def train_fold(self, fold: Fold, run_dir: Path | str, group: str) -> None:

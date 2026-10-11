@@ -680,16 +680,14 @@ class TorchModel(TrainingTargetMixin, BaseModel):
             )
         self._set_random_seed(config.random_seed)
 
-        data = self.data_backend.get_xarray_dataset(["timestamp", "symbol"]).sortby(
-            ["timestamp", "symbol"]
-        )
+        data = self._panel_data()
         segments = self._fit_segments(data)
         stamps = data.timestamp.values
         train_bars, val_bars, test_bars = [
             np.searchsorted(stamps, part.timestamp.values) for part in segments
         ]
 
-        panel = self._training_panel(data)
+        panel = self._training_panel()
         self._fill_target(panel, train_bars, training=True)
         self._fill_target(panel, val_bars, training=False)
         self._fill_target(panel, test_bars, training=False)

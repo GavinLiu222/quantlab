@@ -346,7 +346,7 @@ Traceback (most recent call last):
 TypeError: Can't instantiate abstract class Incomplete without an implementation for abstract methods 'filter_by_date', 'filter_by_symbol', 'get_lazyframe', 'get_xarray_dataset', 'head', 'resample', 'to_internal', 'write'
 ```
 
-数据集、因子或模型在 `__init__` 里通过给 `self.data_backend` 赋值来选择后端；子类可以在调用 `super().__init__` 之后换成自己的后端。分块摄取还会调用后端的 `append`，而 `append` 不属于 `DataBackend`，所以用于分块摄取的后端需要自己实现 `append`。数据集和因子基类的某些部分仍然假定存储是 Zarr，因此新后端最好先在读写路径上试用。
+数据集或因子在 `__init__` 里通过给 `self.data_backend` 赋值来选择后端；子类可以在调用 `super().__init__` 之后换成自己的后端。分块摄取还会调用后端的 `append`，而 `append` 不属于 `DataBackend`，所以用于分块摄取的后端需要自己实现 `append`。数据集和因子基类的某些部分仍然假定存储是 Zarr，因此新后端最好先在读写路径上试用。
 
 ## 注意事项
 

@@ -175,7 +175,7 @@ def warnings_log():
 
 
 def _test_arrays(model: XGBoostRegressor) -> tuple[np.ndarray, np.ndarray]:
-    data = model.data_backend.get_xarray_dataset(["timestamp", "symbol"]).sel(
+    data = model.collected_panel.data.sel(
         timestamp=slice(TEST_START, TEST_END)
     )
     return (
@@ -438,7 +438,7 @@ def test_nan_labels_and_infinite_features(tmp_path, tracker, monkeypatch):
     assert np.isfinite(model.predict(test_x)).all()
 
     rows = seen[0]
-    data = model.data_backend.get_xarray_dataset(["timestamp", "symbol"])
+    data = model.collected_panel.data
     y = model.to_array(data, model.get_label_names())
     train_bars = rows.where[0].max() + 1
     assert len(rows.x) == int(np.isfinite(y[:train_bars]).all(axis=-1).sum())
@@ -579,7 +579,7 @@ def test_train_cv_sequential(tmp_path, tracker):
     finite `test_ic`, and loads into a fresh instance; the summary run's
     `cv_mean_test_ic` is the fold mean and reflects the signal."""
     model = _cv_model(tmp_path, "ckpt_seq", tracker)
-    timestamps = model.data_backend.get_xarray_dataset(["timestamp", "symbol"]).timestamp.values
+    timestamps = model.collected_panel.data.timestamp.values
 
     results = model.train_cv(train_periods=60).folds
 

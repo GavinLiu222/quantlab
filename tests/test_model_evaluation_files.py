@@ -152,7 +152,7 @@ def _series(run_dir: Path) -> pd.DataFrame:
 
 
 def _test_timestamps(model, metrics_or_fold: dict) -> np.ndarray:
-    data = model.data_backend.get_xarray_dataset(["timestamp", "symbol"])
+    data = model.collected_panel.data
     stamps = np.sort(data.timestamp.values)
     start = np.datetime64(metrics_or_fold["test_start"])
     end = np.datetime64(metrics_or_fold["test_end"])
@@ -180,7 +180,7 @@ def _assert_run_files(model, run_dir: Path, metrics: dict, test_stamps) -> None:
     store = run_dir / "test_predictions.zarr"
     assert store.is_dir(), f"no prediction store at {store}"
     saved = xr.open_zarr(store).load()
-    features = model.data_backend.get_xarray_dataset(["timestamp", "symbol"])
+    features = model.collected_panel.data
     (checkpoint,) = [
         p for p in run_dir.iterdir() if p.suffix == model.checkpoint_suffix
     ]

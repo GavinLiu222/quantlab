@@ -16,7 +16,7 @@ export OMP_NUM_THREADS=1   # 仅 macOS
 
 ### 输入与输出
 
-模型头用一个因子对象列表（特征）和一个标签对象列表（目标）来配置，二者都来自因子层（见 factor 指南）。`collect()` 用 `read(start, end)` 或 `compute(start, end)` 向每个对象请求模型 `start_date` 到 `end_date` 的面板，按 `(timestamp, symbol)` 合并，并把面板保存在内存中。模型头内部处理形状为 `[num_times, num_symbols, num_features]` 的数组，最后一个轴的顺序与 `get_factor_names()` 完全一致，输出形状为 `[num_times, num_symbols, num_labels]` 的预测。
+模型头用一个因子对象列表（特征）和一个标签对象列表（目标）来配置，二者都来自因子层（见 factor 指南）。`collect()` 用 `read(start, end)` 或 `compute(start, end)` 向每个对象请求模型 `start_date` 到 `end_date` 的面板，按 `(timestamp, symbol)` 合并，并把面板作为模型的 `collected_panel` 保存在内存中（一个 `CollectedPanel`：两个轴都排好序的数据、读取记录，以及由它生成、各只生成一次的数组）。模型头内部处理形状为 `[num_times, num_symbols, num_features]` 的数组，最后一个轴的顺序与 `get_factor_names()` 完全一致，输出形状为 `[num_times, num_symbols, num_labels]` 的预测。
 
 标签会读取 t 之后的 bar，因此绝不能用作特征。模型靠 `lookahead_bars()` 区分这两种角色：每个标签都有这个方法，因子都没有；构造时，因子列表里出现标签、或标签列表里出现因子，都会被拒绝（见注意事项）。真实的标签是 `quantlab.label.forward.Forward`，即向前平移 `delay + span` 个 bar 的因子，`lookahead_bars()` 返回这个和（见 factor 指南）。
 
@@ -413,7 +413,7 @@ True
 
 ### 平均多个种子
 
-`quantlab.model.predefined.seed_ensemble` 中的 `SeedEnsemble(model, seeds)` 用多个随机种子训练同一份配置，并预测它们的平均。第 k 个成员是模型的类，建在模型的配置上，把 `random_seed` 换成 `seeds[k]`；`seeds` 是至少两个互不相同的整数组成的显式列表。成员读取相同的数据：`collect()` 只在第一个成员上收集一次面板，其余成员共用这个数据后端；`predict_window` 只请求一次特征，再交给每个成员。
+`quantlab.model.predefined.seed_ensemble` 中的 `SeedEnsemble(model, seeds)` 用多个随机种子训练同一份配置，并预测它们的平均。第 k 个成员是模型的类，建在模型的配置上，把 `random_seed` 换成 `seeds[k]`；`seeds` 是至少两个互不相同的整数组成的显式列表。成员读取相同的数据：`collect()` 只在第一个成员上收集一次面板，其余成员接过这个收集面板（`use_panel`）；`predict_window` 只请求一次特征，再交给每个成员。
 
 ```python
 >>> from dataclasses import replace
@@ -425,7 +425,7 @@ True
 >>> [m.config.random_seed for m in ensemble.members]
 [0, 1, 2]
 >>> ensemble = ensemble.collect()
->>> all(m.data_backend is ensemble.members[0].data_backend for m in ensemble.members)
+>>> all(m.collected_panel is ensemble.members[0].collected_panel for m in ensemble.members)
 True
 ```
 
@@ -560,6 +560,18 @@ True
 >>> restored_fold = SeedEnsemble(XGBoostRegressor(sampled), seeds=[0, 1, 2]).load(fold_0.checkpoint)
 >>> [m.model is not None for m in restored_fold.members]
 [True, True, True]
+```
+
+### 在多个模型间共用一个收集面板
+
+配置为在相同的 `start_date`、`end_date` 上读取相同因子和标签的模型（例如同一个模型头的几组超参数）可以持有同一个收集面板：`use_panel(panel)` 把另一个模型的 `collected_panel` 交给这个模型。之后它们共用数据、读取记录以及由它生成的每个数组，所以面板对它们全体只读取、转换一次。读取其他因子、标签或日期的模型会以 `ValueError` 拒绝这个面板。
+
+```python
+>>> deep = XGBoostRegressor(replace(config, hyperparameters={"max_depth": 6}))
+>>> deep.use_panel(model.collected_panel).collected_panel is model.collected_panel
+True
+>>> deep.training_record == model.training_record
+True
 ```
 
 ### 组合不同的模型
@@ -773,7 +785,7 @@ Qlib 的序列模型（GRU、LSTM、ALSTM、Transformer）不按整个截面训�
 ... )).collect()
 >>> gats.window_bars, gats.warmup_bars, gats.epochs, gats.early_stop
 (5, 4, 50, 3)
->>> str(gats.data_backend.get_xarray_dataset().timestamp.values[0])[:10]
+>>> str(gats.collected_panel.data.timestamp.values[0])[:10]
 '2024-01-16'
 >>> stops = []
 >>> sink = logger.add(stops.append, format="{message}", filter=lambda r: "stopping" in r["message"])

@@ -365,3 +365,19 @@ ensemble of different model variants, gets cross-validation by implementing
 the protocol publicly; it calls no private method of its members.
 `tests/test_walk_forward_training.py` drives the module with a stub that
 trains nothing.
+
+A model's `collect()` leaves it a `CollectedPanel`
+(`quantlab/model/collected_panel.py`): the panel sorted on both axes, the
+record of the reads (`training_record`) and what it was read for.
+`panel.array(names, dtype)` builds each array once per variable list and type
+and keeps it, so every fit on the panel reads the same float32 features and
+labels (the **Training panel**) and the evaluation (`predict_collected`)
+reads the features in the panel's own type: on a float32 panel the two share
+one array. Walk-forward folds, a second `train()`, seed-ensemble members
+(`use_panel`) and models sharing a panel through `use_panel` all convert it
+once. `use_panel` refuses a panel read for other factor or label configs or
+dates, since the record must describe what the model reads. The arrays are
+shared memory (a torch head's panel is a view of them), so a head reads them
+and never writes into them: `_transform_feature` returns a new array, and rows
+are taken by indexing, which copies. `tests/test_collected_panel.py` locks
+the sharing and checks that no fit changes the arrays.

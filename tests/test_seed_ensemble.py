@@ -4,7 +4,7 @@ What is locked here, and what turns it red:
 
 - Construction refuses fewer than two seeds or a repeated seed; each member
   is the wrapped model's class on its config with `random_seed` replaced.
-- `collect()` collects once: every member holds the same data backend object.
+- `collect()` collects once: every member holds the same collected panel.
 - Different seeds give different member predictions for a head that draws
   from the seeded generator, and `predict_window` is `average_predictions`
   of the members' predictions.
@@ -135,15 +135,15 @@ def test_members_are_the_model_class_with_each_seed(tmp_path):
 # --------------------------------------------------------------------------
 
 
-def test_members_share_one_data_backend(tmp_path):
+def test_members_share_one_collected_panel(tmp_path):
     dataset_config, bars = _setup(tmp_path)
     ensemble = SeedEnsemble(_model(tmp_path, dataset_config, bars), SEEDS)
 
     ensemble.collect()
 
-    backend = ensemble.members[0].data_backend
-    assert all(m.data_backend is backend for m in ensemble.members)
-    assert backend.get_xarray_dataset().sizes["timestamp"] > 0
+    panel = ensemble.members[0].collected_panel
+    assert all(m.collected_panel is panel for m in ensemble.members)
+    assert panel.data.sizes["timestamp"] > 0
 
 
 def test_seeds_give_different_members_and_the_prediction_is_their_average(tmp_path):

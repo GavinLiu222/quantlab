@@ -88,7 +88,7 @@ def _trained(tmp_path, *, val_size=0.0):
 def _expected(ensemble):
     """Metrics and per-bar series computed independently of the ensemble code."""
     first = ensemble.members[0]
-    data = first.data_backend.get_xarray_dataset(["timestamp", "symbol"]).sortby(
+    data = first.collected_panel.data.sortby(
         ["timestamp", "symbol"]
     )
     predictions = [m.predict_panel(data) for m in ensemble.members]

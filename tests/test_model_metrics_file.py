@@ -215,7 +215,7 @@ def test_test_ic_is_the_ic_of_the_saved_test_predictions(tmp_path, cls):
     run_dir = model.train().parent
 
     saved = xr.open_zarr(run_dir / "test_predictions.zarr").load()
-    truth = model.data_backend.get_xarray_dataset(["timestamp", "symbol"])["ret"]
+    truth = model.collected_panel.data["ret"]
     truth = truth.sel(timestamp=saved.timestamp, symbol=saved.symbol).values
     metrics = _strict_json(run_dir / "run.json")["metrics"]
     expected = np.nanmean(_pearson_by_bar(saved["ret"].values, truth))

@@ -216,7 +216,7 @@ def main() -> None:
         show("recorded val", {k[4:]: v for k, v in run.metrics.items() if k.startswith("val_")})
 
         # 2. Predict the test window and score it --------------------------
-        panel = model.data_backend.get_xarray_dataset(["timestamp", "symbol"])
+        panel = model.collected_panel.data
         test = panel.sel(timestamp=slice(dates["test_start"], dates["test_end"]))
         pred = model.predict_panel(test[model.get_factor_names()])
         print("prediction panel:", dict(pred.sizes), list(pred.data_vars))

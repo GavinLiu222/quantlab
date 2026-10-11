@@ -107,7 +107,7 @@ def _model(root: Path, label_cls, head=PositiveFeatureHead, name="vol"):
 def _expected_test_metrics(run_dir: Path, truth_model, label: str) -> dict:
     """``volatility_level_metrics`` of the saved test predictions against the raw label."""
     predictions = xr.open_zarr(run_dir / "test_predictions.zarr")[label]
-    data = truth_model.data_backend.get_xarray_dataset(["timestamp", "symbol"])
+    data = truth_model.collected_panel.data
     target = data[label].sel(timestamp=predictions.timestamp.values, symbol=predictions.symbol.values)
     return volatility_level_metrics(predictions.values, target.values)
 

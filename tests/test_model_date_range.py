@@ -152,7 +152,7 @@ def test_cal_strategy_collects_compute_panels_on_the_model_range(parts, tmp_path
     factor, label = parts
     model = _model(parts, tmp_path, "2024-01-20", "2024-02-10", strategy="cal")
 
-    collected = model.collect().data_backend.get_xarray_dataset()
+    collected = model.collect().collected_panel.data
 
     assert _dates(collected) == ("2024-01-20", "2024-02-10")
     expected_feature = factor.compute("2024-01-20", "2024-02-10")
@@ -169,7 +169,7 @@ def test_read_strategy_collects_read_panels_on_the_model_range(parts, tmp_path):
     label.build("2024-01-10", "2024-02-20")
     model = _model(parts, tmp_path, "2024-01-20", "2024-02-10", strategy="read")
 
-    collected = model.collect().data_backend.get_xarray_dataset()
+    collected = model.collect().collected_panel.data
 
     assert _dates(collected) == ("2024-01-20", "2024-02-10")
     xr.testing.assert_allclose(
@@ -195,15 +195,15 @@ def test_read_strategy_refuses_a_model_range_the_stores_do_not_cover(parts, tmp_
 def test_two_models_sharing_one_factor_train_without_interfering(parts, tmp_path):
     early = _model(parts, tmp_path, "2024-01-10", "2024-01-31", train_end="2024-01-25")
     early.collect().train()
-    alone = early.predict_panel(early.data_backend.get_xarray_dataset())
+    alone = early.predict_panel(early.collected_panel.data)
 
     late = _model(parts, tmp_path, "2024-02-01", "2024-02-28", train_end="2024-02-20")
     late.collect().train()
     early.collect()
 
-    assert _dates(early.data_backend.get_xarray_dataset()) == ("2024-01-10", "2024-01-31")
-    assert _dates(late.data_backend.get_xarray_dataset()) == ("2024-02-01", "2024-02-28")
-    again = early.predict_panel(early.data_backend.get_xarray_dataset())
+    assert _dates(early.collected_panel.data) == ("2024-01-10", "2024-01-31")
+    assert _dates(late.collected_panel.data) == ("2024-02-01", "2024-02-28")
+    again = early.predict_panel(early.collected_panel.data)
     xr.testing.assert_allclose(again, alone)
 
     # The late model equals one trained on fresh objects, with no early model.
@@ -214,6 +214,6 @@ def test_two_models_sharing_one_factor_train_without_interfering(parts, tmp_path
                    train_end="2024-02-20")
     fresh.collect().train()
     xr.testing.assert_allclose(
-        late.predict_panel(late.data_backend.get_xarray_dataset()),
-        fresh.predict_panel(fresh.data_backend.get_xarray_dataset()),
+        late.predict_panel(late.collected_panel.data),
+        fresh.predict_panel(fresh.collected_panel.data),
     )

@@ -160,7 +160,7 @@ def test_a_model_trains_on_the_masked_label(setup):
     )
     assert model.label_delays == (1,)
     model.collect()
-    panel = model.data_backend.get_xarray_dataset(["timestamp", "symbol"])
+    panel = model.collected_panel.data
     name = f"fwd_ret_{HORIZON}"
     assert np.isnan(_cell(panel, name, T, "CCC"))
     assert np.isfinite(_cell(panel, name, T, "BBB"))

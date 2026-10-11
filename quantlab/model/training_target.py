@@ -7,8 +7,8 @@ layer, not on ``BaseModel``, so importing the root class (``quantlab.model.base`
 never imports torch.
 """
 
+import numpy as np
 import torch
-import xarray as xr
 
 from quantlab.model.torch_data import TrainingPanel
 from quantlab.utils.timer import Timer
@@ -70,15 +70,17 @@ class TrainingTargetMixin:
         """
         return type(self)._transform_target is not type(self)._default_transform_target
 
-    def _training_panel(self, data: xr.Dataset) -> TrainingPanel:
-        """Return the collected panel as a ``TrainingPanel`` with no target yet."""
+    def _training_panel(self) -> TrainingPanel:
+        """Return the collected panel as a float32 ``TrainingPanel`` with no target yet.
+
+        Its float32 feature and label arrays are the ``collected_panel``'s,
+        built once and shared by every fit on it (and by the evaluation when
+        the panel is float32), so a fit reads them and never writes into them.
+        """
         with Timer(f"{self.class_name}: to_array"):
-            return TrainingPanel.from_arrays(
-                self.to_array(data, self.get_factor_names()),
-                timestamps=data.timestamp.values,
-                symbols=data.symbol.values,
-                y_raw=self.to_array(data, self.get_label_names()),
-            )
+            x, timestamps, symbols = self.collected_panel.array(self.get_factor_names(), np.float32)
+            y_raw, _, _ = self.collected_panel.array(self.get_label_names(), np.float32)
+        return TrainingPanel.from_arrays(x, timestamps=timestamps, symbols=symbols, y_raw=y_raw)
 
     def _fill_target(self, panel: TrainingPanel, bars, training: bool) -> None:
         """Compute the training target of ``bars`` once, through ``_transform_target``.

@@ -32,6 +32,7 @@ import torch.nn as nn
 import xarray as xr
 
 import quantlab.core.component as component_rule
+from quantlab.model.collected_panel import CollectedPanel
 from quantlab.model.config import ModelConfig
 from quantlab.model.library_model import LibraryModel
 from quantlab.model.predefined.xgb import XGBoostRegressor
@@ -354,23 +355,23 @@ def test_int64_checkpoint_records_json_integers(tmp_path):
     assert '"7000"' not in raw, raw
 
 
-def _dl_on_a_backend_filled_without_collect(tmp_path, symbols) -> OneBarHead:
-    """A torch head whose data backend holds the panel in `symbols` order.
+def _dl_on_an_unsorted_collected_panel(tmp_path, symbols) -> OneBarHead:
+    """A torch head given a collected panel built from the data in `symbols` order.
 
-    `collect()` sorts the symbol axis. This fills the backend directly, as a
-    caller that calls `data_backend.to_internal` and then `train()` would.
+    `CollectedPanel` sorts the symbol axis itself, so a caller that builds one
+    from an unsorted panel and then calls `train()` trains on the sorted layout.
     """
     model = OneBarHead(ModelConfig(**_dl_train_kwargs(tmp_path)))
     panel = xr.merge([model.config.factors[0]._ds, model.config.labels[0]._ds])
-    model.data_backend.to_internal(panel.sel(symbol=list(symbols)))
-    assert model.symbols == list(symbols)
+    model.collected_panel = CollectedPanel(panel.sel(symbol=list(symbols)))
+    assert model.symbols == sorted(symbols)
     return model
 
 
 def test_train_on_an_unsorted_backend_records_sorted_symbols(tmp_path):
     """G-03.7-8: the record describes the sorted layout `to_array` trains on,
     and the same instance's predictions sit on their own coordinates."""
-    model = _dl_on_a_backend_filled_without_collect(tmp_path, ["S2", "S0", "S1"])
+    model = _dl_on_an_unsorted_collected_panel(tmp_path, ["S2", "S0", "S1"])
 
     checkpoint = model.train()
 
@@ -385,7 +386,7 @@ def test_train_cv_on_an_unsorted_backend_records_sorted_symbols_in_every_fold(
 ):
     """30 timestamps with `train_periods=20` give 2 folds; each fold's run
     must record S0, S1, S2 even though the backend holds S2, S0, S1."""
-    model = _dl_on_a_backend_filled_without_collect(tmp_path, ["S2", "S0", "S1"])
+    model = _dl_on_an_unsorted_collected_panel(tmp_path, ["S2", "S0", "S1"])
 
     cv = model.train_cv(train_periods=20)
 

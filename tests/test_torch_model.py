@@ -324,7 +324,7 @@ def warm_model(spot_kline_zarr, tmp_path):
 def test_training_collect_starts_the_features_the_warm_up_earlier(warm_model):
     model = warm_model().collect()
 
-    panel = model.data_backend.get_xarray_dataset()
+    panel = model.collected_panel.data
     assert str(panel.timestamp.values[0])[:10] == "2024-01-16"  # 4 bars before
     first_label = panel["ret_1"].sel(timestamp="2024-01-20")
     assert np.isfinite(first_label).all()
@@ -336,12 +336,12 @@ def test_the_warm_up_makes_a_short_request_predict_like_a_long_panel(warm_model)
     checkpoint = trained.train()
 
     short = warm_model(start="2024-02-12").load(checkpoint).collect()
-    panel = short.data_backend.get_xarray_dataset()
+    panel = short.collected_panel.data
     assert str(panel.timestamp.values[0])[:10] == "2024-02-08"
 
     first = dict(timestamp="2024-02-12")
     features = short.get_factor_names()
-    expected = trained.predict_panel(trained.data_backend.get_xarray_dataset()[features])
+    expected = trained.predict_panel(trained.collected_panel.data[features])
     got = short.predict_panel(panel[features])
     xr.testing.assert_allclose(got["ret_1"].sel(**first), expected["ret_1"].sel(**first))
     # Without the warm-up bars the first window is short and the answer differs.
@@ -373,7 +373,7 @@ def test_a_read_store_shorter_than_the_warm_up_warns_and_starts_at_the_store(war
     with pytest.warns(UserWarning, match="store starts at 2024-01-18"):
         model = warm_model(strategy="read").collect()
 
-    assert str(model.data_backend.get_xarray_dataset().timestamp.values[0])[:10] == "2024-01-18"
+    assert str(model.collected_panel.data.timestamp.values[0])[:10] == "2024-01-18"
 
 
 # ---------------------------------------------------------------------------

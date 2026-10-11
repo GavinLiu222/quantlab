@@ -131,18 +131,19 @@ class SeedEnsemble(BaseEnsemble):
         """Collect the panel once and share it with every member.
 
         The first member reads (see ``BaseModel._collect``); every other
-        member's ``data_backend`` becomes that same object, so the record
-        ``collect()`` writes holds one read.
+        member takes that same collected panel (``use_panel``), so the record
+        ``collect()`` writes holds one read and every array built from the
+        panel is built once for all the members.
 
         Examples
         --------
-        >>> ensemble.collect().members[1].data_backend is ensemble.members[0].data_backend
+        >>> ensemble.collect().members[1].collected_panel is ensemble.members[0].collected_panel
         True
         """
         first = self.members[0]
         first._collect()
         for member in self.members[1:]:
-            member.data_backend = first.data_backend
+            member.use_panel(first.collected_panel)
 
     def _member_predictions(self, start, end) -> list[xr.Dataset]:
         """Request the features once and predict them with every member."""
@@ -153,9 +154,8 @@ class SeedEnsemble(BaseEnsemble):
         ]
 
     def _member_panel_predictions(self) -> list[xr.Dataset]:
-        """Predict the one shared collected panel with every member."""
-        data = self.members[0].data_backend.get_xarray_dataset(["timestamp", "symbol"])
-        return [member.predict_panel(data) for member in self.members]
+        """Predict the one shared collected panel with every member, from its one feature array."""
+        return [member.predict_collected() for member in self.members]
 
     @property
     def config(self) -> SeedEnsembleConfig:

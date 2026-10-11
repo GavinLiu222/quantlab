@@ -160,7 +160,7 @@ def _torch_config(tmp_path: Path, save_dir: str, tracker=NullTracker()) -> Model
 def _golden_fold_dates(model) -> list[tuple[str, str, str, str]]:
     """The fold dates the pre-refactor formula gives, derived independently
     of any code under test."""
-    ts = model.data_backend.get_xarray_dataset(["timestamp", "symbol"]).timestamp.values
+    ts = model.collected_panel.data.timestamp.values
     assert len(ts) == N_TIMES
     fmt = np.datetime_as_string
     return [
@@ -353,7 +353,7 @@ def test_library_train_cv_returns_per_fold_results_and_loadable_checkpoints(tmp_
     never-collected instance that predicts `[T, S, L]`."""
     model = StubLibraryHead(_library_config(tmp_path, "ckpt"))
     model.collect()
-    timestamps = model.data_backend.get_xarray_dataset(["timestamp", "symbol"]).timestamp.values
+    timestamps = model.collected_panel.data.timestamp.values
     expected = [
         (f.index, f.train_window, f.fitted_train_window, f.test_window)
         for f in walk_forward_folds(timestamps, 50)

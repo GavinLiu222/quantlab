@@ -307,7 +307,7 @@ def test_a_rank_training_target_reaches_the_rows_and_metrics_stay_raw(tmp_path):
         expected = np.argsort(np.argsort(train.y_raw[at, 0])) / (at.sum() - 1)
         assert np.allclose(train.y[at, 0], expected)
 
-    data = model.data_backend.get_xarray_dataset(["timestamp", "symbol"])
+    data = model.collected_panel.data
     x = model.to_array(data, model.get_factor_names())[:80]
     y = model.to_array(data, model.get_label_names())[:80]
     pred = model.predict(x)
@@ -358,7 +358,7 @@ def test_a_training_target_hyperparameter_reaches_the_rows_and_metrics_stay_raw(
             expected = _expected_target(training_target, rows.y_raw[at])
             assert np.allclose(rows.y[at, 0], expected, atol=1e-5)
 
-    data = model.data_backend.get_xarray_dataset(["timestamp", "symbol"])
+    data = model.collected_panel.data
     x = model.to_array(data, model.get_factor_names())
     y = model.to_array(data, model.get_label_names())
     pred = model.predict(x)
@@ -486,7 +486,7 @@ def test_split_loss_is_the_per_bar_mean_of_the_head_loss_on_the_training_target(
     checkpoint = model.train()
     metrics = TrainedRun.open(checkpoint).metrics
 
-    data = model.data_backend.get_xarray_dataset(["timestamp", "symbol"])
+    data = model.collected_panel.data
     x = model.to_array(data, model.get_factor_names())
     y = model.to_array(data, model.get_label_names())
     pred = model.predict(x)

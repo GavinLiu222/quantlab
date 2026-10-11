@@ -162,7 +162,7 @@ def test_variable_axis_follows_declared_order(tmp_path):
 
     assert model.get_factor_names() == ["zeta", "alpha", "mid"]
     assert model.get_label_names() == ["ret_30", "ret_60", "ret_120"]
-    panel = model.data_backend.get_xarray_dataset(["timestamp", "symbol"])
+    panel = model.collected_panel.data
     y = model.to_array(panel, model.get_label_names())
     np.testing.assert_array_equal(y[0, 0], [30.0, 60.0, 120.0])
 

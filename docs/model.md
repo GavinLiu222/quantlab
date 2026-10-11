@@ -16,7 +16,7 @@ export OMP_NUM_THREADS=1   # macOS only
 
 ### Inputs and outputs
 
-A head is configured with a list of factor objects (the features) and a list of label objects (the targets). Both come from the factor layer (see the factor guide). `collect()` asks each of them for its panel from the model's `start_date` to `end_date`, with `read(start, end)` or `compute(start, end)`, merges them on `(timestamp, symbol)` and keeps the panel in memory. Internally a head works on arrays of shape `[num_times, num_symbols, num_features]` whose last axis follows `get_factor_names()` exactly, and produces `[num_times, num_symbols, num_labels]` predictions.
+A head is configured with a list of factor objects (the features) and a list of label objects (the targets). Both come from the factor layer (see the factor guide). `collect()` asks each of them for its panel from the model's `start_date` to `end_date`, with `read(start, end)` or `compute(start, end)`, merges them on `(timestamp, symbol)` and keeps the panel in memory as the model's `collected_panel` (a `CollectedPanel`: the data sorted on both axes, the record of the reads, and the arrays built from it, each built once). Internally a head works on arrays of shape `[num_times, num_symbols, num_features]` whose last axis follows `get_factor_names()` exactly, and produces `[num_times, num_symbols, num_labels]` predictions.
 
 A label reads bars after t, so it must never be a feature. The model tells the two roles apart by `lookahead_bars()`: every label has it and no factor does, and construction refuses a label among the factors or a factor among the labels (see Notes). A real label is a `quantlab.label.forward.Forward`, a factor shifted forward by `delay + span` bars; `lookahead_bars()` returns that sum (see the factor guide).
 
@@ -413,7 +413,7 @@ The procedure is `train_walk_forward` in `quantlab.model.walk_forward_training`,
 
 ### Average several seeds
 
-`SeedEnsemble(model, seeds)` in `quantlab.model.predefined.seed_ensemble` trains one config under several random seeds and predicts their average. Member k is the model's class built on the model's config with `random_seed=seeds[k]`; `seeds` is an explicit list of at least two distinct integers. The members read the same data: `collect()` collects the panel once, on the first member, and every other member shares that data backend, and `predict_window` requests the features once and hands them to every member.
+`SeedEnsemble(model, seeds)` in `quantlab.model.predefined.seed_ensemble` trains one config under several random seeds and predicts their average. Member k is the model's class built on the model's config with `random_seed=seeds[k]`; `seeds` is an explicit list of at least two distinct integers. The members read the same data: `collect()` collects the panel once, on the first member, and every other member takes that collected panel (`use_panel`), and `predict_window` requests the features once and hands them to every member.
 
 ```python
 >>> from dataclasses import replace
@@ -425,7 +425,7 @@ The procedure is `train_walk_forward` in `quantlab.model.walk_forward_training`,
 >>> [m.config.random_seed for m in ensemble.members]
 [0, 1, 2]
 >>> ensemble = ensemble.collect()
->>> all(m.data_backend is ensemble.members[0].data_backend for m in ensemble.members)
+>>> all(m.collected_panel is ensemble.members[0].collected_panel for m in ensemble.members)
 True
 ```
 
@@ -560,6 +560,18 @@ True
 >>> restored_fold = SeedEnsemble(XGBoostRegressor(sampled), seeds=[0, 1, 2]).load(fold_0.checkpoint)
 >>> [m.model is not None for m in restored_fold.members]
 [True, True, True]
+```
+
+### Share one collected panel between models
+
+Models configured to read the same factors and labels over the same `start_date` and `end_date`, such as several hyperparameter settings of one head, can hold one collected panel: `use_panel(panel)` hands a model another model's `collected_panel`. They then share the data, its record and every array built from it, so the panel is read and converted once for all of them. A model reading other factors, labels or dates refuses the panel with `ValueError`.
+
+```python
+>>> deep = XGBoostRegressor(replace(config, hyperparameters={"max_depth": 6}))
+>>> deep.use_panel(model.collected_panel).collected_panel is model.collected_panel
+True
+>>> deep.training_record == model.training_record
+True
 ```
 
 ### Combine different models
@@ -773,7 +785,7 @@ The session below trains a small GATs on the stand-in factor with a calendar, `s
 ... )).collect()
 >>> gats.window_bars, gats.warmup_bars, gats.epochs, gats.early_stop
 (5, 4, 50, 3)
->>> str(gats.data_backend.get_xarray_dataset().timestamp.values[0])[:10]
+>>> str(gats.collected_panel.data.timestamp.values[0])[:10]
 '2024-01-16'
 >>> stops = []
 >>> sink = logger.add(stops.append, format="{message}", filter=lambda r: "stopping" in r["message"])

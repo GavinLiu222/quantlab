@@ -411,16 +411,12 @@ class BaseEnsemble(Component, ABC):
     def _member_panel_predictions(self) -> list[xr.Dataset]:
         """Return each member's prediction over its whole collected panel.
 
-        Each member predicts the panel in its own data backend, so every bar
-        is predicted with all the history collected before it. Used to
-        evaluate the combined prediction after training.
+        Each member predicts its own collected panel from the panel's feature
+        array, so every bar is predicted with all the history collected
+        before it and a member's fit and this prediction share one
+        conversion. Used to evaluate the combined prediction after training.
         """
-        return [
-            member.predict_panel(
-                member.data_backend.get_xarray_dataset(["timestamp", "symbol"])
-            )
-            for member in self.members
-        ]
+        return [member.predict_collected() for member in self.members]
 
     def _combine(self, predictions: list[xr.Dataset]) -> xr.Dataset:
         """Combine the members' prediction panels into the ensemble's prediction.
@@ -817,7 +813,7 @@ class BaseEnsemble(Component, ABC):
         for name, indices in owners.items():
             member = self.members[indices[0]]
             segments[name] = member.evaluation_segments()
-            truth[name] = member.data_backend.get_xarray_dataset(["timestamp", "symbol"])
+            truth[name] = member.collected_panel.data
         return evaluate(
             self._combine(predictions),
             truth,

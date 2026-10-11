@@ -346,7 +346,7 @@ Traceback (most recent call last):
 TypeError: Can't instantiate abstract class Incomplete without an implementation for abstract methods 'filter_by_date', 'filter_by_symbol', 'get_lazyframe', 'get_xarray_dataset', 'head', 'resample', 'to_internal', 'write'
 ```
 
-A dataset, factor or model picks its backend in `__init__` by assigning `self.data_backend`; a subclass can assign its own backend after calling `super().__init__`. Chunked ingestion additionally calls `append` on the backend, which is not part of `DataBackend`, so a backend used for that needs its own `append`. Parts of the dataset and factor base classes still assume a Zarr store, so a new backend is best tried on the read and write paths first.
+A dataset or factor picks its backend in `__init__` by assigning `self.data_backend`; a subclass can assign its own backend after calling `super().__init__`. Chunked ingestion additionally calls `append` on the backend, which is not part of `DataBackend`, so a backend used for that needs its own `append`. Parts of the dataset and factor base classes still assume a Zarr store, so a new backend is best tried on the read and write paths first.
 
 ## Notes
 

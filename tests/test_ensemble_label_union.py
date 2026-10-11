@@ -222,7 +222,7 @@ def _metrics(checkpoint) -> dict:
 
 
 def _expected_ic(model, name, stamps) -> float:
-    data = model.data_backend.get_xarray_dataset(["timestamp", "symbol"])
+    data = model.collected_panel.data
     own = model.predict_panel(data)
     expected, _ = ic_panel_metrics(
         own[name].sel(timestamp=stamps).values,

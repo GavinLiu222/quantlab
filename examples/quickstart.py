@@ -181,7 +181,7 @@ def main() -> None:
 
         # 3. Train the model --------------------------------------------------
         model.collect()
-        collected = model.data_backend.get_xarray_dataset()
+        collected = model.collected_panel.data
         print("Collected panel:", dict(collected.sizes), f"{len(collected.data_vars)} variables")
         checkpoint = model.train()
         print("Checkpoint:", checkpoint.relative_to(root))
