@@ -155,7 +155,7 @@ True
 - `mse`、`rmse`、`mae` 和 `r2` 只对模型按标签本身尺度预测的标签计算（`label_scales` 为 `"raw"`）：拟合排名或 z-score 的模型头（设置了 `training_target`，或覆写了 `_transform_target`）的预测与标签单位不同，只报告 IC 一族。
 - 按本身尺度预测的波动率标签另有 `qlike` 和 `variance_ratio`（见下文“波动率标签”）。
 
-模型头另外给出 `loss`：它在训练目标（经模型头逐 bar 的 `_transform_target` 变换后的标签，见“扩展”）上的损失，逐 bar 计算再对 bar 取平均，因此每个 bar 的权重相同，与它有多少个标的无关。对库模型头，这个损失是 `_loss`（默认 MSE）；对 torch 模型头，它是 `_val_one_batch`，默认就是它的 `_loss`（见“训练 torch 模型”）。损失和评估指标合并后，以 `train_*`、`val_*`、`test_*` 的名字一次写入追踪 run 的摘要（见实验追踪），`train()` 还把同一个字典记录为 `run.json` 的 `metrics`，NaN 和无穷大写成 null。没有验证段时（`val_size=0`）不会有 `val_*` 键，测试段没有 bar 时不会有 `test_*` 键。
+模型头另外给出 `loss`：它在训练目标（经模型头逐 bar 的 `_transform_target` 变换后的标签，见“扩展”）上的损失，逐 bar 计算再对 bar 取平均，因此每个 bar 的权重相同，与它有多少个标的无关。对库模型头，这个损失是 `_loss`（默认 MSE）；对 torch 模型头，它是 `_val_one_batch`，默认就是它的 `_loss`（见“训练 torch 模型”）。损失和评估指标合并后，以 `train_*`、`val_*`、`test_*` 的名字一次写入追踪 run 的摘要（见实验追踪），`train()` 还把同一个字典记录为 `run.json` 的 `metrics`，NaN 和无穷大写成 null。没有验证段时（`val_size=0`）不会有 `val_*` 键，测试段没有 bar 时不会有 `test_*` 键，`metric_splits` 不包含的段也没有对应的键（见“只评估测试段”）。
 
 ```python
 >>> metrics = run.metrics
@@ -241,7 +241,7 @@ True
 
 ### 配置与保留超参数
 
-所有模型头都使用同一个 `ModelConfig`。它只包含两个变体都会读取的字段：因子和标签、保存目录、数据策略、日期、`val_size`、`random_seed` 和 `hyperparameters`。所有训练设置都放进 `hyperparameters` 这一个扁平字典，它会被记录到 `config.json`，因此仅凭 `config.json` 就能重建模型。
+所有模型头都使用同一个 `ModelConfig`。它只包含两个变体都会读取的字段：因子和标签、保存目录、数据策略、日期、`val_size`、`metric_splits`、`random_seed` 和 `hyperparameters`。所有训练设置都放进 `hyperparameters` 这一个扁平字典，它会被记录到 `config.json`，因此仅凭 `config.json` 就能重建模型。
 
 基类和自带的模型头会自己从中读取下面这些键（`quantlab.model.base.RESERVED_HYPERPARAMETERS`，即 `TORCH_RESERVED_HYPERPARAMETERS` 与 `LIBRARY_RESERVED_HYPERPARAMETERS` 的并集）：
 
@@ -560,6 +560,16 @@ True
 >>> restored_fold = SeedEnsemble(XGBoostRegressor(sampled), seeds=[0, 1, 2]).load(fold_0.checkpoint)
 >>> [m.model is not None for m in restored_fold.members]
 [True, True, True]
+```
+
+### 只评估测试段
+
+`metric_splits` 指定训练单元在哪些段上评估，可以是 `"train"`、`"val"`、`"test"` 中的任意几个，默认三个都评估。设为 `("test",)` 时，拟合只计算 `test_*` 指标和 `test_loss`，`ic_series.csv` 只有测试段的 bar，评估也只预测测试段的 bar（外加它之前 `warmup_bars` 根的历史），而不是整个收集面板（`predict_scored`）。这时 `XGBoostRegressor` 每轮只评估验证集（用于早停），torch 模型头也不再每个 epoch 计算测试损失。在 walk-forward 训练中每一折都省下这些计算，`cv_mean` 也只含 `cv_mean_test_*`。ensemble 按其成员的段评估。空 tuple 或其他名字会在构建模型时抛出 `ValueError`。
+
+```python
+>>> quick = XGBoostRegressor(replace(config, metric_splits=("test",))).collect()
+>>> sorted({key.split("_")[0] for key in TrainedRun.open(quick.train()).metrics})
+['test']
 ```
 
 ### 在多个模型间共用一个收集面板

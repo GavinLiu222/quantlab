@@ -315,13 +315,17 @@ metrics and writes `ic_series.csv` and `test_predictions.zarr` into the
 directory, so all three come from one set of predictions. It needs no model.
 
 - A model (`BaseModel._evaluate`, called by `train_into` after the variant's
-  `_fit`) predicts its whole collected panel with `predict_panel` and passes
-  its own `evaluation_segments()`. The variant's `_fit` returns only
+  `_fit`) predicts the bars it is scored on with `predict_scored` (from
+  `warmup_bars` bars before its first scored bar to its last) and passes its
+  own `evaluation_segments()`, in which a segment `config.metric_splits`
+  leaves out is empty; the variant's losses cover the same segments
+  (`_scored_bars`). The variant's `_fit` returns only
   `{split}_loss`; `train_into` merges it with the evaluation metrics and
   writes the dict once to the tracking run's summary and to `run.json`.
 - An ensemble (`BaseEnsemble._evaluate`) combines its members' panel
   predictions with `_combine` and passes, per label, the collected panel and
-  `evaluation_segments()` of the first member predicting it, plus each
+  `evaluation_segments()` of the first member predicting it (each member
+  predicts its own scored bars), plus each
   label's member predictions; a label with at least two gets
   `{split}_member_correlation`.
 
@@ -371,7 +375,7 @@ A model's `collect()` leaves it a `CollectedPanel`
 record of the reads (`training_record`) and what it was read for.
 `panel.array(names, dtype)` builds each array once per variable list and type
 and keeps it, so every fit on the panel reads the same float32 features and
-labels (the **Training panel**) and the evaluation (`predict_collected`)
+labels (the **Training panel**) and the evaluation (`predict_scored`)
 reads the features in the panel's own type: on a float32 panel the two share
 one array. Walk-forward folds, a second `train()`, seed-ensemble members
 (`use_panel`) and models sharing a panel through `use_panel` all convert it

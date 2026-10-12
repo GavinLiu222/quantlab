@@ -393,10 +393,9 @@ class LibraryModel(TrainingTargetMixin, BaseModel):
             self._fit_model(train_rows, val_rows)
 
         with Timer(f"{self.class_name}: losses"):
-            metrics = self._split_loss("train", panel, train_bars)
-            for split, bars in (("val", val_bars), ("test", test_bars)):
-                if len(bars):
-                    metrics.update(self._split_loss(split, panel, bars))
+            metrics = {}
+            for split, bars in self._scored_bars(train_bars, val_bars, test_bars):
+                metrics.update(self._split_loss(split, panel, bars))
 
         self._save_model(checkpoint)
         return metrics

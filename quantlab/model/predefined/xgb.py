@@ -678,7 +678,10 @@ class XGBoostRegressor(LibraryModel):
             params["base_score"] = float(np.mean(train_rows.y, dtype=np.float64))
             self._run.summarize({"base_score": params["base_score"]})
         dtrain = xgb.DMatrix(train_rows.x, label=train_rows.y)
-        evals = [(dtrain, "train")]
+        # The validation set is evaluated every round for early stopping; the
+        # training set only feeds the per-round training curve, so it is
+        # left out when the training segment is not scored.
+        evals = [(dtrain, "train")] if "train" in self.config.metric_splits else []
 
         dval = None
         if val_rows is not None:

@@ -601,3 +601,75 @@ def test_a_day_recorded_in_the_sidecar_but_never_appended_is_kept_and_converted_
     # The rerun converts it, its new permatickers (404, 505) included.
     ds.update(granularity="day")
     xr.testing.assert_identical(_whole(ds), _whole(whole))
+
+
+# -- a backfill converts days in worker processes and reserves the axis ---------
+
+
+def test_a_day_converted_elsewhere_appends_as_one_converted_in_place(tmp_path):
+    import pickle
+
+    import xarray as xr
+
+    whole = _dataset(tmp_path / "whole")
+    whole.from_raw_data_chunked(granularity="day")
+
+    for day in (FULL_DAY, HALF_DAY):
+        # Converted by one instance, sent through a pickle, appended by another.
+        converted = pickle.loads(pickle.dumps(_dataset(tmp_path / "daily", start=day, end=day).convert_day(day)))
+        appender = _dataset(tmp_path / "daily", start=day, end=day)
+        trades = Path(appender.config.raw_data_dir_path) / "trades"
+        for path in trades.rglob("*.csv.gz"):
+            path.unlink()  # the appender cannot read the day itself
+        appender.add_converted_day(converted)
+        appender.update(granularity="day")
+
+    xr.testing.assert_identical(_whole(appender), _whole(whole))
+
+
+def test_a_converted_day_of_another_type_is_refused(tmp_path):
+    with pytest.raises(TypeError, match="ConvertedTradeDay"):
+        _dataset(tmp_path).add_converted_day({"day": FULL_DAY})
+
+
+def test_reserved_permatickers_are_on_the_axis_and_a_later_day_appends_without_a_widen(tmp_path, monkeypatch):
+    from quantlab.backend.zarr import XrBackend
+
+    first = _dataset(tmp_path, start=FULL_DAY, end=FULL_DAY)
+    first.reserve_symbols([404, 505, 999])
+    first.from_raw_data_chunked(granularity="day")
+    assert sorted(_whole(first).symbol.values.tolist()) == [101, 202, 303, 404, 505, 999]
+    # 404 and 505 trade first on the next day: no widen, which would rewrite the store.
+    widened = []
+    monkeypatch.setattr(XrBackend, "widen_symbol_axis", lambda *a, **k: widened.append(a))
+    second = _dataset(tmp_path, start=HALF_DAY, end=HALF_DAY)
+    second.update(granularity="day")
+    assert widened == []
+    panel = _whole(second)
+    assert float(panel["volume"].sel(symbol=505).sum()) == 5.0
+    # A reserved permaticker that never traded: zero volume, NaN prices.
+    assert float(panel["volume"].sel(symbol=999).sum()) == 0.0
+    assert bool(panel["close"].sel(symbol=999).isnull().all())
+
+
+def test_a_widen_inside_the_axis_rewrites_the_store_once_and_the_ledger_records_its_order(tmp_path, monkeypatch):
+    import xarray as xr
+
+    from quantlab.backend.zarr import XrBackend
+    from quantlab.dataset._support.ledger import ChunkLedger
+
+    first = _dataset(tmp_path, start=FULL_DAY, end=FULL_DAY)
+    first.reserve_symbols([999])
+    first.from_raw_data_chunked(granularity="day")
+    # 404 and 505 sort before the reserved 999: the next day widens inside the axis.
+    widen = XrBackend.widen_symbol_axis
+    widened = []
+    monkeypatch.setattr(XrBackend, "widen_symbol_axis", lambda self, *a, **k: widened.append(a) or widen(self, *a, **k))
+    second = _dataset(tmp_path, start=HALF_DAY, end=HALF_DAY)
+    second.update(granularity="day")
+    assert len(widened) == 1
+    with xr.open_zarr(second.config.zarr_file_path) as store:
+        axis = store.symbol.values.tolist()
+    assert axis == [101, 202, 303, 404, 505, 999]
+    ledger = ChunkLedger(ChunkLedger.default_path(second.config.zarr_file_path))
+    ledger.assert_consistent(axis, second.config.zarr_file_path)

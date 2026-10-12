@@ -702,7 +702,8 @@ class TorchModel(TrainingTargetMixin, BaseModel):
         self._on_fit_start()
         train_loader = self._loader(panel, train_bars, training=True)
         val_loader = self._loader(panel, val_bars, training=False) if len(val_bars) else None
-        test_loader = self._loader(panel, test_bars, training=False) if len(test_bars) else None
+        scored = dict(self._scored_bars(train_bars, val_bars, test_bars))
+        test_loader = self._loader(panel, test_bars, training=False) if "test" in scored else None
 
         epoch = 0
         for epoch in tqdm(range(epochs), desc=f"{self.class_name}_train"):
@@ -724,8 +725,7 @@ class TorchModel(TrainingTargetMixin, BaseModel):
                 f"{split}_loss": self._eval_loss(
                     epoch, self._loader(panel, bars, training=False)
                 )
-                for split, bars in (("train", train_bars), ("val", val_bars), ("test", test_bars))
-                if split == "train" or len(bars)
+                for split, bars in scored.items()
             }
 
         self._save_model(checkpoint)

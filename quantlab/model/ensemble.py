@@ -416,7 +416,7 @@ class BaseEnsemble(Component, ABC):
         before it and a member's fit and this prediction share one
         conversion. Used to evaluate the combined prediction after training.
         """
-        return [member.predict_collected() for member in self.members]
+        return [member.predict_scored() for member in self.members]
 
     def _combine(self, predictions: list[xr.Dataset]) -> xr.Dataset:
         """Combine the members' prediction panels into the ensemble's prediction.

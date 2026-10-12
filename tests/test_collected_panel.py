@@ -10,7 +10,8 @@ What is locked here, and what turns it red:
 - `collect()` leaves the model a collected panel; `training_record` is its record.
 - A fit's training panel is float32 even when a factor is float64, and is built
   from the collected panel's arrays: every fold of a `train_cv`, and a second
-  `train()`, fit on and are evaluated on the same feature array (one conversion),
+  `train()`, fit on the same feature array and are evaluated on a view of it
+  (one conversion),
   and no fit changes it: for a library head and for a torch head (whose panel
   shares the array's memory), labels included.
 - `use_panel` hands a collected panel to a model configured to read the same
@@ -153,7 +154,9 @@ def test_every_fold_fits_and_is_evaluated_on_one_unchanged_feature_array(tmp_pat
 
     assert len(cv.folds) > 1
     assert len(built_features) == len(predicted) == len(cv.folds) + 1
-    assert all(x is built_features[0] for x in built_features + predicted)
+    assert all(x is built_features[0] for x in built_features)
+    # The evaluation predicts the scored bars: a view of the same array.
+    assert all(np.shares_memory(x, built_features[0]) for x in predicted)
     np.testing.assert_array_equal(built_features[-1], first)
 
 

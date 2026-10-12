@@ -95,6 +95,11 @@ class ModelConfig(FrozenConfig):
     hyperparameters: dict = field(default_factory=dict)
     #: Fraction of the training window held out, at its end, for validation.
     val_size: float = 0.2
+    #: The segments a trained unit is scored on, any of ``"train"``, ``"val"``
+    #: and ``"test"``, in that order: their metrics and losses, and the bars
+    #: its evaluation predicts. ``("test",)`` scores only the test segment and
+    #: predicts only its bars, which a walk-forward training repeats per fold.
+    metric_splits: tuple[str, ...] = ("train", "val", "test")
     #: Seed applied to Python, numpy and, for torch heads, torch before
     #: training.
     random_seed: int = 42

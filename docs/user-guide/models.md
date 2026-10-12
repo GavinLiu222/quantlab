@@ -99,6 +99,10 @@ fields are:
   test windows, both ends inclusive.
 - `val_size`: the share of the training window held out, at its end, for
   validation and early stopping. The default is 0.2.
+- `metric_splits`: the segments the trained model is scored on, any of
+  `"train"`, `"val"` and `"test"`; all three by default. `("test",)` scores and
+  predicts only the test segment, which makes each fit of a walk-forward
+  training faster.
 - `hyperparameters`: every training and architecture setting, one flat dict.
 - `random_seed`.
 
@@ -215,7 +219,8 @@ label on its raw values for each segment: `train_*`, `val_*` and `test_*`,
 each of `loss`, `mse`, `rmse`, `mae`, `r2`, `ic`, `rank_ic`, `icir` and
 `rank_icir`. These are the values the tracking run's summary receives, except
 that the record holds NaN and infinity as null and the summary leaves them
-out. A run with `val_size=0` has no `val_*` keys. Torch heads record the same
+out. A run with `val_size=0` has no `val_*` keys, and a segment
+`metric_splits` leaves out has none. Torch heads record the same
 keys; their `loss` is the training objective on the transformed target.
 
 Two more files sit beside them, so that a new metric or an ensemble can be

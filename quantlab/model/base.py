@@ -48,7 +48,7 @@ from quantlab.runs.trained_run import (
     write_model_config,
     write_model_run,
 )
-from quantlab.model.evaluation import Segments, evaluate
+from quantlab.model.evaluation import SPLITS, Segments, evaluate
 from quantlab.runs.record import DataRecorder, code_of
 from quantlab.utils.symbol_axis import sort_symbol_axis
 from quantlab.model.split import purge_segments
@@ -301,6 +301,9 @@ class BaseModel(Component, ABC):
         TypeError
             If ``config`` is not an instance of ``config_cls``, a factor is
             a label, or a label is not one (see ``_check_roles``).
+        ValueError
+            If ``metric_splits`` is empty or names a segment other than
+            ``"train"``, ``"val"`` and ``"test"``.
 
         Examples
         --------
@@ -313,9 +316,15 @@ class BaseModel(Component, ABC):
                 f"got {type(config).__name__}"
             )
         self._check_roles(config)
+        splits = tuple(config.metric_splits)
+        if not splits or not set(splits) <= set(SPLITS):
+            raise ValueError(
+                f"{self.class_name}: metric_splits must name one or more of {SPLITS}, got {splits!r}"
+            )
         return dataclasses.replace(
             config,
             name=self.import_path,
+            metric_splits=tuple(split for split in SPLITS if split in splits),
             start_date=(
                 Date.START_DATE if config.start_date is None else config.start_date
             ),
@@ -1195,26 +1204,46 @@ class BaseModel(Component, ABC):
             to_array(data, factors), data.timestamp.values, data.symbol.values
         )
 
-    def predict_collected(self) -> xr.Dataset:
-        """Predict the whole collected panel, as ``predict_panel`` would, from the panel's feature array.
+    def predict_scored(self) -> xr.Dataset:
+        """Predict the bars of the collected panel the model is scored on, from the panel's feature array.
 
-        The array is the ``collected_panel``'s, built once in the panel's own
-        type and shared by every caller, so evaluating after each fit does
-        not convert the panel again.
+        The bars run from ``warmup_bars`` bars before the first bar of
+        ``evaluation_segments()`` (its first scored segment) to the last, so
+        a windowed head's first scored bar has its history; each is predicted
+        as ``predict_panel`` would. The array is the ``collected_panel``'s,
+        built once in the panel's own type and shared by every caller, so
+        evaluating after each fit does not convert the panel again.
 
         Returns
         -------
         xr.Dataset
-            One variable per label on the collected panel's coordinates.
+            One variable per label on the predicted bars and the panel's symbols.
 
         Examples
         --------
+        With ``metric_splits=("test",)`` only the 10 test bars are predicted:
+
         >>> model.collect().train()
-        >>> dict(model.predict_collected().sizes)
-        {'timestamp': 40, 'symbol': 3}
+        >>> model.predict_scored().sizes["timestamp"]
+        10
         """
         self._panel_data()
-        return self._predict_arrays(*self.collected_panel.array(self.get_factor_names()))
+        x, timestamps, symbols = self.collected_panel.array(self.get_factor_names())
+        scored = [stamps for _, stamps in self.evaluation_segments().splits()]
+        if scored:
+            bars = np.concatenate(scored)
+            first = max(0, int(np.searchsorted(timestamps, bars.min())) - self.warmup_bars)
+            last = int(np.searchsorted(timestamps, bars.max(), side="right"))
+            x, timestamps = x[first:last], timestamps[first:last]
+        return self._predict_arrays(x, timestamps, symbols)
+
+    def _scored_bars(self, train_bars, val_bars, test_bars) -> list[tuple[str, object]]:
+        """``(split, bars)`` of the segments a fit scores: named by ``metric_splits``, a non-train one non-empty."""
+        return [
+            (split, bars)
+            for split, bars in zip(SPLITS, (train_bars, val_bars, test_bars))
+            if split in self.config.metric_splits and (split == "train" or len(bars))
+        ]
 
     def _predict_arrays(self, x: np.ndarray, timestamps: np.ndarray, symbols: np.ndarray) -> xr.Dataset:
         """Predict a ``[T, S, F]`` feature array on its coordinates; see ``predict_panel``."""
@@ -1387,23 +1416,26 @@ class BaseModel(Component, ABC):
         ``ic_series.csv`` and ``test_predictions.zarr`` in ``run_dir``.
         """
         data = self._panel_data()
+        segments = self.evaluation_segments()
         labels = {
             str(name): label
             for label in self.config.labels
             for name in self._variable_names(label)
         }
         return evaluate(
-            self.predict_collected(),
+            self.predict_scored(),
             data,
             labels=labels,
             label_scales=self.label_scales,
-            segments=self.evaluation_segments(),
+            segments=segments,
             test_bounds=self.test_bounds,
             run_dir=run_dir,
         )
 
     def evaluation_segments(self) -> Segments:
         """The bars the model is scored on: its purged train, validation and test segments.
+
+        A segment ``config.metric_splits`` does not name is empty.
 
         The collected panel's timestamps, cut as training cuts them (see
         ``_fit_segments``): the training window split by ``val_size``, then
@@ -1431,8 +1463,11 @@ class BaseModel(Component, ABC):
         ['train', 'test']
         """
         data = self._panel_data()
-        train, val, test = (part.timestamp.values for part in self._fit_segments(data))
-        return Segments(train=train, val=val, test=test)
+        parts = zip(SPLITS, (part.timestamp.values for part in self._fit_segments(data)))
+        return Segments(**{
+            split: stamps if split in self.config.metric_splits else stamps[:0]
+            for split, stamps in parts
+        })
 
     def check_hyperparameters(self) -> None:
         """Validate the reserved hyperparameters this variant reads.

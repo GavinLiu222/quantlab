@@ -289,8 +289,8 @@ def test_model_config_holds_only_the_shared_fields():
     assert set(ModelConfig.__dataclass_fields__) == {
         "factors", "labels", "model_save_dir", "factor_data_strategy",
         "label_data_strategy", "start_date", "end_date", "hyperparameters",
-        "val_size", "random_seed", "train_start", "train_end", "test_start",
-        "test_end", "tracker", "name",
+        "val_size", "metric_splits", "random_seed", "train_start", "train_end",
+        "test_start", "test_end", "tracker", "name",
     }
 
 

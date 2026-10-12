@@ -155,7 +155,7 @@ class SeedEnsemble(BaseEnsemble):
 
     def _member_panel_predictions(self) -> list[xr.Dataset]:
         """Predict the one shared collected panel with every member, from its one feature array."""
-        return [member.predict_collected() for member in self.members]
+        return [member.predict_scored() for member in self.members]
 
     @property
     def config(self) -> SeedEnsembleConfig:

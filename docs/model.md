@@ -155,7 +155,7 @@ A trained model is scored after training, by the Evaluation in `quantlab.model.e
 - `mse`, `rmse`, `mae` and `r2` only for a label the model predicts on its own scale, `label_scales` `"raw"`: a head fitting a rank or a z-score (a `training_target`, or its own `_transform_target`) predicts in other units than the label, so it reports the IC family only.
 - `qlike` and `variance_ratio` for a volatility label predicted on its own scale (see Volatility labels below).
 
-The head adds `loss`: its loss on the training target (the label after the head's per-bar `_transform_target`, see Extending), computed per bar and averaged over bars, so every bar weighs the same whatever its number of symbols. For a library head that loss is `_loss` (MSE by default); for a torch head it is `_val_one_batch`, by default its `_loss` (see Train a torch model). The loss and the evaluation metrics, merged, go once to the tracking run's summary as `train_*`, `val_*` and `test_*` (see Track experiments), and `train()` records the same dict as the `metrics` of its `run.json`, with NaN and infinity as null. There are no `val_*` keys when the run has no validation segment (`val_size=0`), and no `test_*` keys when the test segment has no bars.
+The head adds `loss`: its loss on the training target (the label after the head's per-bar `_transform_target`, see Extending), computed per bar and averaged over bars, so every bar weighs the same whatever its number of symbols. For a library head that loss is `_loss` (MSE by default); for a torch head it is `_val_one_batch`, by default its `_loss` (see Train a torch model). The loss and the evaluation metrics, merged, go once to the tracking run's summary as `train_*`, `val_*` and `test_*` (see Track experiments), and `train()` records the same dict as the `metrics` of its `run.json`, with NaN and infinity as null. There are no `val_*` keys when the run has no validation segment (`val_size=0`), no `test_*` keys when the test segment has no bars, and none for a segment `metric_splits` leaves out (see Score only the test segment).
 
 ```python
 >>> metrics = run.metrics
@@ -241,7 +241,7 @@ Shipped heads: `XGBoostRegressor`, `XGBTDRegressor` and `RealMLPRegressor`, all 
 
 ### Configuration and reserved hyperparameters
 
-Every head takes one `ModelConfig`. It holds only what both variants read: the factors and labels, the save directory, the data strategies, the dates, `val_size`, `random_seed` and `hyperparameters`. Every training setting goes in `hyperparameters`, one flat dict that is recorded in `config.json`, so `config.json` alone rebuilds the model.
+Every head takes one `ModelConfig`. It holds only what both variants read: the factors and labels, the save directory, the data strategies, the dates, `val_size`, `metric_splits`, `random_seed` and `hyperparameters`. Every training setting goes in `hyperparameters`, one flat dict that is recorded in `config.json`, so `config.json` alone rebuilds the model.
 
 The base classes and the shipped heads read these keys from it themselves (`quantlab.model.base.RESERVED_HYPERPARAMETERS`, the union of `TORCH_RESERVED_HYPERPARAMETERS` and `LIBRARY_RESERVED_HYPERPARAMETERS`):
 
@@ -560,6 +560,16 @@ True
 >>> restored_fold = SeedEnsemble(XGBoostRegressor(sampled), seeds=[0, 1, 2]).load(fold_0.checkpoint)
 >>> [m.model is not None for m in restored_fold.members]
 [True, True, True]
+```
+
+### Score only the test segment
+
+`metric_splits` names the segments a trained unit is scored on, any of `"train"`, `"val"` and `"test"`; by default all three. With `("test",)` a fit computes only the `test_*` metrics and the `test_loss`, `ic_series.csv` holds only test bars, and the evaluation predicts only the test bars, plus `warmup_bars` bars of history before them, rather than the whole collected panel (`predict_scored`). `XGBoostRegressor` then evaluates only the validation set each round, for early stopping, and a torch head no longer computes the test loss each epoch. In a walk-forward training every fold saves that work, and `cv_mean` holds only `cv_mean_test_*`. An ensemble scores the segments of its members. An empty tuple or another name raises `ValueError` when the model is built.
+
+```python
+>>> quick = XGBoostRegressor(replace(config, metric_splits=("test",))).collect()
+>>> sorted({key.split("_")[0] for key in TrainedRun.open(quick.train()).metrics})
+['test']
 ```
 
 ### Share one collected panel between models
