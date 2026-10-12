@@ -136,6 +136,13 @@ OWN_CAP = "_own_cap"
 ORTHOGONALIZATION_WEIGHTINGS = ("sqrt_cap", "cap", "equal")
 
 
+#: Bars of history ``BarraStyleParameters.warmup_bars`` adds beyond the longest
+#: window: on the Sharadar and FRED stores the first exposure computed from
+#: exactly 1 + RSTR's window and lag differed from the whole computation, and
+#: from one bar more it did not (#252, measured 2026-10-12).
+WARMUP_MARGIN_BARS = 5
+
+
 @dataclass(frozen=True)
 class BarraStyleParameters:
     """Formula parameters for ``BarraStyle``, read from ``config.kwargs``.
@@ -317,7 +324,7 @@ class BarraStyleParameters:
     >>> len(params.panel_columns)
     32
     >>> params.warmup_bars
-    526
+    531
     """
 
     price_column: str = "adjClose"
@@ -487,17 +494,19 @@ class BarraStyleParameters:
 
     @property
     def warmup_bars(self) -> int:
-        """Bars of history the first exposure needs: the longest window plus one return.
+        """Bars of history the first exposure needs: the longest window plus one return, plus a margin.
 
-        The longest is RSTR's, its window plus its lag. Set
-        ``FactorConfig.warmup_bars`` to at least this.
+        The longest is RSTR's, its window plus its lag. The margin of
+        ``WARMUP_MARGIN_BARS`` covers an exposure computed from exactly that
+        history differing from the whole computation on the Sharadar and FRED
+        stores (#252). Set ``FactorConfig.warmup_bars`` to at least this.
 
         Examples
         --------
         >>> BarraStyleParameters().warmup_bars
-        526
+        531
         """
-        return 1 + max(
+        return 1 + WARMUP_MARGIN_BARS + max(
             self.beta_window,
             self.momentum_window + self.momentum_lag,
             self.dastd_window,
@@ -857,7 +866,7 @@ class BarraStyle(FactorKunQuant):
         ``mode`` must be ``"batch"``, ``data_columns`` must name exactly
         ``BarraStyleParameters.panel_columns``, ``factor_names`` may pick any
         subset of the outputs, and ``warmup_bars`` should be at least
-        ``BarraStyleParameters.warmup_bars`` (526 by default).
+        ``BarraStyleParameters.warmup_bars`` (531 by default).
 
     Raises
     ------
@@ -873,7 +882,7 @@ class BarraStyle(FactorKunQuant):
     ``risk_free`` variable on the same symbols.
 
     >>> factor = BarraStyle(FactorConfig(
-    ...     warmup_bars=526,
+    ...     warmup_bars=531,
     ...     dataset=[prices, daily, risk_free],
     ...     mode="batch",
     ...     data_columns=("adjClose", "marketcap", "risk_free", "close", "volume",

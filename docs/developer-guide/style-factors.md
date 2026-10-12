@@ -68,7 +68,7 @@ from quantlab.factor.predefined.barra import BarraStyle, BarraStyleParameters
 
 params = BarraStyleParameters(risk_free_symbol="DTB3")
 factor = BarraStyle(FactorConfig(
-    warmup_bars=params.warmup_bars,            # 526
+    warmup_bars=params.warmup_bars,            # 531
     dataset=MergedDataset([prices, daily, art, history, industry, share_class, dtb3]),
     mode="batch",
     data_columns=params.panel_columns,
