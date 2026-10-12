@@ -6,7 +6,10 @@ as one value per observation date. ``FredAcquisition``
 tier, ``month=YYYY-MM/`` parquet shards whose ``symbol`` is the series id
 and whose ``value`` is the published number, NaN where FRED has none (a
 holiday). ``FredRateDataset`` turns one series of that tier into a panel
-with one symbol, the series id, on FRED's own observation dates:
+with one symbol, the series id, on the dates FRED published a value for (a
+holiday FRED lists without one is no bar: a factor merging the rate with
+stock prices counts its warm-up on the merged calendar, and holiday bars
+would shorten it):
 
 - ``rate``: the value as published, in annualized percent;
 - ``risk_free``: ``rate / 100 / days_per_year``, a decimal return per bar
@@ -147,12 +150,12 @@ class FredRateDataset(BaseDataset):
     def _raw_data_to_xr(self) -> xr.Dataset:
         """Return the panel over the configured window."""
         config = self.config
-        frame = self._observations()
+        frame = self._observations().filter(pl.col("value").is_not_null() & pl.col("value").is_not_nan())
         if config.start_date is not None:
             frame = frame.filter(pl.col("timestamp") >= pd.Timestamp(config.start_date))
         if config.end_date is not None:
             frame = frame.filter(pl.col("timestamp") <= pd.Timestamp(config.end_date))
-        rate = frame.get_column("value").cast(pl.Float64).fill_null(np.nan).to_numpy()
+        rate = frame.get_column("value").cast(pl.Float64).to_numpy()
         return xr.Dataset(
             {
                 "rate": (

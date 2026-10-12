@@ -23,6 +23,10 @@ SERIES = {  # SYNTHETIC rates, annualized percent; None is a holiday.
 }
 
 
+#: The dates FRED publishes a value for: the panel's bars.
+PUBLISHED = {d: v for d, v in SERIES.items() if v is not None}
+
+
 class FakeFred:
     """Answers ``fredgraph.csv`` from ``rows``; ``missing`` is how a gap is written."""
 
@@ -126,21 +130,22 @@ def test_an_update_fetches_only_from_the_watermark_on(tmp_path, fred):
 
     (call,) = fake.calls
     assert (call["cosd"], call["coed"]) == ("2024-01-05", "2024-01-09")
-    assert _rates(_panel(tmp_path)) == pytest.approx(
-        {**{d: (np.nan if v is None else v) for d, v in SERIES.items()}}, nan_ok=True
-    )
+    assert _rates(_panel(tmp_path)) == pytest.approx(PUBLISHED)
 
 
 @pytest.mark.parametrize("missing", ["", "."])
-def test_a_missing_value_becomes_nan_not_an_error(tmp_path, fred, missing):
+def test_a_date_without_a_value_is_no_bar_not_an_error(tmp_path, fred, missing):
+    """FRED lists market holidays without a value; a factor merging the rate
+    with stock prices counts its warm-up on the merged calendar, so a holiday
+    bar would shorten it (BarraStyle's momentum, 2026-10-12)."""
     fred(missing=missing)
 
     result = _acquisition(tmp_path).download().last_result
-    rates = _rates(_panel(tmp_path))
+    panel = _panel(tmp_path)
 
     assert result.failures == {}
-    assert np.isnan(rates["2024-01-04"])
-    assert rates["2024-01-05"] == 5.20
+    assert list(_rates(panel)) == list(PUBLISHED)
+    assert not np.isnan(panel["rate"].values).any()
 
 
 def test_a_server_error_fails_the_series_and_leaves_no_watermark(tmp_path, fred):
@@ -273,7 +278,7 @@ def test_registry_run_and_convert_build_the_store(tmp_path, fred):
             raw_data_dir_path=str(tmp_path / "downloads" / "fred"),
         )
     ).panel("2024-01-01", "2024-12-31")
-    assert panel.sizes["timestamp"] == len(SERIES)
+    assert panel.sizes["timestamp"] == len(PUBLISHED)
 
 
 def test_no_test_can_reach_fred_through_the_real_transport():
@@ -305,7 +310,7 @@ def test_an_update_appends_to_an_existing_store(tmp_path, fred):
     _dataset(tmp_path).update()
 
     rates = _rates(_dataset(tmp_path).panel("2024-01-01", "2024-12-31").load())
-    assert list(rates) == list(SERIES)
+    assert list(rates) == list(PUBLISHED)
     assert rates["2024-01-09"] == 5.21
 
 
