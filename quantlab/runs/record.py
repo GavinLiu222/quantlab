@@ -160,12 +160,12 @@ def _dataset_fingerprint(
 
     A panel is on ``(timestamp, symbol)``; a factor risk store's rows also
     have ``factor`` axes (``(timestamp, factor)``, ``(timestamp, factor_i,
-    factor_j)``). The dataset is sorted by timestamp and symbol first, so the
-    digest does not depend on their order; another axis is hashed in the
-    order it is stored, which is its meaning (the factor order). Each
-    variable has its own sha256 over its values, ``timestamp`` first and its
-    other axes in their own order, in the dtype they are stored in, never
-    up-cast: a float variable after NaN and signed-zero canonicalisation in
+    factor_j)``). Every axis is hashed in the order it is stored, never sorted
+    first, so a store whose symbol axis grew at its end is read once and not
+    copied (ADR 0032); the same values in another order give another digest.
+    Each variable has its own sha256 over its values, ``timestamp`` first
+    and its other axes in their own order, in the dtype they are stored in,
+    never up-cast: a float variable after NaN and signed-zero canonicalisation in
     its own precision, a datetime one as its int64 ticks, an object one as
     its text, any other as it is. The digest is the sha256 of, in order: the
     int64 nanosecond timestamps, the NUL-joined symbol names, for each other
@@ -223,9 +223,6 @@ def _dataset_fingerprint(
             f"(data variables: {sorted(ds.data_vars)})"
         )
 
-    sorted_dims = [dim for dim in ("timestamp", "symbol") if dim in ds.dims]
-    if not all(ds.indexes[dim].is_monotonic_increasing for dim in sorted_dims):
-        ds = ds.sortby(sorted_dims)  # a store is sorted already: no copy then
     if workers is None:
         small = sum(ds[name].nbytes for name in names) < _BLOCK_BYTES
         workers = 1 if small else min(len(names), os.cpu_count() or 1, _HASH_WORKERS)

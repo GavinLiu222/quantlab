@@ -187,11 +187,13 @@ timestamp and the axis sizes. The per-variable digests and dtypes are kept in
 the record (`variable_digests`, `variable_dtypes`), so a mismatch warning can
 say which variables changed. Values are hashed in the dtype they are stored
 in, never up-cast, so a float32 store is hashed as float32 and a variable
-whose dtype changed has another digest. An unsorted panel is sorted first so
-axis order does not matter (a store is sorted already and is not copied), and
-every NaN is rewritten to one canonical bit pattern and every `-0.0` to `0.0`
-in its own precision, because otherwise two reads of identical data could
-hash differently.
+whose dtype changed has another digest. Every axis is hashed in the order it
+is stored, never sorted first, so a store whose symbol axis grew at its end
+(ADR 0032) is not copied, and the ordered symbol names are part of the digest:
+the same values in another symbol order have another digest. Every NaN is
+rewritten to one canonical bit pattern and every `-0.0` to `0.0` in its own
+precision, because otherwise two reads of identical data could hash
+differently.
 
 Variables are hashed in parallel threads, one variable per thread, up to
 eight and the CPU count; a request smaller than one block is hashed in one

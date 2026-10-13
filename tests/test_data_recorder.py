@@ -627,3 +627,36 @@ def test_build_settings_are_recorded_and_decide_the_digest(prices, warnings_logg
 def test_a_dataset_without_build_settings_records_none(prices):
     (entry,) = _record(prices, ("2024-01-02", "2024-01-05"))["data"]
     assert "settings" not in entry
+
+
+@pytest.fixture
+def unsorted_store(tmp_path):
+    """A zarr store whose symbol axis is not sorted (it grew at its end)."""
+    path = tmp_path / "unsorted.zarr"
+    _frame(symbols=("CCC", "AAA", "BBB")).to_zarr(path)
+    return path
+
+
+def test_an_unsorted_store_is_hashed_in_its_stored_order_without_a_copy(
+    unsorted_store, monkeypatch
+):
+    def no_sorted_copy(self, *args, **kwargs):
+        raise AssertionError("the fingerprint sorted a copy of the store")
+
+    monkeypatch.setattr(xr.Dataset, "sortby", no_sorted_copy)
+    first = fingerprint._dataset_fingerprint(xr.open_zarr(unsorted_store), ["close"])
+    second = fingerprint._dataset_fingerprint(xr.open_zarr(unsorted_store), ["close"])
+
+    assert first == second
+    assert first["n_symbols"] == 3
+
+
+def test_the_same_values_in_another_symbol_order_have_another_digest(unsorted_store):
+    stored = xr.open_zarr(unsorted_store)
+    reordered = stored.isel(symbol=[1, 2, 0])  # AAA, BBB, CCC: same cells
+
+    stored_record = fingerprint._dataset_fingerprint(stored, ["close", "volume"])
+    reordered_record = fingerprint._dataset_fingerprint(reordered, ["close", "volume"])
+
+    assert stored_record["digest"] != reordered_record["digest"]
+    assert stored_record["variable_digests"] != reordered_record["variable_digests"]
