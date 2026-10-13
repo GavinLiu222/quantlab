@@ -197,11 +197,11 @@ class TorchModel(TrainingTargetMixin, BaseModel):
         step, as the cross-section dataset needs) and ``num_workers``
         (default 0) from the hyperparameters, shuffles only when training
         with a generator seeded from ``config.random_seed``, and never drops
-        the last batch. Memory is pinned only when ``pin_memory`` (default
-        True) allows it, the panel sits in CPU memory, workers load it and
-        the model runs on CUDA. Pinning copies every batch once more, on one
-        thread, so a large batch can make that thread the bottleneck;
-        ``pin_memory=False`` then lets the batch go to the GPU unpinned. Workers persist
+        the last batch. Memory is pinned only for a panel in CPU memory and
+        a model on CUDA: unset, ``pin_memory`` pins only when workers load
+        the panel; True pins with or without workers; False never pins.
+        Pinning copies every batch once more, on one thread, so a large
+        batch can make that thread the bottleneck. Workers persist
         across epochs: a fit builds its loaders once and passes over them
         every epoch, so they are not restarted each time.
 
@@ -224,8 +224,7 @@ class TorchModel(TrainingTargetMixin, BaseModel):
             generator=torch.Generator().manual_seed(self.config.random_seed),
             drop_last=False,
             pin_memory=(
-                self._pin_memory
-                and bool(workers)
+                (bool(workers) if self._pin_memory is None else self._pin_memory)
                 and self._panel_device == "cpu"
                 and self.device == "cuda"
             ),
@@ -332,19 +331,19 @@ class TorchModel(TrainingTargetMixin, BaseModel):
         return int(self.config.hyperparameters.get("num_workers", 0) or 0)
 
     @property
-    def _pin_memory(self) -> bool:
-        """``hyperparameters["pin_memory"]``, True when unset.
+    def _pin_memory(self) -> bool | None:
+        """``hyperparameters["pin_memory"]``, None when unset.
 
         Raises
         ------
         ValueError
-            If it is not a bool.
+            If it is set to anything but True or False.
         """
-        pin = self.config.hyperparameters.get("pin_memory", True)
-        if not isinstance(pin, bool):
+        pin = self.config.hyperparameters.get("pin_memory")
+        if pin is not None and not isinstance(pin, bool):
             raise ValueError(
-                f"{self.class_name}: hyperparameters['pin_memory'] must be True or "
-                f"False, got {pin!r}"
+                f"{self.class_name}: hyperparameters['pin_memory'] must be True, "
+                f"False or unset, got {pin!r}"
             )
         return pin
 

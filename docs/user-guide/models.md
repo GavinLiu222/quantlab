@@ -124,8 +124,9 @@ heads read them themselves (`quantlab.model.base.RESERVED_HYPERPARAMETERS`).
   then reports `"standardized"`; the metrics still score the raw label. Any
   other value raises `ValueError` in `collect()` or when training starts.
 - `batch_size` (default `None`, one item per step), `num_workers`
-  (default 0) and `pin_memory` (default `True`; `False` never pins
-  batches): the torch head's default data loader.
+  (default 0) and `pin_memory` (unset pins a CPU panel's batches only
+  with workers, `True` also without, `False` never): the torch head's
+  default data loader.
 - `panel_device` (default `"auto"`): where a torch head keeps its training
   panel. `"auto"` uses the GPU when the panel takes at most half the free
   GPU memory and no loader workers read it, `"cuda"` and `"cpu"` force a

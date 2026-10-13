@@ -253,7 +253,7 @@ True
 | `early_stopping_patience` | 自带的库模型头：容忍多少轮（或库自己的单位）没有改善 | 5 |
 | `training_target` | `LibraryModel`：库拟合的逐 bar 截面目标，`"cs_rank"` 或 `"cs_zscore"`；其他值在 `collect()` 或训练开始时抛出 `ValueError`，此时还没有读取数据、也没有开始拟合（见“在截面目标上训练”） | 不设置：原始标签 |
 | `batch_size`、`num_workers` | `TorchModel`：默认的 `_dataloader` | `None`（每步一项）、0 |
-| `pin_memory` | `TorchModel`：为 `False` 时默认的 `_dataloader` 从不锁页 | `True` |
+| `pin_memory` | `TorchModel`：模型在 CUDA 上时，默认的 `_dataloader` 是否锁页内存里面板的 batch；不设只在有 worker 时锁页，`True` 没有 worker 也锁页，`False` 从不锁页 | 不设 |
 | `panel_device` | `TorchModel`：训练面板放在哪里，`"auto"`、`"cuda"` 或 `"cpu"`（见“把训练面板放在 GPU 上”） | `"auto"` |
 | `panel_dtype` | `TorchModel`：特征的存储精度，`"float32"` 或 `"float16"` | `"float32"` |
 
@@ -633,7 +633,7 @@ torch 模型头（`TorchModel`）通过标准的 PyTorch 组件取数据。基�
 | 钩子 | 默认行为 |
 |---|---|
 | `_dataset(panel, bars, training)`：覆盖 `bars` 的 PyTorch `Dataset` | `CrossSectionDataset`，每个 bar 一项；`SymbolSequenceDataset` 提供 Qlib 式的逐标的样本（见下文） |
-| `_dataloader(dataset, training)`：`DataLoader` | 从超参数读取 `batch_size` 和 `num_workers`（默认 `None`，即每步一项，以及 0）；只在训练时打乱，生成器用 `random_seed` 播种；从不丢弃最后一批；worker 跨 epoch 保留；只有模型在 CUDA 上、内存里的面板由 worker 读取时才锁页内存，`pin_memory` 为 `False` 时不锁页 |
+| `_dataloader(dataset, training)`：`DataLoader` | 从超参数读取 `batch_size` 和 `num_workers`（默认 `None`，即每步一项，以及 0）；只在训练时打乱，生成器用 `random_seed` 播种；从不丢弃最后一批；worker 跨 epoch 保留；只有模型在 CUDA 上、面板在内存里时才锁页，默认还要求由 worker 读取（`pin_memory`） |
 | `_transform_feature(x)`：一个 batch 的原始 `x`（缺失处为 NaN）到网络输入 | 截断到 ±3，NaN 变 0 |
 | `_transform_target(y, training)`：一个 bar 的原始标签到 `(target, keep)`；`keep` 把标的从损失里去掉 | `(y, None)`；工具函数 `cs_rank_norm`（Qlib `CSRankNorm`）、`cs_zscore`、`drop_extreme` |
 | `_init_optim(model)`：训练步能理解的任何对象，例如优化器字典 | Adam，学习率 `hyperparameters["lr"]`（`1e-3`） |
@@ -931,7 +931,7 @@ torch 模型头把收集到的整个面板（特征、训练目标、掩码和�
 - `"cuda"` 强制放到 GPU 上。与 `num_workers > 0` 一起使用时会在训练前抛出 `ValueError`，因为数据加载器的 worker 进程不能索引 CUDA 张量；没有可用的 CUDA 设备时也会抛出。
 - `"cpu"` 强制放在内存里。多个运行共用一块 GPU 时使用。
 
-默认的数据加载器只在模型位于 CUDA 上、内存里的面板由 worker 读取时才锁页内存，因为实测不用 worker 时锁页反而让加载变慢。锁页要在单个线程上把每个 batch 再拷贝一次，batch 很大时这个线程可能拖慢整个 epoch；设 `"pin_memory": False` 可以关掉。
+默认的数据加载器只在模型位于 CUDA 上、内存里的面板由 worker 读取时才锁页内存，因为实测不用 worker 时锁页反而让加载变慢。锁页要在单个线程上把每个 batch 再拷贝一次，batch 很大时这个线程可能拖慢整个 epoch；设 `"pin_memory": False` 可以关掉，设为 `True` 则没有 worker 时也锁页。
 
 `panel_dtype="float16"` 以半精度存储特征，面板最大的部分减半，全市场的面板因此能放进 GPU。每个 batch 在 `_transform_feature` 之前转回 float32，所以网络和损失仍然以 float32 运行。超出 float16 范围（±65504）的特征会抛出 `ValueError`，而不是变成无穷大；因子通常早已做过 z-score，远到不了这个范围。下面把“训练 torch 模型”里的最小模型头以 float16 存储特征重新训练一次：
 

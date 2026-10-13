@@ -140,10 +140,21 @@ def test_pin_memory_false_turns_pinning_off(tmp_path, monkeypatch):
     default rule says so.
     """
     assert not _loader_pins(tmp_path, monkeypatch, panel_on="cpu", num_workers=2, pin_memory=False)
+
+
+def test_pin_memory_true_pins_a_cpu_panel_without_workers(tmp_path, monkeypatch):
+    """`pin_memory=True` pins a CPU panel's batches with or without workers.
+
+    A GPU panel is never pinned: its batches are on the device already.
+
+    RED under: `True` meaning only "keep the default rule".
+    """
+    assert _loader_pins(tmp_path, monkeypatch, panel_on="cpu", pin_memory=True)
     assert _loader_pins(tmp_path, monkeypatch, panel_on="cpu", num_workers=2, pin_memory=True)
+    assert not _loader_pins(tmp_path, monkeypatch, panel_on="cuda", pin_memory=True)
 
 
-def test_pin_memory_must_be_a_bool(tmp_path):
+def test_pin_memory_must_be_a_bool_or_unset(tmp_path):
     with pytest.raises(ValueError, match="pin_memory"):
         _head(tmp_path, pin_memory="no")
 
