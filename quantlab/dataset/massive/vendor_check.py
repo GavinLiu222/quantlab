@@ -12,10 +12,9 @@ the vendor's bars of the same day, after two alignments:
   close bars on opposite sides: Massive's bar is ``[t, t + 1m)``, a Trade
   bar ``(t, t + 1m]``, so a trade stamped exactly on a minute (to the
   nanosecond) falls in neighbouring bars on the two sides.
-- **Symbols.** A vendor ticker is put on the permaticker the conversion
-  mapped it to that day; one the conversion did not keep (unmapped, the
-  busier ticker of a pair won, or off the roster: all three are counted
-  together) is counted as ``vendor_unmapped`` and not compared.
+- **Symbols.** Both sides are keyed by the Massive ticker (ADR 0031). A
+  vendor ticker off the conversion's roster is counted as
+  ``vendor_off_roster`` and not compared.
 
 Massive emits a minute bar only when it holds a trade that sets a price,
 so a Trade bar counts as present when it has prices (a ``close``); a bar of
@@ -30,7 +29,7 @@ check ran, not that it passed, until tolerances are set.
 
 Examples
 --------
->>> check = check_minute_bars(bars, vendor, mapping, labels)
+>>> check = check_minute_bars(bars, vendor, labels)
 >>> check["status"], check["both"] == check["agree"]["close"]
 ('checked', True)
 """
@@ -65,21 +64,24 @@ _MINUTE_NS = 60 * 1_000_000_000
 
 
 def check_minute_bars(
-    bars: pl.DataFrame, vendor: pl.DataFrame, mapping: dict[str, int], labels: pl.Series
+    bars: pl.DataFrame,
+    vendor: pl.DataFrame,
+    labels: pl.Series,
+    tickers: tuple[str, ...] | None = None,
 ) -> dict:
     """Compare one session's one-minute Trade bars with Massive's minute aggregates.
 
     Parameters
     ----------
     bars : pl.DataFrame
-        The Trade bars of the day: ``symbol`` (the permaticker, Int64),
+        The Trade bars of the day: ``symbol`` (the Massive ticker),
         ``timestamp`` (the end label) and the ``COMPARED`` variables.
     vendor : pl.DataFrame
         The day's minute aggregates as ``raw.read_aggregates`` returns them.
-    mapping : dict[str, int]
-        The tickers the conversion kept that day, each with its permaticker.
     labels : pl.Series
         The session's bar labels (``Datetime("ns")``).
+    tickers : tuple of str, optional
+        The conversion's roster; ``None`` for every ticker.
 
     Returns
     -------
@@ -87,9 +89,9 @@ def check_minute_bars(
         JSON-ready: ``status`` (``"checked"``); ``ours_bars`` (with
         prices), ``ours_volume_only``, ``vendor_bars``, ``both``,
         ``ours_only``, ``vendor_only``;
-        ``vendor_outside_session``, ``vendor_unmapped``; ``agree`` (bars
+        ``vendor_outside_session``, ``vendor_off_roster``; ``agree`` (bars
         agreeing, per variable); ``worst`` (per disagreeing variable, the
-        ``ticker``, ``permaticker``, ``bar``, ``ours`` and ``vendor`` values
+        ``ticker``, ``bar``, ``ours`` and ``vendor`` values
         of the largest difference, a NaN price shown as ``None``); and up to
         ``SAMPLE`` bars of each one-sided set as ``ours_only_sample`` and
         ``vendor_only_sample``.
@@ -98,36 +100,27 @@ def check_minute_bars(
     --------
     With the bars and vendor file of 2016-11-25 (a half day)::
 
-        check = check_minute_bars(bars, read_aggregates(path), mapping, labels)
+        check = check_minute_bars(bars, read_aggregates(path), labels)
         check["both"], check["agree"]["close"]  # (616733, 616723)
     """
-    tickers = pl.DataFrame(
-        {"ticker": list(mapping), "permaticker": list(mapping.values())},
-        schema={"ticker": pl.String, "permaticker": pl.Int64},
-    )
     grid = pl.DataFrame({"timestamp": labels.cast(pl.Datetime("ns"))})
     theirs = vendor.with_columns(
         (pl.col("window_start") + _MINUTE_NS).cast(pl.Datetime("ns")).alias("timestamp")
     )
     in_session = theirs.join(grid, on="timestamp", how="semi")
-    mapped = in_session.join(tickers, on="ticker", how="inner")
-    theirs = mapped.select(
-        "ticker",
-        pl.col("permaticker").alias("symbol"),
+    rostered = in_session if tickers is None else in_session.filter(pl.col("ticker").is_in(list(tickers)))
+    theirs = rostered.select(
+        pl.col("ticker").alias("symbol"),
         "timestamp",
         *(pl.col(column).cast(pl.Float64).alias(f"{name}_vendor") for name, column in COMPARED.items()),
     )
-    ours = (
-        bars.filter(pl.col("close").is_not_null() & pl.col("close").is_not_nan())
-        .select(
-            pl.col("symbol").cast(pl.Int64),
-            pl.col("timestamp").cast(pl.Datetime("ns")),
-            *(pl.col(name).cast(pl.Float64).alias(f"{name}_ours") for name in COMPARED),
-        )
-        .join(tickers.rename({"permaticker": "symbol"}), on="symbol", how="left")
+    ours = bars.filter(pl.col("close").is_not_null() & pl.col("close").is_not_nan()).select(
+        pl.col("symbol").cast(pl.String),
+        pl.col("timestamp").cast(pl.Datetime("ns")),
+        *(pl.col(name).cast(pl.Float64).alias(f"{name}_ours") for name in COMPARED),
     )
     keys = ["symbol", "timestamp"]
-    both = ours.drop("ticker").join(theirs, on=keys, how="inner")
+    both = ours.join(theirs, on=keys, how="inner")
     ours_only = ours.join(theirs, on=keys, how="anti")
     vendor_only = theirs.join(ours, on=keys, how="anti")
 
@@ -146,8 +139,7 @@ def check_minute_bars(
                 .row(0, named=True)
             )
             worst[name] = {
-                "ticker": row["ticker"],
-                "permaticker": int(row["symbol"]),
+                "ticker": row["symbol"],
                 "bar": row["timestamp"].isoformat(),
                 "ours": _json_float(row[f"{name}_ours"]),
                 "vendor": _json_float(row[f"{name}_vendor"]),
@@ -162,7 +154,7 @@ def check_minute_bars(
         "ours_only": ours_only.height,
         "vendor_only": vendor_only.height,
         "vendor_outside_session": vendor.height - in_session.height,
-        "vendor_unmapped": in_session.height - mapped.height,
+        "vendor_off_roster": in_session.height - rostered.height,
         "agree": agree,
         "worst": worst,
         "ours_only_sample": _sample(ours_only),
@@ -176,8 +168,8 @@ def _json_float(value: float) -> float | None:
 
 
 def _sample(frame: pl.DataFrame) -> list[dict]:
-    """Return the first ``SAMPLE`` bars of ``frame`` as ticker, permaticker and bar."""
+    """Return the first ``SAMPLE`` bars of ``frame`` as ticker and bar."""
     return [
-        {"ticker": row["ticker"], "permaticker": int(row["symbol"]), "bar": row["timestamp"].isoformat()}
+        {"ticker": row["symbol"], "bar": row["timestamp"].isoformat()}
         for row in frame.sort("timestamp", "symbol").head(SAMPLE).iter_rows(named=True)
     ]

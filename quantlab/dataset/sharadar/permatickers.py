@@ -84,6 +84,7 @@ from quantlab.utils.atomic import write_json_atomically
 __all__ = [
     "TICKER_CHANGE",
     "UNMAPPED_SUFFIX",
+    "HolderSpan",
     "PermatickerResolver",
     "map_raw_table",
     "related_spans",
@@ -233,7 +234,7 @@ def related_spans(vendor_root: str | Path, code: str) -> dict[tuple[str, int], t
 
 
 @dataclass(frozen=True)
-class _Span:
+class HolderSpan:
     """One security's use of one ticker: from ``start`` (``None``: always) to ``end`` (``None``: still)."""
 
     permaticker: int
@@ -299,7 +300,7 @@ class PermatickerResolver:
         self.vendor_root = Path(vendor_root)
         self.code = table(code).code
         self.sidecar_path = None if sidecar_path is None else Path(sidecar_path)
-        self._holders: dict[str, list[_Span]] | None = None
+        self._holders: dict[str, list[HolderSpan]] | None = None
         self._current: dict[str, set[int]] | None = None
         self._snapshots: dict[Path, dict[str, set[int]]] = {}
         self._snapshots_all: dict[Path, dict[str, set[int]]] = {}
@@ -420,14 +421,31 @@ class PermatickerResolver:
             )
             return []
 
-    def _ticker_holders(self) -> dict[str, list[_Span]]:
+    def ticker_holders(self) -> dict[str, list[HolderSpan]]:
         """Return each ticker's holders, one span per permaticker, built once.
+
+        Every security known to have used the ticker is a holder, whatever
+        its dates; ``resolve`` then chooses among them, and the Massive
+        Ticker map (``quantlab.dataset.massive.ticker_map``) checks each
+        against the day's close instead.
 
         A span's start is the security's change into the ticker (ACTIONS),
         else the sidecar's start, else its first price date (TICKERS); its
         end the change away (ACTIONS), else the sidecar's next span, else
         the day after its last price for a ``relatedtickers`` former ticker
         (``related_spans``).
+
+        Returns
+        -------
+        dict
+            ``{ticker: [HolderSpan, ...]}``.
+
+        Examples
+        --------
+        Needs the Sharadar raw tier::
+
+            spans = PermatickerResolver("/data/downloads/sharadar", "sep").ticker_holders()["TWO"]
+            [(span.permaticker, span.covers(date(2020, 3, 2))) for span in spans]
         """
         if self._holders is not None:
             return self._holders
@@ -461,7 +479,7 @@ class PermatickerResolver:
         related = related_spans(self.vendor_root, self.code)
         keys = set(chain) | set(sidecar) | set(related)
         keys |= {(t, p) for t, perms in self._current_pairs().items() for p in perms}
-        holders: dict[str, list[_Span]] = {}
+        holders: dict[str, list[HolderSpan]] = {}
         for ticker, permaticker in keys:
             chain_start, chain_end = chain.get((ticker, permaticker), (None, None))
             side_start, side_end = sidecar.get((ticker, permaticker), (None, None))
@@ -475,7 +493,7 @@ class PermatickerResolver:
                 end = side_end
             else:
                 end = rel_end
-            holders.setdefault(ticker, []).append(_Span(permaticker, start, end))
+            holders.setdefault(ticker, []).append(HolderSpan(permaticker, start, end))
         self._holders = holders
         return holders
 
@@ -559,7 +577,7 @@ class PermatickerResolver:
             left -= known
         if left:
             self._refuse_ambiguous(self._current_pairs(), left, "TICKERS")
-        holders = self._ticker_holders() if left else {}
+        holders = self.ticker_holders() if left else {}
         day = pulled.date()
         if snapshot is not None:
             others = self._snapshot_any_table(snapshot)
@@ -591,10 +609,10 @@ class PermatickerResolver:
         return mapped, unresolved
 
     @staticmethod
-    def _holder_on(spans: list[_Span], day: date) -> int | None:
+    def _holder_on(spans: list[HolderSpan], day: date) -> int | None:
         """Return the holder of a reused ticker on ``day``, or ``None`` on a tie.
 
-        The span held at a pull on ``day`` (``_Span.held_at_pull``), the
+        The span held at a pull on ``day`` (``HolderSpan.held_at_pull``), the
         latest-starting one if several are; with none, the one that ended
         last before it.
         """
@@ -617,7 +635,7 @@ class PermatickerResolver:
         day = _day(day)
         if day is None:
             return False
-        spans = self._ticker_holders().get(ticker, [])
+        spans = self.ticker_holders().get(ticker, [])
         return any(s.permaticker == permaticker and s.covers(day) for s in spans)
 
     def settle(

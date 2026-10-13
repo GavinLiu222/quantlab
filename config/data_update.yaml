@@ -19,6 +19,7 @@
 # ending in /; the other actions write their `store`. --check orders reads against later writes.
 # After editing, run `scripts/data_update/update.py --check`.
 # A step with `allow_failure: true` is recorded as failed when it raises, and the run goes on.
+# A stage with `after_done: true` runs once `done` is written; nothing waiting for `done` waits for it.
 
 # The store whose last bar, after the raw stage, is the day t everything is brought to.
 calendar: market/sharadar/sharadar_sep_1d
@@ -53,3 +54,22 @@ stages:
   - name: risk
     steps:
       - extend: risk/use4
+  # Intraday trades, run once `done` is written (`after_done`), so a late, slow or failed Massive day
+  # never holds the paper trading; neither store is in `ready`, and each step does at most five days
+  # (a store far behind is caught up by a run of its own). The Trade bars need Massive's files of t (published the
+  # morning after), the Ticker map also Sharadar's SEP of t (the raw stage) and the day aggregates
+  # the conversion downloads.
+  - name: intraday
+    after_done: true
+    steps:
+      - run:
+          script: scripts/massive/convert.py
+          args: [--download-dir, "{download_dir}", --data-dir, "{data_dir}", --download, --workers, "2", --threads, "8", --max-days, "5", --idle-hours, "2"]
+          writes: [market/massive/massive_trade_bars_1m]
+          allow_failure: true
+      - run:
+          script: scripts/massive/ticker_map.py
+          args: [--download-dir, "{download_dir}", --data-dir, "{data_dir}", --max-days, "5"]
+          writes: [market/massive/massive_ticker_map]
+          reads: [market/sharadar/sharadar_sep_1d]
+          allow_failure: true

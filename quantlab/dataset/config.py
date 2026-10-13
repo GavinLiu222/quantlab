@@ -35,6 +35,8 @@ from quantlab.enums.data import (
 
 if TYPE_CHECKING:
     from quantlab.dataset.base import BaseDataset, MarketDataset
+    from quantlab.dataset.massive.ticker_map import TickerMap
+    from quantlab.dataset.massive.trade_bars import MassiveTradeBarDataset
 
 
 @dataclass(kw_only=True, frozen=True)
@@ -264,21 +266,20 @@ IWM_PERMNO: str = "88222"
 
 @dataclass(kw_only=True, frozen=True)
 class MassiveTradeBarsDatasetConfig(DatasetConfig):
-    """Config of the Trade bar panel built from Massive's daily trade files (ADR 0030).
+    """Config of the Trade bar panel built from Massive's daily trade files (ADRs 0030, 0031).
 
     ``frequency`` stays ``"tick"`` (the raw tier holds one row per trade);
     the size of the bars is ``bar_interval``. The session window and the bar
-    size are fixed at conversion. The panel's ``symbol`` axis is the Sharadar
-    permaticker: each raw ``(date, ticker)`` is mapped through the TICKERS
-    and ACTIONS of the Sharadar raw tier in ``sharadar_dir``, so the
-    inherited ticker-side ``symbols`` field is refused by the dataset.
+    size are fixed at conversion. The panel's ``symbol`` axis is the Massive
+    ticker, exactly as the trade files spell it; reading it as securities
+    goes through the Ticker map. The roster is ``tickers``; the inherited
+    ``symbols`` field is refused by the dataset.
 
     Examples
     --------
     >>> cfg = MassiveTradeBarsDatasetConfig(
     ...     zarr_file_path="/data/zarrs/massive_trade_bars_1m.zarr",
     ...     raw_data_dir_path="/data/downloads/massive",
-    ...     sharadar_dir="/data/downloads/sharadar",
     ...     start_date="2024-11-29",
     ...     end_date="2024-11-29",
     ... )
@@ -290,11 +291,10 @@ class MassiveTradeBarsDatasetConfig(DatasetConfig):
         MassiveTradeBarsDatasetConfig(
             zarr_file_path="/data/zarrs/massive_trade_bars_1s.zarr",
             raw_data_dir_path="/data/downloads/massive",
-            sharadar_dir="/data/downloads/sharadar",
             start_date="2024-11-29",
             end_date="2024-11-29",
             bar_interval="1s",
-            permatickers=(199059, 194726),
+            tickers=("AAPL", "MSFT"),
         )
     """
 
@@ -304,18 +304,68 @@ class MassiveTradeBarsDatasetConfig(DatasetConfig):
     frequency: Frequency = "tick"
     #: Always Massive for this dataset.
     vendor: Vendor | None = "massive"
-    #: The Sharadar raw tier (``<download-dir>/sharadar``) whose TICKERS and
-    #: ACTIONS map each raw ticker to its permaticker.
-    sharadar_dir: str
     #: Bar size the trades are resampled to.
     bar_interval: BarInterval = "1m"
     #: Start of the session window, US/Eastern wall clock ``HH:MM``.
     session_start: str = "09:30"
     #: End of the session window, US/Eastern wall clock ``HH:MM``.
     session_end: str = "16:00"
-    #: The permatickers to convert (a roster); ``None`` converts every
-    #: security that maps.
-    permatickers: tuple[int, ...] | None = None
+    #: The Massive tickers to convert (a roster); ``None`` converts every
+    #: ticker of the trade files.
+    tickers: tuple[str, ...] | None = None
+
+
+@dataclass(kw_only=True, frozen=True)
+class TickerMapConfig(FrozenConfig):
+    """Config of the Ticker map: each day's Massive ticker to its permaticker (ADR 0031).
+
+    Examples
+    --------
+    >>> cfg = TickerMapConfig(
+    ...     path="/data/quantlab/market/massive/massive_ticker_map/massive_ticker_map",
+    ...     massive_dir="/data/quantlab/downloads/massive",
+    ...     sharadar_dir="/data/quantlab/downloads/sharadar",
+    ... )
+    >>> cfg.path
+    '/data/quantlab/market/massive/massive_ticker_map/massive_ticker_map'
+    """
+
+    #: The map's directory: one Parquet file of rows per mapped day.
+    path: str
+    #: Massive's raw tier (``<download-dir>/massive``), holding the day aggregates.
+    massive_dir: str
+    #: Sharadar's raw tier (``<download-dir>/sharadar``): TICKERS, ACTIONS, SEP, SFP.
+    sharadar_dir: str
+
+
+@dataclass(kw_only=True, frozen=True)
+class PermatickerTradeBarsConfig(FrozenConfig):
+    """Config of the Trade bars read on the permaticker axis through the Ticker map.
+
+    The view holds no store of its own; ``trade_bars`` and ``ticker_map``
+    keep their own configs, both component fields. ``resample_freq`` and
+    ``resample_how`` are set by ``PermatickerTradeBarDataset.resample``.
+
+    Examples
+    --------
+    With ``trade_bars`` a ``MassiveTradeBarDataset`` and ``ticker_map`` a
+    ``TickerMap``:
+
+    >>> cfg = PermatickerTradeBarsConfig(trade_bars=trade_bars, ticker_map=ticker_map)
+    >>> sorted(cfg.to_dict())
+    ['name', 'resample_freq', 'resample_how', 'ticker_map', 'trade_bars']
+    """
+
+    #: The Trade bar store on the Massive ticker axis.
+    trade_bars: "MassiveTradeBarDataset" = component()
+    #: The map from each day's Massive ticker to its permaticker.
+    ticker_map: "TickerMap" = component()
+    #: The coarser bars the panel is resampled to; ``None`` for the store's bars.
+    resample_freq: str | None = None
+    #: ``{variable: method}`` of the resample; ``None`` for the Trade bars' defaults.
+    resample_how: dict | None = None
+    #: Dotted import path of the dataset class; filled by the config setter.
+    name: str | None = None
 
 
 @dataclass(kw_only=True, frozen=True)

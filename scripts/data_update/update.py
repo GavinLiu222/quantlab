@@ -23,7 +23,9 @@ writes; ``sharadar``, ``benchmarks`` and ``run`` steps say so there, the others 
 their ``store``. A ``run`` step may also list ``reads``. ``--check`` orders every step's
 reads against the later steps' writes. A step with ``allow_failure: true`` that raises is
 recorded as failed and the run goes on; whether the day is ready is still decided by the
-``ready`` stores.
+``ready`` stores. A stage with ``after_done: true`` runs only once ``done`` is written (its
+steps are added to the status file afterwards, the state kept), so nothing waiting for
+``done`` waits for it.
 
 t is the last bar of the file's ``calendar`` store once the raw stage is done. Until
 every store of the file's ``ready`` list holds t, and t is newer than ``last_done_t``
@@ -438,13 +440,25 @@ def main() -> None:
         if run.t is None:
             run.t = run.calendar_bar()
         for stage in rest:
-            run.run_stage(stage)
+            if not stage.get("after_done"):
+                run.run_stage(stage)
     except Exception as error:
         logger.exception("data update failed")
         report("failed", reason=repr(error))
         sys.exit(EXIT_CODES["failed"])
     report("done", finished=now())
     logger.info(f"data update done to {run.t.date() if run.t is not None else None}")
+    # Stages nothing waiting for `done` reads: they run once it is written, and a
+    # failure there is logged and recorded without changing the state.
+    later = [stage for stage in rest if stage.get("after_done")]
+    for stage in later:
+        try:
+            run.run_stage(stage)
+        except Exception as error:
+            logger.opt(exception=error).warning(f"{stage['name']}: failed after done")
+            run.steps.append({"stage": stage["name"], "result": f"failed: {error!r}"})
+    if later:
+        report("done", finished=now())
 
 
 if __name__ == "__main__":

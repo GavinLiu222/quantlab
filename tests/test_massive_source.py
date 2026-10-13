@@ -15,7 +15,6 @@ from datetime import UTC, date, datetime
 import pytest
 
 from tests.massive_fixtures import trade_line, write_conditions, write_trades
-from tests.sharadar_fixtures import tickers_row
 
 
 def _source():
@@ -73,24 +72,10 @@ def test_run_refuses_and_points_at_the_scripts(acquisition_config):
 
 
 def test_convert_builds_the_trade_bar_store(tmp_path):
-    import polars as pl
-
     from quantlab.acquisition.registry import convert
     from quantlab.dataset.config import MassiveTradeBarsDatasetConfig
     from quantlab.dataset.massive.trade_bars import MassiveTradeBarDataset
-    from quantlab.dataset.sharadar.tables import TABLES, bulk_file, write_bulk_pull
 
-    sharadar = tmp_path / "downloads" / "sharadar"
-    path = bulk_file(sharadar, "tickers")
-    path.parent.mkdir(parents=True)
-    row = tickers_row("SEP", 101, "AAA")  # SYNTHETIC
-    schema = TABLES["tickers"].schema
-    pl.DataFrame(
-        {name: [date.fromisoformat(row[name]) if dtype == pl.Date and row.get(name) else row.get(name)]
-         for name, dtype in schema.items()},
-        schema=schema,
-    ).write_parquet(path)
-    write_bulk_pull(sharadar, "tickers", datetime(2024, 1, 25, tzinfo=UTC))
     massive = tmp_path / "downloads" / "massive"
     write_conditions(massive, datetime(2024, 1, 25, tzinfo=UTC))
     write_trades(massive, date(2024, 1, 24), [trade_line("AAA", datetime(2024, 1, 24, 15), 10.0, 100)])  # SYNTHETIC
@@ -98,10 +83,9 @@ def test_convert_builds_the_trade_bar_store(tmp_path):
     config = MassiveTradeBarsDatasetConfig(
         zarr_file_path=str(tmp_path / "massive_trade_bars_1m.zarr"),
         raw_data_dir_path=str(massive),
-        sharadar_dir=str(sharadar),
     )
     result = convert(_source(), config, data_type="trades", granularity="day")
     assert result.windows_written == 1
     panel = MassiveTradeBarDataset(config).panel("2024-01-24", "2024-01-25")
-    assert panel.symbol.values.tolist() == [101]
+    assert panel.symbol.values.tolist() == ["AAA"]
     assert float(panel["volume"].sum()) == 100.0

@@ -1,41 +1,40 @@
-"""The Trade bar panel built from Massive's daily trade files, on the permaticker axis.
+"""The Trade bar panel built from Massive's daily trade files, on the Massive ticker axis.
 
 ``MassiveTradeBarDataset`` reads the raw tier the Massive client writes
-(``quantlab.dataset.massive.raw``) one trading day at a time, maps each
-raw ``(date, ticker)`` to its Sharadar permaticker, resamples the trades
-with ``quantlab.dataset.massive.resample.TradeBarResampler``, and returns
-the dense ``(timestamp, symbol)`` panel the store holds (ADR 0030).
+(``quantlab.dataset.massive.raw``) one trading day at a time, resamples the
+trades with ``quantlab.dataset.massive.resample.TradeBarResampler``, and
+returns the dense ``(timestamp, symbol)`` panel the store holds (ADRs 0030,
+0031).
 
 - **Sessions** are the XNYS calendar's, half days included; the window is
   ``session_start`` to ``session_end``, the regular session by default. A
   raw day that is not a session is refused.
-- **The symbol axis is the permaticker** (ADR 0023). A ticker is mapped as
-  traded on its day (``PermatickerResolver.resolve_on``) through the
-  Sharadar raw tier in ``sharadar_dir``: SEP's tickers first, then SFP's,
-  so stocks and funds are both kept. A ticker that maps to no permaticker
-  is logged, counted and dropped. If two tickers of one day map to one
-  permaticker, the one with more trades is kept and the other is counted
-  as unmapped.
+- **The symbol axis is the Massive ticker**, exactly as the trade files
+  spell it (``BRK.A``, ``AApB``), every ticker kept, exchange test symbols
+  included (ADR 0031). Conversion reads no Sharadar data. A column is a
+  ticker, not a security: one ticker can belong to different securities on
+  different days, so reading the store as securities goes through the
+  Ticker map (``quantlab.dataset.massive.ticker_map``). ``tickers``
+  restricts a conversion to a roster of Massive tickers.
 - **A cell without an eligible trade** has NaN prices and zero volumes and
-  ``n_trades``; a permaticker on the axis that did not trade on a day is
+  ``n_trades``; a ticker on the axis that did not trade on a day is
   zero volume on every bar of it.
 - **Per-day statistics** (trades in, dropped by each rule, outside the
-  session, excluded from volume, unmapped tickers, outside the roster) are
+  session, excluded from volume, outside the roster) are
   written to the JSON sidecar ``<store>.massive_stats.json``
   (``stats_path``), merged day by day.
 - **Each one-minute day is checked** against Massive's own minute
   aggregates of that day when the raw tier holds them
-  (``quantlab.dataset.massive.vendor_check``): agreement counts, the worst
+  (``quantlab.dataset.massive.vendor_check``), ticker by ticker: agreement counts, the worst
   difference of each variable and the bars present on one side only go to
   the day's ``vendor_check`` statistics. Differences are reported, never
   raised.
 - **The store grows a day at a time.** A config whose range holds the
   next day, passed to ``update(granularity="day")``, appends that day: the
-  symbol axis is the store's own plus the day's new permatickers (zero
-  volume and NaN prices over the days before), so a backfill and a daily
-  update are the same operation. The raw trade file of a converted day may
-  be deleted: ``delete_converted_trades`` deletes it once the store holds
-  the day (``converted_through``) and the day passed its vendor check.
+  day's new tickers are appended at the end of the store's axis in place
+  (ADR 0032), with zero volume and NaN prices over the days before, so a
+  backfill and a daily update are the same operation. Raw trade files are
+  kept (ADR 0031).
 - **The settings are the store's identity.** The bar interval, the session
   window, the roster and the counting rules (``_build_settings``) are
   recorded in the sidecar and in every read's data fingerprint; a
@@ -51,27 +50,19 @@ the dense ``(timestamp, symbol)`` panel the store holds (ADR 0030).
 Convert one day per window (``granularity="day"``): a day of the whole
 market is tens of millions of trades.
 
-- **A day can be converted elsewhere.** ``convert_day`` reads, maps and
+- **A day can be converted elsewhere.** ``convert_day`` reads and
   resamples one day without touching the store, and returns a picklable
   ``ConvertedTradeDay``; ``add_converted_day`` hands it to the instance that
   appends, which then does not read the day again. A backfill converts many
   days in worker processes this way and appends them in date order.
-- **Permatickers can be reserved on the axis.** ``reserve_symbols`` puts
-  permatickers on the axis of the store this instance creates, or widens
-  once, so that later days trading them append without a widen. A widen
-  rewrites the whole store, and nearly every day of the whole market brings
-  a permaticker the store has not seen, so a backfill reserves every
-  permaticker it may meet.
 
 Examples
 --------
-Needs a trade file and a condition table under ``raw_data_dir_path``, and
-Sharadar's TICKERS and ACTIONS under ``sharadar_dir``::
+Needs a trade file and a condition table under ``raw_data_dir_path``::
 
     config = MassiveTradeBarsDatasetConfig(
         zarr_file_path="/data/zarrs/massive_trade_bars_1m.zarr",
         raw_data_dir_path="/data/downloads/massive",
-        sharadar_dir="/data/downloads/sharadar",
         start_date="2024-11-29",
         end_date="2024-11-29",
     )
@@ -114,12 +105,10 @@ from quantlab.dataset.massive.resample import (
     TradeBarResampler,
 )
 from quantlab.dataset.massive.vendor_check import (
-    CHECKED,
     NO_MINUTE_AGGREGATES,
     NOT_ONE_MINUTE,
     check_minute_bars,
 )
-from quantlab.dataset.sharadar.permatickers import PermatickerResolver
 from quantlab.dataset.stock import StockDataset
 from quantlab.utils.atomic import write_json_atomically
 from quantlab.utils.resample import session_labels
@@ -178,13 +167,10 @@ def trade_bar_store_name(bar_interval: str) -> str:
     """
     return f"massive_trade_bars_{bar_interval}.zarr"
 
-#: The Sharadar tables whose tickers map a raw ticker, in order: stocks, then funds.
-MAPPING_TABLES = ("sep", "sfp")
-
 
 @dataclass(frozen=True)
 class ConvertedTradeDay:
-    """One converted trading day: its bars on the permaticker axis and its statistics.
+    """One converted trading day: its bars on the Massive ticker axis and its statistics.
 
     Returned by ``MassiveTradeBarDataset.convert_day``; picklable, so a worker
     process can convert a day and send it to the process that appends it.
@@ -194,7 +180,7 @@ class ConvertedTradeDay:
     day : date
         The trading day.
     bars : pl.DataFrame
-        The day's bars, ``symbol`` being the int64 permaticker.
+        The day's bars, ``symbol`` being the Massive ticker.
     stats : dict
         The day's statistics, as recorded in the sidecar.
     """
@@ -205,13 +191,13 @@ class ConvertedTradeDay:
 
 
 class MassiveTradeBarDataset(StockDataset):
-    """Dense Trade bar panel on the permaticker axis; see the module docstring.
+    """Dense Trade bar panel on the Massive ticker axis; see the module docstring.
 
     Parameters
     ----------
     dataset_config : MassiveTradeBarsDatasetConfig
-        The raw tier, the Sharadar raw tier, the store, the date range, the
-        bar size and the session window.
+        The raw tier, the store, the date range, the bar size, the session
+        window and the roster.
 
     Attributes
     ----------
@@ -235,8 +221,9 @@ class MassiveTradeBarDataset(StockDataset):
     #: ``resample(freq)`` aggregates each variable this way unless told otherwise.
     DEFAULT_RESAMPLE_HOW = TRADE_BAR_RESAMPLE_HOW
 
-    #: No ``"rebuild"``: the raw trade file of a converted day may be gone,
-    #: so a store is only ever refused or widened.
+    #: No ``"rebuild"``: a ticker a day brings has no trades before it, so a
+    #: store is only refused or extended (and rebuilding years of the whole
+    #: market from raw is a job for the conversion script, into a new store).
     NEW_LISTING_STRATEGIES = ("refuse", "widen")
 
     last_stats: dict | None = None
@@ -257,26 +244,24 @@ class MassiveTradeBarDataset(StockDataset):
         if config.symbols is not None:
             raise ValueError(
                 f"{self.class_name}: config.symbols is not selectable; got {config.symbols!r}. "
-                f"The panel's symbol axis is the Sharadar permaticker, and raw tickers are "
-                f"mapped to it day by day."
+                f"The panel's symbol axis is the Massive ticker; a roster of tickers is "
+                f"config.tickers."
             )
         TradeBarResampler(config.bar_interval)
         XnysSessionCalendar(config.session_start, config.session_end)
-        if config.permatickers is not None:
-            config = dataclasses.replace(config, permatickers=tuple(sorted({int(p) for p in config.permatickers})))
+        if config.tickers is not None:
+            config = dataclasses.replace(config, tickers=tuple(sorted({str(t) for t in config.tickers})))
         return config
 
     def _on_config_installed(self) -> None:
-        """Create the calendar and resampler, and clear the per-day cache and the resolvers."""
-        self._calendar = XnysSessionCalendar(self.config.session_start, self.config.session_end)
+        """Create the calendar and resampler, and clear the per-day cache."""
+        self._sessions = XnysSessionCalendar(self.config.session_start, self.config.session_end)
         # The closing auction prints after the exchange's close: only a window
         # ending there (at 13:00 on a half day) has one.
         self._resampler = TradeBarResampler(
             self.config.bar_interval, close_auction=self.config.session_end == REGULAR_SESSION_END
         )
         self._days: dict[date, ConvertedTradeDay] = {}
-        self._resolvers: list[PermatickerResolver] | None = None
-        self._reserved: frozenset[int] = frozenset()
 
     @property
     def _raw_data_type(self) -> str:
@@ -316,28 +301,8 @@ class MassiveTradeBarDataset(StockDataset):
             if (start is None or start <= day) and (end is None or day <= end)
         )
 
-    def _resolver_chain(self) -> list[PermatickerResolver]:
-        """Return the SEP and SFP resolvers over ``sharadar_dir``, built once."""
-        if self._resolvers is None:
-            self._resolvers = [PermatickerResolver(self.config.sharadar_dir, code) for code in MAPPING_TABLES]
-        return self._resolvers
-
-    def _map(self, day: date, tickers: list[str]) -> tuple[dict[str, int], dict[str, str]]:
-        """Map ``tickers`` as traded on ``day``: SEP first, then SFP for the rest."""
-        mapped: dict[str, int] = {}
-        left = list(tickers)
-        reasons: dict[str, str] = {}
-        for resolver in self._resolver_chain():
-            if not left:
-                break
-            found, unresolved = resolver.resolve_on(day, left)
-            mapped.update(found)
-            reasons = {ticker: reason for ticker, reason in unresolved.items() if ticker not in mapped}
-            left = [ticker for ticker in left if ticker not in mapped]
-        return mapped, {ticker: reasons.get(ticker, "no permaticker") for ticker in left}
-
     def convert_day(self, day: date) -> ConvertedTradeDay:
-        """Read, map and resample one trading day, once per instance; the store is not touched.
+        """Read and resample one trading day, once per instance; the store is not touched.
 
         Parameters
         ----------
@@ -361,58 +326,24 @@ class MassiveTradeBarDataset(StockDataset):
             return self._days[day]
         with Timer(f" {self.class_name}: {day}"):
             trades = read_trades(raw_file(self.config.raw_data_dir_path, self.DATA_TYPE, day))
-            counts = trades.group_by("ticker").len().rename({"len": "trades"})
-            mapped, reasons = self._map(day, counts["ticker"].to_list())
-            mapping = pl.DataFrame(
-                {"ticker": list(mapped), "permaticker": list(mapped.values())},
-                schema={"ticker": pl.String, "permaticker": pl.Int64},
-            )
-            # Two tickers of one security on one day: keep the busier one.
-            kept = (
-                counts.join(mapping, on="ticker", how="inner")
-                .sort(["permaticker", "trades", "ticker"], descending=[False, True, False])
-                .unique("permaticker", keep="first", maintain_order=True)
-            )
-            for ticker in mapping.filter(~pl.col("ticker").is_in(kept["ticker"].implode()))["ticker"]:
-                reasons[ticker] = f"another ticker of permaticker {mapped[ticker]} traded more that day"
             outside_roster = 0
-            if self.config.permatickers is not None:
-                on_roster = pl.col("permaticker").is_in(list(self.config.permatickers))
-                outside_roster = int(kept.filter(~on_roster)["trades"].sum())
-                kept = kept.filter(on_roster)
-            sessions = self._calendar.session_bounds([day])
-            records = (
-                trades.join(kept.select("ticker", "permaticker"), on="ticker", how="inner")
-                .drop("ticker")
-                .rename({"permaticker": "symbol"})
-                .with_columns(pl.col("symbol").cast(pl.String), pl.lit(day).alias("date"))
-            )
+            if self.config.tickers is not None:
+                on_roster = pl.col("ticker").is_in(list(self.config.tickers))
+                outside_roster = int(trades.filter(~on_roster).height)
+                trades = trades.filter(on_roster)
+            sessions = self._sessions.session_bounds([day])
+            records = trades.rename({"ticker": "symbol"}).with_columns(pl.lit(day).alias("date"))
             bars, stats = self._resampler.resample_with_stats(
                 records, read_conditions(latest_conditions(self.config.raw_data_dir_path)), sessions
             )
-        trade_counts = dict(counts.iter_rows())
-        unmapped = {
-            ticker: {"trades": int(trade_counts[ticker]), "reason": reason} for ticker, reason in sorted(reasons.items())
-        }
-        if unmapped:
-            logger.warning(
-                f"{self.class_name}: {day}: {len(unmapped)} ticker(s) map to no permaticker and are "
-                f"dropped ({sum(v['trades'] for v in unmapped.values())} trade(s)), first "
-                f"{list(unmapped)[:5]}; see {str(self.stats_path)!r}."
-            )
         day_stats = {
             **{name: int(stats[name].sum()) for name in TRADE_STATS_COUNTS},
-            "unmapped_tickers": len(unmapped),
-            "unmapped_trades": sum(v["trades"] for v in unmapped.values()),
-            "unmapped": unmapped,
             "outside_roster_trades": outside_roster,
         }
-        # Every trade of the file: the resampler saw only the mapped, rostered ones.
-        day_stats["trades_in"] += day_stats["unmapped_trades"] + outside_roster
-        bars = bars.with_columns(pl.col("symbol").cast(pl.Int64))
-        day_stats["vendor_check"] = self._vendor_check(
-            day, bars, dict(kept.select("ticker", "permaticker").iter_rows()), sessions
-        )
+        # Every trade of the file: the resampler saw only the rostered ones.
+        day_stats["trades_in"] += outside_roster
+        bars = bars.with_columns(pl.col("symbol").cast(pl.String))
+        day_stats["vendor_check"] = self._vendor_check(day, bars, sessions)
         result = ConvertedTradeDay(day=day, bars=bars, stats=day_stats)
         self._days[day] = result
         return result
@@ -441,33 +372,13 @@ class MassiveTradeBarDataset(StockDataset):
             raise TypeError(f"{self.class_name}: expected a ConvertedTradeDay, got {type(converted).__name__}.")
         self._days[converted.day] = converted
 
-    def reserve_symbols(self, permatickers) -> None:
-        """Put ``permatickers`` on the axis of the store this instance creates or appends to.
-
-        A permaticker the store lacks widens it once, on this instance's
-        append; a later day trading a reserved permaticker then appends
-        without a widen, which would rewrite the whole store. A reserved
-        permaticker without a trade has zero volume and NaN prices.
-
-        Parameters
-        ----------
-        permatickers : iterable of int
-            The permatickers to reserve.
-
-        Examples
-        --------
-        >>> ds.reserve_symbols([101, 202, 999])
-        >>> ds.update(granularity="day")  # doctest: +SKIP
-        """
-        self._reserved = frozenset(int(p) for p in permatickers)
-
     def _config_settings(self) -> dict:
         """Return the settings this config converts with."""
         return {
             "bar_interval": self.config.bar_interval,
             "session_start": self.config.session_start,
             "session_end": self.config.session_end,
-            "permatickers": None if self.config.permatickers is None else list(self.config.permatickers),
+            "tickers": None if self.config.tickers is None else list(self.config.tickers),
             "rules": COUNTING_RULES,
         }
 
@@ -528,7 +439,7 @@ class MassiveTradeBarDataset(StockDataset):
                 f"bars built under different settings are never mixed. Convert into another store."
             )
 
-    def _vendor_check(self, day: date, bars: pl.DataFrame, mapping: dict[str, int], sessions: pl.DataFrame) -> dict:
+    def _vendor_check(self, day: date, bars: pl.DataFrame, sessions: pl.DataFrame) -> dict:
         """Check a one-minute day against Massive's minute aggregates of that day, when present.
 
         Returns the ``check_minute_bars`` result, or a ``status`` saying why
@@ -540,7 +451,9 @@ class MassiveTradeBarDataset(StockDataset):
         path = raw_file(self.config.raw_data_dir_path, "minute_aggs", day)
         if not path.exists():
             return {"status": NO_MINUTE_AGGREGATES}
-        check = check_minute_bars(bars, read_aggregates(path), mapping, self._resampler.labels(sessions)["timestamp"])
+        check = check_minute_bars(
+            bars, read_aggregates(path), self._resampler.labels(sessions)["timestamp"], self.config.tickers
+        )
         both = max(check["both"], 1)
         logger.info(
             f"{self.class_name}: {day} against Massive's minute bars: {check['both']} bar(s) on both sides, "
@@ -570,51 +483,6 @@ class MassiveTradeBarDataset(StockDataset):
         last_end = ChunkLedger(ChunkLedger.default_path(self.config.zarr_file_path)).last_end
         return None if last_end is None else pd.Timestamp(last_end).date()
 
-    def delete_converted_trades(self, day: date) -> bool:
-        """Delete the raw trade file of ``day`` if the store holds the day and it passed its vendor check.
-
-        The day must be on or before ``converted_through`` and recorded in the
-        statistics sidecar with a vendor check that ran
-        (``vendor_check.CHECKED``): its bars compared with Massive's minute
-        aggregates, whatever the differences. Otherwise the file is kept, so
-        the day can be converted or checked again without a download. The
-        minute and day aggregate files are never deleted (ADR 0030).
-
-        Parameters
-        ----------
-        day : date
-            The trading day.
-
-        Returns
-        -------
-        bool
-            Whether a file was deleted; ``False`` when it was kept or is gone.
-
-        Examples
-        --------
-        With Massive's minute aggregates of the day in the raw tier, the
-        second call deletes the day's trade file and returns ``True``::
-
-            ds = MassiveTradeBarDataset(config).update(granularity="day")
-            ds.delete_converted_trades(date(2024, 11, 29))
-        """
-        path = raw_file(self.config.raw_data_dir_path, self.DATA_TYPE, day)
-        if not path.exists():
-            return False
-        through = self.converted_through()
-        if through is None or day > through:
-            logger.info(f"{self.class_name}: {day} is not in {self.config.zarr_file_path!r}; keeping {str(path)!r}.")
-            return False
-        status = self._recorded_days().get(day.isoformat(), {}).get("vendor_check", {}).get("status")
-        if status != CHECKED:
-            logger.warning(
-                f"{self.class_name}: {day} was not checked against Massive's minute bars ({status!r}); "
-                f"keeping {str(path)!r}."
-            )
-            return False
-        path.unlink()
-        return True
-
     def _write_stats(self, days: dict[date, dict]) -> None:
         """Merge the statistics of ``days`` into the sidecar, with the settings."""
         payload = {"days": {}}
@@ -628,16 +496,19 @@ class MassiveTradeBarDataset(StockDataset):
 
     # -- the panel -------------------------------------------------------------
 
-    def _raw_axes_in_range(self) -> tuple[list[int], pd.DatetimeIndex]:
-        """Return the permatickers and bar labels of the configured range.
+    def _raw_axes_in_range(self) -> tuple[list[str], pd.DatetimeIndex]:
+        """Return the tickers and bar labels of the configured range.
 
-        Every day of the range is converted (and kept for the windows), so
-        the axis is every permaticker that traded on one of them.
+        Every day of the range the store lacks is converted (and kept for
+        the windows), so the axis is every ticker that traded on one of
+        them, with the store's own; ``from_raw_data_chunked`` then pins the
+        store's axis followed by the new ones (ADR 0032).
 
         Raises
         ------
         ValueError
-            If the range has no raw trade day, or no ticker maps.
+            If the range has no raw trade day, or no trade of a rostered
+            ticker and no store.
         """
         self._check_settings()
         days = self._days_in_range()
@@ -648,41 +519,32 @@ class MassiveTradeBarDataset(StockDataset):
                 f"[{self.config.start_date}, {self.config.end_date}]. Download it first."
             )
         stored = self._stored_symbol_axis(self.config.zarr_file_path)
-        # A day the store holds already has its permatickers on the axis, and
+        # A day the store holds already has its tickers on the axis, and
         # its window is skipped: it is not converted again to find them. The
         # ledger says which days those are, not the sidecar, which a crash
         # may have left one day ahead of the store.
         through = self.converted_through() if stored is not None else None
-        symbols: set[int] = set()
+        symbols: set[str] = set()
         for day in days:
             if through is None or day > through:
                 symbols.update(self.convert_day(day).bars["symbol"].unique().to_list())
-        symbols.update(self._reserved)
         if not symbols and stored is None:
             raise ValueError(
-                f"{self.class_name}: no raw ticker of {days[0]}..{days[-1]} maps to a permaticker "
-                f"through {self.config.sharadar_dir!r}; refusing to write an empty panel."
+                f"{self.class_name}: no trade of a rostered ticker in {days[0]}..{days[-1]}; "
+                f"refusing to write an empty panel."
             )
-        labels = self._resampler.labels(self._calendar.session_bounds(days))
-        # The axis is sorted: an append widens a store to the sorted union of its
-        # axis and the window's (``XrBackend.widen_and_append``), so an axis in
-        # any other order would rewrite the store a second time and leave the
-        # ledger recording an order the store no longer has.
+        labels = self._resampler.labels(self._sessions.session_bounds(days))
         if stored is not None:
-            symbols |= {int(symbol) for symbol in stored}
+            symbols |= {str(symbol) for symbol in stored}
         return sort_symbol_axis(symbols), pd.DatetimeIndex(labels["timestamp"].to_list())
 
     def _added_symbols_with_raw_history(self, added: list, start, end) -> dict[str, int]:
-        """Return no history for the permatickers an append adds.
+        """Return no history for the tickers an append adds.
 
-        A converted day puts every permaticker that traded on it on the
-        axis, so one the store lacks did not trade on any of its days: the
-        zero volume and NaN prices a widen gives it there are its real
-        values, and ``update`` widens. (The raw trade files of those days
-        may be gone.) This holds while Sharadar's ticker mapping of those
-        days stays as it was: a ticker unmapped then and mapped by a later
-        TICKERS pull joins with zero volume over the days it traded, which
-        the day's ``unmapped`` statistics show.
+        A converted day puts every ticker that traded on it on the axis, so
+        one the store lacks did not trade on any of its days: the zero volume
+        and NaN prices an extension gives it there are its real values, and
+        ``update`` extends the axis.
         """
         return {}
 
@@ -708,27 +570,27 @@ class MassiveTradeBarDataset(StockDataset):
         sessions = calendar.session_bounds([day for day in candidates if calendar.is_session(day)]).to_pandas()
         return session_labels(timestamps, freq, sessions, self.class_name)
 
-    def _raw_data_to_xr_window(self, start_date, end_date, symbols: list[int] | None = None) -> xr.Dataset:
+    def _raw_data_to_xr_window(self, start_date, end_date, symbols: list[str] | None = None) -> xr.Dataset:
         """Build the bars of the days whose labels fall in the window, densely, on ``symbols``.
 
         Parameters
         ----------
         start_date, end_date : date-like
             First and last bar label to include, inclusive.
-        symbols : list of int, optional
-            The permaticker axis; ``None`` uses ``_raw_axes_in_range``'s.
+        symbols : list of str, optional
+            The ticker axis, in its order; ``None`` uses ``_raw_axes_in_range``'s.
 
         Returns
         -------
         xr.Dataset
             ``TRADE_BAR_VARIABLES`` as float64 on ``(timestamp, symbol)``,
-            ``symbol`` being int64.
+            ``symbol`` being the ticker.
         """
         if symbols is None:
             symbols, _ = self._raw_axes_in_range()
-        symbols = [int(symbol) for symbol in symbols]
+        symbols = [str(symbol) for symbol in symbols]
         start, end = pd.Timestamp(start_date), pd.Timestamp(end_date)
-        labels = self._resampler.labels(self._calendar.session_bounds(self._days_in_range())).filter(
+        labels = self._resampler.labels(self._sessions.session_bounds(self._days_in_range())).filter(
             pl.col("timestamp").is_between(start, end, closed="both")
         )
         days = labels["date"].unique().sort().to_list()
@@ -736,7 +598,7 @@ class MassiveTradeBarDataset(StockDataset):
         self._write_stats({day: self.convert_day(day).stats for day in days})
 
         grid = labels.select("timestamp").join(
-            pl.DataFrame({"symbol": symbols, "_position": range(len(symbols))}, schema={"symbol": pl.Int64, "_position": pl.Int64}),
+            pl.DataFrame({"symbol": symbols, "_position": range(len(symbols))}, schema={"symbol": pl.String, "_position": pl.Int64}),
             how="cross",
         )
         if frames:
@@ -756,7 +618,7 @@ class MassiveTradeBarDataset(StockDataset):
         }
         return xr.Dataset(
             variables,
-            coords={"timestamp": pd.DatetimeIndex(timestamps).values, "symbol": np.array(symbols, dtype=np.int64)},
+            coords={"timestamp": pd.DatetimeIndex(timestamps).values, "symbol": np.array(symbols, dtype=object)},
         )
 
     def _raw_data_to_xr(self) -> xr.Dataset:
@@ -769,5 +631,5 @@ class MassiveTradeBarDataset(StockDataset):
         return data
 
     def _widen_fill_values(self) -> dict:
-        """Return 0 for the volumes and counts of a permaticker added to an existing store; prices stay NaN."""
+        """Return 0 for the volumes and counts of a ticker added to an existing store; prices stay NaN."""
         return {name: 0.0 for name in TRADE_BAR_SUMS}

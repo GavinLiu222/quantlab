@@ -35,7 +35,8 @@ in `reads` the folders or prefixes it reads; the others' reads come from their c
 `--check` orders every step's reads against the later steps' writes.
 
 A step with `allow_failure: true` that raises is recorded as failed and the run goes on; whether
-the day is ready is still decided by the `ready` stores.
+the day is ready is still decided by the `ready` stores. A stage with `after_done: true` runs only
+after the status file says `done`; a failure there is recorded and the state stays `done`.
 
 t is the last bar of the file's `calendar` store (`market/sharadar/sharadar_sep_1d`) once the
 `raw` stage is done. Until every store in the file's `ready` list holds t, and t is newer than
@@ -51,6 +52,19 @@ the membership's roster (`RosterDataset`, see the [dataset guide](dataset.md)), 
 no price copy cut to the roster: SEP is brought up by the raw stage and the membership by the
 `universe` stage, both before the `factors` stage. WRDS data is not in the
 daily update; run `scripts/wrds/*.py` when the vendor publishes.
+
+The last stage, `intraday`, runs once `done` is written (`after_done: true`: its steps are added
+to the status file afterwards, the state kept), so nothing waiting for `done` waits for it. It brings
+Massive's intraday trades up (see the [Massive guide](massive.md)):
+`scripts/massive/convert.py --download` downloads the days after the Trade bar store's last
+(trades, minute and day aggregates) and appends their one-minute Trade bars to
+`market/massive/massive_trade_bars_1m`, then `scripts/massive/ticker_map.py` appends those days'
+rows to the Ticker map `market/massive/massive_ticker_map`, up to the last bar of Sharadar's SEP
+store, which the raw stage has brought up. Both are `run` steps with `allow_failure: true`, each
+does at most five days (`--max-days 5`; a store far behind is caught up by a run of its own), and
+neither store is in `ready`: Massive publishes a day's files the morning after, and a late file
+never holds the paper trading, which reads neither store. Both scripts write their folder's
+`component.json` and `README.md` when missing.
 
 ```bash
 cd ~/projects/quantlab2

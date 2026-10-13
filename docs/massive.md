@@ -1,6 +1,6 @@
 # Massive Trade bars
 
-Massive (Stocks Developer) is quantlab's vendor of intraday US-equity trades ([ADR 0030](adr/0030-massive-trade-bars-are-built-from-every-trade-on-permaticker.md)). It serves every SIP trade, and its own minute and day aggregates, as one gzipped CSV per data type and trading day over a rolling ten-year window. quantlab downloads those files as they are, and builds its own **Trade bars** from the trades: one-minute bars (or any `BarInterval`) on the Sharadar **permaticker** axis, counted by the SIP's rules per trade condition.
+Massive (Stocks Developer) is quantlab's vendor of intraday US-equity trades ([ADR 0030](adr/0030-massive-trade-bars-are-built-from-every-trade-on-permaticker.md)). It serves every SIP trade, and its own minute and day aggregates, as one gzipped CSV per data type and trading day over a rolling ten-year window. quantlab downloads those files as they are, and builds its own **Trade bars** from the trades: one-minute bars (or any `BarInterval`) on the **Massive ticker** axis, counted by the SIP's rules per trade condition. A ticker is not a security; the **Ticker map** (below, [ADR 0031](adr/0031-trade-bars-are-stored-on-the-massive-ticker-the-ticker-map-names-the-security.md)) says which Sharadar permaticker traded under each ticker on each day.
 
 ## Prerequisites
 
@@ -13,7 +13,7 @@ export MASSIVE_S3_ACCESS_KEY_ID=<your-s3-access-key-id>
 export MASSIVE_S3_SECRET_ACCESS_KEY=<your-s3-secret>
 ```
 
-A missing variable raises `MassiveCredentialError` when the client is made, before any transfer. Converting and reading a store need no credential and no network, but they need the Sharadar raw tier's TICKERS and ACTIONS (see [sharadar.md](sharadar.md)) to map tickers to permatickers.
+A missing variable raises `MassiveCredentialError` when the client is made, before any transfer. Converting and reading a store need no credential, no network and no Sharadar data. The Ticker map needs the Sharadar raw tier's TICKERS, ACTIONS, SEP and SFP (see [sharadar.md](sharadar.md)).
 
 The data is licensed for personal use: keep raw files and stores on your own machines, never in the repository or a tracker artifact.
 
@@ -48,24 +48,25 @@ for done in client.download_days("minute_aggs", date(2016, 10, 11), date(2016, 1
     print(done.day, done.published, done.fetched_bytes, done.seconds)
 ```
 
-A session Massive has no file for yet comes back with `published` false and is skipped. Each published day moves the data type's watermark (`massive/<data type>/_watermark.json`) to it while no earlier day of the run is missing, and a later run starts after the watermark, so an interrupted run resumes where it stopped and a day not published yet is asked for again. The watermark, not the files present, says what was downloaded (a trade file is deleted once converted); it does not say what was converted.
+A session Massive has no file for yet comes back with `published` false and is skipped. Each published day moves the data type's watermark (`massive/<data type>/_watermark.json`) to it while no earlier day of the run is missing, and a later run starts after the watermark, so an interrupted run resumes where it stopped and a day not published yet is asked for again. The watermark says what was downloaded; it does not say what was converted.
 
 Concurrency is set on the client: one file is fetched at a time in `streams` byte ranges (default 16), while up to `files - 1` earlier ones are verified (`files` defaults to 4). Verifying decodes the whole gzip on one core and takes about twice as long as fetching: on the training server on 2026-10-09 a 2 GB trade file of 2025 fetched in 33 s at 16 streams and decoded in 81 s. Ranged reads from the server with the vendor reached directly: 1 stream 9 MB/s, 4 streams 35, 8 streams 54, 16 streams 40 to 61, 32 streams 72 MB/s.
 
-`download_days` starts a day only once its caller has moved past the day `files` before it, so however slow the conversion, the day being converted and at most `files - 1` after it are on disk. `registry.run()` refuses Massive, as it refuses Sharadar: the download is the backfill script's (below).
+`download_days` starts a day only once its caller has moved past the day `files` before it, so however slow the conversion, the day being converted and at most `files - 1` after it are on disk. `registry.run()` refuses Massive, as it refuses Sharadar: the download is the conversion script's (below).
 
-## The backfill script
+## The conversion script
 
-`scripts/massive/backfill.py` builds the whole-market one-minute store, oldest day first (the oldest days are the ones about to leave the rolling window):
+`scripts/massive/convert.py` builds the whole-market one-minute store, `<data-dir>/market/massive/massive_trade_bars_1m/massive_trade_bars_1m.zarr` (beside a `README.md`), oldest day first. Days are converted in worker processes (`convert_day`, about 40-90 s and 20-25 GB at peak for a whole-market day) and appended in date order by the main process:
 
 ```bash
-uv run python scripts/massive/backfill.py \
-    --download-dir /data/quantlab/downloads --data-dir /data/quantlab
+taskset -c 64-127 .venv/bin/python scripts/massive/convert.py \
+    --download-dir /data/quantlab/downloads --data-dir /data/quantlab \
+    --workers 10 --threads 5 --download
 ```
 
-For each XNYS session from `--start` (default: the oldest day the plan serves today) to `--end` (default: today in New York) it downloads the trade file while the next few days download behind it (`--files`, default 4; `--streams`, default 16), makes sure the day's minute and day aggregate files are there, appends the day to `<data-dir>/market/massive/massive_trade_bars_1m/massive_trade_bars_1m.zarr` (beside a `README.md`), and then deletes the raw trade file with `MassiveTradeBarDataset.delete_converted_trades`: only once the store holds the day (`converted_through`, read from the chunk ledger) and the day was checked against Massive's minute bars. The run stops at the first session Massive has not published (today before it publishes, or a late file), since the store only grows at its end. A day that could not be checked keeps its trade file and is listed at the end; aggregate files and condition snapshots are never deleted. Tickers map through the Sharadar raw tier in `--sharadar-dir` (default `<download-dir>/sharadar`). Each day prints the bytes fetched, the conversion time, the agreement with Massive's bars, whether the raw file was deleted, the days done and left, the sustained MB/s and an ETA from the pace of the last 20 days.
+With `--download` a background thread pulls the condition table and downloads the missing days of the range, the trades (`--streams`, `--files`) and, in a second thread, the minute and day aggregates; a day is converted once its trade file and minute aggregates are on disk, so the conversion follows the download. Without it the script converts the trade files already on disk; `--follow` waits for the files another process downloads. Raw files are never deleted: Massive serves only a rolling ten years, so a deleted day could not be fetched again.
 
-An interrupted run is rerun with the same arguments: trade files already on disk are converted first (or deleted, when the store holds them already), and downloads go on after the store's last day and each data type's watermark. A rerun with nothing new downloads and converts nothing. Both directories must be outside the repository; the script refuses one inside it.
+The days are the XNYS sessions from `--start` (default: the day after the store's last, else the first trade file on disk, else with `--download` the oldest day the plan serves) to `--end` (default: today in New York). The run stops at the first session without a file once no download is running, since the store only grows at its end; a session before the trade watermark without a file (Massive had none) is skipped with a warning. A new day goes to a worker only while `MemAvailable` stays above `--min-free-gb` plus `--day-gb`, so other jobs keep their memory. Each day prints the conversion and append times, the new tickers it appended, the agreement with Massive's minute bars, the days done and left and an ETA. An interrupted run is rerun with the same arguments: it continues after the store's last day. Both directories must be outside the repository; the script refuses one inside it.
 
 ## Building and reading the panel
 
@@ -76,7 +77,6 @@ from quantlab.dataset.massive.trade_bars import MassiveTradeBarDataset
 config = MassiveTradeBarsDatasetConfig(
     zarr_file_path="/data/quantlab/zarrs/massive_trade_bars_1m.zarr",
     raw_data_dir_path="/data/quantlab/downloads/massive",
-    sharadar_dir="/data/quantlab/downloads/sharadar",
     start_date="2016-11-25",
     end_date="2016-11-25",
 )
@@ -105,13 +105,13 @@ Volumes are floats, so fractional shares are not truncated.
 - **Tick rule.** Each volume-eligible trade is compared with the price of the volume-eligible trade before it in the same session: an up-tick is a buy, a down-tick a sell, a zero tick takes the side of the last non-zero tick. The previous price carries across bars but not across sessions; a session's first trade, and zero ticks before its first price change, count in neither split, so `buy_volume + sell_volume` may be less than `volume` (about 1% of the volume on 2016-11-25).
 - **Auctions.** An auction is the condition-17 (opening) or condition-8 (closing) prints of one market, the one with the most volume under that condition that day: the listing market (2-3% of tickers also get such a print from a second market). Its largest print sets the price, its prints together (odd-lot portions included) the volume. The OHLCV are continuous trading only, cut on `sip_timestamp`. The closing auction's print reaches the SIP after the close (Nasdaq and Arca within a second, NYSE and NYSE American in 2016 about two minutes later, up to seven), so it is in no OHLCV: its prints up to 30 minutes after the close set `close_auction_price` and `close_auction_volume` on the session's last bar, which therefore holds information published after its label (they are still counted in `outside_session`). Only a window ending at 16:00 has a closing auction, and only one starting by 09:30 an opening auction. The opening cross arrives after the open and stays in its bar's OHLCV; it also sets `open_auction_price` and `open_auction_volume` on that bar. A daily resample's `close_auction_price` is the official close: it equals Sharadar SEP's unadjusted close for 94.5% of the stocks with a closing auction on 2016-11-25 and 2016-11-28 (the last continuous trade does for 40-49%); the rest are tiny auctions (median 43 shares) for which SEP keeps the last continuous trade. With the auction, daily volume is 98-99% of SEP's (92% without).
 - **Empty bars.** A bar without an eligible trade has NaN prices and zero volumes and `n_trades`; a bar of volume-only trades (odd lots, for example) has volume and NaN prices.
-- **Symbols.** Each raw `(date, ticker)` is mapped to its permaticker as traded that day, through Sharadar's SEP tickers and then SFP's. A ticker that maps to nothing is dropped, logged and recorded in the sidecar `<store>.massive_stats.json`, with the day's counts: `trades_in`, `dropped_correction`, `dropped_unknown_condition`, `outside_session`, `volume_ineligible` (kept, but no condition lets it count for volume), `unmapped_tickers` and `unmapped_trades`.
+- **Symbols.** The symbol axis is the Massive ticker, exactly as the trade file spells it (`BRK.A`, `AApB`), every ticker kept, exchange test symbols included. A column is a ticker, not a security: one ticker can belong to different securities on different days, and a security that changed ticker is two columns. Reading the store as securities goes through the Ticker map. The day's counts go to the sidecar `<store>.massive_stats.json`: `trades_in`, `dropped_correction`, `dropped_unknown_condition`, `outside_session`, `volume_ineligible` (kept, but no condition lets it count for volume) and `outside_roster_trades`.
 
 Convert one day per window: a day of the whole market is tens of millions of trades (a 2016 half day, 14 million trades, peaks at about 5 GB of memory).
 
 ## Checking against Massive's minute bars
 
-Each converted one-minute day is checked against Massive's own minute aggregates of that day when the raw tier holds them (`quantlab.dataset.massive.vendor_check`), and the result is the day's `vendor_check` entry in the sidecar; a day without them records `{"status": "no minute aggregates"}`. Massive labels a bar at its start, so its bars are shifted one minute onto ours; vendor bars outside the session window, or of a ticker the conversion did not keep, are counted and left out. Massive emits a bar only when it holds a trade that sets a price, so a bar of ours counts as present when it has prices; bars of volume-only trades are counted as `ours_volume_only`. Over the bars present on both sides, `open`, `high`, `low`, `close`, `volume` and `n_trades` are compared for equality, with the count that agree, the bar with the largest difference of each variable (ticker, permaticker, bar, both values) and samples of the bars present on one side only. Differences are reported, never raised.
+Each converted one-minute day is checked against Massive's own minute aggregates of that day when the raw tier holds them (`quantlab.dataset.massive.vendor_check`), and the result is the day's `vendor_check` entry in the sidecar; a day without them records `{"status": "no minute aggregates"}`. Massive labels a bar at its start, so its bars are shifted one minute onto ours; vendor bars outside the session window, or of a ticker off the conversion's roster, are counted and left out; the two sides are compared ticker by ticker. Massive emits a bar only when it holds a trade that sets a price, so a bar of ours counts as present when it has prices; bars of volume-only trades are counted as `ours_volume_only`. Over the bars present on both sides, `open`, `high`, `low`, `close`, `volume` and `n_trades` are compared for equality, with the count that agree, the bar with the largest difference of each variable (ticker, bar, both values) and samples of the bars present on one side only. Differences are reported, never raised.
 
 On the first two days checked:
 
@@ -131,17 +131,17 @@ day = replace(config, start_date="2016-11-28", end_date="2016-11-28")
 MassiveTradeBarDataset(day).update(granularity="day")
 ```
 
-The symbol axis is the store's own plus the day's new permatickers, which get zero volume and NaN prices over the earlier days, their real values: a converted day puts every permaticker that traded on it on the axis. Once a day is converted its raw trade file is no longer needed. Two days appended this way equal one two-day conversion (checked on 2016-11-25 and 2016-11-28, 7,520 permatickers).
+The day's new tickers are appended at the end of the store's symbol axis in place, rewriting no stored chunk ([ADR 0032](adr/0032-a-stores-symbol-axis-grows-at-its-end.md)); they get zero volume and NaN prices over the earlier days, their real values: a converted day puts every ticker that traded on it on the axis. Two days appended this way equal one two-day conversion, compared by label. Raw trade files are kept: Massive serves only a rolling ten years.
 
-The bar interval, the session window, the roster and the counting rules are the store's identity: they are recorded in the sidecar, carried in every read's data fingerprint, and a conversion into a store recorded with other settings is refused before anything is written. Each interval has its own store, named by `trade_bar_store_name(interval)` (`massive_trade_bars_1s.zarr`, ...). Any `BarInterval` from 1s to 30m converts directly; `permatickers` restricts a conversion to a roster, so finer bars stay small:
+The bar interval, the session window, the roster and the counting rules are the store's identity: they are recorded in the sidecar, carried in every read's data fingerprint, and a conversion into a store recorded with other settings is refused before anything is written. Each interval has its own store, named by `trade_bar_store_name(interval)` (`massive_trade_bars_1s.zarr`, ...). Any `BarInterval` from 1s to 30m converts directly; `tickers` restricts a conversion to a roster of Massive tickers, so finer bars stay small:
 
 ```python
 fine = replace(config, zarr_file_path="/data/quantlab/zarrs/massive_trade_bars_1s.zarr",
-               bar_interval="1s", permatickers=(199059, 194726),
+               bar_interval="1s", tickers=("AAPL", "MSFT"),
                start_date="2016-11-25", end_date="2016-11-25")
 ```
 
-Trades of mapped securities off the roster are counted per day as `outside_roster_trades`.
+Trades of tickers off the roster are counted per day as `outside_roster_trades`.
 
 Coarser bars come from Resample with no mapping: each variable declares its aggregation (`open` and `open_auction_price` first, `high` max, `low` min, `close` and `close_auction_price` last, the volumes and `n_trades` sum), and bars are cut per session, right-closed from the open and labelled at their end, the last one cut at the close (an hour of a 09:30-16:00 session ends with the half hour 15:30-16:00); `"1d"` is one bar per session, labelled with its date:
 
@@ -150,3 +150,49 @@ hourly = MassiveTradeBarDataset(config).resample("1h").panel("2016-11-25", "2016
 ```
 
 `resample("5m")` of the one-minute store equals converting the trades at 5m: bit for bit on every variable but `dollar_volume`, whose sums are added in another order (relative differences up to 4e-16 on 2016-11-25 and 2016-11-28).
+
+## The Ticker map
+
+A Massive ticker is not a security: one ticker can belong to different securities on different days, and Sharadar names a security by the tickers of a later pull. The Ticker map (`quantlab.dataset.massive.ticker_map.TickerMap`, ADR 0031) says, for each day and Massive ticker of that day's day aggregates, which Sharadar permaticker traded under it, or none, with the evidence. It reads Massive's day aggregates and Sharadar's TICKERS, ACTIONS, SEP and SFP from the raw tier, and is the only way from Massive tickers to Sharadar's securities.
+
+```python
+from datetime import date
+
+from quantlab.dataset.config import TickerMapConfig
+from quantlab.dataset.massive.ticker_map import TickerMap
+
+ticker_map = TickerMap(TickerMapConfig(
+    path="/data/quantlab/market/massive/massive_ticker_map/massive_ticker_map",
+    massive_dir="/data/quantlab/downloads/massive",
+    sharadar_dir="/data/quantlab/downloads/sharadar",
+))
+ticker_map.append(date(2020, 3, 2))   # one more day
+ticker_map.rebuild()                   # every day of the raw tier again
+rows = ticker_map.read("2020-03-02", "2020-03-02")
+```
+
+A row has `date`, `ticker`, `permaticker` (null when unmapped), `evidence`, `reason` (why it is unmapped), `massive_close`, `sharadar_close` (the chosen candidate's unadjusted close, or the nearest candidate's for a ticker none matches) and `rules_version`. The rules of version 1:
+
+1. The candidates are every Sharadar holder of the ticker (SEP's and SFP's securities, from TICKERS, the ACTIONS ticker changes and `relatedtickers`), whatever their span dates.
+2. A candidate matches when its unadjusted close that day is within max(1% of it, 0.0051) of Massive's day close; the absolute floor admits a low-priced stock Sharadar rounds to cents.
+3. One match is chosen (`price`). Several: the one whose span covers the day (`price+span`), else none.
+4. No match: a candidate whose span covers the day and whose close is off by a cumulative ratio of its ACTIONS splits after the day, in either direction within 1%, is chosen (`split_corrected`): Sharadar sometimes folds a later split into its "unadjusted" close.
+5. Otherwise the ticker is unmapped (`unmapped`), with the reason `no Sharadar holder`, `no candidate priced that day`, `several candidates match its close` or `no candidate's close matches`.
+
+The resolver's fallbacks for Sharadar's own files are not used, so a ticker whose only holder was delisted years before (VIAC on 2020-03-02, held in Sharadar only by ViaCell) is unmapped rather than given to the old company. The map is one Parquet file per day, `<path>/<YYYY>/<YYYY-MM-DD>.parquet`; `append` refuses a day it already holds, and `rebuild` maps every day again into a sidecar that then replaces the map, for a change of rules or a Sharadar restatement. The trades never need converting again.
+
+The shared map is `<data-dir>/market/massive/massive_ticker_map/`, beside its `README.md` and `component.json`. `scripts/massive/ticker_map.py --download-dir ... --data-dir ...` appends the days with day aggregates on disk that it lacks, up to the last bar of Sharadar's SEP store (a day is never mapped before Sharadar's closes of it are in); `--rebuild` maps every day again. The daily data update runs it after the conversion ([data_update.md](data_update.md)).
+
+## Reading Trade bars as securities
+
+`PermatickerTradeBarDataset` reads the Trade bar store through the Ticker map and returns the bars on the permaticker axis. It is the one way to read the store as securities, and a drop-in dataset for factors, models and backtests:
+
+```python
+from quantlab.dataset.massive.permaticker_bars import PermatickerTradeBarDataset
+
+bars = PermatickerTradeBarDataset(MassiveTradeBarDataset(config), ticker_map)
+panel = bars.panel("2020-03-02", "2020-03-03")                 # symbol: int64 permatickers
+hourly = bars.resample("1h").panel("2020-03-02", "2020-03-03")
+```
+
+For each session day the store's ticker columns are mapped through that day's rows of the map: a ticker the map leaves unmapped is dropped, two tickers mapped to one permaticker keep the one with more volume that day, a security that changed ticker is one column across the change, and a permaticker without a ticker on a day reads as a column without a trade (NaN prices, zero volumes). Only the ticker columns the map names are read from the store. `resample` maps the store's one-minute bars first and then aggregates them per session as the Trade bars are. A read records both the store and the map's rows in an open `DataRecorder`, so a run's data fingerprint changes when either does. The view has no store of its own: `update` and `save` are refused, and the store and the map are updated by their own steps.

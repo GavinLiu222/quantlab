@@ -15,7 +15,7 @@ Massive's raw tier is one vendor file per data type and trading day, pulled by
 ``MassiveClient``, not the symbol-batched hive tree an ``Acquisition``
 writes. The descriptor therefore names no acquisition class and no config
 factory: ``registry.run()`` refuses it, and the download is the client's
-(``scripts/massive/backfill.py``).
+(``scripts/massive/convert.py --download``).
 
 Examples
 --------
@@ -46,7 +46,7 @@ MASSIVE_SOURCE = register_source(
         acquisition_cls=None,
         config_factory=None,
         capabilities=(
-            # Every SIP trade; converted to Trade bars on the permaticker axis.
+            # Every SIP trade; converted to Trade bars on the Massive ticker axis.
             Capability(
                 market="us_equity",
                 frequency="tick",
