@@ -562,7 +562,8 @@ class Factor(Component, ABC):
     ) -> Self:
         """Compute ``start`` to ``end`` and write it as the factor store.
 
-        The store at ``store_path`` is replaced by ``compute(start, end)``
+        The store at ``store_path`` is replaced by ``compute(start, end)``,
+        its symbol axis in ``sort_symbol_axis`` order as ``extend`` keeps it,
         and the range is recorded beside it, in
         ``<store_path>.range.json``, for ``store_range``, ``read`` and
         ``extend``. The factor holds nothing afterwards and no config
@@ -587,7 +588,9 @@ class Factor(Component, ABC):
         panel = self.compute(start, end)
         with Timer(f"{self.class_name}: build"):
             self._drop_range(self.store_path)
-            XrBackend().to_internal(panel).write(self.store_path, mode="w")
+            XrBackend().to_internal(panel).sort_symbols().write(
+                self.store_path, mode="w"
+            )
             self._record_range(self.store_path, start, end)
         return self
 

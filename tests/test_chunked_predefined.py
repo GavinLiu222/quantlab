@@ -172,7 +172,8 @@ def spot(root) -> SpotKlineDataset:
 
 
 _STOCK_TIMES = pd.bdate_range("2022-01-03", periods=_N_BARS)
-_STOCK_SYMBOLS = ["AAPL", "AMZN", "AVGO", "GOOGL", "META", "MSFT", "NVDA", "TSLA"]  # sorted, as extend rewrites it
+# Not sorted: a whole build and a chunked one must still lay the store out alike (#247).
+_STOCK_SYMBOLS = ["MSFT", "AAPL", "NVDA", "AMZN", "TSLA", "GOOGL", "META", "AVGO"]
 
 
 @pytest.fixture(scope="module")

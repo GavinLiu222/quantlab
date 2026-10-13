@@ -160,6 +160,39 @@ class XrBackend(DataBackend):
         self.data.to_zarr(path, **kwargs)
         return self
 
+    def sort_symbols(self, dim: str = "symbol") -> Self:
+        """Put ``data``'s ``dim`` axis in ``sort_symbol_axis`` order.
+
+        Every store keeps its symbol axis in that order, the one
+        ``widen_and_append`` writes, so a store has one layout whether it
+        was written whole or appended to. Labels and values move together;
+        a panel without ``dim`` is left as it is.
+
+        Parameters
+        ----------
+        dim : str, default "symbol"
+            The axis to order.
+
+        Returns
+        -------
+        Self
+            ``self``, for chaining.
+
+        Examples
+        --------
+        >>> backend = XrBackend().to_internal(panel).sort_symbols()
+        >>> backend.data["symbol"].values.tolist()
+        ['AAA', 'BBB', 'CCC']
+        """
+        if dim not in self.data.coords:
+            return self
+        labels = self.data[dim].values.tolist()
+        rank = {label: position for position, label in enumerate(labels)}
+        order = [rank[label] for label in sort_symbol_axis(labels)]
+        if order != list(range(len(labels))):
+            self.data = self.data.isel({dim: order})
+        return self
+
     def append(
         self,
         path: str,
@@ -857,8 +890,9 @@ class XrBackend(DataBackend):
         any variable the store lacks is added with ``widen_data_vars``; then
         the unchanged ``append`` runs. Variables are widened after the symbol
         axis so the filler is built once at the final width. Calling this
-        unconditionally is cheap: when both axes already agree, or when no
-        store exists yet, it delegates straight to ``append``.
+        unconditionally is cheap: when both axes already agree it delegates
+        straight to ``append``, and when no store exists yet it puts the
+        ``dim`` axis in sorted order (``sort_symbols``) and then appends.
 
         The closing ``append`` is what keeps the compatibility checks in
         force. Because the widens commit before it runs, a window it then
@@ -904,7 +938,7 @@ class XrBackend(DataBackend):
         append_dim_size = kwargs.get("append_dim_size")
 
         if not Path(path).exists():
-            return self.append(path, append_dim, **kwargs)
+            return self.sort_symbols(dim).append(path, append_dim, **kwargs)
         _recover_index_coordinate_swap(Path(path))
 
         # Labels keep their own type and `sort_symbol_axis` orders integers

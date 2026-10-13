@@ -171,7 +171,10 @@ def test_every_store_touching_test_in_the_owning_suites_requests_the_encoding_fi
     # Re-derived the same way 2026-09-26 (43 -> 41) when #26 moved
     # `tests/test_factor_update.py` from `update()` onto `extend()` and
     # dropped its two `save()`/overlap tests, which `extend()` cannot reach.
-    assert checked == 41, checked
+    # Re-derived the same way 2026-10-12 (41 -> 44) when #247 added three
+    # sorted-symbol-axis tests to `tests/test_factor_update.py`; all three
+    # request `symbol_encoding`.
+    assert checked == 44, checked
 
 
 def test_no_owning_suite_builds_a_symbol_coordinate_from_a_bare_sequence() -> None:
@@ -222,8 +225,9 @@ def test_no_owning_suite_builds_a_symbol_coordinate_from_a_bare_sequence() -> No
         f"one the chunked ingest writes -- so the test would silently cover "
         f"half of what it appears to."
     )
-    # Non-vacuity: three suites, three coordinate expressions.
-    assert found == 5, found
+    # Non-vacuity: the coordinate expressions across the three suites; #247
+    # added the sixth, a panel `widen_and_append` writes to a new store.
+    assert found == 6, found
 
 
 def test_the_shared_fixture_offers_exactly_the_three_modelled_encodings() -> None:

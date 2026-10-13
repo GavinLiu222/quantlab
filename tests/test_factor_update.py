@@ -383,3 +383,74 @@ def test_extend_reaches_the_bounded_widen_path_with_no_call_site_change(
     assert np.isnan(after["alpha"].sel(symbol="CCC").values[: len(LONG)]).all()
     assert not np.isnan(after["alpha"].sel(symbol="CCC").values[len(LONG) :]).any()
     assert_stored_symbol_encoding(str(factor.config.file_path), symbol_encoding)
+
+
+# ---------------------------------------------------------------------------
+# One store layout whichever way it was written (#247)
+# ---------------------------------------------------------------------------
+
+UNSORTED = ["CCC", "AAA", "BBB"]
+
+
+def test_build_writes_the_symbol_axis_in_sorted_order(
+    tmp_path: Path, symbol_encoding: str
+) -> None:
+    """A dataset whose symbol axis is not sorted still gets a sorted store.
+
+    RED under: `build()` writing the computed panel in the dataset's order.
+    """
+    factor = _factor(tmp_path, encoding=symbol_encoding)
+    _build(factor, EARLY, symbols=UNSORTED)
+
+    stored = _stored(factor)
+    assert stored["symbol"].values.tolist() == ["AAA", "BBB", "CCC"]
+    expected = factor._prepared["alpha"].sel(symbol=["AAA", "BBB", "CCC"])
+    np.testing.assert_array_equal(stored["alpha"].values, expected.values)
+
+
+def test_build_then_extend_matches_one_build_position_for_position(
+    tmp_path: Path, symbol_encoding: str
+) -> None:
+    """Built whole or built then extended, the store has one layout.
+
+    RED under: `build()` keeping the dataset's unsorted order, which
+    `extend()` then rewrites sorted.
+    """
+    whole = _factor(tmp_path / "whole", encoding=symbol_encoding)
+    _build(whole, EARLY + LATER, symbols=UNSORTED)
+
+    pieces = _factor(tmp_path / "pieces", encoding=symbol_encoding)
+    _build(pieces, EARLY, symbols=UNSORTED)
+    pieces._prepared = whole._prepared.isel(timestamp=slice(len(EARLY), None))
+    pieces.extend(LATER[-1])
+
+    expected, got = _stored(whole), _stored(pieces)
+    assert got["symbol"].values.tolist() == expected["symbol"].values.tolist()
+    np.testing.assert_array_equal(got["alpha"].values, expected["alpha"].values)
+
+
+def test_widen_and_append_creates_a_store_with_a_sorted_symbol_axis(
+    tmp_path: Path, symbol_encoding: str
+) -> None:
+    """The first chunk `ChunkedFactor` writes lands sorted too.
+
+    RED under: `widen_and_append` delegating a missing store straight to
+    `append` with the panel's own order.
+    """
+    panel = xr.Dataset(
+        {"alpha": (["timestamp", "symbol"], np.arange(6.0).reshape(2, 3))},
+        coords={
+            "timestamp": pd.to_datetime(EARLY[:2]),
+            "symbol": symbol_coord(UNSORTED, symbol_encoding),
+        },
+    )
+    path = str(tmp_path / "new.zarr")
+    XrBackend().to_internal(panel).widen_and_append(path)
+
+    stored = xr.open_zarr(path).load()
+    assert stored["symbol"].values.tolist() == ["AAA", "BBB", "CCC"]
+    np.testing.assert_array_equal(
+        stored["alpha"].values,
+        panel["alpha"].sel(symbol=["AAA", "BBB", "CCC"]).values,
+    )
+    assert_stored_symbol_encoding(path, symbol_encoding)
