@@ -101,7 +101,7 @@ True
 
 ### 先固定 symbol 轴
 
-在转换第一个窗口之前，dataset 会先确定整个范围内的全部标的，并用 `sort_symbol_axis` 排序。之后每个窗口都建立在这条轴上。某个窗口内没有数据的标的会显示为全 NaN 的一列，这保证每次追加都与 store 里已有的列对齐。`BBB` 在 7 月才上市，所以在此之前是 NaN。
+在转换第一个窗口之前，dataset 会先确定整个范围内的全部标的，并用 `sort_symbol_axis` 排序。之后每个窗口都建立在这条轴上。某个窗口内没有数据的标的会显示为全 NaN 的一列，这保证每次追加都与 store 里已有的列对齐。`BBB` 在 7 月才上市，所以在此之前是 NaN。第一个窗口创建 store 时固定它的 chunk 网格：`XrBackend.APPEND_DIM_CHUNK` 行（范围更短时更少）乘 `XrBackend.SYMBOL_DIM_CHUNK` 个标的，与轴的宽度无关，因此之后追加的标的（见后端指南）落进已经划好的 chunk 里。
 
 ```python
 >>> panel["close"].sel(timestamp=slice("2023-06-28", "2023-07-05")).to_pandas()
@@ -183,7 +183,7 @@ XrBackend.append: refusing to append to <root>/data/daily.zarr -- the incoming '
 
 ### 处理新上市的标的
 
-每次运行开始时，symbol 轴都由原始数据确定。当 store 已存在而轴发生了变化（例如出现了新标的）时，由 `on_new_listing` 决定如何处理。默认值 `"refuse"` 报错停止，不改动任何东西。`"widen"` 把新标的加进 store，并在已有历史上填 NaN，然后追加其余窗口。`"rebuild"` 把每个窗口都重新从原始数据转换到新的轴上。
+每次运行开始时，symbol 轴都由原始数据确定。store 已存在时，本次运行固定的轴是 store 自己的轴，后面接上它没有的标的（彼此之间排好序，ADR 0032），因此没有新标的的运行永远不会改变 store 的顺序。当轴发生了变化（例如出现了新标的）时，由 `on_new_listing` 决定如何处理。默认值 `"refuse"` 报错停止，不改动任何东西。`"widen"` 把新标的就地追加到 store 轴的末尾（`XrBackend.extend_symbol_axis`，不重写任何已存储的 chunk），在已有历史上填 NaN，把台账改到扩展后的轴上，然后追加其余窗口。`"rebuild"` 把每个窗口都重新从原始数据转换到新的、排好序的轴上。
 
 ```python
 >>> write_raw(raw, "2024-01-02", "2024-03-29", {"AAA": "2023-01-01", "BBB": "2023-07-01", "CCC": "2024-01-01"}, batch="1")

@@ -508,3 +508,100 @@ def test_the_probe_is_asked_about_the_stores_extent_not_the_config_range(
     asked_start, asked_end = windows[0]
     assert pd.Timestamp(asked_start) == pd.Timestamp(extent_before[0])
     assert pd.Timestamp(asked_end) == pd.Timestamp(extent_before[1])
+
+
+# ---------------------------------------------------------------------------
+# The pinned axis is the stored axis followed by the new symbols (#256, ADR 0032)
+# ---------------------------------------------------------------------------
+
+
+def _chunk_files(path: str) -> dict:
+    """Every stored chunk file of the data variables: bytes, inode, mtime."""
+    root = Path(path)
+    files = {}
+    for chunk in root.rglob("*"):
+        relative = chunk.relative_to(root)
+        if (
+            chunk.is_file()
+            and relative.parts[0] not in ("symbol", "timestamp")
+            and chunk.name not in ("zarr.json", ".zarray", ".zattrs", ".zgroup", ".zmetadata")
+        ):
+            stat = chunk.stat()
+            files[str(relative)] = (chunk.read_bytes(), stat.st_ino, stat.st_mtime_ns)
+    return files
+
+
+def test_a_new_listing_is_appended_at_the_end_without_rewriting_the_store(
+    growing_roster: _GrowingRoster, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`AAA` sorts between `A` and `B` but is appended after them.
+
+    RED under: pinning the sorted raw axis (the store is then rewritten onto
+    `A, AAA, B` by `widen_symbol_axis`).
+    """
+    from quantlab.backend.zarr import XrBackend
+
+    monkeypatch.setattr(XrBackend, "APPEND_DIM_CHUNK", 3)
+    config = _built_over_ab(growing_roster)
+    before = _chunk_files(config.zarr_file_path)
+    growing_roster.write_late_listing("AAA")
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("the store was rewritten")
+
+    monkeypatch.setattr(XrBackend, "widen_symbol_axis", refuse)
+    StockDataset(config).update(granularity="year")
+
+    after = _panel(config.zarr_file_path)
+    assert after["symbol"].values.tolist() == ["A", "B", "AAA"]
+    assert np.isnan(after["adjClose"].sel(symbol="AAA").values[: -len(_DAYS)]).all()
+    assert (after["adjClose"].sel(symbol="AAA").values[-len(_DAYS):] == 400.0).all()
+    assert (after["adjClose"].sel(symbol="B").values[: -len(_DAYS)] == 200.0).all()
+    files = _chunk_files(config.zarr_file_path)
+    for name, content in before.items():
+        assert files[name] == content, name
+
+
+def test_an_update_after_an_extension_neither_widens_nor_refuses(
+    growing_roster: _GrowingRoster, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ledger was rebased onto the extended axis, so the next run agrees.
+
+    RED under: re-pinning the sorted raw axis on the next run (refused as a
+    changed axis) or not rebasing the ledger.
+    """
+    from quantlab.backend.zarr import XrBackend
+
+    config = _built_over_ab(growing_roster)
+    growing_roster.write_late_listing("AAA")
+    StockDataset(config).update(granularity="year")
+    extended = _panel(config.zarr_file_path)
+    before = _chunk_files(config.zarr_file_path)
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("the axis was touched")
+
+    monkeypatch.setattr(XrBackend, "widen_symbol_axis", refuse)
+    monkeypatch.setattr(XrBackend, "extend_symbol_axis", refuse)
+    dataset = _SpyStock(config)
+    dataset.update(granularity="year")
+    StockDataset(config).from_raw_data_chunked(granularity="year")
+
+    assert dataset.window_calls == []
+    assert _chunk_files(config.zarr_file_path) == before
+    xr.testing.assert_identical(_panel(config.zarr_file_path), extended)
+
+
+def test_a_rebuild_writes_a_sorted_axis(growing_roster: _GrowingRoster) -> None:
+    """A listing with history inside the store's extent rebuilds, sorted.
+
+    RED under: rebuilding on the stored-plus-new axis.
+    """
+    config = _built_over_ab(growing_roster)
+    growing_roster._write("AA", 300.0, _STORE_YEARS, "spanning-aa")
+
+    StockDataset(config).update(granularity="year")
+
+    rebuilt = _panel(config.zarr_file_path)
+    assert rebuilt["symbol"].values.tolist() == ["A", "AA", "B"]
+    assert (rebuilt["adjClose"].sel(symbol="AA").values == 300.0).all()

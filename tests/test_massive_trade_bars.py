@@ -652,7 +652,7 @@ def test_reserved_permatickers_are_on_the_axis_and_a_later_day_appends_without_a
     assert bool(panel["close"].sel(symbol=999).isnull().all())
 
 
-def test_a_widen_inside_the_axis_rewrites_the_store_once_and_the_ledger_records_its_order(tmp_path, monkeypatch):
+def test_new_permatickers_are_appended_at_the_end_and_the_ledger_records_the_order(tmp_path, monkeypatch):
     import xarray as xr
 
     from quantlab.backend.zarr import XrBackend
@@ -661,15 +661,16 @@ def test_a_widen_inside_the_axis_rewrites_the_store_once_and_the_ledger_records_
     first = _dataset(tmp_path, start=FULL_DAY, end=FULL_DAY)
     first.reserve_symbols([999])
     first.from_raw_data_chunked(granularity="day")
-    # 404 and 505 sort before the reserved 999: the next day widens inside the axis.
-    widen = XrBackend.widen_symbol_axis
-    widened = []
-    monkeypatch.setattr(XrBackend, "widen_symbol_axis", lambda self, *a, **k: widened.append(a) or widen(self, *a, **k))
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("the store was rewritten")
+
+    # 404 and 505 sort before the reserved 999, but are appended after it (ADR 0032).
+    monkeypatch.setattr(XrBackend, "widen_symbol_axis", refuse)
     second = _dataset(tmp_path, start=HALF_DAY, end=HALF_DAY)
     second.update(granularity="day")
-    assert len(widened) == 1
     with xr.open_zarr(second.config.zarr_file_path) as store:
         axis = store.symbol.values.tolist()
-    assert axis == [101, 202, 303, 404, 505, 999]
+    assert axis == [101, 202, 303, 999, 404, 505]
     ledger = ChunkLedger(ChunkLedger.default_path(second.config.zarr_file_path))
     ledger.assert_consistent(axis, second.config.zarr_file_path)

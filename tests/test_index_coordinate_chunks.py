@@ -77,8 +77,8 @@ def test_appending_windows_keeps_the_index_coordinates_in_one_chunk(
     assert chunks["timestamp"] == (len(_DATES),)
     assert chunks["symbol"] == (2,)
     # The data variables keep their pinned grid.
-    assert chunks["close"] == (4, 2)
-    assert chunks["volume"] == (4, 2)
+    assert chunks["close"] == (4, XrBackend.SYMBOL_DIM_CHUNK)
+    assert chunks["volume"] == (4, XrBackend.SYMBOL_DIM_CHUNK)
     # Consolidated metadata, which xarray opens by default, agrees.
     assert _consolidated_chunks(path) == chunks
     xr.testing.assert_identical(xr.open_zarr(path).load(), _panel())

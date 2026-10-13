@@ -419,7 +419,7 @@ class RiskStore:
         rows = self.compute(start, end)
         with Timer(f"{self.owner}: build"):
             self._range_file(path).unlink(missing_ok=True)
-            XrBackend().to_internal(rows).sort_symbols().write(path, mode="w")
+            XrBackend().to_internal(rows).create(path)
             self._record_range(path, start, end)
         return self
 

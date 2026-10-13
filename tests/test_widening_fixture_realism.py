@@ -174,7 +174,10 @@ def test_every_store_touching_test_in_the_owning_suites_requests_the_encoding_fi
     # Re-derived the same way 2026-10-12 (41 -> 44) when #247 added three
     # sorted-symbol-axis tests to `tests/test_factor_update.py`; all three
     # request `symbol_encoding`.
-    assert checked == 44, checked
+    # Re-derived the same way 2026-10-13 (44 -> 45) when #255 added the
+    # build-then-extend-by-label test to `tests/test_factor_update.py`; it
+    # requests `symbol_encoding`.
+    assert checked == 45, checked
 
 
 def test_no_owning_suite_builds_a_symbol_coordinate_from_a_bare_sequence() -> None:

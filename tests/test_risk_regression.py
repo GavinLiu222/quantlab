@@ -302,8 +302,10 @@ def test_a_symbol_appearing_later_widens_the_store(planted, tmp_path):
     once.build(_day(3), _day(_T - 1))
     twice = _model(prices, exposures, str(tmp_path / "twice.zarr")).regression
     twice.build(_day(3), _day(17)).extend(_day(_T - 1))
+    # The late symbol is appended at the end of the axis (ADR 0032): compare by label.
     xr.testing.assert_identical(
-        once.read(_day(3), _day(_T - 1)).load(), twice.read(_day(3), _day(_T - 1)).load()
+        once.read(_day(3), _day(_T - 1)).load().sortby("symbol"),
+        twice.read(_day(3), _day(_T - 1)).load().sortby("symbol"),
     )
 
 

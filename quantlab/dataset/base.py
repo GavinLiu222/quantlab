@@ -1103,7 +1103,9 @@ class BaseDataset(Component, ABC):
         Parameters
         ----------
         **kwargs
-            Passed to ``XrBackend.write``.
+            Passed to ``XrBackend.create``, which lays the store out as
+            ``widen_and_append`` does (sorted symbol axis, pinned chunk grid
+            and fill values) so it can grow at its end.
 
         Examples
         --------
@@ -1122,7 +1124,9 @@ class BaseDataset(Component, ABC):
                     )
                 )
             self._filter()
-            self.data_backend.write(self.store_path, **kwargs)
+            self.data_backend.create(
+                self.store_path, fill_values=self._widen_fill_values(), **kwargs
+            )
 
     @classmethod
     def from_config(cls, config: dict, run_dir: "str | os.PathLike | None" = None) -> Self:
@@ -1486,6 +1490,7 @@ class BaseDataset(Component, ABC):
             )
 
         symbols, timestamps = self._raw_axes_in_range()
+        symbols = self._pinned_symbol_axis(symbols)
         planner = TimeChunkPlanner(granularity)
         windows = planner.plan_from_timestamps(timestamps)
         resolved_ledger_path = ledger_path or ChunkLedger.default_path(
@@ -1504,6 +1509,9 @@ class BaseDataset(Component, ABC):
             on_new_listing,
             append_dim_size=len(timestamps),
         )
+        if rebuild_asides is not None:
+            # A rebuild starts a new store, which is sorted (ADR 0032).
+            symbols = sort_symbol_axis(symbols)
         # Set before the `try` so the result below can always read it.
         rebuild_rolled_back: bool = False
 
@@ -1764,6 +1772,37 @@ class BaseDataset(Component, ABC):
     #: always recognises one left behind by a rebuild that was killed.
     SUPERSEDED_SUFFIX = XrBackend.SUPERSEDED_SUFFIX
 
+    def _pinned_symbol_axis(self, symbols: list) -> list:
+        """Return the axis a write pins: the stored one, then the new symbols.
+
+        A store's symbol axis grows at its end (ADR 0032): when every stored
+        symbol is among ``symbols`` (the raw axis, sorted), the pinned axis
+        is the stored axis followed by the symbols it lacks, sorted among
+        themselves, so a new listing extends the store in place and a run
+        with no new symbol never reorders it. With no store, or with a
+        stored symbol missing from ``symbols`` (a case
+        ``_reconcile_new_listings`` refuses), ``symbols`` is returned as it
+        is.
+
+        Parameters
+        ----------
+        symbols : list
+            The raw tier's symbols over the whole range, in
+            ``sort_symbol_axis`` order.
+
+        Returns
+        -------
+        list
+            The axis every window of this run is built on.
+        """
+        stored = self._stored_symbol_axis(self.config.zarr_file_path)
+        if stored is None:
+            return symbols
+        known = set(stored)
+        if not known.issubset(symbols):
+            return symbols
+        return stored + [symbol for symbol in symbols if symbol not in known]
+
     @staticmethod
     def _stored_symbol_axis(
         store_path: str, dim: str = "symbol"
@@ -2018,18 +2057,21 @@ class BaseDataset(Component, ABC):
                 f"removed={removed}. The added symbol(s) will be NaN for all "
                 f"existing history: a widen does not re-read the raw files, so "
                 f"history the vendor already has is not recovered. Use "
-                f"on_new_listing='rebuild' for that; it is the only reason to "
-                f"prefer it, since a widen that would not fit in memory "
-                f"rewrites the store block by block "
-                f"(XrBackend.MAX_WIDEN_BYTES), so store size does not force a "
-                f"rebuild."
+                f"on_new_listing='rebuild' for that. The added symbol(s) are "
+                f"appended at the end of the axis in place, rewriting no "
+                f"stored chunk (XrBackend.extend_symbol_axis)."
             )
-            self.data_backend.widen_symbol_axis(
-                store_path,
-                list(symbols),
-                append_dim=append_dim,
-                fill_values=self._widen_fill_values(),
-                append_dim_size=append_dim_size,
+            if removed:
+                # Refuses, naming the symbols it would drop.
+                self.data_backend.widen_symbol_axis(
+                    store_path,
+                    list(symbols),
+                    append_dim=append_dim,
+                    fill_values=self._widen_fill_values(),
+                    append_dim_size=append_dim_size,
+                )
+            self.data_backend.extend_symbol_axis(
+                store_path, added, fill_values=self._widen_fill_values()
             )
             # The ledger stores a fingerprint of the symbol list, so update it
             # now or the widened store cannot be resumed.

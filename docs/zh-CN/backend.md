@@ -159,34 +159,36 @@ ValueError: XrBackend.append: refusing to append to data/grow.zarr -- the 'symbo
 
 ### 给已有存储增加标的或变量
 
-`widen_and_append` 是追加带有新标的或新变量的窗口时的显式入口。它把存储重写到标的的有序并集上，在已存储的日期上用 NaN 回填新变量，然后执行普通的 `append`，所以 `append` 的全部检查依然生效。没有任何变化时它直接调用 `append`，因此每次刷新都调用它开销也很小。
+`widen_and_append` 是追加带有新标的或新变量的窗口时的显式入口。存储没有的标的由 `extend_symbol_axis` 追加到标的轴末尾，彼此之间排好序；新变量在已存储的日期上用 NaN 回填；然后执行普通的 `append`，所以 `append` 的全部检查依然生效。窗口的标的与存储相同、只是顺序不同时，会按存储的顺序重排。没有任何变化时它直接调用 `append`，因此每次刷新都调用它开销也很小。
 
 ```python
->>> new = window(["2024-01-08"], ["AAA", "CCC"], 20, volume=100.0)
+>>> new = window(["2024-01-08"], ["CCC", "AAA", "ABC"], 20, volume=100.0)
 >>> XrBackend().to_internal(new).widen_and_append("data/grow.zarr")
 XrBackend()
 >>> stored = xr.open_zarr("data/grow.zarr")
 >>> stored["symbol"].values.tolist(), sorted(stored.data_vars)
-(['AAA', 'BBB', 'CCC'], ['close', 'volume'])
+(['AAA', 'BBB', 'ABC', 'CCC'], ['close', 'volume'])
 >>> stored["close"].to_pandas()
-symbol       AAA   BBB   CCC
-timestamp                   
-2024-01-02   0.0   1.0   NaN
-2024-01-03   2.0   3.0   NaN
-2024-01-04  10.0  11.0   NaN
-2024-01-05  12.0  13.0   NaN
-2024-01-08  20.0   NaN  21.0
+symbol       AAA   BBB   ABC   CCC
+timestamp                         
+2024-01-02   0.0   1.0   NaN   NaN
+2024-01-03   2.0   3.0   NaN   NaN
+2024-01-04  10.0  11.0   NaN   NaN
+2024-01-05  12.0  13.0   NaN   NaN
+2024-01-08  21.0   NaN  22.0  20.0
 >>> stored["volume"].to_pandas()
-symbol        AAA  BBB    CCC
-timestamp                    
-2024-01-02    NaN  NaN    NaN
-2024-01-03    NaN  NaN    NaN
-2024-01-04    NaN  NaN    NaN
-2024-01-05    NaN  NaN    NaN
-2024-01-08  100.0  NaN  100.0
+symbol        AAA  BBB    ABC    CCC
+timestamp                           
+2024-01-02    NaN  NaN    NaN    NaN
+2024-01-03    NaN  NaN    NaN    NaN
+2024-01-04    NaN  NaN    NaN    NaN
+2024-01-05    NaN  NaN    NaN    NaN
+2024-01-08  100.0  NaN  100.0  100.0
 ```
 
-已有标的保留原有历史。新标的在它第一行之前是 NaN，而新窗口中缺席的标的在新日期上是 NaN。`widen_symbol_axis(path, symbols)` 和 `widen_data_vars(path, variables)` 可以分别完成这两半工作，且不需要在内存中持有面板。加宽会重写存储：不超过 `XrBackend.MAX_WIDEN_BYTES`（4 GiB）时一次性在内存中完成，超过则分块重写并记录一条警告，两种方式得到的存储相同。
+已有标的保留原有历史。新标的在它第一行之前读到的是各变量的填充值：NaN，或者 `fill_values=` 为该变量指定的值（例如 `{"volume": 0.0}`），由 `widen_and_append` 创建的存储也把它记为 Zarr 的 fill value。新窗口中缺席的标的在新日期上是 NaN。`extend_symbol_axis(path, symbols)` 和 `widen_data_vars(path, variables)` 可以分别完成这两半工作，且不需要在内存中持有面板。
+
+扩展标的轴不重写任何已存储的 chunk：标的轴上的每个数组就地 resize，新标签写进坐标，所以无论存储多大，一个新标的只需几次元数据写入。没有任何计算依赖存储的标的顺序，合并面板的地方都按标签对齐（ADR 0032）。新存储的标的轴 chunk 宽度固定为 `XrBackend.SYMBOL_DIM_CHUNK`（1024），与第一次写入的宽度无关，这样一个从少量标的起步的存储不会最终碎成成千上万个窄 chunk；之前创建的存储保留原来的宽度。扩展过程中被杀掉的进程会留下比坐标更长的数组，下一次写入存储时会把它们截回。另一条路是 `widen_symbol_axis(path, symbols)`：它按给定顺序把存储重写到一个超集轴上，不超过 `XrBackend.MAX_WIDEN_BYTES`（4 GiB）时一次性完成，超过则分块重写并记录一条警告。
 
 ### 把面板聚合到更粗的 bar
 

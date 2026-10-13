@@ -85,7 +85,7 @@ A Zarr store on `(timestamp, symbol)`:
 |------|---------|
 | variables | One float variable per label of the run's prediction panel, named as the panel names it (`ret_5` for the Barra run). The value is NaN where a symbol has no prediction: it is not an index member on that bar, or it has no features. |
 | `timestamp` | The bars predicted, strictly increasing, one appended per run. |
-| `symbol` | The union of every row's symbols, sorted (`sort_symbol_axis`; integer permatickers for Sharadar). A row bringing a new symbol widens the axis, and the symbol's earlier rows are NaN. |
+| `symbol` | The union of every row's symbols (integer permatickers for Sharadar): the first row's sorted (`sort_symbol_axis`), then each row's new symbols appended at the end, sorted among themselves (ADR 0032). The earlier rows of a new symbol are NaN. |
 | coordinates | Both index coordinates are kept in one chunk (`XrBackend.append`, #232). |
 | `attrs["format_version"]`, `attrs["labels"]` | As a run's `predictions.zarr` writes them (`PredictionPanel`): `labels` is a JSON list of `{"name", "scale", "delay", "span"}`. `PredictionPanel.read(store)` therefore reads the whole store. |
 | `attrs["live_format_version"]` | `1`. |

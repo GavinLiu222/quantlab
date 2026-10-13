@@ -588,8 +588,8 @@ class Factor(Component, ABC):
         panel = self.compute(start, end)
         with Timer(f"{self.class_name}: build"):
             self._drop_range(self.store_path)
-            XrBackend().to_internal(panel).sort_symbols().write(
-                self.store_path, mode="w"
+            XrBackend().to_internal(panel).create(
+                self.store_path, fill_values=self._widen_fill_values()
             )
             self._record_range(self.store_path, start, end)
         return self

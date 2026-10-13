@@ -159,34 +159,36 @@ ValueError: XrBackend.append: refusing to append to data/grow.zarr -- the 'symbo
 
 ### Add a symbol or a variable to an existing store
 
-`widen_and_append` is the explicit way to append a window that has new symbols or new variables. It rewrites the store onto the sorted union of symbols, backfills new variables with NaN over the dates already stored, and then runs the ordinary `append`, so all its checks still apply. When nothing has changed it calls `append` directly, so it is cheap to use on every refresh.
+`widen_and_append` is the explicit way to append a window that has new symbols or new variables. Symbols the store lacks are appended at the end of its symbol axis, sorted among themselves, by `extend_symbol_axis`; new variables are backfilled with NaN over the dates already stored; then the ordinary `append` runs, so all its checks still apply. A window carrying the store's symbols in another order is put in the store's order. When nothing has changed it calls `append` directly, so it is cheap to use on every refresh.
 
 ```python
->>> new = window(["2024-01-08"], ["AAA", "CCC"], 20, volume=100.0)
+>>> new = window(["2024-01-08"], ["CCC", "AAA", "ABC"], 20, volume=100.0)
 >>> XrBackend().to_internal(new).widen_and_append("data/grow.zarr")
 XrBackend()
 >>> stored = xr.open_zarr("data/grow.zarr")
 >>> stored["symbol"].values.tolist(), sorted(stored.data_vars)
-(['AAA', 'BBB', 'CCC'], ['close', 'volume'])
+(['AAA', 'BBB', 'ABC', 'CCC'], ['close', 'volume'])
 >>> stored["close"].to_pandas()
-symbol       AAA   BBB   CCC
-timestamp                   
-2024-01-02   0.0   1.0   NaN
-2024-01-03   2.0   3.0   NaN
-2024-01-04  10.0  11.0   NaN
-2024-01-05  12.0  13.0   NaN
-2024-01-08  20.0   NaN  21.0
+symbol       AAA   BBB   ABC   CCC
+timestamp                         
+2024-01-02   0.0   1.0   NaN   NaN
+2024-01-03   2.0   3.0   NaN   NaN
+2024-01-04  10.0  11.0   NaN   NaN
+2024-01-05  12.0  13.0   NaN   NaN
+2024-01-08  21.0   NaN  22.0  20.0
 >>> stored["volume"].to_pandas()
-symbol        AAA  BBB    CCC
-timestamp                    
-2024-01-02    NaN  NaN    NaN
-2024-01-03    NaN  NaN    NaN
-2024-01-04    NaN  NaN    NaN
-2024-01-05    NaN  NaN    NaN
-2024-01-08  100.0  NaN  100.0
+symbol        AAA  BBB    ABC    CCC
+timestamp                           
+2024-01-02    NaN  NaN    NaN    NaN
+2024-01-03    NaN  NaN    NaN    NaN
+2024-01-04    NaN  NaN    NaN    NaN
+2024-01-05    NaN  NaN    NaN    NaN
+2024-01-08  100.0  NaN  100.0  100.0
 ```
 
-Existing symbols keep their history. The new symbol is NaN before its first row, and a symbol missing from the new window is NaN on the new date. `widen_symbol_axis(path, symbols)` and `widen_data_vars(path, variables)` perform the two halves separately and do not need a panel in memory. A widen rewrites the store: up to `XrBackend.MAX_WIDEN_BYTES` (4 GiB) in one pass, above that block by block with a logged warning. The stored result is the same.
+Existing symbols keep their history. A new symbol reads as each variable's fill before its first row: NaN, or the value `fill_values=` names for it (`{"volume": 0.0}`, say), which a store created by `widen_and_append` also records as the Zarr fill value. A symbol missing from the new window is NaN on the new date. `extend_symbol_axis(path, symbols)` and `widen_data_vars(path, variables)` perform the two halves separately and do not need a panel in memory.
+
+Extending the symbol axis rewrites no stored chunk: each array on the axis is resized in place and the new labels are written to the coordinate, so a new symbol costs a few metadata writes however large the store is. No computation depends on a store's symbol order; everything that combines panels aligns them by label (ADR 0032). A new store chunks its symbol axis at `XrBackend.SYMBOL_DIM_CHUNK` (1024) whatever its first width, so a store that starts with a few symbols does not end in thousands of narrow chunks; stores created before keep their width. A process killed during an extension leaves arrays longer than the coordinate, and the next write to the store cuts them back. `widen_symbol_axis(path, symbols)` is the other route: it rewrites the store onto a superset axis in the order given, up to `XrBackend.MAX_WIDEN_BYTES` (4 GiB) in one pass, above that block by block with a logged warning.
 
 ### Aggregate a panel onto coarser bars
 

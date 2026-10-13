@@ -1065,8 +1065,11 @@ def test_a_day_granularity_conversion_reaches_zarr_identical_to_the_unchunked_st
     assert set(chunked_grid) == set(unchunked_grid)
     expected = min(XrBackend.APPEND_DIM_CHUNK, 9)
     for name, shape in chunked_grid.items():
-        assert shape == unchunked_grid[name], name
+        assert shape[0] == unchunked_grid[name][0], name
         assert shape[0] == expected, name
+        # `save` writes without an encoding; the chunked store pins the
+        # symbol axis at SYMBOL_DIM_CHUNK (ADR 0032).
+        assert shape[1] == XrBackend.SYMBOL_DIM_CHUNK, name
 
     # And the resume ledger on disk agrees: nine completed windows covering
     # the nine observed rows, fingerprinted against the pinned roster.
@@ -1126,7 +1129,7 @@ def test_the_chunk_grid_is_the_stores_extent_not_the_first_windows(
 
     grid = _chunk_grid(config.zarr_file_path)
     assert grid, "the store carries no data variables to measure"
-    assert set(grid.values()) == {(min(XrBackend.APPEND_DIM_CHUNK, 9), 3)}
+    assert set(grid.values()) == {(min(XrBackend.APPEND_DIM_CHUNK, 9), XrBackend.SYMBOL_DIM_CHUNK)}
 
 
 @pytest.mark.parametrize("granularity", ["year", "month", "day"])
@@ -1158,7 +1161,7 @@ def test_the_chunk_grid_is_identical_at_every_rung(
 
     grid = _chunk_grid(config.zarr_file_path)
     assert set(grid) == set(_chunk_grid(unchunked_config.zarr_file_path))
-    assert set(grid.values()) == {(min(XrBackend.APPEND_DIM_CHUNK, 9), 3)}
+    assert set(grid.values()) == {(min(XrBackend.APPEND_DIM_CHUNK, 9), XrBackend.SYMBOL_DIM_CHUNK)}
 
 
 def test_the_chunk_grid_survives_a_crash_and_resume(
@@ -1192,7 +1195,7 @@ def test_the_chunk_grid_survives_a_crash_and_resume(
     assert _panel(config.zarr_file_path).sizes["timestamp"] == 9
     grid = _chunk_grid(config.zarr_file_path)
     assert grid
-    assert set(grid.values()) == {(min(XrBackend.APPEND_DIM_CHUNK, 9), 3)}
+    assert set(grid.values()) == {(min(XrBackend.APPEND_DIM_CHUNK, 9), XrBackend.SYMBOL_DIM_CHUNK)}
 
     clean_config = three_year_stock_config("grid_resume_clean.zarr")
     StockDataset(clean_config).from_raw_data_chunked(granularity="year")
@@ -1255,7 +1258,7 @@ def test_the_chunk_grid_survives_a_rebuild(
     assert rebuilt["symbol"].values.tolist() == ["A", "B", "C"]
     grid = _chunk_grid(config.zarr_file_path)
     assert grid
-    assert set(grid.values()) == {(min(XrBackend.APPEND_DIM_CHUNK, 9), 3)}
+    assert set(grid.values()) == {(min(XrBackend.APPEND_DIM_CHUNK, 9), XrBackend.SYMBOL_DIM_CHUNK)}
 
     scratch_config = growing_roster.config("grid_rebuild_scratch.zarr")
     StockDataset(scratch_config).from_raw_data_chunked(granularity="year")
@@ -1328,7 +1331,7 @@ def test_the_chunk_grid_survives_a_widen(
 
     grid = _chunk_grid(config.zarr_file_path)
     assert grid, "the store carries no data variables to measure"
-    assert set(grid.values()) == {(min(XrBackend.APPEND_DIM_CHUNK, 9), 3)}
+    assert set(grid.values()) == {(min(XrBackend.APPEND_DIM_CHUNK, 9), XrBackend.SYMBOL_DIM_CHUNK)}
 
 
 def _incomplete_store(tmp_path: Path, name: str) -> str:
@@ -1337,7 +1340,7 @@ def _incomplete_store(tmp_path: Path, name: str) -> str:
     The shape a crash-resumed conversion leaves behind, built directly rather
     than through `from_raw_data_chunked` so the two backend arms below exercise
     `XrBackend` on its own terms. Under `APPEND_DIM_CHUNK = 4` the creating
-    write correctly leaves `(4, 2)` -- plan `03.6-05`'s fix -- and everything
+    write correctly leaves `(4, SYMBOL_DIM_CHUNK)` -- plan `03.6-05`'s fix -- and everything
     the arms measure is what a LATER rewrite does to that grid.
     """
     path = str(tmp_path / name)
@@ -1345,7 +1348,7 @@ def _incomplete_store(tmp_path: Path, name: str) -> str:
         _small_panel(["2022-01-04", "2022-06-15", "2022-12-28"], ["A", "B"], 0.0)
     ).append(path, append_dim_size=9)
     assert set(_chunk_grid(path).values()) == {
-        (min(XrBackend.APPEND_DIM_CHUNK, 9), 2)
+        (min(XrBackend.APPEND_DIM_CHUNK, 9), XrBackend.SYMBOL_DIM_CHUNK)
     }, "the creating write did not state the extent, so the arm measures nothing"
     return path
 
@@ -1396,7 +1399,7 @@ def test_a_variable_widen_leaves_one_chunk_grid_not_two(
     assert len(set(grid.values())) == 1, (
         f"one store, two chunk grids: {grid}"
     )
-    assert set(grid.values()) == {(min(XrBackend.APPEND_DIM_CHUNK, 9), 2)}
+    assert set(grid.values()) == {(min(XrBackend.APPEND_DIM_CHUNK, 9), XrBackend.SYMBOL_DIM_CHUNK)}
 
 
 def test_a_store_built_by_write_keeps_two_chunk_grids_accepted_cost(
@@ -1540,7 +1543,7 @@ def test_the_chunk_grid_survives_a_block_by_block_widen(
 
     grid = _chunk_grid(path)
     assert grid, "the store carries no data variables to measure"
-    assert set(grid.values()) == {(min(XrBackend.APPEND_DIM_CHUNK, 9), 3)}
+    assert set(grid.values()) == {(min(XrBackend.APPEND_DIM_CHUNK, 9), XrBackend.SYMBOL_DIM_CHUNK)}
 
 
 def test_a_narrow_stated_extent_cannot_shrink_an_existing_stores_grid(
@@ -1580,7 +1583,7 @@ def test_a_narrow_stated_extent_cannot_shrink_an_existing_stores_grid(
     path = str(tmp_path / "grid_narrow_extent.zarr")
     XrBackend().to_internal(_small_panel(dates, ["A", "B"], 0.0)).append(path)
     assert set(_chunk_grid(path).values()) == {
-        (min(XrBackend.APPEND_DIM_CHUNK, 12), 2)
+        (min(XrBackend.APPEND_DIM_CHUNK, 12), XrBackend.SYMBOL_DIM_CHUNK)
     }, "the store did not start on the whole-range grid, so the arm measures nothing"
 
     # The narrow stated extent a config-windowed run would hand in.
@@ -1592,7 +1595,7 @@ def test_a_narrow_stated_extent_cannot_shrink_an_existing_stores_grid(
 
     grid = _chunk_grid(path)
     assert grid, "the store carries no data variables to measure"
-    assert set(grid.values()) == {(min(XrBackend.APPEND_DIM_CHUNK, 12), 3)}, (
+    assert set(grid.values()) == {(min(XrBackend.APPEND_DIM_CHUNK, 12), XrBackend.SYMBOL_DIM_CHUNK)}, (
         f"a narrow stated extent shrank the store's grid irreversibly: {grid}"
     )
 
@@ -1601,9 +1604,10 @@ def test_the_chunk_grid_reaches_three_consumers_from_one_read(tmp_path: Path) ->
     """The forwarding lock, asserted structurally rather than behaviourally.
 
     `widen_and_append` receives the stated extent inside `**kwargs` -- passed
-    by `from_raw_data_chunked` -- and has THREE consumers for it: the symbol
-    widen, the variable widen, and the closing `append()` that all three exits
-    forward `**kwargs` to verbatim. Reading it with `pop` would satisfy the
+    by `from_raw_data_chunked` -- and has THREE consumers for it: the encoding
+    of a creating write, the variable widen, and the closing `append()` that
+    every exit forwards `**kwargs` to verbatim. The symbol axis grows in place
+    (`extend_symbol_axis`, ADR 0032), which re-pins no grid and so needs none. Reading it with `pop` would satisfy the
     first two and STARVE the third, reintroducing the original first-window
     defect on every store-creating write. That is a strictly worse regression
     than the gap this closes, and it is invisible from `widen_and_append`'s own
@@ -1630,7 +1634,7 @@ def test_the_chunk_grid_reaches_three_consumers_from_one_read(tmp_path: Path) ->
         if isinstance(node, ast.Call)
         and any(kw.arg == "append_dim_size" for kw in node.keywords)
     }
-    assert "widen_symbol_axis" in receivers, receivers
+    assert "_append_encoding" in receivers, receivers
     assert "widen_data_vars" in receivers, receivers
 
     popped = [

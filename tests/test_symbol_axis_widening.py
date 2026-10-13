@@ -8,8 +8,9 @@ leaves XYZ's history attributed to ARM with nothing raised and nothing
 recoverable afterwards (measured 2026-09-06).
 
 This module pins the opt-in that gets PAST that refusal without weakening it.
-`widen_and_append` reindexes BOTH the store and the incoming window onto
-`sorted(stored | incoming)` and then calls the UNCHANGED `append()` -- so the
+`widen_and_append` extends the store's axis in place with the incoming labels it
+lacks, appended at its end (ADR 0032), reindexes the incoming window onto that
+axis and then calls the UNCHANGED `append()` -- so the
 guard still runs and passes on its own terms, by construction rather than by
 exemption. A caller who did not opt in still gets the refusal; that half is
 pinned next door, in
@@ -242,7 +243,7 @@ def test_widening_does_not_misattribute_when_the_symbol_count_is_unchanged(
     recorded outcome -- `rows 0-4 were written for XYZ but are now labelled:
     ARM`.
 
-    The widen must union rather than substitute: `['A', 'ARM', 'XYZ']`, XYZ's
+    The widen must union rather than substitute: `['A', 'XYZ', 'ARM']`, XYZ's
     stored values still under XYZ, ARM's historical cells NaN.
 
     RED under: substituting raw `to_zarr(mode="a", append_dim=...)` for the
@@ -270,7 +271,8 @@ def test_widening_does_not_misattribute_when_the_symbol_count_is_unchanged(
 
     after = _stored(path)
     assert_stored_symbol_encoding(path, symbol_encoding)
-    assert after["symbol"].values.tolist() == ["A", "ARM", "XYZ"]
+    # ARM is new, so it is appended after the stored axis (ADR 0032).
+    assert after["symbol"].values.tolist() == ["A", "XYZ", "ARM"]
 
     np.testing.assert_array_equal(
         after["close"].sel(symbol="XYZ").values[:2],
@@ -605,14 +607,17 @@ def test_the_chunk_grid_survives_a_widen(tmp_path: Path, symbol_encoding: str) -
     ).append(path)
     assert zarr.open_group(path, mode="r")["close"].chunks == (
         XrBackend.APPEND_DIM_CHUNK,
-        2,
+        XrBackend.SYMBOL_DIM_CHUNK,
     )
 
     XrBackend().widen_symbol_axis(path, ["A", "B", "C"])
 
     assert_stored_symbol_encoding(path, symbol_encoding)
     chunks = zarr.open_group(path, mode="r")["close"].chunks
-    assert chunks == (min(XrBackend.APPEND_DIM_CHUNK, 600), 3)
+    assert chunks == (
+        min(XrBackend.APPEND_DIM_CHUNK, 600),
+        XrBackend.SYMBOL_DIM_CHUNK,
+    )
 
 
 def test_an_over_budget_widen_takes_a_block_loop_that_actually_iterates(
@@ -793,8 +798,8 @@ def test_a_chunked_widen_lands_on_the_stores_own_chunk_grid(
     The relation is already asserted in
     `test_the_two_widen_strategies_leave_identical_stores`; this is the literal,
     so a change that moved BOTH paths onto a new grid together still reddens
-    somewhere. The grid must be `APPEND_DIM_CHUNK` along `timestamp` and the
-    WIDENED symbol count across it -- the block length is what decides the
+    somewhere. The grid must be `APPEND_DIM_CHUNK` along `timestamp` and
+    `SYMBOL_DIM_CHUNK` across it -- the block length is what decides the
     former, because the first block carries the `encoding=`.
 
     RED under: sizing the block below `APPEND_DIM_CHUNK` or off its multiple
@@ -811,7 +816,7 @@ def test_a_chunked_widen_lands_on_the_stores_own_chunk_grid(
 
     assert zarr.open_group(path, mode="r")["close"].chunks == (
         min(XrBackend.APPEND_DIM_CHUNK, len(_LONG_DATES)),
-        3,
+        XrBackend.SYMBOL_DIM_CHUNK,
     )
     assert_stored_symbol_encoding(path, symbol_encoding)
 
@@ -1062,7 +1067,10 @@ def test_widen_and_append_creates_the_store_when_there_is_none(
     ).widen_and_append(path)
 
     assert _stored(path)["symbol"].values.tolist() == ["A", "B"]
-    assert zarr.open_group(path, mode="r")["close"].chunks == (2, 2)
+    assert zarr.open_group(path, mode="r")["close"].chunks == (
+        2,
+        XrBackend.SYMBOL_DIM_CHUNK,
+    )
 
 
 def test_widen_and_append_inherits_the_overlap_refusal_verbatim(

@@ -24,7 +24,6 @@ FIXED-WIDTH unicode store, while the store the real chunked ingest writes is
 """
 
 import inspect
-import re
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -32,7 +31,6 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
-from loguru import logger
 
 from conftest import assert_stored_symbol_encoding, symbol_coord
 from quantlab.factor.config import BaseFactorConfig
@@ -327,62 +325,75 @@ def test_the_widen_fill_seam_reaches_the_widening_call(
     assert after["anomaly_flag"].values[len(EARLY) :].all()
 
 
-def test_extend_reaches_the_bounded_widen_path_with_no_call_site_change(
+def test_extend_appends_a_new_symbol_in_place_with_no_call_site_change(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, symbol_encoding: str
 ) -> None:
-    """260908-g30's sharp case, proved from the FACTOR side rather than
-    inferred from the backend suite.
+    """A new listing reaches the in-place extension, never a rewrite (ADR 0032).
 
-    `Factor` has no raw tier. `BaseDataset`'s `on_new_listing="rebuild"` escape
-    -- re-densify every window from raw -- does not exist for it, so
-    `Factor.extend()` -> `XrBackend.widen_and_append` -> `widen_symbol_axis` is
-    the ONLY path a new listing can take here. Before the router that path
-    materialised the whole store unconditionally: a 3,000-symbol 1-minute year
-    of 20 factors is a 43.9 GiB allocation triggered by a single IPO.
+    `Factor` has no raw tier, so `Factor.extend()` ->
+    `XrBackend.widen_and_append` is the only path a new listing can take here.
+    The new symbol is appended at the end of the axis by
+    `XrBackend.extend_symbol_axis`, which resizes the arrays in place; the
+    rewrite (`widen_symbol_axis`) is never called, whatever the store's size.
 
-    The proof that matters is that routing arrived WITHOUT a call-site change.
-    Nothing in `Factor.extend()` names a strategy, passes a budget or knows the
-    storage layer chunks anything; the only thing this test does differently
-    from `test_extend_reconciles_a_new_symbol_without_being_told_to` is move
-    the constant.
-
-    600 hourly rows so the block loop genuinely iterates -- see `LONG`. RED
-    under: reverting the router; giving `widen_symbol_axis` a strategy
-    parameter that `extend()` would then have to pass; or a chunked path that
-    collapses to one write (the reported block count is then 1).
+    RED under: `widen_and_append` widening onto the sorted union again.
     """
     factor = _factor(tmp_path, encoding=symbol_encoding)
-    _build(factor, LONG)
+    _build(factor, LONG, symbols=["BBB", "DDD"])
     before = _stored(factor)
-    assert before.sizes["timestamp"] == len(LONG) > XrBackend.APPEND_DIM_CHUNK
 
-    monkeypatch.setattr(XrBackend, "MAX_WIDEN_BYTES", 0)
-    messages: list[str] = []
-    sink_id = logger.add(messages.append, level="WARNING", format="{message}")
-    try:
-        _extend(factor, AFTER_LONG, symbols=["AAA", "BBB", "CCC"], offset=100.0)
-    finally:
-        logger.remove(sink_id)
+    def refuse(*args, **kwargs):
+        raise AssertionError("extend() rewrote the store")
 
-    # The chunked branch ran, on THIS store, and its loop iterated.
-    named = [m for m in messages if str(factor.config.file_path) in m]
-    assert named, messages
-    match = re.search(r"(\d+) block\(s\) of (\d+) row\(s\)", named[0])
-    assert match, named
-    assert int(match.group(1)) == 2, named[0]
-    assert int(match.group(2)) == XrBackend.APPEND_DIM_CHUNK, named[0]
+    monkeypatch.setattr(XrBackend, "widen_symbol_axis", refuse)
+    _extend(factor, AFTER_LONG, symbols=["AAA", "BBB", "DDD"], offset=100.0)
 
     after = _stored(factor)
-    assert after["symbol"].values.tolist() == ["AAA", "BBB", "CCC"]
+    assert after["symbol"].values.tolist() == ["BBB", "DDD", "AAA"]
     assert after.sizes["timestamp"] == len(LONG) + len(AFTER_LONG)
-    for symbol in ("AAA", "BBB"):
+    for symbol in ("BBB", "DDD"):
         np.testing.assert_array_equal(
             after["alpha"].sel(symbol=symbol).values[: len(LONG)],
             before["alpha"].sel(symbol=symbol).values,
         )
-    assert np.isnan(after["alpha"].sel(symbol="CCC").values[: len(LONG)]).all()
-    assert not np.isnan(after["alpha"].sel(symbol="CCC").values[len(LONG) :]).any()
+    assert np.isnan(after["alpha"].sel(symbol="AAA").values[: len(LONG)]).all()
+    assert not np.isnan(after["alpha"].sel(symbol="AAA").values[len(LONG) :]).any()
     assert_stored_symbol_encoding(str(factor.config.file_path), symbol_encoding)
+
+
+def test_build_then_extend_with_a_new_symbol_equals_one_build_by_label(
+    tmp_path: Path, symbol_encoding: str
+) -> None:
+    """The extended store holds what one build holds, compared by label.
+
+    The axes differ in order (a new symbol is appended, a build sorts), and
+    nothing reads a store by position (ADR 0032).
+
+    RED under: a new symbol's history landing under another label.
+    """
+    symbols = ["AAA", "BBB", "CCC"]
+    whole = _factor(tmp_path / "whole", encoding=symbol_encoding)
+    _build(whole, EARLY + LATER, symbols=symbols)
+    whole_panel = whole._prepared.copy()
+    # The early bars of the late listing are missing, as an extension leaves them.
+    late = (whole_panel["symbol"] == symbols[0]) & whole_panel["timestamp"].isin(
+        pd.to_datetime(EARLY)
+    )
+    whole_panel["alpha"] = whole_panel["alpha"].where(~late)
+    whole._prepared = whole_panel
+    whole.build(EARLY[0], LATER[-1])
+
+    pieces = _factor(tmp_path / "pieces", encoding=symbol_encoding)
+    pieces._prepared = whole_panel.isel(timestamp=slice(None, len(EARLY))).sel(
+        symbol=["BBB", "CCC"]
+    )
+    pieces.build(EARLY[0], EARLY[-1])
+    pieces._prepared = whole_panel.isel(timestamp=slice(len(EARLY), None))
+    pieces.extend(LATER[-1])
+
+    expected, got = _stored(whole), _stored(pieces)
+    assert got["symbol"].values.tolist() == ["BBB", "CCC", "AAA"]
+    xr.testing.assert_identical(got.sortby("symbol"), expected.sortby("symbol"))
 
 
 # ---------------------------------------------------------------------------

@@ -692,7 +692,9 @@ def test_the_filler_joins_the_stores_existing_chunk_grid(
     XrBackend().widen_data_vars(path, {"beta": np.dtype("float64")})
 
     group = zarr.open_group(path, mode="r")
-    assert group["alpha"].chunks == (4, 2), group["alpha"].chunks
+    assert group["alpha"].chunks == (4, XrBackend.SYMBOL_DIM_CHUNK), group[
+        "alpha"
+    ].chunks
     assert group["beta"].chunks == group["alpha"].chunks, group["beta"].chunks
 
 

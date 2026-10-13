@@ -124,6 +124,14 @@ class XrBackend(DataBackend):
     #: re-pins it.
     APPEND_DIM_CHUNK = 512
 
+    #: Chunk width pinned along the symbol axis when a store is created by
+    #: ``append``, ``widen_and_append`` or a widen rewrite. A store's symbol
+    #: axis grows at its end (``extend_symbol_axis``, ADR 0032), so a width
+    #: taken from the first window would leave a store that started with a
+    #: few symbols in thousands of narrow chunks. Stores created before the
+    #: constant keep their own width; Zarr fixes it at creation.
+    SYMBOL_DIM_CHUNK = 1024
+
     #: Largest number of bytes a symbol-axis widen may materialise at once.
     #: At or under this budget ``widen_symbol_axis`` reindexes the whole store
     #: in memory and writes it once; above it, the store is rewritten block by
@@ -159,6 +167,73 @@ class XrBackend(DataBackend):
         kwargs.setdefault("mode", "w")
         self.data.to_zarr(path, **kwargs)
         return self
+
+    def create(
+        self,
+        path: str,
+        fill_values: Optional[Mapping[str, object]] = None,
+        *,
+        dim: str = "symbol",
+        append_dim: str = "timestamp",
+        **kwargs,
+    ) -> Self:
+        """Write ``data`` as a new store at ``path``, laid out to grow.
+
+        The ``dim`` axis is put in ``sort_symbol_axis`` order
+        (``sort_symbols``) and the chunk grid and Zarr fill values are pinned
+        as ``append`` and ``widen_and_append`` pin them
+        (``_append_encoding``): ``APPEND_DIM_CHUNK`` along ``append_dim``,
+        ``SYMBOL_DIM_CHUNK`` along ``dim``, and the ``fill_values`` entry as
+        the fill of each variable on ``dim``, so a symbol appended later
+        (``extend_symbol_axis``) reads as it without being written. Any store
+        already at ``path`` is replaced, as by ``write``.
+
+        Parameters
+        ----------
+        path : str
+            Directory of the Zarr store.
+        fill_values : Mapping[str, object], optional
+            Per-variable fill of the cells a later symbol extension adds.
+        dim : str, default "symbol"
+            The symbol axis.
+        append_dim : str, default "timestamp"
+            The dimension the store grows along.
+        **kwargs
+            Passed through to ``write``; an ``encoding`` given here wins.
+
+        Examples
+        --------
+        >>> import tempfile
+        >>> from pathlib import Path
+        >>> import numpy as np
+        >>> import pandas as pd
+        >>> import xarray as xr
+        >>> import zarr
+        >>> from quantlab.backend.zarr import XrBackend
+        >>> panel = xr.Dataset(
+        ...     {"close": (("timestamp", "symbol"), np.ones((2, 2)))},
+        ...     coords={"timestamp": pd.date_range("2024-01-02", periods=2),
+        ...             "symbol": np.array(["BBB", "AAA"], dtype=object)},
+        ... )
+        >>> path = str(Path(tempfile.mkdtemp()) / "prices.zarr")
+        >>> _ = XrBackend().to_internal(panel).create(path)
+        >>> xr.open_zarr(path)["symbol"].values.tolist()
+        ['AAA', 'BBB']
+        >>> zarr.open_group(path)["close"].chunks
+        (2, 1024)
+        """
+        self.sort_symbols(dim)
+        kwargs.setdefault(
+            "encoding",
+            self._append_encoding(
+                append_dim,
+                dim=dim,
+                fill_values=fill_values,
+                zarr_format=kwargs.get("zarr_format"),
+            ),
+        )
+        kwargs.setdefault("mode", "w")
+        return self.write(path, **kwargs)
 
     def sort_symbols(self, dim: str = "symbol") -> Self:
         """Put ``data``'s ``dim`` axis in ``sort_symbol_axis`` order.
@@ -274,7 +349,7 @@ class XrBackend(DataBackend):
             return self
 
         # A rechunk killed midway may have left the store without a coordinate.
-        _recover_index_coordinate_swap(target)
+        _recover_interrupted_writes(target)
         self._assert_append_compatible(path, append_dim)
         # xarray rejects `encoding` on an append; the grid was pinned by the
         # creating write above.
@@ -424,7 +499,7 @@ class XrBackend(DataBackend):
                 shutil.rmtree(orphan, ignore_errors=True)
         if not target.exists():
             raise FileNotFoundError(f"File {path} does not exist.")
-        _recover_index_coordinate_swap(target)
+        _recover_interrupted_writes(target)
 
         fills = dict(fill_values or {})
 
@@ -675,7 +750,11 @@ class XrBackend(DataBackend):
         # the store directory, which the swap later renames away.
         widened = stored.reindex({dim: requested}, fill_value=fills).load()
         encoding = self._append_encoding(
-            append_dim, data=widened, append_dim_size=append_dim_size
+            append_dim,
+            data=widened,
+            append_dim_size=append_dim_size,
+            dim=dim,
+            fill_values=fills,
         )
         widened.to_zarr(str(widening), mode="w", encoding=encoding)
 
@@ -716,6 +795,8 @@ class XrBackend(DataBackend):
                         append_dim,
                         data=block,
                         append_dim_size=append_dim_size,
+                        dim=dim,
+                        fill_values=fills,
                     ),
                 )
                 continue
@@ -798,7 +879,7 @@ class XrBackend(DataBackend):
         """
         if not Path(path).exists():
             raise FileNotFoundError(f"File {path} does not exist.")
-        _recover_index_coordinate_swap(Path(path))
+        _recover_interrupted_writes(Path(path))
 
         fills = dict(fill_values or {})
         requested = {
@@ -843,13 +924,13 @@ class XrBackend(DataBackend):
             # so the filler reproduces the store's actual shape.
             layout = next(
                 (
-                    variable.dims
+                    variable
                     for variable in stored.data_vars.values()
                     if append_dim in variable.dims
                 ),
                 None,
             )
-            dims = tuple(layout) if layout is not None else tuple(stored.sizes)
+            dims = tuple(layout.dims) if layout is not None else tuple(stored.sizes)
             shape = tuple(int(stored.sizes[name]) for name in dims)
 
             # No coords on the filler: the store already holds them, and
@@ -866,12 +947,192 @@ class XrBackend(DataBackend):
                 }
             )
             encoding = self._append_encoding(
-                append_dim, data=filler, append_dim_size=append_dim_size
+                append_dim,
+                data=filler,
+                append_dim_size=append_dim_size,
+                fill_values=fills,
+                zarr_format=_zarr_format(Path(path)),
             )
+            # Across every other dimension the filler joins the grid the
+            # store's variables already have (a store created before
+            # SYMBOL_DIM_CHUNK keeps its own symbol chunk width).
+            stored_chunks = (
+                layout.encoding.get("chunks") if layout is not None else None
+            )
+            if stored_chunks is not None:
+                for entry in encoding.values():
+                    entry["chunks"] = tuple(
+                        chunk if axis == append_dim else int(stored_chunks[index])
+                        for index, (axis, chunk) in enumerate(
+                            zip(dims, entry["chunks"])
+                        )
+                    )
         finally:
             stored.close()
 
         filler.to_zarr(path, mode="a", encoding=encoding)
+        return self
+
+    def extend_symbol_axis(
+        self,
+        path: str,
+        symbols: Sequence,
+        dim: str = "symbol",
+        fill_values: Optional[Mapping[str, object]] = None,
+    ) -> Self:
+        """Append ``symbols`` at the end of the store's ``dim`` axis, in place.
+
+        Each Zarr array carrying ``dim`` is resized; no stored chunk is
+        rewritten, so the cost is a few metadata writes whatever the store's
+        size. The new cells read as each array's fill value: NaN for a
+        floating-point variable, the ``fill_values`` entry otherwise, an empty
+        string for a text coordinate on ``dim``. A variable whose Zarr fill
+        value is not that (a store created before
+        ``_append_encoding`` pinned it, a datetime variable) has its new
+        cells written, which rewrites at most the chunks the old axis ends
+        in. The coordinate is then swapped for one holding the old labels
+        followed by ``symbols``, in one chunk, and the metadata consolidated;
+        arrays without ``dim`` are untouched. ``data`` is not touched.
+
+        Labels the store already holds are skipped; the others keep the
+        order given (``widen_and_append`` sorts them among themselves). They
+        are re-spelled in the stored axis's dtype first, so a ticker handed
+        to an integer axis raises. A fixed-width text axis is stored at the
+        width of its longest label.
+
+        The swap of the coordinate is the commit: a process killed before it
+        leaves arrays longer than the coordinate, which the next writing
+        call cuts back (``_recover_axis_extension``), so the store is as it
+        was before. Do not run this while another process reads the store.
+
+        Parameters
+        ----------
+        path : str
+            Directory of the Zarr store.
+        symbols : Sequence
+            The labels to append.
+        dim : str, default "symbol"
+            The axis to extend.
+        fill_values : Mapping[str, object], optional
+            Per-variable fill of the new cells. A variable on ``dim``
+            that is not floating-point needs one, as in
+            ``widen_symbol_axis``.
+
+        Raises
+        ------
+        FileNotFoundError
+            If no store exists at ``path``.
+        ValueError
+            If a non-floating variable on ``dim`` has no fill value.
+
+        Examples
+        --------
+        >>> import tempfile
+        >>> from pathlib import Path
+        >>> import numpy as np
+        >>> import pandas as pd
+        >>> import xarray as xr
+        >>> from quantlab.backend.zarr import XrBackend
+        >>> panel = xr.Dataset(
+        ...     {"close": (("timestamp", "symbol"), np.ones((2, 2))),
+        ...      "volume": (("timestamp", "symbol"), np.ones((2, 2)))},
+        ...     coords={"timestamp": pd.date_range("2024-01-02", periods=2),
+        ...             "symbol": np.array(["BBB", "DDD"], dtype=object)},
+        ... )
+        >>> path = str(Path(tempfile.mkdtemp()) / "prices.zarr")
+        >>> _ = XrBackend().to_internal(panel).append(path)
+        >>> _ = XrBackend().extend_symbol_axis(
+        ...     path, ["AAA"], fill_values={"volume": 0.0}
+        ... )
+        >>> stored = xr.open_zarr(path)
+        >>> stored["symbol"].values.tolist()
+        ['BBB', 'DDD', 'AAA']
+        >>> stored["close"].sel(symbol="AAA").values.tolist()
+        [nan, nan]
+        >>> stored["volume"].sel(symbol="AAA").values.tolist()
+        [0.0, 0.0]
+        """
+        import zarr
+
+        target = Path(path)
+        if not target.exists():
+            raise FileNotFoundError(f"File {path} does not exist.")
+        _recover_interrupted_writes(target)
+        fills = dict(fill_values or {})
+
+        # The decoded view gives each variable's dtype and its encoding.
+        opened = xr.open_zarr(path)
+        try:
+            stored_index = opened[dim].to_index()
+            requested = normalize_to_axis_dtype(symbols, stored_index)
+            known = set(stored_index.tolist())
+            added = []
+            for label in requested:
+                if label not in known:
+                    known.add(label)
+                    added.append(label)
+            if not added:
+                return self
+            on_dim = {
+                str(name): variable
+                for name, variable in opened.variables.items()
+                if dim in variable.dims and name != dim
+            }
+            # A text coordinate on the axis (a name beside each symbol)
+            # reads empty for a new symbol, as a reindex fills it.
+            for name in opened.coords:
+                if str(name) in on_dim and on_dim[str(name)].dtype.kind in "OSTU":
+                    fills.setdefault(str(name), "")
+            offenders = [
+                f"'{name}' ({variable.dtype})"
+                for name, variable in on_dim.items()
+                if name not in fills
+                and not np.issubdtype(variable.dtype, np.floating)
+            ]
+            if offenders:
+                raise ValueError(
+                    f"XrBackend.extend_symbol_axis: refusing to extend {path} "
+                    f"-- variable(s) {', '.join(offenders)} carry '{dim}' but "
+                    f"are not floating-point and no fill value was given. "
+                    f"Their new cells would read as the array's raw fill (0, "
+                    f"False, the epoch), an invented history. Pass "
+                    f"fill_values={{...}} with a value for each."
+                )
+            # Metadata only: how each variable is decoded, to encode a fill.
+            templates = {
+                name: xr.Variable(
+                    variable.dims,
+                    np.empty((0,) * variable.ndim, dtype=variable.dtype),
+                    attrs=dict(variable.attrs),
+                    encoding=dict(variable.encoding),
+                )
+                for name, variable in on_dim.items()
+            }
+        finally:
+            opened.close()
+
+        group = zarr.open_group(str(target), mode="r+", use_consolidated=False)
+        old = int(group[dim].shape[0])
+        new = old + len(added)
+        for name, template in templates.items():
+            array = group[name]
+            axis = template.dims.index(dim)
+            fill = fills.get(name, np.nan)
+            shape = list(array.shape)
+            shape[axis] = new
+            array.resize(tuple(shape))
+            if not _reads_as(array, template.dtype, fill):
+                _write_extension_fill(
+                    array, axis, old, fill, template, self.MAX_WIDEN_BYTES
+                )
+
+        values = np.concatenate(
+            [
+                np.asarray(group[dim][...], dtype=object),
+                np.asarray(added, dtype=object),
+            ]
+        )
+        _swap_index_coordinate(target, dim, values)
         return self
 
     def widen_and_append(
@@ -885,14 +1146,19 @@ class XrBackend(DataBackend):
         """Reconcile every axis with the store at ``path``, then ``append``.
 
         The opt-in sibling of ``append`` for a panel that has grown. In
-        order: the ``dim`` axis is widened to the sorted union of the stored
-        and incoming labels and ``data`` is reindexed onto that axis; then
-        any variable the store lacks is added with ``widen_data_vars``; then
-        the unchanged ``append`` runs. Variables are widened after the symbol
-        axis so the filler is built once at the final width. Calling this
-        unconditionally is cheap: when both axes already agree it delegates
-        straight to ``append``, and when no store exists yet it puts the
-        ``dim`` axis in sorted order (``sort_symbols``) and then appends.
+        order: the incoming labels the store lacks are appended at the end
+        of its ``dim`` axis, sorted among themselves (``extend_symbol_axis``,
+        which rewrites no stored chunk), and ``data`` is reindexed onto the
+        stored axis followed by them; then any variable the store lacks is
+        added with ``widen_data_vars``; then the unchanged ``append`` runs.
+        A window carrying the store's labels in another order is only
+        reindexed. Variables are widened after the symbol axis so the filler
+        is built once at the final width. Calling this unconditionally is
+        cheap: when both axes already agree it delegates straight to
+        ``append``, and when no store exists yet it puts the ``dim`` axis in
+        sorted order (``sort_symbols``) and creates the store with its chunk
+        grid and the Zarr fill values of ``fill_values`` pinned
+        (``_append_encoding``).
 
         The closing ``append`` is what keeps the compatibility checks in
         force. Because the widens commit before it runs, a window it then
@@ -916,14 +1182,17 @@ class XrBackend(DataBackend):
         dim : str, default "symbol"
             The symbol axis to reconcile.
         fill_values : Mapping[str, object], optional
-            Per-variable fill for non-floating variables, passed
-            to both widens and used to reindex ``data``.
+            Per-variable fill of the cells a new symbol or a new
+            variable adds (NaN when absent), passed to both widens, pinned
+            as the Zarr fill value of a new store and used to reindex
+            ``data``.
         **kwargs
             Passed through to ``append``.
 
         Examples
         --------
-        A window carrying a symbol and a variable the store has not seen:
+        A store holding ``AAA`` and ``CCC``, a window carrying ``DDD``,
+        ``BBB`` and a variable the store has not seen:
 
         >>> XrBackend().to_internal(window).widen_and_append(
         ...     "prices.zarr", fill_values={"flag": False}
@@ -931,15 +1200,26 @@ class XrBackend(DataBackend):
         XrBackend()
         >>> stored = xr.open_zarr("prices.zarr")
         >>> stored["symbol"].values.tolist(), sorted(stored.data_vars)
-        (['AAA', 'BBB', 'CCC', 'DDD'], ['amount', 'close', 'flag', 'volume'])
+        (['AAA', 'CCC', 'BBB', 'DDD'], ['amount', 'close', 'flag', 'volume'])
         """
         # `get`, not `pop`: the closing `append` also needs the key in
         # `kwargs` when it creates the store.
         append_dim_size = kwargs.get("append_dim_size")
 
         if not Path(path).exists():
-            return self.sort_symbols(dim).append(path, append_dim, **kwargs)
-        _recover_index_coordinate_swap(Path(path))
+            self.sort_symbols(dim)
+            kwargs.setdefault(
+                "encoding",
+                self._append_encoding(
+                    append_dim,
+                    append_dim_size=append_dim_size,
+                    dim=dim,
+                    fill_values=fill_values,
+                    zarr_format=kwargs.get("zarr_format"),
+                ),
+            )
+            return self.append(path, append_dim, **kwargs)
+        _recover_interrupted_writes(Path(path))
 
         # Labels keep their own type and `sort_symbol_axis` orders integers
         # numerically, so an integer axis is never sorted as strings.
@@ -965,25 +1245,25 @@ class XrBackend(DataBackend):
             str(name): variable.dtype
             for name, variable in self.data.data_vars.items()
         }
-        union = sort_symbol_axis(set(stored_labels) | set(incoming))
+        known = set(stored_labels)
+        added = sort_symbol_axis(
+            {label for label in incoming if label not in known}
+        )
+        axis = stored_labels + added
         unstored = [
             name for name in incoming_names if name not in stored_names
         ]
 
-        if union == stored_labels and union == incoming and not unstored:
+        if not added and axis == incoming and not unstored:
             return self.append(path, append_dim, **kwargs)
 
-        if union != stored_labels or union != incoming:
-            self.widen_symbol_axis(
-                path,
-                union,
-                dim=dim,
-                append_dim=append_dim,
-                fill_values=fill_values,
-                append_dim_size=append_dim_size,
+        if added:
+            self.extend_symbol_axis(
+                path, added, dim=dim, fill_values=fill_values
             )
+        if axis != incoming:
             self.data = self.data.reindex(
-                {dim: union}, fill_value=dict(fill_values or {})
+                {dim: axis}, fill_value=dict(fill_values or {})
             )
 
         if unstored:
@@ -1003,14 +1283,23 @@ class XrBackend(DataBackend):
         data: Optional[xr.Dataset] = None,
         *,
         append_dim_size: Optional[int] = None,
+        dim: str = "symbol",
+        fill_values: Optional[Mapping[str, object]] = None,
+        zarr_format: Optional[int] = None,
     ) -> dict:
         """Build the Zarr ``encoding`` that pins each variable's chunk shape.
 
         Along ``append_dim`` the chunk is ``min(APPEND_DIM_CHUNK, extent)``;
+        along ``dim`` it is ``SYMBOL_DIM_CHUNK``, whatever the panel's width;
         along every other dimension it is the panel's full length. Variables
         that do not carry ``append_dim`` are left unencoded. Every creating
         write in this class routes through here so the chunk rule has one
         source.
+
+        A variable on ``dim`` whose ``fill_values`` entry is a plain number
+        or boolean of its own kind also gets that value as its Zarr fill
+        value, so the cells ``extend_symbol_axis`` adds read as it without
+        being written.
 
         Parameters
         ----------
@@ -1028,6 +1317,14 @@ class XrBackend(DataBackend):
             whole-range write would have chosen, while a stated value
             narrower than the panel cannot shrink it. ``None`` uses the
             panel's own length.
+        dim : str, default "symbol"
+            The symbol axis, chunked at ``SYMBOL_DIM_CHUNK``.
+        fill_values : Mapping[str, object], optional
+            Per-variable fill of the cells a symbol extension adds.
+        zarr_format : int, optional
+            The format of the store written. Zarr v2 takes no
+            ``fill_value`` encoding from xarray, so a v2 store gets none and
+            ``extend_symbol_axis`` writes its fills.
 
         Returns
         -------
@@ -1035,23 +1332,30 @@ class XrBackend(DataBackend):
             A dict mapping variable names to ``{"chunks": (...)}`` entries.
         """
         panel = self.data if data is None else data
+        fills = dict(fill_values or {})
         encoding = {}
         for name, variable in panel.data_vars.items():
             if append_dim not in variable.dims:
                 continue
             chunks = []
-            for dim in variable.dims:
-                if dim == append_dim and append_dim_size is not None:
+            for axis in variable.dims:
+                if axis == append_dim and append_dim_size is not None:
                     # A lower bound only: shrinking the grid would be
                     # irreversible once a `mode="w"` rewrite pins it.
-                    size = max(int(panel.sizes[dim]), int(append_dim_size))
+                    size = max(int(panel.sizes[axis]), int(append_dim_size))
                 else:
-                    size = int(panel.sizes[dim])
-                if dim == append_dim:
+                    size = int(panel.sizes[axis])
+                if axis == append_dim:
                     chunks.append(max(min(self.APPEND_DIM_CHUNK, size), 1))
+                elif axis == dim:
+                    chunks.append(self.SYMBOL_DIM_CHUNK)
                 else:
                     chunks.append(max(size, 1))
             encoding[name] = {"chunks": tuple(chunks)}
+            if dim in variable.dims and name in fills and zarr_format != 2:
+                fill = _plain_fill(variable.dtype, fills[name])
+                if fill is not None:
+                    encoding[name]["fill_value"] = fill
         return encoding
 
     @staticmethod
@@ -1540,9 +1844,37 @@ def _recover_index_coordinate_swap(store: Path) -> list[str]:
     return resolved
 
 
-def _with_one_chunk(document: dict, length: int) -> dict:
-    """Return an array metadata document with its chunk grid set to ``length``."""
+def _coordinate_document(document: dict, length: int, values=None) -> dict:
+    """Return an array metadata document of one chunk of ``length``.
+
+    The shape is set to ``length`` too. With ``values``, a fixed-width text
+    array is widened to hold the longest of them.
+    """
     document = dict(document)
+    if "shape" in document:
+        document["shape"] = [length]
+    width = (
+        max((len(str(value)) for value in values), default=0)
+        if values is not None
+        else 0
+    )
+    data_type = document.get("data_type")
+    if (
+        isinstance(data_type, dict)
+        and data_type.get("name") == "fixed_length_utf32"
+    ):
+        held = int(data_type["configuration"]["length_bytes"]) // 4
+        if width > held:
+            document["data_type"] = {
+                **data_type,
+                "configuration": {
+                    **data_type["configuration"],
+                    "length_bytes": 4 * width,
+                },
+            }
+    dtype = document.get("dtype")
+    if isinstance(dtype, str) and dtype[1:2] == "U" and width > int(dtype[2:]):
+        document["dtype"] = f"{dtype[:2]}{width}"
     if document.get("zarr_format") == 3:
         grid = dict(document["chunk_grid"])
         if grid.get("name") != "regular":
@@ -1665,37 +1997,7 @@ def rechunk_index_coordinates(path: "str | os.PathLike") -> list[str]:
         length = int(array.shape[0])
         if length == 0 or tuple(array.chunks) == (length,):
             continue
-        values = array[...]
-        source = store / name
-        staging, replaced = _rechunk_sidecars(store, name)
-        try:
-            staging.mkdir(parents=True)
-            for document in _ARRAY_METADATA_FILES:
-                if not (source / document).exists():
-                    continue
-                content = json.loads((source / document).read_text())
-                if document != ".zattrs":
-                    content = _with_one_chunk(content, length)
-                (staging / document).write_text(json.dumps(content, indent=2))
-            target = zarr.open_array(str(staging), mode="r+")
-            target[...] = values
-            check = zarr.open_array(str(staging), mode="r")
-            if tuple(check.chunks) != (length,) or not np.array_equal(
-                np.asarray(check[...], dtype=object),
-                np.asarray(values, dtype=object),
-            ):
-                raise RuntimeError(
-                    f"rechunk_index_coordinates: '{name}' of {path} did not "
-                    f"read back equal after the rewrite; the store is unchanged."
-                )
-        except BaseException:
-            shutil.rmtree(staging, ignore_errors=True)
-            raise
-        # From here a kill leaves residue `_recover_index_coordinate_swap`
-        # resolves on the next call; the original stays on disk until the
-        # consolidated metadata describes the rewritten array.
-        os.replace(source, replaced)
-        os.replace(staging, source)
+        _stage_index_coordinate(store, name, array[...])
         rewritten.append(name)
 
     if rewritten and consolidated:
@@ -1703,3 +2005,208 @@ def rechunk_index_coordinates(path: "str | os.PathLike") -> list[str]:
     for name in rewritten:
         shutil.rmtree(_rechunk_sidecars(store, name)[1])
     return rewritten
+
+
+def _stage_index_coordinate(store: Path, name: str, values) -> None:
+    """Swap index coordinate ``name`` of ``store`` for ``values`` in one chunk.
+
+    The new array is built and read back in the ``.rechunk.tmp`` sidecar,
+    then swapped in by two renames, the original going to the
+    ``.replaced.tmp`` sidecar. The caller consolidates the metadata and then
+    removes that sidecar; until then a kill leaves residue
+    ``_recover_index_coordinate_swap`` resolves. ``values`` may be longer
+    than the stored array (``XrBackend.extend_symbol_axis``); a fixed-width
+    text array is widened to its longest label.
+
+    Raises
+    ------
+    RuntimeError
+        If the new array does not read back equal to ``values``; the store
+        is then left as it was.
+    """
+    import zarr
+
+    length = len(values)
+    source = store / name
+    staging, replaced = _rechunk_sidecars(store, name)
+    try:
+        staging.mkdir(parents=True)
+        for document in _ARRAY_METADATA_FILES:
+            if not (source / document).exists():
+                continue
+            content = json.loads((source / document).read_text())
+            if document != ".zattrs":
+                content = _coordinate_document(content, length, values)
+            (staging / document).write_text(json.dumps(content, indent=2))
+        target = zarr.open_array(str(staging), mode="r+")
+        target[...] = np.asarray(
+            values, dtype=None if target.dtype.kind in "OT" else target.dtype
+        )
+        check = zarr.open_array(str(staging), mode="r")
+        if tuple(check.chunks) != (length,) or not np.array_equal(
+            np.asarray(check[...], dtype=object),
+            np.asarray(values, dtype=object),
+        ):
+            raise RuntimeError(
+                f"XrBackend: rewriting coordinate '{name}' of {store} did not "
+                f"read back equal; the store is unchanged."
+            )
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    # From here a kill leaves residue `_recover_index_coordinate_swap`
+    # resolves on the next call; the original stays on disk until the
+    # consolidated metadata describes the rewritten array.
+    os.replace(source, replaced)
+    os.replace(staging, source)
+
+
+def _swap_index_coordinate(store: Path, name: str, values) -> None:
+    """Swap index coordinate ``name`` for ``values`` and finish the swap.
+
+    ``_stage_index_coordinate``, then consolidation (when the store has
+    it), then removal of the original.
+    """
+    import zarr
+
+    group = zarr.open_group(str(store), mode="r", use_consolidated=False)
+    zarr_format = group.metadata.zarr_format
+    consolidated = _is_consolidated(store, zarr_format)
+    _stage_index_coordinate(store, name, values)
+    if consolidated:
+        zarr.consolidate_metadata(str(store), zarr_format=zarr_format)
+    shutil.rmtree(_rechunk_sidecars(store, name)[1])
+
+
+def _recover_interrupted_writes(store: Path) -> None:
+    """Settle what a killed writer left in ``store``, before writing to it.
+
+    A coordinate swap first (``_recover_index_coordinate_swap``), then an
+    extension that never committed (``_recover_axis_extension``). Called on
+    entry by every ``XrBackend`` method that writes to an existing store.
+    """
+    _recover_index_coordinate_swap(store)
+    _recover_axis_extension(store)
+
+
+def _recover_axis_extension(store: Path) -> list[str]:
+    """Cut back arrays an ``extend_symbol_axis`` killed midway left too long.
+
+    The extension resizes every array on the axis first and swaps the
+    coordinate last, so an array longer along a dimension than that
+    dimension's index coordinate belongs to an extension that never
+    committed. It is resized back to the coordinate's length; the cells it
+    gained were never part of the store. Run after
+    ``_recover_index_coordinate_swap``, which settles the coordinate itself.
+
+    Returns
+    -------
+    list[str]
+        Names of the arrays cut back, sorted.
+    """
+    import zarr
+
+    group = zarr.open_group(str(store), mode="r", use_consolidated=False)
+    lengths = {
+        name: int(group[name].shape[0])
+        for name in _index_coordinate_names(group)
+    }
+    cut = []
+    for name, array in group.arrays():
+        dims = _dimension_names(array) or []
+        shape = list(array.shape)
+        for axis, dim in enumerate(dims):
+            if dim != name and dim in lengths and shape[axis] > lengths[dim]:
+                shape[axis] = lengths[dim]
+        if tuple(shape) != tuple(array.shape):
+            logger.warning(
+                f"XrBackend: '{name}' of {store} is longer than its axis, left "
+                f"by an extension killed before its commit; cutting it back to "
+                f"{tuple(shape)}."
+            )
+            zarr.open_array(str(store / name), mode="r+").resize(tuple(shape))
+            cut.append(str(name))
+    if cut:
+        zarr_format = group.metadata.zarr_format
+        if _is_consolidated(store, zarr_format):
+            zarr.consolidate_metadata(str(store), zarr_format=zarr_format)
+    return sorted(cut)
+
+
+def _write_extension_fill(array, axis, old, fill, template, max_bytes) -> None:
+    """Write ``fill`` into the cells past ``old`` along ``axis`` of ``array``.
+
+    The fill is encoded the way xarray encodes ``template``'s variable
+    (a datetime's units, a mask value), and written in blocks along the
+    array's first other axis, each block under ``max_bytes``
+    (``XrBackend.MAX_WIDEN_BYTES``).
+    """
+    shape = list(array.shape)
+    shape[axis] -= old
+    if not all(shape):
+        return
+    other = next((index for index in range(array.ndim) if index != axis), None)
+    rows = shape[other] if other is not None else 1
+    row_bytes = int(np.prod(shape)) // rows * template.dtype.itemsize
+    step = max(max_bytes // max(row_bytes, 1), 1)
+    for low in range(0, rows, step):
+        region: list = [slice(None)] * array.ndim
+        region[axis] = slice(old, None)
+        block = list(shape)
+        if other is not None:
+            region[other] = slice(low, low + step)
+            block[other] = min(step, rows - low)
+        decoded = xr.Variable(
+            template.dims,
+            np.full(block, fill, dtype=template.dtype),
+            attrs=template.attrs,
+            encoding=template.encoding,
+        )
+        encoded = xr.conventions.encode_cf_variable(decoded)
+        array[tuple(region)] = np.asarray(encoded.values, dtype=array.dtype)
+
+
+def _zarr_format(store: Path) -> int:
+    """Return the Zarr format (2 or 3) of the store at ``store``."""
+    import zarr
+
+    group = zarr.open_group(str(store), mode="r", use_consolidated=False)
+    return int(group.metadata.zarr_format)
+
+
+def _plain_fill(dtype, fill) -> Optional[object]:
+    """Return ``fill`` as a Zarr fill value of ``dtype``, or None.
+
+    Only a plain number or boolean of the variable's own kind qualifies (a
+    float, integer or boolean variable stored as such), since anything else
+    is encoded by xarray and its Zarr fill would be the encoded value.
+    """
+    dtype = np.dtype(dtype)
+    if isinstance(fill, (bool, np.bool_)):
+        return bool(fill) if dtype.kind == "b" else None
+    if dtype.kind == "f" and isinstance(fill, (int, float, np.integer, np.floating)):
+        return float(fill)
+    if dtype.kind in "iu" and isinstance(fill, (int, np.integer)):
+        return int(fill)
+    return None
+
+
+def _reads_as(array, dtype, fill) -> bool:
+    """Return whether the cells Zarr pads ``array`` with decode to ``fill``.
+
+    True only for a variable stored as itself (the same numeric or boolean
+    dtype in memory and on disk, so no encoding stands between them) whose
+    Zarr fill value equals ``fill``, NaN equal to NaN.
+    """
+    dtype = np.dtype(dtype)
+    if dtype.kind not in "fiub" or np.dtype(array.dtype) != dtype:
+        return False
+    stored = array.fill_value
+    if stored is None:
+        return False
+    try:
+        if dtype.kind == "f" and np.isnan(fill):
+            return bool(np.isnan(stored))
+        return bool(stored == fill)
+    except TypeError:
+        return False

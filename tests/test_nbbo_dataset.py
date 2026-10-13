@@ -817,8 +817,9 @@ def test_widen_adds_a_new_listing_without_raising(mock_wrds_session, tmp_path):
         granularity="day", on_new_listing="widen"
     )
     stored = _read_store(cfg.zarr_file_path)
-    # MSFT's PERMNO sorts first numerically; the axis stays in numeric order.
-    assert stored["symbol"].values.tolist() == [MSFT, AAPL, BRK_B]
+    # MSFT's PERMNO sorts first numerically, but a new listing is appended at
+    # the end of the stored axis (ADR 0032).
+    assert stored["symbol"].values.tolist() == [AAPL, BRK_B, MSFT]
 
 
 def test_empty_permnos_is_refused_before_any_store(mock_wrds_session, tmp_path):

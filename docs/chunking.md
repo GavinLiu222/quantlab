@@ -101,7 +101,7 @@ True
 
 ### The symbol axis is fixed first
 
-Before the first window is converted, the dataset determines the symbols of the whole range once, sorted by `sort_symbol_axis`. Every window is then built on exactly that axis. A symbol with no rows in a window appears as an all-NaN column, which is what keeps every append aligned with the columns already in the store. `BBB` lists in July, so it is NaN before then.
+Before the first window is converted, the dataset determines the symbols of the whole range once, sorted by `sort_symbol_axis`. Every window is then built on exactly that axis. A symbol with no rows in a window appears as an all-NaN column, which is what keeps every append aligned with the columns already in the store. `BBB` lists in July, so it is NaN before then. The first window creates the store with its chunk grid pinned: `XrBackend.APPEND_DIM_CHUNK` rows (or fewer, for a shorter range) by `XrBackend.SYMBOL_DIM_CHUNK` symbols, whatever the axis's width, so symbols appended later (see the backend guide) land in the chunks already laid out.
 
 ```python
 >>> panel["close"].sel(timestamp=slice("2023-06-28", "2023-07-05")).to_pandas()
@@ -183,7 +183,7 @@ The alternative is to delete the store and its `.chunks.json` file and convert a
 
 ### Handle a new listing
 
-The symbol axis is fixed from the raw data at the start of every run. When the store already exists and the axis has changed, for example because a new symbol appeared, `on_new_listing` decides what happens. The default, `"refuse"`, stops with an error and changes nothing. `"widen"` adds the new symbols to the store as NaN over its existing history and then appends the remaining windows. `"rebuild"` converts every window again from raw onto the new axis.
+The symbol axis is fixed from the raw data at the start of every run. When a store exists, the run pins the store's own axis followed by the symbols it lacks, sorted among themselves (ADR 0032), so a run that brings no new symbol never reorders the store. When the axis has changed, for example because a new symbol appeared, `on_new_listing` decides what happens. The default, `"refuse"`, stops with an error and changes nothing. `"widen"` appends the new symbols at the end of the store's axis in place (`XrBackend.extend_symbol_axis`, no stored chunk is rewritten), NaN over its existing history, rebases the ledger onto the extended axis and then appends the remaining windows. `"rebuild"` converts every window again from raw onto the new axis, sorted.
 
 ```python
 >>> write_raw(raw, "2024-01-02", "2024-03-29", {"AAA": "2023-01-01", "BBB": "2023-07-01", "CCC": "2024-01-01"}, batch="1")
