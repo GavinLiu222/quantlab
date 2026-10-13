@@ -63,10 +63,13 @@ from quantlab.model.config import ModelConfig
 #: Keys of ``ModelConfig.hyperparameters`` a ``TorchModel`` reads itself:
 #: ``epochs`` (the epoch cap, default 100), ``lr`` (learning rate of the
 #: default ``_init_optim``, default ``1e-3``), and ``batch_size``,
-#: ``num_workers``, ``panel_device`` and ``panel_dtype`` (reserved for the
-#: torch data loader and training panel).
+#: ``num_workers``, ``pin_memory``, ``panel_device`` and ``panel_dtype``
+#: (reserved for the torch data loader and training panel).
 TORCH_RESERVED_HYPERPARAMETERS: frozenset[str] = frozenset(
-    {"epochs", "lr", "batch_size", "num_workers", "panel_device", "panel_dtype"}
+    {
+        "epochs", "lr", "batch_size", "num_workers", "pin_memory",
+        "panel_device", "panel_dtype",
+    }
 )
 
 #: Keys of ``ModelConfig.hyperparameters`` a ``LibraryModel`` reads itself:

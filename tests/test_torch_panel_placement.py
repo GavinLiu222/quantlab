@@ -5,12 +5,13 @@ the GPU when it takes at most half the free GPU memory and no loader
 workers are asked for, `"cuda"` forces the GPU, `"cpu"` forces CPU memory.
 `panel_dtype="float16"` stores the features in half precision, cast back to
 float32 per batch. The default loader pins memory only for a CPU panel
-with workers.
+with workers, and keeps its workers alive across epochs.
 
 What turns this file red:
 - `"auto"` ignores the 50% budget, or picks the GPU with workers or without CUDA;
 - `"cuda"` with workers or without CUDA, or an unknown value, trains anyway;
-- memory is pinned without workers, or for a GPU panel;
+- memory is pinned without workers, or for a GPU panel, or with `pin_memory=False`;
+- a loader with workers restarts them every epoch;
 - float16 storage changes predictions beyond rounding, or silently turns a
   value too large for float16 into infinity.
 
@@ -132,11 +133,37 @@ def test_memory_is_pinned_only_for_a_cpu_panel_with_workers(tmp_path, monkeypatc
     assert not _loader_pins(tmp_path, monkeypatch, panel_on="cuda", num_workers=2)
 
 
+def test_pin_memory_false_turns_pinning_off(tmp_path, monkeypatch):
+    """`pin_memory=False` keeps a CPU panel read by workers unpinned.
+
+    RED under: the hyperparameter being ignored, or pinning whenever the
+    default rule says so.
+    """
+    assert not _loader_pins(tmp_path, monkeypatch, panel_on="cpu", num_workers=2, pin_memory=False)
+    assert _loader_pins(tmp_path, monkeypatch, panel_on="cpu", num_workers=2, pin_memory=True)
+
+
+def test_pin_memory_must_be_a_bool(tmp_path):
+    with pytest.raises(ValueError, match="pin_memory"):
+        _head(tmp_path, pin_memory="no")
+
+
 @pytest.mark.skipif(torch.cuda.is_available(), reason="the model would run on the GPU")
 def test_nothing_is_pinned_when_the_model_runs_on_the_cpu(tmp_path):
     head = _head(tmp_path, num_workers=2)
     head._panel_device = "cpu"
     assert not head._dataloader([0, 1], training=False).pin_memory
+
+
+def test_loader_workers_persist_across_epochs(tmp_path):
+    """One fit reuses its loaders every epoch, so their workers are kept alive.
+
+    RED under: a loader with workers that restarts them on every pass.
+    """
+    head = _head(tmp_path, num_workers=2)
+    head._panel_device = "cpu"
+    assert head._dataloader([0, 1], training=True).persistent_workers
+    assert not _head(tmp_path)._dataloader([0, 1], training=True).persistent_workers
 
 
 # ---------------------------------------------------------------------------

@@ -38,7 +38,7 @@ class ModelConfig(FrozenConfig):
         ``"cs_zscore"``, applied per bar; unset trains on the raw label.
         Set, ``label_scales`` is ``"standardized"``; metrics still read the
         raw label.
-    ``batch_size``, ``num_workers``, ``panel_device``, ``panel_dtype``
+    ``batch_size``, ``num_workers``, ``pin_memory``, ``panel_device``, ``panel_dtype``
         Reserved for the torch data loader and training panel.
 
     A ``LibraryModel``'s ``_init_model`` receives the dict without the

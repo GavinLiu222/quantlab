@@ -296,7 +296,8 @@ def test_model_config_holds_only_the_shared_fields():
 
 def test_the_reserved_hyperparameter_names():
     assert TORCH_RESERVED_HYPERPARAMETERS == {
-        "epochs", "lr", "batch_size", "num_workers", "panel_device", "panel_dtype",
+        "epochs", "lr", "batch_size", "num_workers", "pin_memory", "panel_device",
+        "panel_dtype",
     }
     assert LIBRARY_RESERVED_HYPERPARAMETERS == {
         "early_stopping", "early_stopping_patience", "training_target",
