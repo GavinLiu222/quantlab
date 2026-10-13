@@ -2027,8 +2027,10 @@ class BaseDataset(Component, ABC):
         if stored is None or stored == list(symbols):
             return ledger, None
 
-        added = [symbol for symbol in symbols if symbol not in set(stored)]
-        removed = [symbol for symbol in stored if symbol not in set(symbols)]
+        # The sets are built once: a store holds tens of thousands of symbols.
+        stored_set, symbol_set = set(stored), set(symbols)
+        added = [symbol for symbol in symbols if symbol not in stored_set]
+        removed = [symbol for symbol in stored if symbol not in symbol_set]
 
         # Resolved only after the early return above, so the raw tier is not
         # queried when the axes already agree.
