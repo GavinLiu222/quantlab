@@ -14,9 +14,16 @@ Two datasets ship:
 - ``SymbolSequenceDataset``, Qlib style: one item per ``(bar, symbol)``
   cell, the symbol's last ``window_bars`` bars as ``[N, F]``, batched by the
   default collation to ``[B, N, F]``.
+
+``prefetch`` readies a loader's next batches on the model's device in a
+background thread, so gathering and copying the next batch overlaps the
+current step.
 """
 
 import dataclasses
+import queue
+import threading
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -229,21 +236,141 @@ class Batch(NamedTuple):
     y_raw: torch.Tensor
     where: tuple[torch.Tensor, torch.Tensor]
 
-    def to(self, device) -> "Batch":
+    def to(self, device, non_blocking: bool = False) -> "Batch":
         """Return the batch with every tensor on ``device``.
+
+        ``non_blocking`` is passed to every ``Tensor.to``: from pinned memory
+        to CUDA, the copies are only queued on the current stream.
 
         Examples
         --------
         >>> batch.to("cpu").x.device.type
         'cpu'
         """
+        return self._map(lambda tensor: tensor.to(device, non_blocking=non_blocking))
+
+    def pin_memory(self) -> "Batch":
+        """Return the batch with every tensor copied into pinned (page-locked) memory.
+
+        Examples
+        --------
+        >>> batch.pin_memory().x.is_pinned()
+        True
+        """
+        return self._map(lambda tensor: tensor.pin_memory())
+
+    def tensors(self) -> tuple[torch.Tensor, ...]:
+        """Every tensor of the batch: ``x``, ``y``, ``mask``, ``y_raw`` and both ``where``.
+
+        Examples
+        --------
+        >>> [tuple(tensor.shape) for tensor in batch.tensors()]
+        [(2, 1, 1), (2, 1), (2,), (2, 1), (2,), (2,)]
+        """
+        return (self.x, self.y, self.mask, self.y_raw, *self.where)
+
+    def _map(self, function) -> "Batch":
+        """Return the batch with ``function`` applied to every tensor."""
         return Batch(
-            x=self.x.to(device),
-            y=self.y.to(device),
-            mask=self.mask.to(device),
-            y_raw=self.y_raw.to(device),
-            where=(self.where[0].to(device), self.where[1].to(device)),
+            x=function(self.x),
+            y=function(self.y),
+            mask=function(self.mask),
+            y_raw=function(self.y_raw),
+            where=(function(self.where[0]), function(self.where[1])),
         )
+
+
+#: Batches ``prefetch`` keeps waiting for the caller, besides the one its
+#: thread is readying and the one in use.
+PREFETCH_DEPTH = 2
+
+
+def prefetch(batches: Iterable, device) -> Iterator[Batch]:
+    """Yield ``batches`` on ``device``, each readied ahead by a background thread.
+
+    A thread takes the next items of ``batches`` (a ``DataLoader``, or any
+    iterable of ``Batch``-shaped tuples) in order and moves them to
+    ``device`` while the caller works on the current one, keeping at most
+    ``PREFETCH_DEPTH`` waiting besides the one it is readying. For a CUDA ``device`` it copies each batch into
+    pinned memory and queues the copy to the GPU on a side stream; the
+    caller's stream waits for that copy before the batch is handed over, so
+    the transfer overlaps the GPU's work on the previous batch. The batches
+    come out exactly as ``batches`` gives them, in its order.
+
+    An error raised by ``batches`` is raised here, at the batch it stopped
+    at. Closing the iterator early (``close()``, or an error in the
+    caller's loop under ``contextlib.closing``) stops and joins the thread.
+
+    Parameters
+    ----------
+    batches : iterable
+        The batches, each a ``Batch`` or a tuple of its fields.
+    device : str or torch.device
+        Where to hand them over.
+
+    Yields
+    ------
+    Batch
+        The next batch, on ``device``.
+
+    Examples
+    --------
+    >>> [int(b.where[0][0]) for b in prefetch([batch, batch], "cpu")]
+    [4, 4]
+    """
+    device = torch.device(device)
+    cuda = device.type == "cuda"
+    ready: queue.Queue = queue.Queue(maxsize=PREFETCH_DEPTH)
+    stop = threading.Event()
+    end = object()
+    stream = torch.cuda.Stream(device) if cuda else None
+
+    def put(item) -> None:
+        while not stop.is_set():
+            try:
+                ready.put(item, timeout=0.1)
+                return
+            except queue.Full:
+                pass
+
+    def produce() -> None:
+        try:
+            for raw in batches:
+                if stop.is_set():
+                    return
+                batch = Batch(*raw)
+                if cuda:
+                    with torch.cuda.stream(stream):
+                        batch = batch.pin_memory().to(device, non_blocking=True)
+                        copied = torch.cuda.Event()
+                        copied.record(stream)
+                    put((batch, copied))
+                else:
+                    put((batch.to(device), None))
+            put(end)
+        except BaseException as error:  # noqa: BLE001 - handed to the caller, raised there
+            put(error)
+
+    thread = threading.Thread(target=produce, name="quantlab-prefetch", daemon=True)
+    thread.start()
+    try:
+        while True:
+            item = ready.get()
+            if item is end:
+                return
+            if isinstance(item, BaseException):
+                raise item
+            batch, copied = item
+            if cuda:
+                current = torch.cuda.current_stream(device)
+                current.wait_event(copied)
+                for tensor in batch.tensors():
+                    # Memory allocated on the side stream is used on this one.
+                    tensor.record_stream(current)
+            yield batch
+    finally:
+        stop.set()
+        thread.join()
 
 
 class CrossSectionDataset(Dataset):

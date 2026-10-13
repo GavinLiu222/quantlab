@@ -697,7 +697,7 @@ the `lr` hyperparameter), `_train_one_batch` / `_val_one_batch` / `_test_one_bat
 `_on_fit_start` / `_should_stop` / `_on_fit_end` (run the `epochs`
 hyperparameter's count of epochs). `_init_model` receives the whole
 `hyperparameters` dict, whose reserved keys (`epochs`, `lr`, `batch_size`,
-`num_workers`, `pin_memory`, `panel_device`, `panel_dtype`, `early_stopping`,
+`num_workers`, `pin_memory`, `prefetch`, `panel_device`, `panel_dtype`, `early_stopping`,
 `early_stopping_patience`) the base classes read, so read the head's own keys
 by name rather than splatting the dict into the network. `quantlab.model.torch_training` has helpers for them: `masked_mse`,
 `cs_rank_norm`, `cs_zscore`, `drop_extreme` and `TrainLossThreshold`. The

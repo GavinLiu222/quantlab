@@ -9,6 +9,7 @@ learning choice is an optional hook. Checkpoints are ``.pth`` files. Shipped hea
 """
 
 from abc import abstractmethod
+from contextlib import closing
 from pathlib import Path
 
 import numpy as np
@@ -19,7 +20,7 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
 from quantlab.model.base import TORCH_RESERVED_HYPERPARAMETERS, BaseModel
-from quantlab.model.torch_data import Batch, CrossSectionDataset, TrainingPanel
+from quantlab.model.torch_data import Batch, CrossSectionDataset, TrainingPanel, prefetch
 from quantlab.model.training_target import TrainingTargetMixin
 from quantlab.utils.timer import Timer
 
@@ -197,11 +198,13 @@ class TorchModel(TrainingTargetMixin, BaseModel):
         step, as the cross-section dataset needs) and ``num_workers``
         (default 0) from the hyperparameters, shuffles only when training
         with a generator seeded from ``config.random_seed``, and never drops
-        the last batch. Memory is pinned only for a panel in CPU memory and
-        a model on CUDA: unset, ``pin_memory`` pins only when workers load
-        the panel; True pins with or without workers; False never pins.
-        Pinning copies every batch once more, on one thread, so a large
-        batch can make that thread the bottleneck. Workers persist
+        the last batch. The loader never pins memory while batches are
+        prefetched (``prefetch``), since the prefetcher pins them itself.
+        With ``prefetch=False``, memory is pinned only for a panel in CPU
+        memory and a model on CUDA: unset, ``pin_memory`` pins only when
+        workers load the panel; True pins with or without workers; False
+        never pins. Pinning copies every batch once more, on one thread, so
+        a large batch can make that thread the bottleneck. Workers persist
         across epochs: a fit builds its loaders once and passes over them
         every epoch, so they are not restarted each time.
 
@@ -227,6 +230,7 @@ class TorchModel(TrainingTargetMixin, BaseModel):
                 (bool(workers) if self._pin_memory is None else self._pin_memory)
                 and self._panel_device == "cpu"
                 and self.device == "cuda"
+                and not self._prefetching
             ),
             persistent_workers=bool(workers),
         )
@@ -310,7 +314,7 @@ class TorchModel(TrainingTargetMixin, BaseModel):
         """Choose the weights to keep, after the last epoch; the default keeps the last."""
 
     def check_hyperparameters(self) -> None:
-        """Refuse an invalid ``epochs``, ``pin_memory``, ``panel_device`` or ``panel_dtype``.
+        """Refuse an invalid ``epochs``, ``prefetch``, ``pin_memory``, ``panel_device`` or ``panel_dtype``.
 
         Raises
         ------
@@ -322,6 +326,7 @@ class TorchModel(TrainingTargetMixin, BaseModel):
         >>> model.check_hyperparameters()  # the defaults are valid
         """
         self.epochs
+        self._prefetch
         self._pin_memory
         self._panel_settings()
 
@@ -337,7 +342,8 @@ class TorchModel(TrainingTargetMixin, BaseModel):
         Raises
         ------
         ValueError
-            If it is set to anything but True or False.
+            If it is set to anything but True or False, or set while
+            ``prefetch`` is not False: the prefetcher pins its own batches.
         """
         pin = self.config.hyperparameters.get("pin_memory")
         if pin is not None and not isinstance(pin, bool):
@@ -345,7 +351,58 @@ class TorchModel(TrainingTargetMixin, BaseModel):
                 f"{self.class_name}: hyperparameters['pin_memory'] must be True, "
                 f"False or unset, got {pin!r}"
             )
+        if pin is not None and self._prefetch is not False:
+            raise ValueError(
+                f"{self.class_name}: hyperparameters['pin_memory'] applies only with "
+                f"prefetch=False; the prefetcher pins its own batches"
+            )
         return pin
+
+    @property
+    def _prefetch(self) -> bool | None:
+        """``hyperparameters["prefetch"]``, None when unset.
+
+        Raises
+        ------
+        ValueError
+            If it is set to anything but True or False, or to True without
+            a CUDA device.
+        """
+        setting = self.config.hyperparameters.get("prefetch")
+        if setting is not None and not isinstance(setting, bool):
+            raise ValueError(
+                f"{self.class_name}: hyperparameters['prefetch'] must be True, "
+                f"False or unset, got {setting!r}"
+            )
+        if setting and self.device != "cuda":
+            raise ValueError(
+                f"{self.class_name}: hyperparameters['prefetch']=True needs a CUDA "
+                f"device, and the model runs on {self.device!r}"
+            )
+        return setting
+
+    @property
+    def _prefetching(self) -> bool:
+        """Whether batches go through ``prefetch``: from a CPU panel to a CUDA model.
+
+        Unset, ``prefetch`` follows that rule; False turns it off. Read once
+        the panel is placed.
+
+        Raises
+        ------
+        ValueError
+            If ``prefetch=True`` but the panel is not in CPU memory or the
+            model not on CUDA.
+        """
+        setting = self._prefetch
+        crossing = self._panel_device == "cpu" and self.device == "cuda"
+        if setting and not crossing:
+            raise ValueError(
+                f"{self.class_name}: hyperparameters['prefetch']=True needs the "
+                f"training panel in CPU memory and the model on CUDA; the panel is "
+                f"on {self._panel_device!r} and the model on {self.device!r}"
+            )
+        return crossing if setting is None else setting
 
     def _panel_settings(self) -> tuple[str, torch.dtype]:
         """Return the validated ``(panel_device, feature dtype)`` of the hyperparameters.
@@ -527,6 +584,20 @@ class TorchModel(TrainingTargetMixin, BaseModel):
             )
         return batch._replace(x=x)
 
+    def _batches(self, loader):
+        """Yield ``loader``'s batches prepared (``_prepare``), prefetched when ``_prefetching``.
+
+        Use it under ``contextlib.closing``, so a loop left early stops the
+        prefetching thread.
+        """
+        source = prefetch(loader, self.device) if self._prefetching else loader
+        try:
+            for raw in source:
+                yield self._prepare(raw)
+        finally:
+            if source is not loader:
+                source.close()
+
     def _loader(self, panel: TrainingPanel, bars, training: bool) -> DataLoader:
         """Return the head's loader over the head's dataset of ``bars``."""
         return self._dataloader(self._dataset(panel, bars, training), training)
@@ -540,9 +611,10 @@ class TorchModel(TrainingTargetMixin, BaseModel):
     def _train_epoch(self, epoch: int, loader: DataLoader) -> float:
         """Call ``_train_one_batch`` on every training batch; their mean loss."""
         self.model.train()  # type: ignore[union-attr]
-        return self._mean_loss(
-            self._train_one_batch(epoch, self._prepare(batch)) for batch in loader
-        )
+        with closing(self._batches(loader)) as batches:
+            return self._mean_loss(
+                self._train_one_batch(epoch, batch) for batch in batches
+            )
 
     def _eval_loss(self, epoch: int, loader: DataLoader) -> float:
         """Per-bar ``_val_one_batch`` averaged over bars; NaN without a valid target.
@@ -560,9 +632,9 @@ class TorchModel(TrainingTargetMixin, BaseModel):
         """
         pieces: dict[int, list[tuple[float, int]]] = {}
         self.model.eval()  # type: ignore[union-attr]
-        with torch.no_grad():
-            for raw in loader:
-                for bar, piece in self._split_by_bar(self._prepare(raw)):
+        with torch.no_grad(), closing(self._batches(loader)) as batches:
+            for batch in batches:
+                for bar, piece in self._split_by_bar(batch):
                     valid = int(piece.mask.sum())
                     loss = float(self._val_one_batch(epoch, piece))
                     pieces.setdefault(bar, []).append((loss, valid))
@@ -605,9 +677,9 @@ class TorchModel(TrainingTargetMixin, BaseModel):
     def _test_epoch(self, epoch: int, loader: DataLoader) -> None:
         """Call ``_test_one_batch`` on every test batch, in eval mode without gradients."""
         self.model.eval()  # type: ignore[union-attr]
-        with torch.no_grad():
-            for batch in loader:
-                self._test_one_batch(epoch, self._prepare(batch))
+        with torch.no_grad(), closing(self._batches(loader)) as batches:
+            for batch in batches:
+                self._test_one_batch(epoch, batch)
 
     def _predict_panel_bars(self, panel: TrainingPanel, bars) -> np.ndarray:
         """Return ``[T, S, L]`` predictions for ``bars``, NaN everywhere else.
@@ -629,9 +701,8 @@ class TorchModel(TrainingTargetMixin, BaseModel):
         count = torch.zeros((num_times, num_symbols), dtype=torch.int64)
         loader = self._loader(panel, bars, training=False)
         self.model.eval()  # type: ignore[union-attr]
-        with torch.no_grad():
-            for raw in loader:
-                batch = self._prepare(raw)
+        with torch.no_grad(), closing(self._batches(loader)) as batches:
+            for batch in batches:
                 pred = self._forward(batch.x)
                 expected = tuple(batch.mask.shape) + (self.num_labels,)
                 if not isinstance(pred, torch.Tensor) or tuple(pred.shape) != expected:

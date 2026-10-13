@@ -253,7 +253,8 @@ The base classes and the shipped heads read these keys from it themselves (`quan
 | `early_stopping_patience` | the shipped library heads: rounds (or the library's own unit) without improvement | 5 |
 | `training_target` | `LibraryModel`: the per-bar cross-sectional target the library fits, `"cs_rank"` or `"cs_zscore"`; any other value raises `ValueError` in `collect()` or when training starts, before any data is read or any fit (see Train on a cross-sectional target) | unset: the raw label |
 | `batch_size`, `num_workers` | `TorchModel`: the default `_dataloader` | `None` (one item per step), 0 |
-| `pin_memory` | `TorchModel`: whether the default `_dataloader` pins a CPU panel's batches for a CUDA model; unset pins only with workers, `True` also without, `False` never | unset |
+| `pin_memory` | `TorchModel`, only with `prefetch=False` (set otherwise, it raises `ValueError`): whether the default `_dataloader` pins a CPU panel's batches for a CUDA model; unset pins only with workers, `True` also without, `False` never | unset |
+| `prefetch` | `TorchModel`: whether a background thread readies the next batch, pinned and copied to the GPU on a side stream, while the current step runs; unset prefetches exactly when the panel is in CPU memory and the model on CUDA, `True` raises `ValueError` where that does not hold, `False` never | unset |
 | `panel_device` | `TorchModel`: where the training panel lives, `"auto"`, `"cuda"` or `"cpu"` (see Keep the training panel on the GPU) | `"auto"` |
 | `panel_dtype` | `TorchModel`: the precision the features are stored in, `"float32"` or `"float16"` | `"float32"` |
 
@@ -633,7 +634,7 @@ A head writes three things: `window_bars` (N), `_init_model(num_features, num_la
 | Hook | Default |
 |---|---|
 | `_dataset(panel, bars, training)`: the PyTorch `Dataset` over `bars` | `CrossSectionDataset`, one item per bar; `SymbolSequenceDataset` gives Qlib-style per-symbol samples (see below) |
-| `_dataloader(dataset, training)`: the `DataLoader` | `batch_size` and `num_workers` from the hyperparameters (`None`, one item per step, and 0); shuffled only in training, with a generator seeded from `random_seed`; the last batch never dropped; workers kept alive across epochs; memory pinned only for a CPU panel of a CUDA model, by default only when workers read it (`pin_memory`) |
+| `_dataloader(dataset, training)`: the `DataLoader` | `batch_size` and `num_workers` from the hyperparameters (`None`, one item per step, and 0); shuffled only in training, with a generator seeded from `random_seed`; the last batch never dropped; workers kept alive across epochs; memory pinned only with `prefetch=False`, for a CPU panel of a CUDA model, by default only when workers read it (`pin_memory`) |
 | `_transform_feature(x)`: a batch's raw `x`, NaN where missing, to the network input | clip to ±3, NaN to 0 |
 | `_transform_target(y, training)`: one bar's raw labels to `(target, keep)`; `keep` drops symbols from the loss | `(y, None)`; helpers `cs_rank_norm` (Qlib `CSRankNorm`), `cs_zscore`, `drop_extreme` |
 | `_init_optim(model)`: anything the training step understands, such as a dict of optimizers | Adam at `hyperparameters["lr"]` (`1e-3`) |
@@ -931,7 +932,9 @@ A torch head holds the whole collected panel (features, training target, masks a
 - `"cuda"` forces the GPU. It raises `ValueError` before training with `num_workers > 0`, because a loader worker process cannot index a CUDA tensor, or when no CUDA device is available.
 - `"cpu"` forces CPU memory. Use it when several runs share one GPU.
 
-The default loader pins memory only for a CPU panel read by workers of a model on CUDA, since pinning without workers made loading slower in a measurement. Pinning copies every batch once more on a single thread, so with large batches that thread can limit the epoch; `"pin_memory": False` turns it off and `True` turns it on without workers too.
+When the panel stays in CPU memory and the model runs on CUDA, the batches are prefetched (`prefetch`, on by default there): a background thread takes the loader's next batch, copies it into pinned memory and queues its copy to the GPU on a side stream while the GPU works on the current one, so gathering and copying overlap the step. The batches arrive in the loader's order, so a fit is as reproducible as without it. On GATs over a 88 GiB CPU panel (about 110 MB per batch) a step went from 30.7 ms to 18.6 ms, the time left being the gathering of the window itself. `"prefetch": False` turns it off; `True` raises `ValueError` unless the panel is in CPU memory and the model on CUDA.
+
+With `prefetch=False`, the default loader pins memory only for a CPU panel read by workers of a model on CUDA, since pinning without workers made loading slower in a measurement. Pinning copies every batch once more on a single thread, so with large batches that thread can limit the epoch; `"pin_memory": False` turns it off and `True` turns it on without workers too. While batches are prefetched the prefetcher pins them itself, and setting `pin_memory` raises `ValueError`.
 
 `panel_dtype="float16"` stores the features in half precision, halving the panel's largest part so a full-market panel fits on the GPU. Each batch is cast back to float32 before `_transform_feature`, so the network and the loss still run in float32. A feature too large for float16 (beyond ±65504) raises `ValueError` rather than becoming infinite; factors are normally z-scored long before that. Below, the minimal head from Train a torch model is trained again with its features stored in float16:
 

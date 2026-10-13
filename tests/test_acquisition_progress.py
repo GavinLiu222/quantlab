@@ -1353,6 +1353,9 @@ def test_no_task_isolation_was_added() -> None:
     import ast
 
     banned = {"asyncio", "queue", "multiprocessing", "concurrent"}
+    # Not task isolation: `prefetch` hands a training loop's next batches from
+    # one thread to the loop through a bounded queue (ADR 0032).
+    allowed = {"quantlab/model/torch_data.py": {"queue"}}
     modules = _quantlab_modules()
     assert len(modules) >= 40, len(modules)
 
@@ -1362,6 +1365,7 @@ def test_no_task_isolation_was_added() -> None:
             name
             for name in _imported_names(path)
             if name.split(".")[0] in banned
+            and name not in allowed.get(str(path), set())
         )
         if hits:
             offenders[str(path)] = hits
