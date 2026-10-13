@@ -621,6 +621,26 @@ True
 
 `_combine` 只看得到预测。需要在训练中学习参数的规则（例如在验证段上拟合权重）目前还不支持。
 
+### 组装分别训练的模型
+
+`assemble(runs, save_dir=None)` 和 `assemble_cv(runs, save_dir=None)` 把各自训练好的模型组装成一个集成单元，不重新训练。它们用于无法在一个进程里一起训练的成员，例如面板太大、装不下两份的 XGBoost 回归器和 GATs 网络，或者分几次运行训练的各个种子。第 k 个 run 是第 k 个成员自己的训练单元：`assemble` 用 `"model"` 单元，`assemble_cv` 用该成员的 walk-forward run（`train_cv`）。每个 run 都被拷贝到 `save_dir`（默认 `model_save_dir`）下新试验目录的 `member_{k}/` 中，所以删掉源目录后结果照样能打开和加载；`load`、`check_checkpoint` 和回测器的 `run_cv` 读取它时，与读取 `train()` 或 `train_cv()` 写出的单元没有区别。组装出来的和训练出来的是同一种集成。
+
+写入任何东西之前先做全部检查。第 k 个 run 必须是模型而不是集成（要组合一个集成里的模型，就把它的成员逐个传入），类与第 k 个成员相同，训练用的变量与第 k 个成员一致（`check_checkpoint`），对 `SeedEnsemble` 还要求种子与第 k 个成员相同。各 run 的测试窗口必须相同，且都没有拟合过其中的任何 bar；`assemble_cv` 还要求各 run 的折完全相同。集成的训练窗口覆盖各成员的训练窗口，与训练出来的集成相同。
+
+只评估测试段：各成员保存的 `test_predictions.zarr` 由 `_combine` 合成，每个标签对照第一个预测它的成员的标签打分，标签只读测试窗口，不读任何特征。单元的指标只有 `test_*`（`cv_mean` 对它们取平均），`ic_series.csv` 和 `test_predictions.zarr` 与训练出来的集成一样写出。顶层单元的 `data_fingerprint` 是各源 run 的指纹，以组件在集成内的路径为键；`code` 是执行组装的代码；`assembled_from` 列出每个源 run 的目录和代码记录。
+
+```python
+>>> xgb_cv = xgb.collect().train_cv(train_periods=100)    # 一个进程
+>>> mlp_cv = mlp.collect().train_cv(train_periods=100)    # 另一个进程
+>>> both = ModelEnsemble([xgb, mlp]).assemble_cv([xgb_cv.path, mlp_cv.path], "checkpoints")
+>>> both.kind, both.folds[0].kind, [m.seed for m in both.folds[0].members]
+('walk_forward', 'ensemble', [None, None])
+>>> sorted(both.folds[0].metrics)
+['test_ic', 'test_icir', 'test_member_correlation', 'test_rank_ic', 'test_rank_icir']
+>>> [entry["directory"] for entry in both.assembled_from] == [str(xgb_cv.path), str(mlp_cv.path)]
+True
+```
+
 ### 训练 torch 模型
 
 torch 模型头（`TorchModel`）通过标准的 PyTorch 组件取数据。基类把收集到的数据组装成一个由 torch 张量构成的*训练面板*：特征 `x`（`[T, S, F]`）、训练目标（`[T, S, L]`）及其 `mask`（`[T, S]`）、原始标签 `y_raw`，以及 `present`（`[T, S]`，至少有一个有限特征值的格子），外加时间戳和标的。模型头的 `_dataset(panel, bars, training)` 返回覆盖若干 bar 的 `torch.utils.data.Dataset`，`_dataloader(dataset, training)` 负责分批。默认数据集是 `quantlab.model.torch_data` 中的 `CrossSectionDataset`，每个 bar 一个样本项：这个 bar 的*截面*，即在该 bar 上出现的标的，每个标的带着自己最近 `window_bars` 个 bar 的特征。网络看到的是 `[S_t, N, F]`，其中标的数 S_t 逐 bar 变化，所以网络不能依赖标的的顺序或数量。训练之后才加入的标的同样会得到预测，标签缺失的标的仍作为上下文留在输入里。

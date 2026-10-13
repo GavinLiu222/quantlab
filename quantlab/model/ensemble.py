@@ -59,8 +59,14 @@ On disk ``train()`` writes an ``"ensemble"`` unit::
 The record names each member's directory and seed (null when the ensemble
 does not vary seeds) and nothing specific to one kind of ensemble; each
 member's class is in its own ``config.json``.
+
+``assemble`` and ``assemble_cv`` write the same units from members trained
+separately (their own ``train`` / ``train_cv`` runs), copied in without
+training again; only the test segment is scored, and ``run.json`` names the
+source runs in ``assembled_from``.
 """
 
+import shutil
 from abc import ABC
 from collections.abc import Sequence
 from pathlib import Path
@@ -69,21 +75,24 @@ from typing import Self
 import numpy as np
 import pandas as pd
 import xarray as xr
+from loguru import logger
 
-from quantlab.core.component import Component
+from quantlab.core.component import Component, walk_components
 from quantlab.runs.record import code_of
 from quantlab.model.base import record_training_reads
 from quantlab.tracking.base import Tracker
 from quantlab.runs.trained_run import (
     TrainedRun,
+    fold_directory,
     member_directory,
     new_trial_directory,
     write_ensemble_run,
+    write_walk_forward_run,
 )
 from quantlab.utils.cross_section import cross_sectional_zscore
-from quantlab.model.evaluation import evaluate
+from quantlab.model.evaluation import Segments, evaluate
 from quantlab.model.split import Fold
-from quantlab.model.walk_forward_training import fold_config, train_walk_forward
+from quantlab.model.walk_forward_training import cv_mean_metrics, fold_config, train_walk_forward
 
 
 def _as_time(value) -> pd.Timestamp:
@@ -802,25 +811,42 @@ class BaseEnsemble(Component, ABC):
         dict
             The metrics, with NaN where a metric is undefined.
         """
-        predictions = self._member_panel_predictions()
+        segments, truth = {}, {}
+        for name, indices in self._label_owners().items():
+            member = self.members[indices[0]]
+            segments[name] = member.evaluation_segments()
+            truth[name] = member.collected_panel.data
+        return self._score(
+            self._member_panel_predictions(), truth, segments, self.test_bounds, run_dir
+        )
+
+    def _score(
+        self,
+        predictions: list[xr.Dataset],
+        truth: dict,
+        segments: dict,
+        test_bounds: tuple,
+        run_dir: Path,
+    ) -> dict:
+        """Score the ``_combine`` of the members' ``predictions`` and write the evaluation files.
+
+        ``truth`` and ``segments`` map each label name to the panel and the
+        ``Segments`` of the first member predicting it; ``evaluate`` does the
+        scoring, with the members' agreement as an extra metric.
+        """
         owners = self._label_owners()
         # Members agree on every label of one name (_check_members_agree), so
         # the first label object naming a variable speaks for all of them.
         objects = {
             str(name): obj for obj in reversed(self.labels) for name in obj.get_factor_names()
         }
-        segments, truth = {}, {}
-        for name, indices in owners.items():
-            member = self.members[indices[0]]
-            segments[name] = member.evaluation_segments()
-            truth[name] = member.collected_panel.data
         return evaluate(
             self._combine(predictions),
             truth,
             labels={name: objects[name] for name in owners},
             label_scales=self.label_scales,
             segments=segments,
-            test_bounds=self.test_bounds,
+            test_bounds=test_bounds,
             run_dir=run_dir,
             extra_metrics=lambda name, stamps, symbols: _member_agreement(
                 [predictions[k] for k in owners[name]], name, stamps, symbols
@@ -940,6 +966,266 @@ class BaseEnsemble(Component, ABC):
         for member, saved in zip(self.members, run.members):
             member.load(saved.checkpoint)
         return self
+
+    # ------------------------------------------------------------------
+    # Assembling from members trained separately
+    # ------------------------------------------------------------------
+
+    def assemble(self, runs: Sequence[Path | str], save_dir: Path | str | None = None) -> Path:
+        """Assemble an ensemble unit from models trained separately and return its ``run.json``.
+
+        Nothing is trained: run k, a ``"model"`` unit, is copied into
+        ``member_{k}/`` of a new ``{class}_trial_{timestamp}`` directory
+        under ``save_dir``, which becomes an ``"ensemble"`` unit that
+        ``load`` and a backtest read as if ``train()`` had written it. Run k
+        must be a model of member k's class, trained on member k's variables
+        (``check_checkpoint``) and, when the ensemble varies seeds, under
+        member k's seed; every run must have the same test window and have
+        fitted no bar of it.
+
+        Only the test segment is scored, from the members' saved test
+        predictions and the labels over the test window (no feature is
+        read): the unit has ``test_*`` metrics only, and its
+        ``assembled_from`` names each source run and its code record.
+
+        Parameters
+        ----------
+        runs : sequence of Path or str
+            One trained model unit per member, in member order: its
+            directory, ``run.json`` or checkpoint.
+        save_dir : Path or str, optional
+            Where the unit's directory is created; ``model_save_dir`` (the
+            first member's) by default.
+
+        Returns
+        -------
+        Path
+            Absolute path of the unit's ``run.json``, the ensemble's
+            load-mode checkpoint.
+
+        Raises
+        ------
+        ValueError
+            If the runs do not match the members as described, before
+            anything is written.
+
+        Examples
+        --------
+        >>> checkpoint = ModelEnsemble([xgb, mlp]).assemble([xgb_run, mlp_run], "models")
+        >>> sorted(TrainedRun.open(checkpoint).metrics)[:2]
+        ['test_ic', 'test_icir']
+        """
+        parts = [TrainedRun.open(run) for run in runs]
+        test_window = self._check_assembly(parts)
+        directory = new_trial_directory(self._save_root(save_dir), self.class_name)
+        return self._assemble_into(
+            directory, parts, test_window, provenance=self._assembled_provenance(parts)
+        )
+
+    def assemble_cv(
+        self, runs: Sequence[Path | str], save_dir: Path | str | None = None
+    ) -> TrainedRun:
+        """Assemble a walk-forward unit of ensembles from walk-forward runs trained separately.
+
+        Run k is member k's own walk-forward run (``train_cv``). Fold i of
+        the result is the ensemble unit ``assemble`` would write from fold i
+        of every run, so every run must have the same folds, and in each
+        fold the same test window; the fold means of their ``test_*``
+        metrics are ``cv_mean``. A backtester's ``run_cv`` replays the
+        result with the ensemble as its model.
+
+        Parameters
+        ----------
+        runs : sequence of Path or str
+            One walk-forward run per member, in member order.
+        save_dir : Path or str, optional
+            Where the unit's directory is created; ``model_save_dir`` by
+            default.
+
+        Returns
+        -------
+        TrainedRun
+            The ``"walk_forward"`` unit, whose folds are ``"ensemble"`` units.
+
+        Raises
+        ------
+        ValueError
+            If a run is not a walk-forward run, the runs' folds differ, or a
+            fold's runs do not match the members as ``assemble`` requires,
+            before anything is written.
+
+        Examples
+        --------
+        >>> cv = ModelEnsemble([xgb, gats]).assemble_cv([xgb_cv.path, gats_cv.path])
+        >>> cv.kind, cv.folds[0].kind
+        ('walk_forward', 'ensemble')
+        """
+        walks = [TrainedRun.open(run) for run in runs]
+        self._check_run_count(walks)
+        for k, walk in enumerate(walks):
+            if walk.kind != "walk_forward":
+                raise ValueError(
+                    f"{self.class_name}: run {k} ({walk.path}) is a {walk.kind!r} trained "
+                    f"run, not a walk-forward run"
+                )
+        indices = [fold.index for fold in walks[0].folds]
+        for k, walk in enumerate(walks[1:], start=1):
+            if [fold.index for fold in walk.folds] != indices:
+                raise ValueError(
+                    f"{self.class_name}: run {k} has folds "
+                    f"{[fold.index for fold in walk.folds]}, run 0 has {indices}"
+                )
+        folds = [[walk.folds[j] for walk in walks] for j in range(len(indices))]
+        windows = [self._check_assembly(parts) for parts in folds]
+        trial = new_trial_directory(self._save_root(save_dir), self.class_name)
+        fold_metrics = [
+            TrainedRun.open(
+                self._assemble_into(fold_directory(trial, index), parts, window, provenance=None)
+            ).metrics
+            for index, parts, window in zip(indices, folds, windows)
+        ]
+        means = cv_mean_metrics(fold_metrics)
+        return write_walk_forward_run(
+            trial, folds=indices, cv_mean=means, provenance=self._assembled_provenance(walks)
+        )
+
+    def _save_root(self, save_dir: Path | str | None) -> Path:
+        """``save_dir``, or ``model_save_dir`` when it is None."""
+        return self.model_save_dir if save_dir is None else Path(save_dir)
+
+    def _check_run_count(self, runs: Sequence[TrainedRun]) -> None:
+        """Refuse a number of runs other than the number of members."""
+        if len(runs) != len(self.members):
+            raise ValueError(
+                f"{self.class_name}: {len(runs)} runs for {len(self.members)} members"
+            )
+
+    def _check_assembly(self, parts: Sequence[TrainedRun]) -> tuple:
+        """Check that ``parts`` can be member k of this ensemble each, and return their test window.
+
+        See ``assemble`` for what is required.
+        """
+        self._check_run_count(parts)
+        for k, (member, part) in enumerate(zip(self.members, parts)):
+            if part.kind != "model":
+                raise ValueError(
+                    f"{self.class_name}: run {k} ({part.path}) is a {part.kind!r} trained run, "
+                    f"not a model; assemble from its members one by one"
+                )
+            name = part.config.get("name")
+            if name != member.import_path:
+                raise ValueError(
+                    f"{self.class_name}: run {k} ({part.path}) is a {name}, but member {k} "
+                    f"is a {member.import_path}"
+                )
+            member.check_checkpoint(part.checkpoint)
+            seed = self._member_seed(k)
+            if seed is not None and part.config.get("random_seed") != seed:
+                raise ValueError(
+                    f"{self.class_name}: run {k} ({part.path}) was trained with seed "
+                    f"{part.config.get('random_seed')!r}, but member {k} has seed {seed!r}"
+                )
+            if part.test_predictions is None:
+                raise ValueError(
+                    f"{self.class_name}: run {k} ({part.path}) has no test predictions to "
+                    f"score the ensemble on"
+                )
+        windows = {part.test_window for part in parts}
+        if len(windows) != 1:
+            raise ValueError(
+                f"{self.class_name}: the runs test on different windows: "
+                f"{[part.test_window for part in parts]}"
+            )
+        (test_window,) = windows
+        for k, part in enumerate(parts):
+            if part.fitted_train_window is None or None in test_window:
+                raise ValueError(
+                    f"{self.class_name}: run {k} ({part.path}) records no fitted training "
+                    f"window or test window to check against each other"
+                )
+            end = part.fitted_train_window[1]
+            if end is not None and _as_time(end) >= _as_time(test_window[0]):
+                raise ValueError(
+                    f"{self.class_name}: run {k} ({part.path}) fitted up to {end}, inside "
+                    f"the test window {test_window}"
+                )
+        return test_window
+
+    def _assemble_into(
+        self,
+        directory: Path,
+        parts: Sequence[TrainedRun],
+        test_window: tuple,
+        *,
+        provenance: dict | None,
+    ) -> Path:
+        """Copy the checked ``parts`` in as the members, score the test segment, write ``run.json``."""
+        directory = Path(directory).absolute()
+        directory.mkdir(parents=True, exist_ok=True)
+        for k, part in enumerate(parts):
+            shutil.copytree(part.path, member_directory(directory, k))
+        metrics = self._evaluate_test(directory, parts, test_window)
+        return write_ensemble_run(
+            directory,
+            seeds=[self._member_seed(k) for k in range(len(self.members))],
+            train_window=_covering([part.train_window for part in parts]),
+            fitted_train_window=_covering([part.fitted_train_window for part in parts]),
+            test_window=test_window,
+            metrics=metrics,
+            provenance=provenance,
+        )
+
+    def _evaluate_test(
+        self, directory: Path, sources: Sequence[TrainedRun], test_window: tuple
+    ) -> dict:
+        """Score the combined test predictions of assembled members; see ``_evaluate``.
+
+        The members' predictions are their saved ``test_predictions.zarr``,
+        and each label is scored against the labels of the first member
+        predicting it, read over the test window alone; the files written
+        are ``_evaluate``'s, on the test segment.
+        """
+        predictions = [
+            xr.open_zarr(member_directory(directory, k) / source.test_predictions.name).load()
+            for k, source in enumerate(sources)
+        ]
+        segments, truth = {}, {}
+        for name, indices in self._label_owners().items():
+            # The owner's saved prediction holds its test segment's bars and symbols,
+            # those a trained ensemble scores this label on.
+            owner = predictions[indices[0]]
+            panel = self.members[indices[0]]._collect_all_labels(*test_window)
+            truth[name] = panel.reindex(symbol=owner.symbol.values)
+            stamps = owner.timestamp.values
+            segments[name] = Segments(train=stamps[:0], val=stamps[:0], test=stamps)
+        return self._score(predictions, truth, segments, test_window, directory)
+
+    def _assembled_provenance(self, parts: Sequence[TrainedRun]) -> dict:
+        """The assembled top unit's ``data_fingerprint``, ``code`` and ``assembled_from``.
+
+        Each source run's fingerprint is re-keyed by the component's path
+        within the ensemble; a component several members share keeps the
+        first member's record, with a warning when another member's differs.
+        ``code`` is the code assembling it.
+        """
+        path_in_ensemble = {id(item): path for path, item in walk_components(self)}
+        fingerprint: dict = {}
+        for member, part in zip(self.members, parts):
+            for path, item in walk_components(member):
+                if path in part.data_fingerprint and id(item) in path_in_ensemble:
+                    key, record = path_in_ensemble[id(item)], part.data_fingerprint[path]
+                    if fingerprint.setdefault(key, record) != record:
+                        logger.warning(
+                            f"{self.class_name}: the source runs read {key} with different "
+                            f"data; the first run's record is kept (the source runs keep their own)"
+                        )
+        return {
+            "data_fingerprint": fingerprint,
+            "code": code_of(self),
+            "assembled_from": [
+                {"directory": str(part.path), "code": part.code} for part in parts
+            ],
+        }
 
 
 # Combining and comparing member predictions.

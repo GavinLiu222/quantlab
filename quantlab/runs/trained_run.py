@@ -25,6 +25,9 @@ Every unit's ``run.json`` also holds ``data_fingerprint``: what the unit's
 path within the model; and ``code``, the code record of the model
 (``quantlab.runs.record``). Only the top unit records them: the trained
 model, or the ensemble or walk-forward unit; its members and folds hold none.
+An ensemble or walk-forward unit assembled from members trained separately
+(``BaseEnsemble.assemble``) also records ``assembled_from``: each source
+run's directory and code record.
 
 ``train`` writes a unit at ``{model_save_dir}/{Class}_trial_{timestamp}/``,
 ``train_cv`` a ``"walk_forward"`` unit there. Paths inside ``run.json`` are
@@ -130,6 +133,11 @@ class TrainedRun:
     code : dict or None
         The code record of the model it trained (``git``, ``modules``,
         ``libraries``); None for a member or a fold.
+    assembled_from : tuple of dict
+        For an ensemble or walk-forward unit assembled from members trained
+        separately (``BaseEnsemble.assemble``), each member's source run, in
+        member order: its ``directory`` when assembled and its ``code``;
+        empty for a unit that was trained.
     members : tuple of TrainedRun
         An ``"ensemble"`` unit's members, in member order; empty otherwise.
     folds : tuple of TrainedRun
@@ -167,6 +175,7 @@ class TrainedRun:
     resolved_hyperparameters: dict | None = None
     data_fingerprint: dict = dataclasses.field(default_factory=dict)
     code: dict | None = None
+    assembled_from: tuple = ()
     members: tuple = ()
     folds: tuple = ()
     cv_mean: dict | None = None
@@ -230,6 +239,7 @@ class TrainedRun:
             resolved_hyperparameters=record.get("resolved_hyperparameters"),
             data_fingerprint=dict(record.get("data_fingerprint") or {}),
             code=record.get("code"),
+            assembled_from=tuple(record.get("assembled_from") or ()),
             members=tuple(
                 dataclasses.replace(
                     cls.open(recorded_path(directory, entry["directory"])), seed=entry["seed"]
@@ -357,12 +367,18 @@ def write_model_config(directory: Path | str, config: dict) -> None:
 
 
 def _provenance(provenance: Mapping | None) -> dict:
-    """Return the ``data_fingerprint`` and ``code`` fields of a unit's ``run.json``."""
+    """Return the ``data_fingerprint`` and ``code`` fields of a unit's ``run.json``.
+
+    An assembled unit's ``assembled_from`` comes with them when given.
+    """
     provenance = provenance or {}
-    return {
+    fields = {
         "data_fingerprint": dict(provenance.get("data_fingerprint") or {}),
         "code": provenance.get("code"),
     }
+    if provenance.get("assembled_from"):
+        fields["assembled_from"] = list(provenance["assembled_from"])
+    return fields
 
 
 def _evaluation_names(directory: Path) -> dict:
@@ -469,8 +485,9 @@ def write_ensemble_run(
     metrics : dict
         The metrics of the combined prediction.
     provenance : mapping, optional
-        The top unit's ``data_fingerprint`` and ``code``; None (a member, a
-        fold) records an empty fingerprint and no code.
+        The top unit's ``data_fingerprint`` and ``code``, and for an
+        assembled unit ``assembled_from``; None (a member, a fold) records
+        an empty fingerprint and no code.
 
     Returns
     -------
@@ -531,8 +548,9 @@ def write_walk_forward_run(
     cv_mean : dict
         The fold means of the metrics; NaN and inf become null.
     provenance : mapping, optional
-        The top unit's ``data_fingerprint`` and ``code``; None (a member, a
-        fold) records an empty fingerprint and no code.
+        The top unit's ``data_fingerprint`` and ``code``, and for an
+        assembled unit ``assembled_from``; None (a member, a fold) records
+        an empty fingerprint and no code.
 
     Returns
     -------

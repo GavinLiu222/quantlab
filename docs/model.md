@@ -621,6 +621,26 @@ The combination rule is the hook `_combine(predictions)`: it receives one predic
 
 `_combine` sees only the predictions. A rule whose parameters are learned during training, such as weights fitted on the validation segment, is not supported yet.
 
+### Assemble models trained separately
+
+`assemble(runs, save_dir=None)` and `assemble_cv(runs, save_dir=None)` make an ensemble unit out of models that were trained on their own, without training anything again. They exist for members that cannot train in one process, such as an XGBoost regressor and a GATs network over a panel too large to hold twice, or seeds trained one run at a time. Run k is member k's own trained unit: for `assemble` a `"model"` unit, for `assemble_cv` the member's walk-forward run (`train_cv`). Each run is copied into `member_{k}/` of a new trial directory under `save_dir` (by default `model_save_dir`), so the result opens and loads with its sources deleted, and `load`, `check_checkpoint` and a backtester's `run_cv` read it as if `train()` or `train_cv()` had written it. Assembled and trained, it is the same ensemble.
+
+Everything is checked before anything is written. Run k must be a model, not an ensemble (to combine an ensemble's models, pass its members one by one), of member k's class, trained on member k's variables (`check_checkpoint`) and, for a `SeedEnsemble`, under member k's seed. The runs must test on the same window, and none may have fitted a bar of it; for `assemble_cv` they must also have the same folds. The ensemble's training window covers its members', as it does for a trained ensemble.
+
+Only the test segment is scored: the members' saved `test_predictions.zarr` are combined by `_combine` and each label is scored against the labels of the first member predicting it, read over the test window alone, so no feature is read. The unit's metrics are the `test_*` ones (`cv_mean` averages those), and `ic_series.csv` and `test_predictions.zarr` are written as for a trained ensemble. The top unit's `data_fingerprint` is each source run's, keyed by the component's path within the ensemble, its `code` that of the code assembling it, and `assembled_from` names each source run's directory and code record.
+
+```python
+>>> xgb_cv = xgb.collect().train_cv(train_periods=100)    # one process
+>>> mlp_cv = mlp.collect().train_cv(train_periods=100)    # another
+>>> both = ModelEnsemble([xgb, mlp]).assemble_cv([xgb_cv.path, mlp_cv.path], "checkpoints")
+>>> both.kind, both.folds[0].kind, [m.seed for m in both.folds[0].members]
+('walk_forward', 'ensemble', [None, None])
+>>> sorted(both.folds[0].metrics)
+['test_ic', 'test_icir', 'test_member_correlation', 'test_rank_ic', 'test_rank_icir']
+>>> [entry["directory"] for entry in both.assembled_from] == [str(xgb_cv.path), str(mlp_cv.path)]
+True
+```
+
 ### Train a torch model
 
 A torch head (`TorchModel`) is fed through standard PyTorch components. The base class builds a *training panel* of torch tensors from the collected data: features `x` (`[T, S, F]`), the training target (`[T, S, L]`), its `mask` (`[T, S]`), the raw labels `y_raw` and `present` (`[T, S]`, a cell with at least one finite feature), with the timestamps and symbols. The head's `_dataset(panel, bars, training)` returns a `torch.utils.data.Dataset` over some bars and `_dataloader(dataset, training)` batches it. The default dataset, `CrossSectionDataset` in `quantlab.model.torch_data`, gives one item per bar: the bar's *cross-section*, meaning its present symbols, each carrying its own last `window_bars` bars of features. The network then sees `[S_t, N, F]`, where the number of symbols S_t changes from bar to bar, so it must not depend on the order or the number of symbols. A symbol that joins after training still gets a prediction, and a symbol whose label is missing stays in the input as context.
