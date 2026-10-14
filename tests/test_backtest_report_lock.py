@@ -281,6 +281,10 @@ def scenarios(tmp_path: Path, cv_project) -> dict[str, tuple[Path, list[Path]]]:
 #: losing name-days). The metrics did not change.
 #: Re-recorded when the cut-off buttons became a stepless slider over each bar's
 #: ranked contributions. The metrics did not change.
+#: The two run_cv runs were re-recorded when a fold became the stitched account
+#: over its test segment (ADR 0033): their ``stitched`` blocks are unchanged, the
+#: report differs in its run_cv note alone, and each fold's metrics are now cut
+#: from the stitched curve.
 EXPECTED: dict[str, str] = {
     "run_long_only_benchmark/report.html": "67cd735b883bd7d9155032203396e0d25d3e7afbe906f734ca75bf7540cd9d9b",
     "run_long_only_benchmark/metrics.json": "b4901c705f203ce3a769b40c357ce8a444d16df4488492ab2abf4f03e2697be6",
@@ -290,23 +294,24 @@ EXPECTED: dict[str, str] = {
     "run_weights_benchmark/metrics.json": "aaf9c98eca07ec66a8f01999e3a6de56221133d6cb07b0a9dd8ea175170c84b2",
     "run_weights/report.html": "202dab36b03888b5387c94e68b6ba7c89f7b0a55f7bc1d3fd23a29d45bf9b33e",
     "run_weights/metrics.json": "fbfd860207fe6f7410dba4f91f905b38e9a45739d4c22f7c5d48de5e0b209b73",
-    "run_cv_benchmark/report.html": "5beb90155ba392b3454844986f160942220b8fbb0f1c34f20adce4e502061985",
-    "run_cv_benchmark/metrics.json": "2df35a73119a4f7d4ed32983c76662dbe9b07b552c19169a870ddb79b3a8b3a3",
-    "run_cv/report.html": "b3a1c01d2d0e0f58c4be9cd24bc76bf4e7d3f360dae81dd784b80ffbac64cdc8",
-    "run_cv/metrics.json": "966f1e174eb2b1058c99048b48599fddff839a163a1fb847113bbac7542d6ced",
+    "run_cv_benchmark/report.html": "c80d26bea83d393a3eea975d3d26a6536558cb7ab7f1c5c5805e832dd18fe6c4",
+    "run_cv_benchmark/metrics.json": "5eb6071ba06b6922deb7bf73aaf73915ce3d2c5400d1e0a5126136172eb5b538",
+    "run_cv/report.html": "b3ccb9da1587cba5526614ecb9b54dcdc2f1609a18d3e9d079365d5bb40f390c",
+    "run_cv/metrics.json": "c689af22c94db84dfcfbc21acf48c039ebfc734e79d5a132e9cfecac86a5bbf8",
 }
 
 
 #: The six reports as they were before the Holdings tab (#225), the hashes
 #: recorded for #215. A report written without holdings must still be these
-#: bytes.
+#: bytes; the two run_cv reports differ from them in their run_cv note alone
+#: (ADR 0033).
 WITHOUT_HOLDINGS: dict[str, str] = {
     "run_long_only_benchmark/report.html": "8caaa6219ea786273f1c8a00032708572e0fc572c5f57cd198702279ba330d15",
     "run_long_short_delisting/report.html": "54b3cea2423d40c569b90d5a32a141c8fdcf218c2fe83b3b34ee45a06ad5907f",
     "run_weights_benchmark/report.html": "dd91414c66fc9013ceb3b93b5ae80465ea2404684ac6e0427fe83859977888fe",
     "run_weights/report.html": "dd2b7cc3db804b68b16afbf9020ac0aa963a053e18c1bcca717a80c6476b056d",
-    "run_cv_benchmark/report.html": "100bcf7d9935a5e8f090e7d6700214ffc1f9d88e4062db923b8b286d8122203f",
-    "run_cv/report.html": "cbd7443db5f3d1384a370e01f2d85dc4b3443a9f961c9afb7fe82e502f67d89a",
+    "run_cv_benchmark/report.html": "b6c78dd64783a5683ee6909989a1ad7fe4872c539daf78d11fefaa1a7e5acbea",
+    "run_cv/report.html": "ab69ebb37987d411837f2bd24d119c492859df1891c7cdd80e525721325ad74b",
 }
 
 

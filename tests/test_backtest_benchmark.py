@@ -429,7 +429,6 @@ def test_run_cv_compares_the_stitched_curve_and_every_fold(tmp_path, expanding):
         (relative[-1] - 1.0) * 100.0, rel=1e-9
     )
     for record in cv.folds:
-        assert record["benchmark"] is not None
         assert "relative" in record["metrics"]
     run = BacktestRun.open(cv.run_dir)
     assert [fold.index for fold in run.folds] == [record["fold"] for record in cv.folds]
@@ -444,8 +443,7 @@ def test_run_cv_compares_the_stitched_curve_and_every_fold(tmp_path, expanding):
     for record in cv.folds:
         training = record["metrics"]["training_window"]
         assert f"fold {record['fold']} training {training[0]} .. {training[1]}</title>" in page
-        traded = record["simulation"].value.timestamp.values
-        assert f"fold {record['fold']} traded {_day(traded[0])} .. {_day(traded[-1])}</title>" in page
+        assert f"fold {record['fold']} traded {record['test_start']} .. {record['test_end']}</title>" in page
     kind = "expanding" if expanding else "sliding"
     assert f"{len(cv.folds)} folds, {kind} training window" in page
 

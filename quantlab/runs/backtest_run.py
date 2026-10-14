@@ -18,7 +18,7 @@ written last. Its kinds are ``"run"``, ``"run_cv"``, ``"run_weights"`` and
   by its declaration without importing the backtester class), the data
   fingerprint (what the run's ``DataRecorder`` recorded: every dataset or
   factor store it read, by component path; a ``run_cv`` run's is its stitched
-  pass, each fold child run holds its fold's), ``code`` (the backtester tree's
+  pass, each fold child run what its fold's prediction read), ``code`` (the backtester tree's
   code record, ``quantlab.runs.record``), ``trained_run`` (the trained unit
   the backtest used: the one trained in train mode, the checkpoint's in load
   mode, the walk-forward unit for ``run_cv``; none for ``run_weights``) and
@@ -26,8 +26,10 @@ written last. Its kinds are ``"run"``, ``"run_cv"``, ``"run_weights"`` and
 - The weights, the equity curve, the holdings (when the engine supplies
   them), the metrics, the settlements, the report,
   the prediction panel (a run with a model), the per-bar factor attribution
-  (a run with a risk model) and each fold's own files are files of the
-  directory, named by this module only.
+  (a run with a risk model) and each fold's metrics are files of the
+  directory, named by this module only. A fold is the run's stitched account
+  over its test segment (ADR 0033): its weights, equity, holdings and
+  settlements are read from the run, cut to the fold's window.
 
 ``BacktestRun.open`` (or ``quantlab.runs.directory.open_run``) reads a run:
 typed properties, readers that return loaded objects, ``trained_run()``,
@@ -70,7 +72,7 @@ from quantlab.runs.directory import (
 )
 from quantlab.runs.trained_run import TrainedRun
 from quantlab.utils.atomic import write_json_atomically
-from quantlab.utils.date_range import bar_label
+from quantlab.utils.date_range import bar_label, label_ns
 from quantlab.execution.rules import ExecutionSettings
 from quantlab.utils.jsonable import to_jsonable
 
@@ -120,33 +122,29 @@ class Annualization:
 class FoldArtifacts:
     """What a ``run_cv`` run writes for one fold, a child run of kind ``"fold"``.
 
+    A fold is the run's stitched account over the fold's test segment (ADR
+    0033): its weights, equity, holdings and settlements are the run's, cut
+    to ``window``, and are not written again.
+
     Attributes
     ----------
     index : int
         The fold's index in the walk.
-    weights, equity : xarray.Dataset
-        The fold's own simulated weights and equity curve.
-    settlements : list
-        The fold's settlements.
+    window : tuple of str
+        The fold's first and last bar, as bar labels.
     metrics : dict
         The fold's metrics.
     trained_run : Path or str
         The fold's trained unit.
     data_fingerprint : Mapping
-        What the fold read, as its ``DataRecorder`` recorded it.
-    holdings : xarray.Dataset or None
-        The fold's own simulated holdings, a ``holding`` variable on
-        ``(timestamp, symbol)``; None when the engine supplies none.
+        What the fold's prediction read, as its ``DataRecorder`` recorded it.
     """
 
     index: int
-    weights: xr.Dataset
-    equity: xr.Dataset
-    settlements: list
+    window: tuple[str, str]
     metrics: dict
     trained_run: Path | str
-    data_fingerprint: Mapping = field(default_factory=dict)
-    holdings: xr.Dataset | None = None
+    data_fingerprint: Mapping
 
 
 def write_backtest_run(
@@ -252,20 +250,15 @@ def write_backtest_run(
         for fold in folds:
             directory = staging / _FOLDS_DIR / f"fold_{fold.index}"
             directory.mkdir(parents=True)
-            _write_simulation(
-                directory,
-                fold.weights,
-                fold.equity,
-                fold.settlements,
-                fold.metrics,
-                fold.holdings,
+            write_json_atomically(
+                directory / _METRICS_FILE, to_jsonable(fold.metrics), indent=2
             )
             write_record(
                 directory,
                 "fold",
                 {
                     "index": fold.index,
-                    "window": _window(fold.equity),
+                    "window": list(fold.window),
                     "trained_run": _unit(fold.trained_run),
                     "data_fingerprint": dict(fold.data_fingerprint),
                 },
@@ -381,7 +374,7 @@ class BacktestRun:
         How its statistics were annualized.
     data_fingerprint : dict
         What the run read, by component path, as its ``DataRecorder``
-        recorded it: a ``run_cv`` run's stitched pass, a fold's own reads.
+        recorded it: a ``run_cv`` run's stitched pass, what a fold's prediction read.
     code : dict or None
         The code record of the backtester's tree when the run was written
         (``git``, ``modules``, ``libraries``); a fold's is its run's.
@@ -680,25 +673,31 @@ class BacktestRun:
     def weights(self) -> xr.Dataset:
         """The simulated target weights, a ``weight`` panel on ``(timestamp, symbol)``.
 
+        A fold's are its ``run_cv`` run's, cut to the fold's window.
+
         Examples
         --------
         >>> BacktestRun.open(run_dir).weights()["weight"].dims
         ('timestamp', 'symbol')
         """
-        return XrBackend().read(self.path / _WEIGHTS_FILE).data.load()
+        return self._panel(_WEIGHTS_FILE)
 
     def equity(self) -> xr.Dataset:
         """The equity curve: ``value`` and ``returns``, plus the benchmark's when one ran.
+
+        A fold's is its ``run_cv`` run's, cut to the fold's window.
 
         Examples
         --------
         >>> sorted(BacktestRun.open(run_dir).equity().data_vars)
         ['returns', 'value']
         """
-        return XrBackend().read(self.path / _EQUITY_FILE).data.load()
+        return self._panel(_EQUITY_FILE)
 
     def holdings(self) -> xr.Dataset | None:
         """The simulated holdings, or None for a run written without them.
+
+        A fold's are its ``run_cv`` run's, cut to the fold's window.
 
         A ``holding`` panel on ``(timestamp, symbol)``: each symbol's value
         at each bar's close over the book's value, cash included, on every
@@ -709,8 +708,9 @@ class BacktestRun:
         >>> BacktestRun.open(run_dir).holdings()["holding"].dims
         ('timestamp', 'symbol')
         """
-        path = self.path / _HOLDINGS_FILE
-        return XrBackend().read(path).data.load() if path.exists() else None
+        if not (self._recipe_dir / _HOLDINGS_FILE).exists():
+            return None
+        return self._panel(_HOLDINGS_FILE)
 
     @property
     def has_predictions(self) -> bool:
@@ -757,12 +757,33 @@ class BacktestRun:
     def settlements(self) -> list:
         """The delisted holdings settled into cash during the simulation.
 
+        A fold's are its ``run_cv`` run's settled inside the fold's window.
+
         Examples
         --------
         >>> BacktestRun.open(run_dir).settlements()
         []
         """
-        return json.loads((self.path / _SETTLEMENTS_FILE).read_text(encoding="utf-8"))
+        path = self._recipe_dir / _SETTLEMENTS_FILE
+        settlements = json.loads(path.read_text(encoding="utf-8"))
+        if self.kind != "fold":
+            return settlements
+        first, last = self._window_ns()
+        return [
+            settlement for settlement in settlements
+            if first <= label_ns(settlement["settlement_timestamp"]) <= last
+        ]
+
+    def _window_ns(self) -> tuple:
+        """The window's first and last bar as nanosecond ``datetime64``."""
+        return label_ns(self.window[0]), label_ns(self.window[1])
+
+    def _panel(self, name: str) -> xr.Dataset:
+        """Read the panel ``name`` of the run; a fold's is its run's, cut to the fold's window."""
+        data = XrBackend().read(self._recipe_dir / name).data
+        if self.kind == "fold":
+            data = data.sel(timestamp=slice(*self._window_ns()))
+        return data.load()
 
     def report(self) -> str:
         """The run's self-contained HTML report, as text.

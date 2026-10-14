@@ -245,7 +245,7 @@ def test_an_expanding_walk_forward_unit_replays_with_run_cv(tmp_path):
     for record in result.folds:
         first = BT_TRAIN_PERIODS + record["fold"] * BT_TEST_PERIODS
         np.testing.assert_array_equal(
-            record["weights"].timestamp.values.astype("datetime64[ns]"),
+            record["predictions"].timestamp.values.astype("datetime64[ns]"),
             stamps[first : first + BT_TEST_PERIODS].astype("datetime64[ns]"),
         )
         assert record["checkpoint"] == str(cv.folds[record["fold"]].checkpoint)

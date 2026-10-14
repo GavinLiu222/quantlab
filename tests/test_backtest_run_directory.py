@@ -252,9 +252,12 @@ def test_a_run_cv_run_opens_with_its_folds_as_child_runs(tmp_path):
     for fold, record, unit in zip(run.folds, result.folds, walk.folds):
         assert fold.kind == "fold"
         assert fold.window == (record["test_start"], record["test_end"])
-        xr.testing.assert_identical(fold.weights(), record["weights"])
+        # A fold is the stitched account over its window (ADR 0033).
+        xr.testing.assert_identical(
+            fold.weights(),
+            result.weights.sel(timestamp=slice(record["test_start"], record["test_end"])),
+        )
         assert fold.metrics() == _json(record["metrics"])
-        assert fold.settlements() == _json(record["simulation"].settlements)
         assert fold.trained_run() == TrainedRun.open(unit.path)
         assert fold.market == run.market and fold.execution == run.execution
         assert BacktestRun.open(fold.path) == fold.__class__.open(fold.path)

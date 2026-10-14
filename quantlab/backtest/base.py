@@ -408,15 +408,16 @@ class CVBacktestResult:
 
     ``run_dir`` is ``None`` when ``config.output_dir`` is ``None``.
     ``folds`` holds one record per replayed fold: the fold's index
-    ``fold``, its fitted training and test dates and ``checkpoint`` plus that fold's own
-    ``predictions``, ``weights``, ``simulation`` and ``metrics`` from an
-    independent per-fold simulation. ``weights`` are built in one pass over
-    the concatenated fold predictions, as one account whose holdings carry
-    across fold boundaries, and ``simulation`` is the single continuous
-    simulation of them. ``metrics`` mirrors ``metrics.json`` with the keys ``stitched``,
+    ``fold``, its fitted training and test dates and ``checkpoint``, the
+    ``predictions`` of its checkpoint over its test segment, its
+    ``metrics`` and ``data_fingerprint`` (what its prediction read).
+    ``weights`` are built in one pass over the concatenated fold
+    predictions, as one account whose holdings carry across fold
+    boundaries, and ``simulation`` is the single continuous simulation of
+    them; a fold's metrics are that account over its test segment (ADR
+    0033). ``metrics`` mirrors ``metrics.json`` with the keys ``stitched``,
     ``folds`` and ``notes``. ``benchmark`` is the buy-and-hold benchmark
-    simulated over the stitched span, or ``None`` without a benchmark; each
-    fold record also carries its own ``benchmark``.
+    simulated over the stitched span, or ``None`` without a benchmark.
 
     Examples
     --------
@@ -962,9 +963,9 @@ class BaseBacktester(Component, ABC):
         folds whose test segment lies inside the backtest window, and checks
         on the price calendar that those test segments are contiguous and
         non-overlapping before any model is loaded (a stitched curve with a
-        gap or an overlap corresponds to no real trading path). Each fold is
-        then backtested on its own test segment with its own checkpoint, and
-        its in-sample split uses that fold's training dates. A label looks a
+        gap or an overlap corresponds to no real trading path). Each fold's
+        checkpoint then predicts its own test segment, and the fold's
+        in-sample split uses that fold's training dates. A label looks a
         few bars ahead (its *lookahead*), so the training labels of a fold
         already saw the bars after ``train_end``. ``train_cv`` purges those
         bars from every training window and each fold records its fitted
@@ -978,10 +979,13 @@ class BaseBacktester(Component, ABC):
         the rebalance schedule runs on from the first bar; the weights are
         simulated once, with capital carried across as well, and the
         ``stitched`` metrics record the pass's ``portfolio_construction``.
-        Per-fold metrics still come from the independent per-fold backtests.
-        Each fold records the data it reads, compared with that fold's
-        expected fingerprint (the warning names the fold); the run's own
-        fingerprint is what the stitched pass reads.
+        A fold is that account over its test segment, never a second account
+        started from cash (ADR 0033): its metrics are the stitched curve's
+        over its bars, its first bar's return included, so the folds'
+        returns chain to the stitched total. Each fold records the data its
+        prediction reads, compared with that fold's expected fingerprint (the
+        warning names the fold); the run's own fingerprint is what the
+        stitched pass reads.
 
         Returns
         -------
@@ -1039,7 +1043,7 @@ class BaseBacktester(Component, ABC):
         return result
 
     def _replay_cv(self) -> CVBacktestResult:
-        """Backtest every fold, simulate the stitched weights and persist; see ``run_cv``."""
+        """Predict every fold, decide and simulate the stitched account and persist; see ``run_cv``."""
         self._check_label_delays()
         self._fingerprints = {}
         # run_cv only loads; never carry a checkpoint trained by an earlier run().
@@ -1056,28 +1060,24 @@ class BaseBacktester(Component, ABC):
 
         expected_folds = self.expected_fold_fingerprints or {}
         records: list[dict] = []
+        fold_bars: list[np.ndarray] = []
+        splits: list[dict] = []
         for fold in folds:
             self._load_model_checkpoint(fold["checkpoint"])
+            # A fold only predicts; the portfolio is decided once, on the stitched account.
             with self._recorder(
                 expected_folds.get(fold["fold"]),
                 f"{self.class_name} fold {fold['fold']}",
             ) as recorder:
-                window = self._backtest_window(
-                    fold["test_start"],
-                    fold["test_end"],
-                    calendar,
-                    *fold["_train_bounds"],
-                    # A fold's own curve is not attributed; the stitched one is.
-                    attribute=False,
-                )
+                predictions = self._predict_window(fold["test_start"], fold["test_end"])
+            first, last = self._fold_span(fold, calendar)
+            bars = calendar[first : last + 1]
+            fold_bars.append(bars)
+            splits.append(self._window_split(bars, calendar, *fold["_train_bounds"]))
             records.append(
                 {
                     **self._fold_summary(fold),
-                    "predictions": window.predictions,
-                    "weights": window.weights,
-                    "simulation": window.simulation,
-                    "benchmark": window.benchmark,
-                    "metrics": window.metrics,
+                    "predictions": predictions.reindex(timestamp=bars),
                     "data_fingerprint": recorder.records,
                 }
             )
@@ -1112,6 +1112,8 @@ class BaseBacktester(Component, ABC):
                 stitched_predictions = stitched_predictions.reindex(
                     symbol=stitched_prices.symbol.values
                 )
+                for record, bars in zip(records, fold_bars):
+                    record["predictions"] = stitched_predictions.sel(timestamp=bars)
                 stitched_delisted = self._delisting_marks(stitched_prices)
                 stitched_weights = self._generate_signals(
                     stitched_predictions, stitched_prices, stitched_delisted
@@ -1126,7 +1128,7 @@ class BaseBacktester(Component, ABC):
                     if stitched_benchmark_prices is None
                     else self._simulate_benchmark(stitched_benchmark_prices)
                 )
-                stitched_split = self._stitched_split(stitched_prices.timestamp.values, records)
+                stitched_split = self._stitched_split(stitched_prices.timestamp.values, splits)
                 stitched_metrics = self._compute_metrics(
                     stitched_simulation, stitched_benchmark, stitched_split
                 )
@@ -1140,6 +1142,14 @@ class BaseBacktester(Component, ABC):
                     stitched_metrics["factor_attribution"] = self._factor_attribution(
                         stitched_prices, stitched_simulation, stitched_split
                     )
+                for record, bars, split in zip(records, fold_bars, splits):
+                    # A fold is the stitched account over its test segment (ADR 0033).
+                    record["metrics"] = self._compute_metrics(
+                        stitched_simulation,
+                        stitched_benchmark,
+                        split,
+                        within=self._label_pair(bars[[0, -1]]),
+                    )
         finally:
             # A failed pass still reports what it had read before failing.
             self._fingerprints = recorder.records
@@ -1147,9 +1157,9 @@ class BaseBacktester(Component, ABC):
         notes = self._report_notes() + [
             f"run_cv: the stitched curve is one continuous simulation over folds "
             f"{[fold['fold'] for fold in folds]} ({first_start}..{last_end}), "
-            f"capital and holdings carried across fold boundaries; per-fold "
-            f"metrics come from "
-            f"separate per-fold simulations. Each fold's first label-lookahead "
+            f"capital and holdings carried across fold boundaries; each fold's "
+            f"metrics are this curve over the fold's test segment, its first bar's "
+            f"return included. Each fold's first label-lookahead "
             f"bars are in-sample (metrics stitched.in_sample_ranges) and are not "
             f"shaded in this report."
         ]
@@ -1171,6 +1181,7 @@ class BaseBacktester(Component, ABC):
             predictions=stitched_predictions,
             records=records,
             units=[fold["_unit"] for fold in folds],
+            fold_bars=fold_bars,
         )
 
         return CVBacktestResult(
@@ -1662,6 +1673,23 @@ class BaseBacktester(Component, ABC):
             )
         return selected
 
+    @staticmethod
+    def _fold_span(fold: dict, calendar: np.ndarray) -> tuple[int, int]:
+        """Return the (first, last) indices of ``fold``'s test segment on the sorted ``calendar``.
+
+        The first bar is the first one on or after ``test_start``'s day, the
+        last the last one on ``test_end``'s day, so an intraday fold keeps
+        every bar of its last day; ``first > last`` when it has none.
+        """
+        cal = np.asarray(calendar).astype("datetime64[ns]")
+        day_start = np.datetime64(fold["test_start"], "D").astype("datetime64[ns]")
+        day_after_end = (np.datetime64(fold["test_end"], "D") + np.timedelta64(1, "D")).astype(
+            "datetime64[ns]"
+        )
+        first = int(np.searchsorted(cal, day_start, side="left"))
+        last = int(np.searchsorted(cal, day_after_end, side="left")) - 1
+        return first, last
+
     def _assert_contiguous_folds(self, folds: list[dict], calendar: np.ndarray) -> None:
         """Check on the price calendar that the fold test segments abut exactly.
 
@@ -1678,17 +1706,9 @@ class BaseBacktester(Component, ABC):
             On a gap, an overlap, or a fold with no price bars;
             the message names the folds and dates involved.
         """
-        cal = np.asarray(calendar).astype("datetime64[ns]")
-        one_day = np.timedelta64(1, "D")
-
         def _span(fold: dict) -> tuple[int, int]:
             """Return the (first, last) calendar indices of ``fold``'s test segment."""
-            day_start = np.datetime64(fold["test_start"], "D").astype("datetime64[ns]")
-            day_after_end = (np.datetime64(fold["test_end"], "D") + one_day).astype(
-                "datetime64[ns]"
-            )
-            first = int(np.searchsorted(cal, day_start, side="left"))
-            last = int(np.searchsorted(cal, day_after_end, side="left")) - 1
+            first, last = self._fold_span(fold, calendar)
             if first > last:
                 raise ValueError(
                     f"{self.class_name}: fold {fold['fold']} test segment "
@@ -1728,22 +1748,19 @@ class BaseBacktester(Component, ABC):
         calendar: np.ndarray,
         train_start,
         train_end,
-        *,
-        attribute: bool = True,
     ) -> _BacktestWindow:
         """Run every step of one backtest window without persisting anything.
 
-        Shared by ``run()`` and by each fold of ``run_cv()``: request the
-        factor panels for the window and predict, load the prices, reindex
+        The steps of ``run()``: request the factor panels for the window and
+        predict, load the prices, reindex
         the predictions onto the price axes (symbols without a prediction
         become NaN and are never selected), split the window against the
         fitted training window ``[train_start, train_end]`` plus the labels'
         lookahead, generate and check the weights, simulate, simulate
         the benchmark (when one is configured, on the same bars) and compute
         the metrics, with the ``attribution`` block, and the
-        ``factor_attribution`` block when the config has a ``risk_model``,
-        unless ``attribute`` is False (a ``run_cv()`` fold). The model must
-        already be prepared.
+        ``factor_attribution`` block when the config has a ``risk_model``.
+        The model must already be prepared.
 
         Raises
         ------
@@ -1775,8 +1792,7 @@ class BaseBacktester(Component, ABC):
         delisted = self._delisting_marks(prices)
         weights = self._generate_signals(predictions, prices, delisted)
         self._assert_weights_contract(weights, prices)
-        if attribute:
-            self._check_risk_model(prices.timestamp.values)
+        self._check_risk_model(prices.timestamp.values)
 
         with Timer(f"{self.class_name}: simulate"):
             simulation = self._simulate(weights, prices, delisted=delisted)
@@ -1787,14 +1803,13 @@ class BaseBacktester(Component, ABC):
         )
         metrics = self._compute_metrics(simulation, benchmark, split)
         metrics.update(self._signal_metrics())
-        if attribute:
-            metrics["attribution"] = self._attribution(
-                predictions, prices, weights, simulation, benchmark, delisted
+        metrics["attribution"] = self._attribution(
+            predictions, prices, weights, simulation, benchmark, delisted
+        )
+        if self.config.risk_model is not None:
+            metrics["factor_attribution"] = self._factor_attribution(
+                prices, simulation, split
             )
-            if self.config.risk_model is not None:
-                metrics["factor_attribution"] = self._factor_attribution(
-                    prices, simulation, split
-                )
         return _BacktestWindow(
             predictions=predictions,
             prices=prices,
@@ -2595,6 +2610,8 @@ class BaseBacktester(Component, ABC):
         simulation: SimulationResult,
         benchmark: SimulationResult | None,
         split: dict | None,
+        *,
+        within: tuple[str, str] | None = None,
     ) -> dict:
         """Compute the whole, in-sample and out-of-sample metric blocks.
 
@@ -2618,26 +2635,52 @@ class BaseBacktester(Component, ABC):
         ``run_weights()`` run, which has no training window) computes the
         ``whole`` blocks only: no ``in_sample`` or ``out_of_sample`` key
         appears at any level and no split key is added.
+
+        ``within`` (a pair of inclusive bar labels) measures a stretch of
+        ``simulation`` instead of all of it: a ``run_cv()`` fold, the stitched
+        account over its test segment (ADR 0033). Its ``whole`` is then the
+        ``_return_stats``, ``_period_record_stats`` and win rates of that
+        stretch, its first bar's return included, so the folds' returns
+        chain to the stitched total; ``execution`` lists the orders rejected
+        on its fill bars and has no ``max_target_deviation`` (the stitched
+        block's covers every bar).
         """
-        whole = self._engine_stats(simulation)
-        whole.update(
-            self._turnover_stats(self._turnover(simulation), simulation.bar_interval)
-        )
-        # The number of fills: position-level trade counts do not say how
-        # often we traded. A run with no fills has no `order` dimension, so
-        # use `.sizes.get` rather than a subscript that would raise.
-        whole["Total Orders"] = int(simulation.orders.sizes.get("order", 0))
         timestamps = simulation.value.timestamp.values
-        whole_range = [
-            (self._bar_label(timestamps[0]), self._bar_label(timestamps[-1]))
-        ]
+        if within is None:
+            whole = self._engine_stats(simulation)
+            whole.update(
+                self._turnover_stats(self._turnover(simulation), simulation.bar_interval)
+            )
+            # The number of fills: position-level trade counts do not say how
+            # often we traded. A run with no fills has no `order` dimension, so
+            # use `.sizes.get` rather than a subscript that would raise.
+            whole["Total Orders"] = int(simulation.orders.sizes.get("order", 0))
+            whole_range = [
+                (self._bar_label(timestamps[0]), self._bar_label(timestamps[-1]))
+            ]
+            rejected = list(simulation.rejected_orders)
+            execution = {"max_target_deviation": simulation.max_target_deviation}
+        else:
+            whole_range = [within]
+            whole = {
+                **self._return_stats(simulation, whole_range),
+                **self._period_record_stats(simulation, whole_range),
+            }
+            rejected = [
+                order
+                for order in simulation.rejected_orders
+                if backtest_stats.in_ranges(
+                    [date_range.label_ns(order["fill_timestamp"])], whole_range
+                )[0]
+            ]
+            execution = {}
         whole.update(self._win_rates(simulation, whole_range))
         metrics: dict = {
             "whole": whole,
             "execution": {
-                "rejected_order_count": len(simulation.rejected_orders),
-                "rejected_orders": list(simulation.rejected_orders),
-                "max_target_deviation": simulation.max_target_deviation,
+                "rejected_order_count": len(rejected),
+                "rejected_orders": rejected,
+                **execution,
             },
         }
 
@@ -2656,7 +2699,9 @@ class BaseBacktester(Component, ABC):
         if benchmark is not None:
             axis_symbol = self._benchmark_axis_symbol or ""
             metrics["benchmark"] = {
-                "symbol": self._benchmark_display_name(axis_symbol, timestamps[-1]),
+                "symbol": self._benchmark_display_name(
+                    axis_symbol, timestamps[-1] if within is None else within[1]
+                ),
                 "axis_symbol": axis_symbol,
                 "whole": self._return_stats(benchmark, whole_range),
                 **{
@@ -2883,8 +2928,9 @@ class BaseBacktester(Component, ABC):
         """Return the timeline of ``report.html``: ``report_windows`` of this run.
 
         ``records`` are the folds of a ``run_cv()`` run, each with its
-        ``fold`` number, its own ``simulation`` (the bars it traded) and
-        ``metrics`` (its ``training_window`` and ``in_sample_range``).
+        ``fold`` number and ``metrics`` (the first and last bar it traded,
+        ``whole`` ``Start`` and ``End``, its ``training_window`` and
+        ``in_sample_range``).
         """
         folds = None
         if records is not None:
@@ -2893,7 +2939,7 @@ class BaseBacktester(Component, ABC):
                     "fold": record["fold"],
                     "training_window": record["metrics"].get("training_window"),
                     "traded": self._label_pair(
-                        record["simulation"].value.timestamp.values[[0, -1]]
+                        (record["metrics"]["whole"]["Start"], record["metrics"]["whole"]["End"])
                     ),
                     "in_sample_range": record["metrics"].get("in_sample_range"),
                 }
@@ -2913,6 +2959,7 @@ class BaseBacktester(Component, ABC):
         predictions: xr.Dataset | None = None,
         records: Sequence[dict] = (),
         units: Sequence[Path] = (),
+        fold_bars: Sequence[np.ndarray] = (),
     ) -> Path | None:
         """Write a new run directory with every artifact of a run.
 
@@ -2934,9 +2981,10 @@ class BaseBacktester(Component, ABC):
         ``run_cv`` run describes the stitched curve: ``metrics`` holds
         ``stitched``, ``folds`` and ``notes``, the report reads
         ``metrics["stitched"]`` and the fold ``records``, and each record is
-        written as a child run of kind ``"fold"`` (its weights, equity curve,
-        holdings, settlements and metrics), with ``units`` giving each fold's trained
-        unit in record order.
+        written as a child run of kind ``"fold"`` (its metrics and what its
+        prediction read; its curves are the run's over its window, ADR 0033),
+        with ``units`` giving each fold's trained unit and ``fold_bars`` its
+        bars, in record order.
 
         ``report.html`` is self-contained: headline numbers, a timeline
         of the backtest and training windows from ``_report_windows``, the
@@ -3011,15 +3059,12 @@ class BaseBacktester(Component, ABC):
             folds=[
                 FoldArtifacts(
                     index=record["fold"],
-                    weights=record["weights"],
-                    equity=self._equity(record["simulation"], record.get("benchmark")),
-                    settlements=record["simulation"].settlements,
+                    window=self._label_pair(bars[[0, -1]]),
                     metrics=record["metrics"],
                     trained_run=unit,
                     data_fingerprint=record["data_fingerprint"],
-                    holdings=self._holdings(record["simulation"]),
                 )
-                for record, unit in zip(records, units, strict=True)
+                for record, unit, bars in zip(records, units, fold_bars, strict=True)
             ],
         )
 
@@ -3129,9 +3174,9 @@ class BaseBacktester(Component, ABC):
         return PredictionPanel(predictions, label_specs(self.config.model))
 
     def _stitched_split(
-        self, timestamps: np.ndarray, records: list[dict]
+        self, timestamps: np.ndarray, splits: list[dict]
     ) -> dict:
-        """Build the in-sample/out-of-sample split of the stitched curve from the folds.
+        """Build the in-sample/out-of-sample split of the stitched curve from the folds' ``splits``.
 
         The stitched curve is out-of-sample by construction, since each fold
         trades only its own test segment, except for the first bars of each
@@ -3145,15 +3190,15 @@ class BaseBacktester(Component, ABC):
         is produced, because several ranges do not fit one pair.
         """
         in_sample_ranges = [
-            record["metrics"]["in_sample_range"]
-            for record in records
-            if record["metrics"]["in_sample_range"] is not None
+            split["in_sample_range"]
+            for split in splits
+            if split["in_sample_range"] is not None
         ]
         _, out_of_sample = split_ranges(timestamps, in_sample_ranges)
         pieces = [self._label_pair(r) for r in out_of_sample]
         return {
             "training_windows": [
-                record["metrics"]["training_window"] for record in records
+                split["training_window"] for split in splits
             ],
             "in_sample_ranges": in_sample_ranges,
             "out_of_sample_ranges": pieces,

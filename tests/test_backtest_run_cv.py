@@ -33,11 +33,14 @@ What is locked here, and what turns it red:
   backtest window are run.
 - **D-35, the stitched curve.** Its weights come from one pass over the
   concatenated fold predictions and it is ONE continuous simulation, so
-  holdings and capital carry across fold boundaries (#90), while every fold
-  also gets its own backtest that starts flat from `init_cash`.
+  holdings and capital carry across fold boundaries (#90). The portfolio is
+  decided and simulated once: a fold is that account over its test segment,
+  never a second account started from cash (ADR 0033), and its metrics chain
+  to the stitched total.
 - **D-24 / D-35, the run directory.** The top-level artifacts describe the
   stitched curve, and each fold is a child run of kind `fold` (`BacktestRun.folds`,
-  #133) holding its own weights, equity, holdings, settlements and metrics. Results are
+  #133) holding its metrics and what its prediction read; its weights, equity,
+  holdings and settlements are the run's, cut to its window. Results are
   read through `BacktestRun`; run file names appear only where the subject is
   the layout itself (the directory listing) or a record is edited to check a
   refusal (`_edited_project`).
@@ -316,7 +319,7 @@ def test_each_fold_loads_its_own_checkpoint_and_trades_only_its_test_segment(
     for record in result.folds:
         fold = record["fold"]
         np.testing.assert_array_equal(
-            record["weights"].timestamp.values.astype("datetime64[ns]"),
+            record["predictions"].timestamp.values.astype("datetime64[ns]"),
             _test_bars(cv_project, fold),
         )
         assert record["checkpoint"] == cv_project.checkpoints[fold]
@@ -500,20 +503,14 @@ def test_stitched_curve_is_one_continuous_simulation(
 
     result = _backtester(tmp_path, cv_project).run_cv()
 
-    # Every fold simulates once; the stitched pass once with costs and once
-    # without (the attribution's cost part).
-    assert len(calls) == N_FOLDS + 2
-    for fold in range(N_FOLDS):
-        np.testing.assert_array_equal(
-            calls[fold].to_numpy().astype("datetime64[ns]"),
-            _test_bars(cv_project, fold),
-        )
+    # Only the stitched account is simulated (ADR 0033): once with costs and
+    # once without (the attribution's cost part).
+    assert len(calls) == 2
     stitched_bars = cv_project.bars[FIRST_TEST_BAR : LAST_TEST_BAR + 1].astype(
         "datetime64[ns]"
     )
-    np.testing.assert_array_equal(
-        calls[-1].to_numpy().astype("datetime64[ns]"), stitched_bars
-    )
+    for call in calls:
+        np.testing.assert_array_equal(call.to_numpy().astype("datetime64[ns]"), stitched_bars)
     np.testing.assert_array_equal(
         result.simulation.value.timestamp.values.astype("datetime64[ns]"),
         stitched_bars,
@@ -521,19 +518,16 @@ def test_stitched_curve_is_one_continuous_simulation(
 
 
 def test_stitched_capital_is_not_reset_at_fold_boundaries(tmp_path, cv_project):
-    """Fold 1's own simulation starts flat at init_cash; the stitched curve
-    arrives at fold 1 still holding fold 0's last book, so its value moves
-    across the boundary bar. A curve glued from per-fold values, whether reset
-    to init_cash or rescaled to the previous end value, stays flat there."""
+    """The stitched curve arrives at fold 1 still holding fold 0's last book, so
+    its value moves across the boundary bar. A curve glued from per-fold values,
+    whether reset to init_cash or rescaled to the previous end value, stays
+    flat there."""
     result = _backtester(tmp_path, cv_project).run_cv()
 
     stitched = result.simulation.value
-    fold0 = result.folds[0]["simulation"].value
-    fold1 = result.folds[1]["simulation"].value
     boundary = _test_bars(cv_project, 1)[0]
     before = _test_bars(cv_project, 0)[-1]
 
-    assert float(fold1.values[0]) == pytest.approx(INIT_CASH)
     assert abs(float(stitched.sel(timestamp=boundary)) - INIT_CASH) > 1.0
     assert (
         abs(
@@ -542,29 +536,37 @@ def test_stitched_capital_is_not_reset_at_fold_boundaries(tmp_path, cv_project):
         )
         > 1e-6
     )
-    # Until the first boundary the stitched path IS fold 0's path.
-    np.testing.assert_allclose(
-        stitched.values[:TEST_PERIODS], fold0.values, rtol=1e-12
-    )
 
 
-def test_stitched_weights_equal_the_concatenated_fold_weights(tmp_path, cv_project):
+def test_a_folds_metrics_are_the_stitched_account_over_its_test_segment(tmp_path, cv_project):
+    """ADR 0033: a fold's return runs from the bar before its first test bar
+    (``init_cash`` for the first fold) to its last, so the folds' returns
+    chain to the stitched total."""
     result = _backtester(tmp_path, cv_project).run_cv()
+    value = result.simulation.value
 
-    expected = xr.concat([record["weights"] for record in result.folds], dim="timestamp")
-    xr.testing.assert_identical(result.weights, expected)
+    chained = 1.0
+    for record in result.folds:
+        bars = _test_bars(cv_project, record["fold"])
+        whole = record["metrics"]["whole"]
+        position = int(np.flatnonzero(value.timestamp.values == bars[0])[0])
+        start = INIT_CASH if position == 0 else float(value.values[position - 1])
+        end = float(value.sel(timestamp=bars[-1]))
+        assert whole["Total Return [%]"] == pytest.approx((end / start - 1.0) * 100.0)
+        assert pd.Timestamp(whole["Start"]) == pd.Timestamp(bars[0])
+        assert pd.Timestamp(whole["End"]) == pd.Timestamp(bars[-1])
+        chained *= 1.0 + whole["Total Return [%]"] / 100.0
+    stitched = result.metrics["stitched"]["whole"]["Total Return [%]"]
+    assert (chained - 1.0) * 100.0 == pytest.approx(stitched)
 
 
 def test_run_cv_stitches_its_folds_on_the_valuation_basis(tmp_path, cv_project):
     """#119: run_cv() accepts the valuation basis and stitches as under the
-    fill basis: the stitched weights are the folds' weights, the stitched
-    curve is the weights backtest of those weights on the valuation basis, and
-    it is not the fill basis's curve."""
+    fill basis: the stitched curve is the weights backtest of its weights on
+    the valuation basis, and it is not the fill basis's curve."""
     backtester = _backtester(tmp_path, cv_project, sizing_basis="valuation")
     result = backtester.run_cv()
 
-    expected = xr.concat([record["weights"] for record in result.folds], dim="timestamp")
-    xr.testing.assert_identical(result.weights, expected)
     replayed = backtester.run_weights(result.weights)
     np.testing.assert_array_equal(replayed.simulation.value.values, result.simulation.value.values)
     by_open = _backtester(tmp_path, cv_project).run_cv()
@@ -636,19 +638,24 @@ def test_run_cv_run_directory_contents(tmp_path, cv_project):
         run.equity()["value"].values, result.simulation.value.values
     )
 
-    # --- per-fold child runs ------------------------------------------------
+    # --- per-fold child runs: the stitched account cut to each fold (ADR 0033) --
     assert run.kind == "run_cv"
     assert all(fold.predictions() is None for fold in run.folds)
     assert [fold.index for fold in run.folds] == [record["fold"] for record in result.folds]
     for fold, record in zip(run.folds, result.folds):
         assert fold.kind == "fold"
-        np.testing.assert_array_equal(
-            fold.weights()["weight"].values, record["weights"]["weight"].values
+        assert {p.name for p in fold.path.iterdir()} == {"run.json", "metrics.json"}
+        bars = _test_bars(cv_project, record["fold"])
+        assert fold.window == (_day(bars[0]), _day(bars[-1]))
+        xr.testing.assert_identical(fold.weights(), run.weights().sel(timestamp=bars))
+        xr.testing.assert_identical(fold.equity(), run.equity().sel(timestamp=bars))
+        assert fold.settlements() == [
+            settlement for settlement in run.settlements()
+            if bars[0] <= np.datetime64(pd.Timestamp(settlement["settlement_timestamp"]), "ns") <= bars[-1]
+        ]
+        assert fold.metrics()["whole"]["Total Return [%]"] == pytest.approx(
+            record["metrics"]["whole"]["Total Return [%]"]
         )
-        np.testing.assert_array_equal(
-            fold.equity()["value"].values, record["simulation"].value.values
-        )
-        assert len(fold.settlements()) == len(record["simulation"].settlements)
 
     # --- metrics -------------------------------------------------------------
     metrics = run.metrics()
@@ -665,7 +672,7 @@ def test_run_cv_run_directory_contents(tmp_path, cv_project):
         assert "Total Return [%]" in entry["metrics"]["whole"]
     assert metrics["stitched"]["in_sample_ranges"] == []
 
-    # --- settlements: the stitched list, each fold's in its child run ----------
+    # --- settlements: the stitched list ------------------------------------------
     assert len(run.settlements()) == len(result.simulation.settlements)
 
     # --- the data fingerprint: the stitched pass on top, each fold's in its run --
@@ -679,6 +686,8 @@ def test_run_cv_run_directory_contents(tmp_path, cv_project):
     ]
     assert [_day(entry["end"]) for entry in window] == [last_day]
     for fold, record in zip(run.folds, result.folds):
+        # A fold only predicts: it records the model's reads, never the prices.
+        assert "price_dataset" not in fold.data_fingerprint
         (factor,) = fold.data_fingerprint["model.factors.0.dataset"]
         assert _day(factor["start"]) < record["test_start"], "the factor range must include warm-up"
         assert _day(factor["end"]) == record["test_end"]
@@ -736,21 +745,14 @@ def _book_identity(run: BacktestRun, simulation, prices: xr.Dataset) -> None:
         )
 
 
-def test_run_cv_writes_holdings_for_the_stitched_run_and_every_fold(tmp_path, cv_project):
+def test_run_cv_writes_holdings_for_the_stitched_run_and_cuts_them_for_every_fold(
+    tmp_path, cv_project
+):
     from tests.test_backtest_holdings import holdings_data
 
     result = _backtester(tmp_path, cv_project).run_cv()
     run = BacktestRun.open(result.run_dir)
     prices = xr.open_zarr(cv_project.dataset_config.zarr_file_path).load()
-
-    # Each fold's holdings are its own simulation's.
-    assert len(run.folds) == N_FOLDS
-    for fold, record in zip(run.folds, result.folds):
-        assert (fold.path / "holdings.zarr").exists()
-        xr.testing.assert_equal(
-            fold.holdings()["holding"], record["simulation"].holdings.rename("holding")
-        )
-        _book_identity(fold, record["simulation"], prices)
 
     # The stitched holdings are the stitched simulation's, with no reset at a
     # fold boundary: the book entering fold 1 is still invested.
@@ -758,7 +760,14 @@ def test_run_cv_writes_holdings_for_the_stitched_run_and_every_fold(tmp_path, cv
     stitched = run.holdings()["holding"]
     boundary = pd.Timestamp(_test_bars(cv_project, 1)[0])
     assert float(np.abs(stitched.sel(timestamp=boundary)).sum()) == pytest.approx(1.0, abs=1e-6)
-    assert float(np.abs(run.folds[1].holdings()["holding"].sel(timestamp=boundary)).sum()) == 0.0
+
+    # Each fold's holdings are the stitched ones over its test segment.
+    assert len(run.folds) == N_FOLDS
+    for fold in run.folds:
+        assert not (fold.path / "holdings.zarr").exists()
+        xr.testing.assert_identical(
+            fold.holdings(), run.holdings().sel(timestamp=_test_bars(cv_project, fold.index))
+        )
 
     # The stitched report's Holdings tab covers every stitched bar, from holdings.zarr.
     data = holdings_data(run.report())
@@ -802,9 +811,15 @@ class _Recorder(PortfolioConstructor):
         return rule.construct(context)
 
 
-def test_the_stitched_pass_hands_each_fold_the_holdings_the_previous_one_left(
+def test_the_rule_decides_each_rebalance_bar_once_on_the_holdings_the_previous_fold_left(
     tmp_path, cv_project
 ):
+    """ADR 0033: the portfolio is constructed once, on the stitched account.
+
+    No fold is decided again from cash: the rule sees each rebalance bar of the
+    stitched span exactly once, and at a fold boundary it is handed the book
+    the previous fold left.
+    """
     _SEEN.clear()
     backtester = _backtester(tmp_path, cv_project)
     backtester.config = dataclasses.replace(
@@ -815,10 +830,8 @@ def test_the_stitched_pass_hands_each_fold_the_holdings_the_previous_one_left(
 
     n_bars = LAST_TEST_BAR - FIRST_TEST_BAR + 1
     rebalances = int(rebalance_mask(n_bars, REBALANCE_PERIODS).sum())
-    stitched, per_fold = _SEEN[-rebalances:], _SEEN[:-rebalances]
+    assert len(_SEEN) == rebalances
     boundary = pd.Timestamp(_test_bars(cv_project, 1)[0])
-    in_fold = next(c for c in per_fold if c.timestamp == boundary)
-    carried = next(c for c in stitched if c.timestamp == boundary)
-    assert (in_fold.current_weights.values == 0).all()
+    carried = next(c for c in _SEEN if c.timestamp == boundary)
     assert float(carried.current_weights.sum()) == pytest.approx(1.0, abs=1e-9)
     assert result.metrics["stitched"]["portfolio_construction"]["failed_bar_count"] == 0

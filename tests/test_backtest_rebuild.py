@@ -702,17 +702,18 @@ def test_run_cv_reports_a_partial_comparison_when_a_fold_raises(
 
 
 def test_run_cv_rebuild_names_the_fold_whose_data_changed(tmp_path, warning_messages):
-    """Each fold child run holds its own record; a rebuild names the fold that changed.
+    """Each fold child run holds what its prediction read; a rebuild names the fold that changed.
 
     Folds test 6 bars each from bar 30 and the factor warms up 5 bars, so a
-    close changed at bar 50 lies in fold 3's test segment and fold 4's
-    warm-up, and in the stitched pass, but in no other fold.
+    close changed at bar 50 lies in the factor reads of fold 3's test segment
+    and fold 4's warm-up, and in the stitched pass's prices, but in no other
+    fold. A fold reads no prices (ADR 0033).
     """
     original = _cv_original(tmp_path)
     first = original.run_cv()
     run = BacktestRun.open(first.run_dir)
     for fold in run.folds:
-        assert set(fold.data_fingerprint) == {"price_dataset", "model.factors.0.dataset"}
+        assert set(fold.data_fingerprint) == {"model.factors.0.dataset"}
     assert set(run.data_fingerprint) == {"price_dataset"}  # the stitched pass
 
     _shift_close(original.config.price_dataset.config, 50, 1.25)

@@ -230,7 +230,6 @@ def test_run_cv_attributes_the_stitched_curve_once(cv):
     # The folds carry no factor attribution, in memory or on disk.
     assert len(cv.folds) > 1
     assert all("factor_attribution" not in fold["metrics"] for fold in cv.metrics["folds"])
-    assert all(record["simulation"].factor_attribution is None for record in cv.folds)
     stores = sorted(p.relative_to(cv.run_dir) for p in Path(cv.run_dir).rglob("factor_attribution.zarr"))
     assert stores == [Path("factor_attribution.zarr")]
 

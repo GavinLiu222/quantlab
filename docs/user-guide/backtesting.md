@@ -480,10 +480,12 @@ the stitched curve is out-of-sample throughout; in the example run
 `in_sample_ranges` is `[]` and `out_of_sample_ranges` is
 `[('2023-05-22', '2024-02-23')]`. `metrics.json` holds a
 `stitched` block (with `in_sample_ranges` and `out_of_sample_ranges` as lists)
-and a `folds` list with every fold's own metrics from its independent
-simulation. Each fold is also a child run of kind `"fold"`
-(`BacktestRun.open(run_dir).folds`) with its own weights, equity curve,
-settlements and metrics and the fold's trained unit.
+and a `folds` list with every fold's metrics: the stitched account over the
+fold's test segment, its first bar's return included, so the folds' returns
+chain to the stitched total (ADR 0033). Each fold is also a child run of kind
+`"fold"` (`BacktestRun.open(run_dir).folds`) with its metrics and the fold's
+trained unit; its weights, equity curve, holdings and settlements are the
+run's, cut to the fold's window.
 
 ## The run directory
 

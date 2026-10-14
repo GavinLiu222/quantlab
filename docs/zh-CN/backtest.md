@@ -129,7 +129,7 @@ def train_cv_project(model, train_periods):
 
 ### 一次运行做了什么
 
-`BaseBacktester.run()` 在 `start_date` 到 `end_date` 的窗口上回测一个模型。它先检查每个标签的延迟是否等于引擎的成交延迟，然后加载 checkpoint（或先训练模型），在窗口上计算特征，为每个标的、每根 bar 预测分数，向具体的回测器类要目标权重，模拟成交，计算指标，最后写出运行目录。`run_cv()` 对一次 `train_cv` 的每一折做同样的事，并把各折拼接成一条曲线。`run_weights(weights)` 不经过模型，直接回测已有的目标权重（见[回测预先算好的权重](#回测预先算好的权重)）。
+`BaseBacktester.run()` 在 `start_date` 到 `end_date` 的窗口上回测一个模型。它先检查每个标签的延迟是否等于引擎的成交延迟，然后加载 checkpoint（或先训练模型），在窗口上计算特征，为每个标的、每根 bar 预测分数，向具体的回测器类要目标权重，模拟成交，计算指标，最后写出运行目录。`run_cv()` 用一次 `train_cv` 的每一折出该折测试段的预测，把各折拼接成一个账户，组合只构建一次。`run_weights(weights)` 不经过模型，直接回测已有的目标权重（见[回测预先算好的权重](#回测预先算好的权重)）。
 
 第一个会话先训练一个 checkpoint，然后回测一条规则：持有分数最高的两个标的，每五根 bar 调仓一次。日志输出到 stderr，这里没有显示。
 
@@ -285,8 +285,8 @@ out_of_sample -5.61 -4.27 13
 | `code` | 运行所用的代码：quantlab 的 git commit 以及已跟踪文件是否有改动，回测器组件树中每个定义了类的模块的 SHA-256（区分框架模块与组件模块，并列出使用它的组件路径），以及 numpy、pandas、xarray、polars、xgboost、torch、vectorbt、KunQuant 和 cvxpy 的版本。 |
 | `trained_run()` | 回测所用的训练单元，即一个 `TrainedRun`：train 模式下是训练出的单元，load 模式下是 checkpoint 所在的单元，`run_cv()` 是 walk-forward 单元，一折则是该折自己的单元；`run_weights()` 为 `None`。 |
 | `weights()`、`equity()` | `(timestamp, symbol)` 上的目标权重；`timestamp` 上的组合 `value` 与每根 bar 的 `returns`，跑了基准时另有 `benchmark_value` 和 `benchmark_returns`。 |
-| `holdings()` | 引擎模拟出的持仓（`holdings.zarr`），`(timestamp, symbol)` 上的 `holding` 面板：每根 bar 收盘时各标的的市值占组合净值（含现金）的比例，覆盖窗口内每根 bar，空头为负，没有持仓处为 0。调仓成交时持仓等于目标权重（扣除成本），之后随价格漂移到下一次调仓；被拒订单和退市结算也体现在其中。`run_cv()` 的每个折各自保存本折的持仓。不带持仓写出的运行（引擎不提供持仓）为 `None`。 |
-| `metrics()` | 与 `result.metrics` 相同的映射，按 JSON 保存的形式：NaN 和无穷大变为 `None`，元组变为列表。每次运行都记录 `execution`（被拒订单和最大目标偏差）。`run()`、`run_cv()` 的每个折以及 `run_cv()` 的拼接过程还记录 `portfolio_construction`：`failed_bar_count` 和 `failed_bars`，即组合构建规则无法决定（优化失败或不可行）、回测改为维持原仓位的调仓 bar，以及组合构建规则报告的事件，例如均值-方差优化器的 `closed_without_risk`（因风险模型没有估计而被平仓的持仓），或 top-n 规则的 `tie_at_cutoff`（截断点落在并列分数中间时被排除的并列标的，说明入选是按标的顺序而不是按分数决定的），带 `count`（所有 bar 上的标的总数）和 `bars`，每个 bar 一条记录，记录列出涉及的标的，`tie_at_cutoff` 则只记数量。 |
+| `holdings()` | 引擎模拟出的持仓（`holdings.zarr`），`(timestamp, symbol)` 上的 `holding` 面板：每根 bar 收盘时各标的的市值占组合净值（含现金）的比例，覆盖窗口内每根 bar，空头为负，没有持仓处为 0。调仓成交时持仓等于目标权重（扣除成本），之后随价格漂移到下一次调仓；被拒订单和退市结算也体现在其中。`run_cv()` 一折的持仓是所属运行的持仓在该折窗口上的切片。不带持仓写出的运行（引擎不提供持仓）为 `None`。 |
+| `metrics()` | 与 `result.metrics` 相同的映射，按 JSON 保存的形式：NaN 和无穷大变为 `None`，元组变为列表。每次运行都记录 `execution`（被拒订单和最大目标偏差）。`run()` 和 `run_cv()` 的拼接过程还记录 `portfolio_construction`：`failed_bar_count` 和 `failed_bars`，即组合构建规则无法决定（优化失败或不可行）、回测改为维持原仓位的调仓 bar，以及组合构建规则报告的事件，例如均值-方差优化器的 `closed_without_risk`（因风险模型没有估计而被平仓的持仓），或 top-n 规则的 `tie_at_cutoff`（截断点落在并列分数中间时被排除的并列标的，说明入选是按标的顺序而不是按分数决定的），带 `count`（所有 bar 上的标的总数）和 `bars`，每个 bar 一条记录，记录列出涉及的标的，`tie_at_cutoff` 则只记数量。 |
 | `settlements()` | 退市结算记录。 |
 | `report()`、`log_report(tracking_run)` | HTML 报告的文本；把它附到追踪 run 上。 |
 | `predictions()` | 仅带模型的运行（`run()`、`run_cv()`）才有：组合构建规则读到的预测（在价格坐标轴上）及其标签规格，格式为 `PredictionPanel`；`DecisionInputs.from_run(run_dir)` 凭它在不加载模型的情况下重建该运行的决策输入，包括已绑定的规则（见[组合构建](portfolio.md#不加载模型重建一次运行的决策输入)）。`run_weights()` 的运行为 `None`。 |
@@ -337,7 +337,7 @@ Name: 2024-02-12 00:00:00, dtype: float64
 
 ### 回放一次交叉验证
 
-`train_cv` 写出一次 walk-forward 运行：一个试验目录，每折一个训练单元，各有自己的 checkpoint，另有一个列出各折的 `run.json`（见 model 指南）。`run_cv()` 通过 `TrainedRun` 读取它，用各折自己的 checkpoint 回测该折的测试段，再把拼接后的各折预测一次性转换为权重，使持仓像一个账户那样跨折延续，并整体模拟一次。`cv_project_dir` 指向试验目录，即 `train_cv().path`，`model_mode` 必须是 `"load"`。只使用测试段落在窗口内的折，这些测试段必须逐 bar 首尾相接。
+`train_cv` 写出一次 walk-forward 运行：一个试验目录，每折一个训练单元，各有自己的 checkpoint，另有一个列出各折的 `run.json`（见 model 指南）。`run_cv()` 通过 `TrainedRun` 读取它，用各折自己的 checkpoint 预测该折的测试段，再把拼接后的各折预测一次性转换为权重，使持仓像一个账户那样跨折延续，并整体模拟一次。`cv_project_dir` 指向试验目录，即 `train_cv().path`，`model_mode` 必须是 `"load"`。只使用测试段落在窗口内的折，这些测试段必须逐 bar 首尾相接。
 
 ```python
 >>> cfg2 = write_price_store(root / "cv", n_bars=80)
@@ -367,7 +367,7 @@ Name: 2024-02-12 00:00:00, dtype: float64
 ('fold', ('2024-02-12', '2024-02-19'), True)
 ```
 
-运行描述的是拼接后的曲线：它的权重、净值曲线、结算和指标都来自拼接过程，预测面板是各折预测的拼接。每一折是一个 kind 为 `"fold"` 的子运行，在 `cv_run.folds` 中，有自己的权重、净值曲线、结算、指标以及该折的训练单元。拼接曲线是一次模拟，所以资金会跨折延续。每一折另有一次从 `init_cash` 起步的独立模拟，各折的指标来自这些独立模拟。`train_cv` 对每一折的训练段清洗掉最后 L 根 bar，并把清洗之后实际拟合的窗口记入该折的 `run.json`。一折的样本内窗口结束于拟合窗口终点之后第 L 根 bar，也就是该折测试段之前的那根 bar，所以拼接曲线上没有样本内的 bar。`quantlab.model.split.split_ranges` 把拼接后的 bar 切分为 `in_sample_ranges` 和 `out_of_sample_ranges`。
+运行描述的是拼接后的曲线：它的权重、净值曲线、结算和指标都来自拼接过程，预测面板是各折预测的拼接。每一折是一个 kind 为 `"fold"` 的子运行，在 `cv_run.folds` 中，记录该折的指标、训练单元以及出预测时读取的数据。拼接曲线是一次模拟，所以资金会跨折延续。一折就是这个账户在该折测试段上的一段，而不是从 `init_cash` 另起的账户（ADR 0033）：组合只构建一次，一折的权重、净值曲线、持仓和结算是运行在该折窗口上的切片，指标按拼接曲线在该折 bar 上计算，包括第一根 bar 的收益，因此各折收益连乘等于拼接后的总收益。要看从现金起步的一折，用 `run()` 载入该折的 checkpoint。`train_cv` 对每一折的训练段清洗掉最后 L 根 bar，并把清洗之后实际拟合的窗口记入该折的 `run.json`。一折的样本内窗口结束于拟合窗口终点之后第 L 根 bar，也就是该折测试段之前的那根 bar，所以拼接曲线上没有样本内的 bar。`quantlab.model.split.split_ranges` 把拼接后的 bar 切分为 `in_sample_ranges` 和 `out_of_sample_ranges`。
 
 ```python
 >>> stitched = cv.metrics["stitched"]
@@ -516,7 +516,7 @@ sorted(benchmarked.metrics["relative"]["whole"])[:4]
 
 ### 超额归因
 
-带模型的运行（`run()`，以及 `run_cv()` 的拼接曲线；单个 fold 自己的曲线不做归因）还会记录超额收益的来源，写在 `metrics["attribution"]`（`run_cv()` 为 `metrics["stitched"]["attribution"]`）：
+带模型的运行（`run()`，以及 `run_cv()` 的拼接曲线；单个 fold 不另做归因）还会记录超额收益的来源，写在 `metrics["attribution"]`（`run_cv()` 为 `metrics["stitched"]["attribution"]`）：
 
 ```python
 parts = benchmarked.metrics["attribution"]["decomposition"]
