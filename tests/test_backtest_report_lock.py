@@ -18,7 +18,10 @@ The rounding is there because the last digits of a float differ between
 CPUs: numpy sums in another order on another SIMD width, so a Sharpe ratio
 printed on macOS as ``-3.9547411421850533`` prints as ``-3.9547411421850547``
 on a Linux runner, from the 13th significant digit on. Ten digits keep every
-change a reader of the report could see. The bytes still depend on the
+change a reader of the report could see. A number below 1e-12 in magnitude is
+the round-off of a zero (the Holdings tab's cash share of a fully invested
+book: ``1.1e-16`` on one CI runner, 0 or ``-2.2e-16`` on another) and is
+written 0. The bytes still depend on the
 installed plotly, numpy and vectorbt; a version bump that changes them shows
 up here first.
 The same runs with the holdings left out of ``write_backtest_report`` (a
@@ -210,12 +213,21 @@ def _run_cv(root: Path, cv_project, *, benchmark: bool) -> Path:
 
 def normalized(text: str, roots: list[Path]) -> str:
     """``text`` with temporary directories, run names and plotly div ids replaced
-    and decimal numbers rounded to 10 significant digits."""
+    and decimal numbers rounded to 10 significant digits, below 1e-12 written 0."""
     for root in roots:
         text = text.replace(str(root), "<ROOT>")
     text = _UUID.sub("<UUID>", text)
     text = _RUN_NAME.sub(r"\1_<STAMP>", text)
-    return _DECIMAL.sub(lambda match: format(float(match.group()), ".10g"), text)
+    return _DECIMAL.sub(lambda match: _rounded(float(match.group())), text)
+
+
+def _rounded(value: float) -> str:
+    """``value`` to 10 significant digits; a round-off of zero is ``0``.
+
+    The Holdings tab's cash share of a fully invested book is ``1 - sum`` of
+    the weights: 0 on one CPU, ``1.1e-16`` or ``-2.2e-16`` on another.
+    """
+    return "0" if abs(value) < 1e-12 else format(value, ".10g")
 
 
 def run_files(run_dir: Path, roots: list[Path]) -> dict[str, str]:
@@ -285,18 +297,20 @@ def scenarios(tmp_path: Path, cv_project) -> dict[str, tuple[Path, list[Path]]]:
 #: over its test segment (ADR 0033): their ``stitched`` blocks are unchanged, the
 #: report differs in its run_cv note alone, and each fold's metrics are now cut
 #: from the stitched curve.
+#: Four reports were re-recorded when a round-off of zero (below 1e-12: a fully
+#: invested book's cash share, a -0) was normalized to 0; their bytes did not change.
 EXPECTED: dict[str, str] = {
-    "run_long_only_benchmark/report.html": "67cd735b883bd7d9155032203396e0d25d3e7afbe906f734ca75bf7540cd9d9b",
+    "run_long_only_benchmark/report.html": "e0ce0d96156ae5875321d5ba3d58e6eba18c3976662ff6662e638be896f5c17a",
     "run_long_only_benchmark/metrics.json": "b4901c705f203ce3a769b40c357ce8a444d16df4488492ab2abf4f03e2697be6",
-    "run_long_short_delisting/report.html": "0c4561145c5374f4759407bf52c1c7c20fd0886c0c7b4074d7805dde279e9fc1",
+    "run_long_short_delisting/report.html": "baee60caee1796f1f832ce22f7aeb326c8ea13a5990f9969926dd8144c8d68d1",
     "run_long_short_delisting/metrics.json": "61e9a1bee817c10179cc309e8722ad9a7a9a56c896183d0a3fe5d79ee90c79ed",
     "run_weights_benchmark/report.html": "2a2a62d488063f3b061536a5fcb76353fa65d9ee47166373159b6e55a8ea9702",
     "run_weights_benchmark/metrics.json": "aaf9c98eca07ec66a8f01999e3a6de56221133d6cb07b0a9dd8ea175170c84b2",
     "run_weights/report.html": "202dab36b03888b5387c94e68b6ba7c89f7b0a55f7bc1d3fd23a29d45bf9b33e",
     "run_weights/metrics.json": "fbfd860207fe6f7410dba4f91f905b38e9a45739d4c22f7c5d48de5e0b209b73",
-    "run_cv_benchmark/report.html": "c80d26bea83d393a3eea975d3d26a6536558cb7ab7f1c5c5805e832dd18fe6c4",
+    "run_cv_benchmark/report.html": "791d9f02df4c6e99631a4c3fe729bb37e675662340db6fb0057df3ac8b86b665",
     "run_cv_benchmark/metrics.json": "5eb6071ba06b6922deb7bf73aaf73915ce3d2c5400d1e0a5126136172eb5b538",
-    "run_cv/report.html": "b3ccb9da1587cba5526614ecb9b54dcdc2f1609a18d3e9d079365d5bb40f390c",
+    "run_cv/report.html": "d8d0bdf27ba051940162a7c76ab5762422def9be98e44d1948aebf8b7ee05040",
     "run_cv/metrics.json": "c689af22c94db84dfcfbc21acf48c039ebfc734e79d5a132e9cfecac86a5bbf8",
 }
 
