@@ -4,9 +4,10 @@ English | [简体中文](zh-CN/portfolio.md)
 
 Portfolio construction is the step between a model and a backtest. On every rebalance bar it takes the model's predictions for that bar and the weights currently held, and returns the weights to hold after the bar. The backtest then trades those weights.
 
-Every rule derives from `PortfolioConstructor` (`quantlab/portfolio/base.py`). Two rules ship in `quantlab/portfolio/predefined/`:
+Every rule derives from `PortfolioConstructor` (`quantlab/portfolio/base.py`). Three rules ship in `quantlab/portfolio/predefined/`:
 
 - `TopNConstructor`: equal weights on the `top_n` best scores, long-only or long-short.
+- `TopkDropoutConstructor`: qlib's TopkDropout. It holds `topk` names and replaces at most `n_drop` of them per rebalance, long-only or long-short.
 - `MeanVarianceOptimizer`: Markowitz weights with a turnover penalty, solved with cvxpy. It prices risk with a covariance estimator. Two ship: `LedoitWolfEstimator`, a Ledoit-Wolf shrunk covariance of trailing returns, and `FactorRiskStoreEstimator`, which reads a factor risk model's stores (`quantlab/risk/`).
 
 A backtest holds its rule in the `constructor` field of its config (see [Backtesting](backtest.md)).
@@ -158,6 +159,30 @@ array([False, False, False,  True])
 >>> decision.weights.values, decision.failure, decision.events
 (array([0.375, 0.   , 0.375, 0.25 ]), None, {})
 
+```
+
+## TopkDropout
+
+`TopkDropoutConstructor` (`quantlab/portfolio/predefined/topk_dropout.py`) follows qlib's `TopkDropoutStrategy` with `method_sell="bottom"`, `method_buy="top"` and `only_tradable=True`. It caps turnover at about `n_drop / topk` of the book per rebalance, where `TopNConstructor` rebuilds an equal-weight book every time. On each rebalance bar, for a book holding `last`:
+
+1. The candidates are the `n_drop + topk - len(last)` best-scored symbols that are tradable, have a finite score and are not held.
+2. The holdings among the `n_drop` worst of the holdings and candidates ranked together are sold. A holding is therefore sold only for a better-scored symbol. A holding without a finite score ranks worst. A locked position is never sold.
+3. The first `len(sell) + topk - len(last)` candidates are bought, so an empty book fills up to `topk`.
+
+Kept holdings stay at their current weight. The buys split equally what the kept holdings leave of the budget (1 long-only, 0.5 per side long-short), or the sold weight when that is more. The short side runs the same rule on the negated scores, and never buys a held symbol or one of the bar's long buys. qlib's `hold_thresh`, random methods and price-limit rules are not reproduced.
+
+```python
+>>> from quantlab.portfolio.config import TopkDropoutConfig
+>>> from quantlab.portfolio.predefined.topk_dropout import TopkDropoutConstructor
+>>> rule = TopkDropoutConstructor(TopkDropoutConfig(direction="long_only", topk=2, n_drop=1))
+>>> held = PortfolioContext(
+...     timestamp=pd.Timestamp("2024-03-01"),
+...     predictions=xr.Dataset({"ret_5": on_symbols([0.8, -0.1, 0.5, 0.2])}),
+...     tradable=on_symbols([True, True, True, True]),
+...     current_weights=on_symbols([0.55, 0.45, 0.0, 0.0]),
+... )
+>>> rule.construct(held).values  # BBB makes way for CCC; AAA keeps its weight
+array([0.55, 0.  , 0.45, 0.  ])
 ```
 
 ## Mean-variance optimisation

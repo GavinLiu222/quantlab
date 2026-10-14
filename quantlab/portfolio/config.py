@@ -39,6 +39,29 @@ class TopNConfig(FrozenConfig):
 
 
 @dataclass(frozen=True)
+class TopkDropoutConfig(FrozenConfig):
+    """Config of ``TopkDropoutConstructor``: qlib's TopkDropout.
+
+    Examples
+    --------
+    >>> cfg = TopkDropoutConfig(direction="long_only", topk=50, n_drop=5)
+    >>> cfg.score_label is None
+    True
+    """
+
+    #: ``"long_only"`` holds ``topk`` names; ``"long_short"`` also holds
+    #: ``topk`` shorts, the short side mirrored, the two books disjoint.
+    direction: Literal["long_only", "long_short"]
+    #: Number of names held per book.
+    topk: int
+    #: Most holdings replaced per book at a rebalance.
+    n_drop: int
+    #: The label whose prediction ranks the symbols. ``None`` selects the
+    #: predictor's first label.
+    score_label: str | None = None
+
+
+@dataclass(frozen=True)
 class LedoitWolfEstimatorConfig(FrozenConfig):
     """Config of ``LedoitWolfEstimator``: a shrunk sample covariance of trailing returns.
 

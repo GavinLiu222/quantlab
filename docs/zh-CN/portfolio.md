@@ -4,9 +4,10 @@
 
 组合构建是模型和回测之间的一步。在每个调仓 bar 上，它拿到模型对这根 bar 的预测和当前持有的权重，返回这根 bar 之后要持有的权重，回测再去交易这些权重。
 
-每条规则都继承 `PortfolioConstructor`（`quantlab/portfolio/base.py`）。`quantlab/portfolio/predefined/` 里自带两条规则：
+每条规则都继承 `PortfolioConstructor`（`quantlab/portfolio/base.py`）。`quantlab/portfolio/predefined/` 里自带三条规则：
 
 - `TopNConstructor`：分数最高的 `top_n` 个标的等权，可以只做多，也可以多空。
+- `TopkDropoutConstructor`：qlib 的 TopkDropout。持有 `topk` 个标的，每次调仓最多换掉 `n_drop` 个，可以只做多，也可以多空。
 - `MeanVarianceOptimizer`：带换手惩罚的 Markowitz 权重，用 cvxpy 求解。它用协方差估计器给风险定价。自带两个：`LedoitWolfEstimator`，即对历史收益样本协方差做 Ledoit-Wolf 收缩；`FactorRiskStoreEstimator`，读取因子风险模型（`quantlab/risk/`）的 store。
 
 回测把规则放在配置的 `constructor` 字段里（见[回测](backtest.md)）。
@@ -158,6 +159,30 @@ array([False, False, False,  True])
 >>> decision.weights.values, decision.failure, decision.events
 (array([0.375, 0.   , 0.375, 0.25 ]), None, {})
 
+```
+
+## TopkDropout
+
+`TopkDropoutConstructor`（`quantlab/portfolio/predefined/topk_dropout.py`）沿用 qlib 的 `TopkDropoutStrategy`（`method_sell="bottom"`、`method_buy="top"`、`only_tradable=True`）。每次调仓的换手被限制在大约 `n_drop / topk`；`TopNConstructor` 则每次都重建一个等权组合。在每个调仓 bar 上，对持有 `last` 的一边：
+
+1. 候选是可交易、分数有限、未持有的标的中分数最高的 `n_drop + topk - len(last)` 个。
+2. 把持仓和候选放在一起排序，最差的 `n_drop` 个里属于持仓的卖出。所以持仓只会为分数更高的标的让位。没有有限分数的持仓排在最后。锁定持仓从不卖出。
+3. 买入候选中的前 `len(sell) + topk - len(last)` 个，所以空仓时会一次补满到 `topk`。
+
+留下的持仓保持当前权重。买入的标的平分留下的持仓用剩的预算（只做多为 1，多空每边 0.5）；卖出的权重更多时，平分卖出的权重。空头一边对取负的分数执行同样的规则，并且不买已持有的标的，也不买这根 bar 新买入的多头。qlib 的 `hold_thresh`、随机方法和涨跌停规则没有复现。
+
+```python
+>>> from quantlab.portfolio.config import TopkDropoutConfig
+>>> from quantlab.portfolio.predefined.topk_dropout import TopkDropoutConstructor
+>>> rule = TopkDropoutConstructor(TopkDropoutConfig(direction="long_only", topk=2, n_drop=1))
+>>> held = PortfolioContext(
+...     timestamp=pd.Timestamp("2024-03-01"),
+...     predictions=xr.Dataset({"ret_5": on_symbols([0.8, -0.1, 0.5, 0.2])}),
+...     tradable=on_symbols([True, True, True, True]),
+...     current_weights=on_symbols([0.55, 0.45, 0.0, 0.0]),
+... )
+>>> rule.construct(held).values  # BBB 让位给 CCC；AAA 保持原权重
+array([0.55, 0.  , 0.45, 0.  ])
 ```
 
 ## 均值-方差优化
