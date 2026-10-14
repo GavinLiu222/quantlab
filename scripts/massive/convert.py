@@ -183,6 +183,9 @@ def oldest_served_day(client, today: date) -> date:
 AGGREGATE_STREAMS = 2
 AGGREGATE_FILES = 2
 
+#: The aggregate data types: the vendor check reads the minute bars, the Ticker map the day bars.
+AGGREGATE_TYPES = ("minute_aggs", "day_aggs")
+
 
 class Downloader(threading.Thread):
     """Download the files of ``data_types`` for ``start``..``end`` in the background, oldest first.
@@ -316,11 +319,23 @@ def main() -> int:
     if pending:
         end = min(end, pending[-1])
 
+    # The aggregates start after their own watermarks too: a day converted
+    # before Massive published its aggregates (about 00:30 ET the next day)
+    # gets them, and the Ticker map its day, on a later run.
+    aggregates_start = min(
+        [*list(pending)[:1], *(
+            watermark + timedelta(days=1)
+            for watermark in (read_watermark(vendor_root, data_type) for data_type in AGGREGATE_TYPES)
+            if watermark is not None
+        )],
+        default=None,
+    )
     downloader = aggregates = None
     if client is not None and pending:
         downloader = Downloader(client, ("trades",), pending[0], end, download_dir)
-        aggregates = Downloader(aggregates_client, ("minute_aggs", "day_aggs"), pending[0], end, download_dir)
         downloader.start()
+    if client is not None and aggregates_start is not None and aggregates_start <= end:
+        aggregates = Downloader(aggregates_client, AGGREGATE_TYPES, aggregates_start, end, download_dir)
         aggregates.start()
 
     def ready(day: date) -> bool:
@@ -421,6 +436,9 @@ def main() -> int:
         return 130
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
+    if aggregates is not None:
+        # Aggregates of days the store already holds may still be coming.
+        aggregates.join()
     through = MassiveTradeBarDataset(config).converted_through()
     print(
         f"done: {converted} day(s) converted in {duration(time.monotonic() - started)}; store holds through "
