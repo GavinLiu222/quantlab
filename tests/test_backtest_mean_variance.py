@@ -28,7 +28,9 @@ What is locked here, and what turns it red:
   model (#230): under `"read"` the exposures factor is never computed, the
   store is read once over the panel, and the weights equal those of `"cal"`;
   a bound may name one of the model's exposures. Under `"cal"` the weights
-  equal `tests/factor_risk_cal_reference.npz`, captured before #230.
+  equal `tests/factor_risk_cal_reference.npz`, captured before #230 and
+  re-captured when the risk term took the factor exposures as variables
+  (OSQP moved them by under 2e-5).
 
 Everything is synthetic, CPU-only and offline.
 """
@@ -615,7 +617,8 @@ def test_a_mean_variance_backtest_on_a_factor_risk_model_runs_and_rebuilds(tmp_p
 
     weights = original.weights["weight"].values
     # The weights before the decision took its exposures from the risk model
-    # (#230), captured on macOS arm64 under "cal": bit-identical there. The
+    # (#230), captured on macOS arm64 under "cal" (re-captured when the risk
+    # term took the factor exposures as variables): bit-identical there. The
     # solver may round differently on another machine, hence the tolerance.
     reference = np.load(Path(__file__).with_name("factor_risk_cal_reference.npz"))["weights"]
     np.testing.assert_allclose(weights, reference, rtol=0, atol=1e-10)
