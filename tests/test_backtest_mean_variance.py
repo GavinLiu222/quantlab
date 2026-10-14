@@ -36,6 +36,7 @@ Everything is synthetic, CPU-only and offline.
 """
 
 import dataclasses
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -620,7 +621,12 @@ def test_a_mean_variance_backtest_on_a_factor_risk_model_runs_and_rebuilds(tmp_p
     # (#230), captured on macOS arm64 under "cal" (re-captured when the risk
     # term took the factor exposures as variables): bit-identical there. The
     # solver may round differently on another machine, hence the tolerance.
-    reference = np.load(Path(__file__).with_name("factor_risk_cal_reference.npz"))["weights"]
+    # Linux has its own capture (the training server, x86_64 OpenBLAS): its
+    # LAPACK signs some eigenvectors of the eigenfactor adjustment the other
+    # way, so the seeded simulations draw other histories and the weights
+    # differ by up to 0.0054 between the two.
+    name = "factor_risk_cal_reference.npz" if sys.platform == "darwin" else "factor_risk_cal_reference_linux.npz"
+    reference = np.load(Path(__file__).with_name(name))["weights"]
     np.testing.assert_allclose(weights, reference, rtol=0, atol=1e-10)
     rebalance = np.isfinite(weights).all(axis=1)
     assert rebalance.sum() == len(range(0, WINDOW[1] - WINDOW[0], REBALANCE))
