@@ -50,7 +50,7 @@ TEST_END = np.datetime_as_string(TIMES[N_TIMES - 1], unit="D")
 N_TRAIN_TIMES = 100
 N_TEST_TIMES = 30
 
-METRIC_KEYS = ("loss", "mse", "rmse", "mae", "r2", "ic", "rank_ic", "icir", "rank_icir")
+METRIC_KEYS = ("loss", "mse", "rmse", "mae", "r2", "ic", "rank_ic", "icir", "rank_icir", "rank_autocorrelation")
 
 
 class FakePanel:

@@ -147,7 +147,7 @@ def _series(run_dir: Path) -> pd.DataFrame:
     path = run_dir / "ic_series.csv"
     assert path.is_file(), f"no IC series at {path}"
     frame = pd.read_csv(path, parse_dates=["timestamp"])
-    assert list(frame.columns) == ["split", "timestamp", "ic", "rank_ic"]
+    assert list(frame.columns) == ["split", "timestamp", "ic", "rank_ic", "rank_autocorrelation"]
     return frame
 
 
@@ -172,6 +172,9 @@ def _assert_run_files(model, run_dir: Path, metrics: dict, test_stamps) -> None:
         assert metrics[f"{split}_icir"] == pytest.approx(information_ratio(rows["ic"]))
         assert metrics[f"{split}_rank_icir"] == pytest.approx(
             information_ratio(rows["rank_ic"])
+        )
+        assert metrics[f"{split}_rank_autocorrelation"] == pytest.approx(
+            rows["rank_autocorrelation"].mean()
         )
     np.testing.assert_array_equal(
         frame.loc[frame["split"] == "test", "timestamp"].values, test_stamps

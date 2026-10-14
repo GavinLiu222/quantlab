@@ -551,7 +551,7 @@ def test_a_dl_train_writes_metrics_json_and_reloads_to_the_same_predictions(
     checkpoint = model.train()
 
     metrics = TrainedRun.open(checkpoint).metrics
-    keys = ("loss", "ic", "rank_ic", "icir", "rank_icir")
+    keys = ("loss", "ic", "rank_ic", "icir", "rank_icir", "rank_autocorrelation")
     assert set(metrics) == {f"{s}_{k}" for s in ("train", "val", "test") for k in keys}
     assert metrics == tracker.runs[0].summary
 

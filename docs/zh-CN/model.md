@@ -151,7 +151,7 @@ True
 模型训练完成之后才打分，由 `quantlab.model.evaluation` 中的评估（`evaluate`）完成，集成也用它。模型用 `predict_panel` 对收集到的整个面板预测一次，因此窗口型模型头的前几个 bar 也有 warm-up；每个标签都在 `evaluation_segments()` 给出的训练、验证和测试段（即上面清除后的分段）上，对照它的原始值打分。指标、`ic_series.csv` 和 `test_predictions.zarr` 来自同一份预测。规则对模型和集成是同一套：
 
 - 每个标签都打分。第一个标签的键为 `{split}_{metric}`，其余标签为 `{split}_{label}_{metric}`。
-- IC 一族（`ic`、`rank_ic`、`icir`、`rank_icir`）总会计算。
+- IC 一族（`ic`、`rank_ic`、`icir`、`rank_icir`）总会计算；另有 `rank_autocorrelation`：段内每个 bar 的预测与上一个 bar 预测的秩相关的均值（`rank_autocorrelation_series`；段的第一个 bar 没有）。它衡量预测的排序能保持多久，决定了跟随它的组合换手的下限。
 - `mse`、`rmse`、`mae` 和 `r2` 只对模型按标签本身尺度预测的标签计算（`label_scales` 为 `"raw"`）：拟合排名或 z-score 的模型头（设置了 `training_target`，或覆写了 `_transform_target`）的预测与标签单位不同，只报告 IC 一族。
 - 按本身尺度预测的波动率标签另有 `qlike` 和 `variance_ratio`（见下文“波动率标签”）。
 
@@ -160,7 +160,7 @@ True
 ```python
 >>> metrics = run.metrics
 >>> sorted(metrics)[:9]
-['test_ic', 'test_icir', 'test_loss', 'test_mae', 'test_mse', 'test_r2', 'test_rank_ic', 'test_rank_icir', 'test_rmse']
+['test_ic', 'test_icir', 'test_loss', 'test_mae', 'test_mse', 'test_r2', 'test_rank_autocorrelation', 'test_rank_ic', 'test_rank_icir', 'test_rmse']
 >>> {k: round(v, 3) for k, v in metrics.items() if k.endswith("rank_ic")}
 {'train_rank_ic': 0.707, 'val_rank_ic': 0.687, 'test_rank_ic': 0.679}
 >>> {k: round(v, 3) for k, v in metrics.items() if k.endswith("icir")}
@@ -203,7 +203,7 @@ IC 和 RankIC 背后的逐时间点数值由 `cross_sectional_ic_series` 和 `cr
 
 每次运行还会在 `run.json` 旁边写两个文件，之后要算新指标或做集成时可以直接从磁盘读取，不必重新预测：
 
-- `ic_series.csv` 有 `split`、`timestamp`、`ic` 和 `rank_ic` 四列：每个参与评估的段（`train`、`val`、`test`，各段内按时间排序）的每个 bar 一行，记录该 bar 在主标签原始值上的 IC 和 RankIC。它们和记录的指标来自同一份预测：某段 `ic` 列的均值就是 `<split>_ic`，其 ICIR 就是 `<split>_icir`。没有 IC 的 bar（有效标的少于两个，或截面为常数）不写行。只有当两个值一个存在、另一个不存在时，才会出现空单元格。
+- `ic_series.csv` 有 `split`、`timestamp`、`ic`、`rank_ic` 和 `rank_autocorrelation` 五列：每个参与评估的段（`train`、`val`、`test`，各段内按时间排序）的每个 bar 一行，记录该 bar 在主标签原始值上的 IC 和 RankIC，以及该 bar 的秩自相关（段的第一个 bar 为空）。它们和记录的指标来自同一份预测：某段 `ic` 列的均值就是 `<split>_ic`，其 ICIR 就是 `<split>_icir`，`rank_autocorrelation` 列的均值就是 `<split>_rank_autocorrelation`。没有 IC 的 bar（有效标的少于两个，或截面为常数）不写行。只有当两个值一个存在、另一个不存在时，才会出现空单元格。
 - `test_predictions.zarr` 是测试段的预测面板：即指标所用的那份 `predict_panel` 预测，覆盖 `test_bounds` 内的测试段 bar 和收集到的所有标的，每个标签一个变量。测试段没有 bar 时不写这个存储。
 
 `TrainedRun` 以 `ic_series` 和 `test_predictions` 给出它们的路径，没写的文件为 `None`。
@@ -466,12 +466,12 @@ True
 ([0.682, 0.687, 0.689], 0.688)
 ```
 
-集成单元里还有平均预测的评估文件，在最后一个成员训练完之后、它的 `run.json` 之前写入。每个成员预测自己收集到的整个面板，预测经 `average_predictions` 平均，平均值由单模型所用的同一个评估（`quantlab.model.evaluation.evaluate`）打分，每个标签的分段取预测它的第一个成员去重叠（purge）后的训练、验证和测试段（`evaluation_segments()`），因此模型和集成按同一套规则命名和计算指标。单元的指标含 `train`、`val`（仅当有验证段时）和 `test` 的 `{split}_ic`、`{split}_rank_ic`、`{split}_icir` 和 `{split}_rank_icir`，对原始的第一个标签计算；另有 `{split}_member_correlation`，衡量各成员预测的一致程度（见下文）。平均得到的标签没有 loss、MSE、MAE 或 R2，因为平均值是 z 分数单位。只有一个成员按标签本身尺度预测的标签保留这个尺度，并按该成员自己的方式打分：还有 `{split}_mse`、`{split}_rmse`、`{split}_mae` 和 `{split}_r2`，波动率标签还有 `{split}_qlike` 和 `{split}_variance_ratio`（见上文“波动率标签”；不是第一个标签时为 `{split}_{label}_qlike`）；由多个成员平均的标签是 z 分数单位，这些都没有。`ic_series.csv` 以单模型文件的格式保存这些指标背后的逐 bar 序列，`test_predictions.zarr` 保存测试段上的平均预测。每个成员保留自己的文件，内容不变。
+集成单元里还有平均预测的评估文件，在最后一个成员训练完之后、它的 `run.json` 之前写入。每个成员预测自己收集到的整个面板，预测经 `average_predictions` 平均，平均值由单模型所用的同一个评估（`quantlab.model.evaluation.evaluate`）打分，每个标签的分段取预测它的第一个成员去重叠（purge）后的训练、验证和测试段（`evaluation_segments()`），因此模型和集成按同一套规则命名和计算指标。单元的指标含 `train`、`val`（仅当有验证段时）和 `test` 的 `{split}_ic`、`{split}_rank_ic`、`{split}_icir`、`{split}_rank_icir` 和 `{split}_rank_autocorrelation`，对原始的第一个标签计算；另有 `{split}_member_correlation`，衡量各成员预测的一致程度（见下文）。平均得到的标签没有 loss、MSE、MAE 或 R2，因为平均值是 z 分数单位。只有一个成员按标签本身尺度预测的标签保留这个尺度，并按该成员自己的方式打分：还有 `{split}_mse`、`{split}_rmse`、`{split}_mae` 和 `{split}_r2`，波动率标签还有 `{split}_qlike` 和 `{split}_variance_ratio`（见上文“波动率标签”；不是第一个标签时为 `{split}_{label}_qlike`）；由多个成员平均的标签是 z 分数单位，这些都没有。`ic_series.csv` 以单模型文件的格式保存这些指标背后的逐 bar 序列，`test_predictions.zarr` 保存测试段上的平均预测。每个成员保留自己的文件，内容不变。
 
 ```python
 >>> metrics = trained.metrics
 >>> sorted(metrics)
-['test_ic', 'test_icir', 'test_member_correlation', 'test_rank_ic', 'test_rank_icir', 'train_ic', 'train_icir', 'train_member_correlation', 'train_rank_ic', 'train_rank_icir', 'val_ic', 'val_icir', 'val_member_correlation', 'val_rank_ic', 'val_rank_icir']
+['test_ic', 'test_icir', 'test_member_correlation', 'test_rank_autocorrelation', 'test_rank_ic', 'test_rank_icir', 'train_ic', 'train_icir', 'train_member_correlation', 'train_rank_autocorrelation', 'train_rank_ic', 'train_rank_icir', 'val_ic', 'val_icir', 'val_member_correlation', 'val_rank_autocorrelation', 'val_rank_ic', 'val_rank_icir']
 >>> [round(m.metrics["test_rank_ic"], 3) for m in trained.members], round(metrics["test_rank_ic"], 3)
 ([0.682, 0.687, 0.689], 0.688)
 >>> import pandas as pd
@@ -554,7 +554,7 @@ True
 >>> fold_0.members[0].checkpoint.name
 'XGBoostRegressor_fold_0_member_0.joblib'
 >>> sorted(fold_0.metrics)[:5]
-['test_ic', 'test_icir', 'test_member_correlation', 'test_rank_ic', 'test_rank_icir']
+['test_ic', 'test_icir', 'test_member_correlation', 'test_rank_autocorrelation', 'test_rank_ic', 'test_rank_icir']
 >>> [round(f.metrics["test_rank_ic"], 3) for f in ensemble_cv.folds]
 [0.69, 0.651, 0.709, 0.672, 0.698]
 >>> {k: round(v, 3) for k, v in ensemble_cv.cv_mean.items() if k.endswith("rank_ic")}
@@ -636,7 +636,7 @@ True
 >>> both.kind, both.folds[0].kind, [m.seed for m in both.folds[0].members]
 ('walk_forward', 'ensemble', [None, None])
 >>> sorted(both.folds[0].metrics)
-['test_ic', 'test_icir', 'test_member_correlation', 'test_rank_ic', 'test_rank_icir']
+['test_ic', 'test_icir', 'test_member_correlation', 'test_rank_autocorrelation', 'test_rank_ic', 'test_rank_icir']
 >>> [entry["directory"] for entry in both.assembled_from] == [str(xgb_cv.path), str(mlp_cv.path)]
 True
 ```

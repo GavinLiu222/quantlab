@@ -150,7 +150,8 @@ def test_the_assembled_unit_is_self_contained_and_names_its_sources(runs, tmp_pa
     fold = reopened.folds[0]
     _ensemble(runs, "reload").load(fold.checkpoint).predict_window(*fold.test_window)
     assert sorted(fold.metrics) == [
-        "test_ic", "test_icir", "test_member_correlation", "test_rank_ic", "test_rank_icir",
+        "test_ic", "test_icir", "test_member_correlation", "test_rank_autocorrelation",
+        "test_rank_ic", "test_rank_icir",
     ]
     assert sorted(reopened.cv_mean) == sorted(
         [f"cv_mean_{key}" for key in fold.metrics] + ["cv_n_folds"]

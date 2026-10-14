@@ -217,7 +217,7 @@ def test_torch_train_cv_fold_geometry_golden_sequential(tmp_path):
 
 ML_FOLD_DATES: list[tuple[str, str, str, str]] = []
 
-METRIC_KEYS = ("loss", "mse", "rmse", "mae", "r2", "ic", "rank_ic", "icir", "rank_icir")
+METRIC_KEYS = ("loss", "mse", "rmse", "mae", "r2", "ic", "rank_ic", "icir", "rank_icir", "rank_autocorrelation")
 SPLITS = ("train", "val", "test")
 
 

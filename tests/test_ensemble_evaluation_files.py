@@ -37,14 +37,14 @@ import xarray as xr
 from quantlab.model import ensemble as ensemble_base
 from quantlab.model.predefined.seed_ensemble import SeedEnsemble
 from quantlab.model.ensemble import average_predictions, member_correlation
-from quantlab.model.evaluation import regression_panel_metrics
+from quantlab.model.evaluation import rank_autocorrelation_series, regression_panel_metrics
 from quantlab.runs.trained_run import TrainedRun
 from tests.backtest_fixtures import SeededHead, make_model, write_price_store
 
 N_BARS = 60
 SEEDS = [0, 1, 2]
 IC_KEYS = ("ic", "rank_ic", "icir", "rank_icir")
-METRIC_KEYS = (*IC_KEYS, "member_correlation")
+METRIC_KEYS = (*IC_KEYS, "rank_autocorrelation", "member_correlation")
 ENSEMBLE_FILES = [
     "ic_series.csv",
     "member_0",
@@ -101,13 +101,15 @@ def _expected(ensemble):
         values, per_bar = regression_panel_metrics(pred, target, return_series=True)
         for key in IC_KEYS:
             metrics[f"{split}_{key}"] = values[key]
+        autocorrelation = rank_autocorrelation_series(pred)
+        metrics[f"{split}_rank_autocorrelation"] = np.nanmean(autocorrelation)
         metrics[f"{split}_member_correlation"], _ = member_correlation(
             [
                 p[label].sel(timestamp=stamps, symbol=data.symbol.values).values
                 for p in predictions
             ]
         )
-        series[split] = (stamps, per_bar["ic"], per_bar["rank_ic"])
+        series[split] = (stamps, per_bar["ic"], per_bar["rank_ic"], autocorrelation)
     return metrics, series
 
 
@@ -158,9 +160,9 @@ def test_ic_series_is_the_per_bar_series_in_the_single_model_layout(tmp_path, va
     frame = pd.read_csv(manifest.parent / "ic_series.csv", parse_dates=["timestamp"])
     _, series = _expected(ensemble)
 
-    assert list(frame.columns) == ["split", "timestamp", "ic", "rank_ic"]
+    assert list(frame.columns) == ["split", "timestamp", "ic", "rank_ic", "rank_autocorrelation"]
     rows = []
-    for split, (stamps, ic, rank_ic) in series.items():
+    for split, (stamps, ic, rank_ic, autocorrelation) in series.items():
         keep = np.isfinite(ic) | np.isfinite(rank_ic)
         rows.append(
             pd.DataFrame(
@@ -169,6 +171,7 @@ def test_ic_series_is_the_per_bar_series_in_the_single_model_layout(tmp_path, va
                     "timestamp": stamps[keep],
                     "ic": ic[keep],
                     "rank_ic": rank_ic[keep],
+                    "rank_autocorrelation": autocorrelation[keep],
                 }
             )
         )

@@ -45,10 +45,10 @@ TIMES = np.datetime64("2024-01-01") + np.arange(N_TIMES).astype("timedelta64[D]"
 START = np.datetime_as_string(TIMES[0], unit="D")
 END = np.datetime_as_string(TIMES[-1], unit="D")
 
-METRIC_KEYS = ("loss", "mse", "rmse", "mae", "r2", "ic", "rank_ic", "icir", "rank_icir")
+METRIC_KEYS = ("loss", "mse", "rmse", "mae", "r2", "ic", "rank_ic", "icir", "rank_icir", "rank_autocorrelation")
 #: The keys of a head trained on a standardized target (OneBarHead z-scores
 #: it): its prediction is not on the label's scale, so no error metric.
-STANDARDIZED_KEYS = ("loss", "ic", "rank_ic", "icir", "rank_icir")
+STANDARDIZED_KEYS = ("loss", "ic", "rank_ic", "icir", "rank_icir", "rank_autocorrelation")
 KEYS = {"library": METRIC_KEYS, "torch": STANDARDIZED_KEYS}
 SPLITS = ("train", "val", "test")
 

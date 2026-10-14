@@ -151,7 +151,7 @@ True
 A trained model is scored after training, by the Evaluation in `quantlab.model.evaluation` (`evaluate`), which an ensemble uses too. The model predicts its whole collected panel once with `predict_panel`, so a windowed head's first bars get their warm-up, and every label is scored against its raw values on the train, validation and test segments of `evaluation_segments()` (the purged segments above). The same predictions give the metrics, `ic_series.csv` and `test_predictions.zarr`. The rules, one set for a model and an ensemble:
 
 - Every label is scored. The first label's keys are `{split}_{metric}`, every other label's `{split}_{label}_{metric}`.
-- The IC family (`ic`, `rank_ic`, `icir`, `rank_icir`) always.
+- The IC family (`ic`, `rank_ic`, `icir`, `rank_icir`) always, and `rank_autocorrelation`: the mean over the segment of each bar's rank correlation with the previous bar's prediction (`rank_autocorrelation_series`; a segment's first bar has none). It measures how much the prediction's order persists, which bounds the turnover of a book that follows it.
 - `mse`, `rmse`, `mae` and `r2` only for a label the model predicts on its own scale, `label_scales` `"raw"`: a head fitting a rank or a z-score (a `training_target`, or its own `_transform_target`) predicts in other units than the label, so it reports the IC family only.
 - `qlike` and `variance_ratio` for a volatility label predicted on its own scale (see Volatility labels below).
 
@@ -160,7 +160,7 @@ The head adds `loss`: its loss on the training target (the label after the head'
 ```python
 >>> metrics = run.metrics
 >>> sorted(metrics)[:9]
-['test_ic', 'test_icir', 'test_loss', 'test_mae', 'test_mse', 'test_r2', 'test_rank_ic', 'test_rank_icir', 'test_rmse']
+['test_ic', 'test_icir', 'test_loss', 'test_mae', 'test_mse', 'test_r2', 'test_rank_autocorrelation', 'test_rank_ic', 'test_rank_icir', 'test_rmse']
 >>> {k: round(v, 3) for k, v in metrics.items() if k.endswith("rank_ic")}
 {'train_rank_ic': 0.707, 'val_rank_ic': 0.687, 'test_rank_ic': 0.679}
 >>> {k: round(v, 3) for k, v in metrics.items() if k.endswith("icir")}
@@ -203,7 +203,7 @@ A return label, and a volatility label a head predicts on a standardized scale (
 
 Every run also writes two files beside `run.json`, so a new metric or an ensemble can be computed from disk without predicting again:
 
-- `ic_series.csv` has the columns `split`, `timestamp`, `ic` and `rank_ic`: one row per bar of each evaluated segment (`train`, `val`, `test`, each in time order), holding the IC and RankIC of that bar on the raw primary label. They come from the same predictions as the recorded metrics: the mean of a segment's `ic` column is its `<split>_ic`, and its ICIR is `<split>_icir`. A bar without an IC (fewer than two valid symbols, or a constant cross-section) has no row. A cell is empty only when one of the two values exists and the other does not.
+- `ic_series.csv` has the columns `split`, `timestamp`, `ic`, `rank_ic` and `rank_autocorrelation`: one row per bar of each evaluated segment (`train`, `val`, `test`, each in time order), holding the IC and RankIC of that bar on the raw primary label and the bar's rank autocorrelation (empty on a segment's first bar). They come from the same predictions as the recorded metrics: the mean of a segment's `ic` column is its `<split>_ic`, its ICIR is `<split>_icir`, and the mean of its `rank_autocorrelation` column is its `<split>_rank_autocorrelation`. A bar without an IC (fewer than two valid symbols, or a constant cross-section) has no row. A cell is empty only when one of the two values exists and the other does not.
 - `test_predictions.zarr` is the prediction panel of the test segment: the `predict_panel` predictions the metrics come from, over the test bars inside `test_bounds` and every collected symbol, with one variable per label. There is no store when the test segment has no bars.
 
 `TrainedRun` gives their paths as `ic_series` and `test_predictions`, `None` for a file that was not written.
@@ -466,12 +466,12 @@ True
 ([0.682, 0.687, 0.689], 0.688)
 ```
 
-The ensemble unit also holds the evaluation files of the averaged prediction, written after the last member and before its `run.json`. Every member predicts its whole collected panel, the predictions are averaged by `average_predictions`, and the average is scored by the Evaluation a single model uses (`quantlab.model.evaluation.evaluate`), each label on the purged train, validation and test segments (`evaluation_segments()`) of the first member predicting it, so a model and an ensemble name and compute their metrics by one rule. The unit's metrics hold `{split}_ic`, `{split}_rank_ic`, `{split}_icir` and `{split}_rank_icir` for `train`, `val` (only when there is a validation segment) and `test`, computed on the raw first label, and `{split}_member_correlation`, how much the members agree (below). An averaged label has no loss, MSE, MAE or R2, because the average is in z-score units. A label only one member predicts on the label's own scale keeps that scale and is scored as that member scores it: `{split}_mse`, `{split}_rmse`, `{split}_mae` and `{split}_r2` too, and for a volatility label `{split}_qlike` and `{split}_variance_ratio` (see Volatility labels above; for a label other than the first, `{split}_{label}_qlike`); a label averaged over several members is in z-score units and gets none of them. `ic_series.csv` holds the per-bar series behind them in the layout of a single model's file, and `test_predictions.zarr` the averaged prediction on the test segment. Each member keeps its own files, unchanged.
+The ensemble unit also holds the evaluation files of the averaged prediction, written after the last member and before its `run.json`. Every member predicts its whole collected panel, the predictions are averaged by `average_predictions`, and the average is scored by the Evaluation a single model uses (`quantlab.model.evaluation.evaluate`), each label on the purged train, validation and test segments (`evaluation_segments()`) of the first member predicting it, so a model and an ensemble name and compute their metrics by one rule. The unit's metrics hold `{split}_ic`, `{split}_rank_ic`, `{split}_icir`, `{split}_rank_icir` and `{split}_rank_autocorrelation` for `train`, `val` (only when there is a validation segment) and `test`, computed on the raw first label, and `{split}_member_correlation`, how much the members agree (below). An averaged label has no loss, MSE, MAE or R2, because the average is in z-score units. A label only one member predicts on the label's own scale keeps that scale and is scored as that member scores it: `{split}_mse`, `{split}_rmse`, `{split}_mae` and `{split}_r2` too, and for a volatility label `{split}_qlike` and `{split}_variance_ratio` (see Volatility labels above; for a label other than the first, `{split}_{label}_qlike`); a label averaged over several members is in z-score units and gets none of them. `ic_series.csv` holds the per-bar series behind them in the layout of a single model's file, and `test_predictions.zarr` the averaged prediction on the test segment. Each member keeps its own files, unchanged.
 
 ```python
 >>> metrics = trained.metrics
 >>> sorted(metrics)
-['test_ic', 'test_icir', 'test_member_correlation', 'test_rank_ic', 'test_rank_icir', 'train_ic', 'train_icir', 'train_member_correlation', 'train_rank_ic', 'train_rank_icir', 'val_ic', 'val_icir', 'val_member_correlation', 'val_rank_ic', 'val_rank_icir']
+['test_ic', 'test_icir', 'test_member_correlation', 'test_rank_autocorrelation', 'test_rank_ic', 'test_rank_icir', 'train_ic', 'train_icir', 'train_member_correlation', 'train_rank_autocorrelation', 'train_rank_ic', 'train_rank_icir', 'val_ic', 'val_icir', 'val_member_correlation', 'val_rank_autocorrelation', 'val_rank_ic', 'val_rank_icir']
 >>> [round(m.metrics["test_rank_ic"], 3) for m in trained.members], round(metrics["test_rank_ic"], 3)
 ([0.682, 0.687, 0.689], 0.688)
 >>> import pandas as pd
@@ -554,7 +554,7 @@ True
 >>> fold_0.members[0].checkpoint.name
 'XGBoostRegressor_fold_0_member_0.joblib'
 >>> sorted(fold_0.metrics)[:5]
-['test_ic', 'test_icir', 'test_member_correlation', 'test_rank_ic', 'test_rank_icir']
+['test_ic', 'test_icir', 'test_member_correlation', 'test_rank_autocorrelation', 'test_rank_ic', 'test_rank_icir']
 >>> [round(f.metrics["test_rank_ic"], 3) for f in ensemble_cv.folds]
 [0.69, 0.651, 0.709, 0.672, 0.698]
 >>> {k: round(v, 3) for k, v in ensemble_cv.cv_mean.items() if k.endswith("rank_ic")}
@@ -636,7 +636,7 @@ Only the test segment is scored: the members' saved `test_predictions.zarr` are 
 >>> both.kind, both.folds[0].kind, [m.seed for m in both.folds[0].members]
 ('walk_forward', 'ensemble', [None, None])
 >>> sorted(both.folds[0].metrics)
-['test_ic', 'test_icir', 'test_member_correlation', 'test_rank_ic', 'test_rank_icir']
+['test_ic', 'test_icir', 'test_member_correlation', 'test_rank_autocorrelation', 'test_rank_ic', 'test_rank_icir']
 >>> [entry["directory"] for entry in both.assembled_from] == [str(xgb_cv.path), str(mlp_cv.path)]
 True
 ```

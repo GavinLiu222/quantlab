@@ -15,12 +15,15 @@ What turns this file red:
 - an empty validation segment yields `val_*` keys, or an empty test segment
   writes `test_predictions.zarr`;
 - `ic_series.csv` is not the first label's per-bar series in the
-  `split, timestamp, ic, rank_ic` layout, or `test_predictions.zarr` is not
+  `split, timestamp, ic, rank_ic, rank_autocorrelation` layout, or `test_predictions.zarr` is not
   cut to the test bounds;
 - a label uses another label's segments when the caller gives one per label;
 - a label given its own truth panel is not scored on that panel's symbols;
 - `member_correlation` is missing for a label several members predict, is
-  given for a label one member predicts, or differs from the hand value.
+  given for a label one member predicts, or differs from the hand value;
+- `rank_autocorrelation` (and its per-bar column in `ic_series.csv`) is not
+  the Spearman correlation of a bar's prediction with the previous bar's of
+  the same segment.
 
 Every expected value below is computed by hand in the comments, not by
 calling the metric functions.
@@ -107,7 +110,8 @@ def test_the_ic_family_and_error_metrics_of_a_raw_label_match_hand_values(tmp_pa
     assert set(metrics) == {
         f"{split}_{key}"
         for split in ("train", "test")
-        for key in ("ic", "rank_ic", "icir", "rank_icir", "mse", "rmse", "mae", "r2")
+        for key in ("ic", "rank_ic", "icir", "rank_icir", "rank_autocorrelation",
+                    "mse", "rmse", "mae", "r2")
     }
 
 
@@ -117,7 +121,7 @@ def test_a_standardized_label_gets_the_ic_family_only(tmp_path):
     assert set(metrics) == {
         f"{split}_{key}"
         for split in ("train", "test")
-        for key in ("ic", "rank_ic", "icir", "rank_icir")
+        for key in ("ic", "rank_ic", "icir", "rank_icir", "rank_autocorrelation")
     }
     assert metrics["train_ic"] == pytest.approx(TRAIN_IC)
 
@@ -173,11 +177,25 @@ def test_ic_series_holds_the_first_labels_per_bar_series(tmp_path):
     )
 
     frame = pd.read_csv(tmp_path / "ic_series.csv", parse_dates=["timestamp"])
-    assert list(frame.columns) == ["split", "timestamp", "ic", "rank_ic"]
+    assert list(frame.columns) == ["split", "timestamp", "ic", "rank_ic", "rank_autocorrelation"]
     assert list(frame["split"]) == ["train", "train", "test", "test"]
     assert list(frame["timestamp"]) == list(pd.DatetimeIndex(TIMES))
     np.testing.assert_allclose(frame["ic"], [1.0, 0.8, -1.0, 0.8])
     np.testing.assert_allclose(frame["rank_ic"], [1.0, 0.8, -1.0, 0.8])
+    # The prediction is the same on every bar; a segment's first bar has no previous one.
+    np.testing.assert_allclose(frame["rank_autocorrelation"], [np.nan, 1.0, np.nan, 1.0])
+
+
+def test_rank_autocorrelation_correlates_each_bar_with_the_previous_bar_of_its_segment(tmp_path):
+    # Predicting TRUTH: bar 1 swaps the top two of bar 0 (Spearman 0.8), bar 3
+    # against bar 2 has rank differences 3, 1, -2, -2, so 1 - 6 * 18 / 60 = -0.8.
+    # Bar 2 opens the test segment and is not compared with bar 1.
+    metrics = _evaluate(tmp_path, predictions=_panel(ret=TRUTH))
+
+    assert metrics["train_rank_autocorrelation"] == pytest.approx(0.8)
+    assert metrics["test_rank_autocorrelation"] == pytest.approx(-0.8)
+    frame = pd.read_csv(tmp_path / "ic_series.csv")
+    np.testing.assert_allclose(frame["rank_autocorrelation"], [np.nan, 0.8, np.nan, -0.8])
 
 
 def test_test_predictions_hold_every_label_on_the_test_bars_within_the_bounds(tmp_path):

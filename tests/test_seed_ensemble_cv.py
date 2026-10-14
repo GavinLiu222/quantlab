@@ -66,7 +66,7 @@ LAST_TEST_BAR = TRAIN_PERIODS + N_FOLDS * TEST_PERIODS - 1
 #: A 2-bar forward label: lookahead 3, so every fold's training window is purged.
 HORIZON = 2
 SEEDS = [0, 1, 2]
-ENSEMBLE_METRICS = {"ic", "rank_ic", "icir", "rank_icir", "member_correlation"}
+ENSEMBLE_METRICS = {"ic", "rank_ic", "icir", "rank_icir", "rank_autocorrelation", "member_correlation"}
 
 
 def _day(ts) -> str:

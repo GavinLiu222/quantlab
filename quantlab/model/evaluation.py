@@ -13,7 +13,10 @@ Scoring rules, one set for every unit:
 - Every label is scored on every non-empty segment. The first label's keys
   are ``{split}_{metric}``, every other label's ``{split}_{label}_{metric}``.
 - The IC family (``ic``, ``rank_ic``, ``icir``, ``rank_icir``, see
-  ``ic_panel_metrics``) always.
+  ``ic_panel_metrics``) always, and ``rank_autocorrelation``, the mean of
+  ``rank_autocorrelation_series`` over the segment: how much the
+  prediction's order persists from one bar to the next, which bounds the
+  turnover of a book that follows it.
 - The error metrics ``mse``, ``rmse``, ``mae`` and ``r2`` only for a label
   whose prediction is on its own scale (label scale ``"raw"``): a
   standardized prediction is in other units than the label.
@@ -390,6 +393,51 @@ def cross_sectional_rank_ic(pred, target) -> float:
     return _finite_mean(cross_sectional_rank_ic_series(pred, target))
 
 
+def rank_autocorrelation_series(pred, lag: int = 1) -> np.ndarray:
+    """Return each row's rank correlation with the row ``lag`` rows before, NaN where there is none.
+
+    The prediction's own persistence, as the factor report's
+    ``rank_autocorrelation``: row ``t`` is the cross-sectional rank IC of
+    ``pred[t]`` against ``pred[t - lag]`` on the symbols finite in both. The
+    first ``lag`` rows have no earlier row and are NaN, as is a row skipped
+    by the rank IC. A signal whose order changes little from bar to bar
+    (values near 1) needs little trading to follow.
+
+    Parameters
+    ----------
+    pred : array_like
+        A 2-D ``[T, S]`` panel of predictions.
+    lag : int, default 1
+        How many rows back each row is compared with; at least 1.
+
+    Returns
+    -------
+    np.ndarray
+        A float64 array of length ``T``.
+
+    Raises
+    ------
+    ValueError
+        If ``pred`` is not 2-D or ``lag`` is below 1.
+
+    Examples
+    --------
+    The second row swaps the top two of the first:
+
+    >>> rank_autocorrelation_series([[1.0, 2.0, 3.0, 4.0], [1.0, 2.0, 4.0, 3.0]])
+    array([nan, 0.8])
+    """
+    p = np.asarray(pred, dtype=np.float64)
+    if p.ndim != 2:
+        raise ValueError(f"rank_autocorrelation_series expects a 2-D [T, S] panel, got shape {p.shape}")
+    if lag < 1:
+        raise ValueError(f"lag must be at least 1, got {lag}")
+    out = np.full(p.shape[0], np.nan)
+    if p.shape[0] > lag:
+        out[lag:] = cross_sectional_rank_ic_series(p[lag:], p[:-lag])
+    return out
+
+
 def regression_panel_metrics(
     pred, target, *, return_series: bool = False
 ) -> dict[str, float] | tuple[dict[str, float], dict[str, np.ndarray]]:
@@ -660,10 +708,12 @@ def evaluate(
     -----
     Written into ``run_dir``:
 
-    - ``ic_series.csv``, columns ``split, timestamp, ic, rank_ic``: the first
-      label's per-bar IC and rank IC behind its ``{split}_ic`` /
-      ``{split}_icir``, one row per bar of each scored split in ``SPLITS``
-      order; a bar where both are undefined has no row.
+    - ``ic_series.csv``, columns ``split, timestamp, ic, rank_ic,
+      rank_autocorrelation``: the first label's per-bar IC, rank IC and
+      rank autocorrelation behind its ``{split}_ic`` / ``{split}_icir`` /
+      ``{split}_rank_autocorrelation``, one row per bar of each scored split
+      in ``SPLITS`` order; a bar where the IC and the rank IC are both
+      undefined has no row.
     - ``test_predictions.zarr``: every label's prediction on the first
       label's test bars inside ``test_bounds``; not written when there are
       none.
@@ -683,7 +733,7 @@ def evaluate(
     )
     truths = truth if not isinstance(truth, xr.Dataset) else {name: truth for name in names}
     metrics: dict[str, float] = {}
-    series: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+    series: dict[str, tuple[np.ndarray, ...]] = {}
     for i, name in enumerate(names):
         prefix = "" if i == 0 else f"{name}_"
         scale = label_scales.get(name)
@@ -698,6 +748,8 @@ def evaluate(
             )
             target = target.values
             values, per_bar = ic_panel_metrics(pred, target, return_series=True)
+            autocorrelation = rank_autocorrelation_series(pred)
+            values["rank_autocorrelation"] = _finite_mean(autocorrelation)
             if scale == "raw":
                 values.update(
                     mse=mse(pred, target), rmse=rmse(pred, target),
@@ -709,7 +761,7 @@ def evaluate(
                 values.update(extra_metrics(name, stamps, symbols))
             metrics.update({f"{split}_{prefix}{key}": value for key, value in values.items()})
             if i == 0:
-                series[split] = (stamps, per_bar["ic"], per_bar["rank_ic"])
+                series[split] = (stamps, per_bar["ic"], per_bar["rank_ic"], autocorrelation)
 
     if run_dir is not None:
         ic_series_path, test_predictions_path = evaluation_paths(run_dir)
@@ -727,23 +779,23 @@ def evaluate(
 def _write_ic_series(path: Path, series: Mapping) -> None:
     """Write per-bar IC series to ``path`` as ``ic_series.csv``, atomically.
 
-    ``series`` maps a split name to ``(timestamps, ic, rank_ic)`` arrays of
-    one length. The rows follow the splits of ``SPLITS`` that ``series``
+    ``series`` maps a split name to ``(timestamps, ic, rank_ic,
+    rank_autocorrelation)`` arrays of one length. The rows follow the splits of ``SPLITS`` that ``series``
     holds, each in its given order; a bar where neither value is finite has
     no row.
 
     Examples
     --------
     >>> ic_series_path, _ = evaluation_paths(unit)
-    >>> _write_ic_series(ic_series_path, {"test": (stamps, ic, rank_ic)})
+    >>> _write_ic_series(ic_series_path, {"test": (stamps, ic, rank_ic, autocorrelation)})
     >>> pd.read_csv(ic_series_path).columns.tolist()
-    ['split', 'timestamp', 'ic', 'rank_ic']
+    ['split', 'timestamp', 'ic', 'rank_ic', 'rank_autocorrelation']
     """
     rows = []
     for split in SPLITS:
         if split not in series:
             continue
-        stamps, ic, rank_ic = series[split]
+        stamps, ic, rank_ic, autocorrelation = series[split]
         keep = np.isfinite(ic) | np.isfinite(rank_ic)
         rows.append(
             pd.DataFrame(
@@ -752,13 +804,14 @@ def _write_ic_series(path: Path, series: Mapping) -> None:
                     "timestamp": np.asarray(stamps)[keep],
                     "ic": ic[keep],
                     "rank_ic": rank_ic[keep],
+                    "rank_autocorrelation": autocorrelation[keep],
                 }
             )
         )
     frame = (
         pd.concat(rows, ignore_index=True)
         if rows
-        else pd.DataFrame(columns=["split", "timestamp", "ic", "rank_ic"])
+        else pd.DataFrame(columns=["split", "timestamp", "ic", "rank_ic", "rank_autocorrelation"])
     )
     path = Path(path)
     staging = path.with_name(path.name + ".tmp")
