@@ -1343,7 +1343,9 @@ def test_no_task_isolation_was_added() -> None:
     batches, `FactorAnalysis._render_to`'s loky call that draws a factor
     report's figures, `dataset_fingerprint`'s threading call over a
     request's variables, and `SharadarClient._download_zip`'s threading call
-    over a bulk zip's byte ranges; none isolates a long task from a caller.
+    over a bulk zip's byte ranges, ``ChunkedFactor._pieces``'s loky call over
+    a factor's chunks and ``MappedTradeBarDataset.update``'s loky call over
+    batches of days; none isolates a long task from a caller.
 
     Asserted from the AST rather than by counting substrings. `inspect
     .getsource(...).count("Parallel(")` -- the obvious form -- is 3 against

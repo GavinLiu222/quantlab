@@ -251,18 +251,19 @@ class ChunkedConfig(BaseFactorConfig):
     """Config of ``quantlab.factor.predefined.chunked.ChunkedFactor``.
 
     ``factor`` is the factor computed one chunk at a time; it keeps its own
-    config, warm-up and store. ``granularity`` forces the chunks to one
-    calendar period each (a ``TimeChunkPlanner`` granularity); ``None``
-    lets the wrapper choose from the memory available. ``dataset`` is
+    config, warm-up and store, and may be resampled. ``granularity`` forces
+    the chunks to one calendar period each (a ``TimeChunkPlanner``
+    granularity); ``None`` lets the wrapper choose from the memory
+    available. ``workers`` processes compute chunks at once. ``dataset`` is
     filled with the wrapped factor's dataset.
 
     Examples
     --------
     With ``alpha`` a factor whose store would not fit in memory at once:
 
-    >>> cfg = ChunkedConfig(factor=alpha, granularity="month")
-    >>> cfg.warmup_bars, cfg.file_path
-    (0, None)
+    >>> cfg = ChunkedConfig(factor=alpha, granularity="month", workers=8)
+    >>> cfg.warmup_bars, cfg.file_path, cfg.workers
+    (0, None, 8)
     """
 
     #: The wrapped factor warms itself up; anything but 0 is refused.
@@ -274,3 +275,38 @@ class ChunkedConfig(BaseFactorConfig):
     #: One ``TimeChunkPlanner`` granularity for every chunk; ``None`` chooses
     #: the coarsest one whose chunks fit in memory.
     granularity: str | None = None
+    #: Worker processes computing chunks at once; the wrapped factor's own
+    #: threads (``njobs``) run in each. 1 computes them one after another here.
+    workers: int = 1
+
+
+@dataclass(kw_only=True, frozen=True)
+class IntradayAverageConfig(BaseFactorConfig):
+    """Config of ``quantlab.factor.predefined.intraday.IntradayAverage``.
+
+    ``factor`` is the factor whose stored values are averaged, usually a
+    resampled ``IntradayStats``; it keeps its own config and store, which
+    must cover the range asked for. ``dataset`` is filled with the wrapped
+    factor's dataset.
+
+    Examples
+    --------
+    With ``daily`` an ``IntradayStats`` resampled to ``"1d"``:
+
+    >>> cfg = IntradayAverageConfig(factor=daily, window=20, min_count=10)
+    >>> cfg.warmup_bars, cfg.window
+    (0, 20)
+    """
+
+    #: The window's history is read from the wrapped store; anything but 0 is refused.
+    warmup_bars: int = 0
+    #: Filled with the wrapped factor's dataset by the factor's config setter.
+    dataset: "MarketDataset | None" = component(default=None)
+    #: The factor whose stored values are averaged.
+    factor: "Factor" = component()
+    #: Bars of the wrapped store averaged over, the current one included.
+    window: int = 20
+    #: Fewest present values a window needs; fewer gives NaN.
+    min_count: int = 10
+    #: Threads used by the KunQuant executor.
+    njobs: int = 128

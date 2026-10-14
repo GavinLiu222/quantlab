@@ -585,49 +585,38 @@ class Factor(Component, ABC):
         ('2024-01-01', '2024-03-31')
         """
         self._refuse_unless_owner("build")
-        panel = self.compute(start, end)
+        self._create_store(self.compute(start, end), start, end)
+        return self
+
+    def _create_store(self, panel: xr.Dataset, start, end) -> None:
+        """Replace the store with ``panel``, computed over ``start``..``end``, and record the range.
+
+        The write half of ``build``; ``ChunkedFactor`` calls it with a
+        chunk computed in a worker process.
+        """
         with Timer(f"{self.class_name}: build"):
             self._drop_range(self.store_path)
             XrBackend().to_internal(panel).create(
                 self.store_path, fill_values=self._widen_fill_values()
             )
             self._record_range(self.store_path, start, end)
-        return self
 
-    def extend(self, end: "str | datetime.date | pd.Timestamp") -> Self:
-        """Append the bars after the recorded range, up to ``end``.
+    def _append_store(self, panel: xr.Dataset, end) -> None:
+        """Append ``panel``, the bars after the recorded range up to ``end``, and record the range.
 
-        The bars are computed with ``compute``, so they are warmed from the
-        dataset's history, then appended to the store; its timestamp, symbol
-        and variable axes widen to fit, and cells created by widening are
-        filled from ``_widen_fill_values()``.
-        The recorded range then ends at ``end``.
-
-        Parameters
-        ----------
-        end : str, datetime.date or pd.Timestamp
-            The new end of the store's range.
-
-        Returns
-        -------
-        Self
-            ``self``, for chaining.
-
-        Raises
-        ------
-        ValueError
-            If the factor is resampled, does not own its store (see
-            ``owns_store``), the store has no recorded range, or the recorded
-            range already reaches ``end``.
-
-        Examples
-        --------
-        >>> factor.build("2024-01-01", "2024-03-31").store_range()
-        ('2024-01-01', '2024-03-31')
-        >>> factor.extend("2024-04-30").store_range()
-        ('2024-01-01', '2024-04-30')
+        The write half of ``extend``; ``ChunkedFactor`` calls it with a
+        chunk computed in a worker process.
         """
-        self._refuse_if_resampled("extend")
+        recorded_start, _ = self._extendable_range(end)
+        with Timer(f"{self.class_name}: extend"):
+            if panel.sizes["timestamp"]:
+                XrBackend().to_internal(panel).widen_and_append(
+                    self.store_path, fill_values=self._widen_fill_values()
+                )
+            self._record_range(self.store_path, recorded_start, end)
+
+    def _extendable_range(self, end) -> tuple[str, str]:
+        """Return the recorded range, refusing an ``extend`` to ``end``; see ``extend``."""
         self._refuse_unless_owner("extend")
         recorded = self._stored_range(self.store_path)
         if recorded is None:
@@ -643,14 +632,49 @@ class Factor(Component, ABC):
                 f"already covers {recorded_start} to {recorded_end}; extend() "
                 f"appends only bars after {recorded_end}, got end {end!r}."
             )
+        return recorded_start, recorded_end
+
+    def extend(self, end: "str | datetime.date | pd.Timestamp") -> Self:
+        """Append the bars after the recorded range, up to ``end``.
+
+        The bars are computed with ``compute``, so they are warmed from the
+        dataset's history, then appended to the store; its timestamp, symbol
+        and variable axes widen to fit, and cells created by widening are
+        filled from ``_widen_fill_values()``.
+        The recorded range then ends at ``end``.
+
+        A resampled factor appends resampled bars. ``compute`` reads every
+        source bar a resampled bar covers, past the range's ends too, so each
+        stored bar is whole and a store built in pieces equals one built at
+        once: a minute factor's daily store can be built a quarter at a time.
+
+        Parameters
+        ----------
+        end : str, datetime.date or pd.Timestamp
+            The new end of the store's range.
+
+        Returns
+        -------
+        Self
+            ``self``, for chaining.
+
+        Raises
+        ------
+        ValueError
+            If the factor does not own its store (see
+            ``owns_store``), the store has no recorded range, or the recorded
+            range already reaches ``end``.
+
+        Examples
+        --------
+        >>> factor.build("2024-01-01", "2024-03-31").store_range()
+        ('2024-01-01', '2024-03-31')
+        >>> factor.extend("2024-04-30").store_range()
+        ('2024-01-01', '2024-04-30')
+        """
+        _, recorded_end = self._extendable_range(end)
         after = last_moment(recorded_end) + pd.Timedelta(1, "ns")
-        panel = self.compute(after, end)
-        with Timer(f"{self.class_name}: extend"):
-            if panel.sizes["timestamp"]:
-                XrBackend().to_internal(panel).widen_and_append(
-                    self.store_path, fill_values=self._widen_fill_values()
-                )
-            self._record_range(self.store_path, recorded_start, end)
+        self._append_store(self.compute(after, end), end)
         return self
 
     def owns_store(self) -> bool:
@@ -839,8 +863,8 @@ class Factor(Component, ABC):
         ``compute``, ``read`` and ``build`` on it answer on the resampled
         bars. This factor and its dataset are not changed.
 
-        A resampled factor cannot ``extend()`` its store or stream, and
-        ``build()`` writes to ``store_path``, the resampled store beside the
+        A resampled factor cannot stream. ``build()`` and ``extend()`` write
+        to ``store_path``, the resampled store beside the
         source. The bars are cut the way the dataset cuts them (see
         ``BaseDataset._resample_labels``).
 

@@ -358,8 +358,13 @@ def test_factor_resample_saves_beside_the_source_and_reads_it_back(
         *STORE_RANGE
     ).sizes["timestamp"] == DAYS
 
-    with pytest.raises(ValueError, match="extend"):
-        daily.extend("2024-01-05")
+    # The sibling store extends like any factor store: built in two pieces it
+    # holds what one build over the whole range writes.
+    pieces = _momentum(minute_config, tmp_path / "pieces").resample("1d", "last")
+    assert pieces.store_path != daily.store_path
+    pieces.build(STORE_RANGE[0], "2024-01-02")
+    pieces.extend(STORE_RANGE[1])
+    xr.testing.assert_allclose(xr.open_zarr(pieces.store_path).load(), xr.open_zarr(daily.store_path).load())
 
 
 def test_factor_resample_config_round_trips(minute_config: DatasetConfig, tmp_path: Path):

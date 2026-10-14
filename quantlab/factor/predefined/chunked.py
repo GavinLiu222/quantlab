@@ -18,11 +18,23 @@ output alone would not.
 
 A factor is chunked along time only: a cross-sectional operator needs
 every symbol of a bar at once.
+
+A resampled factor is chunked on its source bars, in chunks no finer than
+its resampled bars, so every chunk holds whole resampled bars: a minute
+factor's daily store is built a month at a time.
+
+With ``workers`` above 1 the chunks are computed in that many worker
+processes at once, each rebuilding the wrapped factor from its config, and
+written in time order by this process as the wrapped factor's ``build`` and
+``extend`` write them, so the store is still only the owner's. The workers
+are a ``joblib.Parallel`` (loky) fan-out, like the repository's others.
 """
 
 import ctypes
 import dataclasses
+import json
 import sys
+from collections.abc import Iterator
 from typing import Self
 
 import numpy as np
@@ -30,10 +42,15 @@ import pandas as pd
 import psutil
 import xarray as xr
 
+from joblib import Parallel, delayed
+from loguru import logger
+
+from quantlab.core.component import rebuild
 from quantlab.dataset._support.ledger import TimeChunkPlanner
 from quantlab.factor.base import Factor
 from quantlab.factor.config import ChunkedConfig
 from quantlab.utils.date_range import last_moment
+from quantlab.utils.resample import resample_seconds
 
 #: Share of the memory available when a computation starts that its chunks
 #: may take; the rest is left for the process and the machine.
@@ -57,6 +74,11 @@ def release_memory() -> None:
             ctypes.CDLL("libc.so.6").malloc_trim(0)
         except (OSError, AttributeError):
             pass
+
+
+def _compute_chunk(config: dict, first, last) -> xr.Dataset:
+    """Compute one chunk in a worker process, the factor rebuilt from its config."""
+    return rebuild(config).compute(first, last)
 
 
 def memory_budget() -> int:
@@ -84,6 +106,10 @@ class ChunkedFactor(Factor):
     There is no store of its own: ``store_path``, ``store_range`` and
     ``read`` are the wrapped factor's, so a model can read either.
 
+    A resampled wrapped factor is chunked on its source bars, never finer
+    than its resampled bars. ``config.workers`` processes compute chunks at
+    once (``parallel_workers``); see the module docstring.
+
     Parameters
     ----------
     config : ChunkedConfig
@@ -92,8 +118,8 @@ class ChunkedFactor(Factor):
     Raises
     ------
     ValueError
-        If the wrapped factor is resampled: resample its source factor's
-        store instead, which is aggregation, not computation.
+        If the wrapper itself is resampled, a granularity is finer than the
+        wrapped factor's resampled bars, or ``workers`` is below 1.
 
     Examples
     --------
@@ -142,8 +168,9 @@ class ChunkedFactor(Factor):
         ------
         ValueError
             If ``warmup_bars`` is not 0, ``file_path`` or ``resample_freq``
-            is set, the wrapped factor is resampled, ``factor_names`` are
-            not the wrapped factor's or ``granularity`` is unknown.
+            is set, ``factor_names`` are not the wrapped factor's,
+            ``granularity`` is unknown or finer than the wrapped factor's
+            resampled bars, or ``workers`` is not a positive integer.
         """
         config = self.config
         if config.warmup_bars != 0:
@@ -156,10 +183,9 @@ class ChunkedFactor(Factor):
                 f"{self.class_name}: file_path must be None; the wrapper writes the "
                 f"wrapped factor's store and has none of its own."
             )
-        if config.resample_freq is not None or config.factor.config.resample_freq is not None:
+        if config.resample_freq is not None:
             raise ValueError(
-                f"{self.class_name}: cannot wrap or be a resampled factor; build the "
-                f"source factor in chunks, then resample it, which reads its store."
+                f"{self.class_name}: cannot be resampled; wrap a resampled factor instead."
             )
         if tuple(config.factor_names) != self._get_factor_names():
             raise ValueError(
@@ -172,6 +198,23 @@ class ChunkedFactor(Factor):
                 f"{self.class_name}: unknown granularity {config.granularity!r}; "
                 f"accepted values are {list(TimeChunkPlanner.GRANULARITIES)} or None."
             )
+        if config.granularity is not None and config.granularity not in self._granularities():
+            raise ValueError(
+                f"{self.class_name}: granularity {config.granularity!r} is finer than "
+                f"{config.factor.class_name}'s {config.factor.config.resample_freq!r} bars; "
+                f"a chunk must hold whole resampled bars."
+            )
+        if not isinstance(config.workers, int) or config.workers < 1:
+            raise ValueError(f"{self.class_name}: workers must be a positive integer, got {config.workers!r}.")
+
+    def _granularities(self) -> tuple[str, ...]:
+        """Return the granularities whose chunks hold whole bars of the wrapped factor."""
+        freq = self.config.factor.config.resample_freq
+        if freq is None:
+            return TimeChunkPlanner.GRANULARITIES
+        return tuple(
+            g for g in TimeChunkPlanner.GRANULARITIES if TimeChunkPlanner.PERIOD_SECONDS[g] >= resample_seconds(freq)
+        )
 
     @property
     def store_path(self) -> str | None:
@@ -212,7 +255,11 @@ class ChunkedFactor(Factor):
         """Return the granularity and the ``(first, last)`` bar of every chunk of a range.
 
         The granularity is ``None`` when the range is one chunk because it
-        fits whole.
+        fits whole. With ``config.workers`` above 1 and no ``granularity``
+        set, the coarsest granularity that cuts at least ``workers`` chunks
+        whose largest fits ``workers`` times in ``memory_budget()`` is
+        chosen, so every worker has a chunk; when none does, the plan is the
+        one-worker plan.
 
         Parameters
         ----------
@@ -234,16 +281,18 @@ class ChunkedFactor(Factor):
             return self.config.granularity, []
         if self.config.granularity is not None:
             return self.config.granularity, self._chunks(bars, self.config.granularity)
-        budget, needed = memory_budget(), self._peak_bytes(len(bars))
+        budget, workers = memory_budget(), self.config.workers
+        if workers > 1:
+            for granularity in self._granularities():
+                chunks = self._chunks(bars, granularity)
+                if len(chunks) >= workers and self._peak_bytes(self._longest(bars, chunks)) * workers <= budget:
+                    return granularity, chunks
+        needed = self._peak_bytes(len(bars))
         if needed <= budget:
             return None, [(bars[0], bars[-1])]
-        for granularity in TimeChunkPlanner.GRANULARITIES:
+        for granularity in self._granularities():
             chunks = self._chunks(bars, granularity)
-            longest = max(
-                bars.searchsorted(last, "right") - bars.searchsorted(first)
-                for first, last in chunks
-            )
-            needed = self._peak_bytes(longest)
+            needed = self._peak_bytes(self._longest(bars, chunks))
             if needed <= budget:
                 return granularity, chunks
         raise MemoryError(
@@ -277,7 +326,7 @@ class ChunkedFactor(Factor):
         """
         factor = self.config.factor
         bars = self.config.dataset.calendar(start, end)
-        output = len(bars) * self._symbol_count() * factor.cell_bytes()[1]
+        output = self._output_bars(bars) * self._symbol_count() * factor.cell_bytes()[1]
         if output > memory_budget():
             raise MemoryError(
                 f"{self.class_name}.compute(): the output of {factor.class_name} from "
@@ -288,25 +337,30 @@ class ChunkedFactor(Factor):
         _, chunks = self.plan(start, end)
         if len(chunks) <= 1:
             return factor.compute(start, end)
-        # The outer chunks keep the caller's own start and end labels.
-        firsts = [start, *(first for first, _ in chunks[1:])]
-        lasts = [*(last for _, last in chunks[:-1]), end]
+        ranges = self._ranges(start, end, chunks)
+        if factor.config.resample_freq is not None:
+            # A resampled chunk is small: its bars are not the dataset's, so join them.
+            pieces = list(self._pieces(ranges, chunks))
+            if any(not piece["symbol"].equals(pieces[0]["symbol"]) for piece in pieces):
+                raise ValueError(
+                    f"{self.class_name}.compute(): the chunks of {factor.class_name} are on "
+                    f"different symbols; chunks cannot be joined."
+                )
+            return xr.concat(pieces, dim="timestamp")
         panel = None
-        with self.keep_compiled():
-            for first, last in zip(firsts, lasts):
-                piece = factor.compute(first, last)
-                if panel is None:
-                    panel = self._allocate(bars, piece)
-                rows = bars.get_indexer(pd.DatetimeIndex(piece["timestamp"].values))
-                if (rows < 0).any() or not piece["symbol"].equals(panel["symbol"]):
-                    raise ValueError(
-                        f"{self.class_name}.compute(): the chunk from {first} to {last} "
-                        f"is not on the dataset's bars and symbols; chunks cannot be joined."
-                    )
-                for name in panel.data_vars:
-                    panel[name].values[rows] = piece[name].values
-                del piece
-                release_memory()
+        for (first, last), piece in zip(ranges, self._pieces(ranges, chunks)):
+            if panel is None:
+                panel = self._allocate(bars, piece)
+            rows = bars.get_indexer(pd.DatetimeIndex(piece["timestamp"].values))
+            if (rows < 0).any() or not piece["symbol"].equals(panel["symbol"]):
+                raise ValueError(
+                    f"{self.class_name}.compute(): the chunk from {first} to {last} "
+                    f"is not on the dataset's bars and symbols; chunks cannot be joined."
+                )
+            for name in panel.data_vars:
+                panel[name].values[rows] = piece[name].values
+            del piece
+            release_memory()
         return panel
 
     def build(self, start, end) -> Self:
@@ -322,6 +376,17 @@ class ChunkedFactor(Factor):
         """
         factor = self.config.factor
         _, chunks = self.plan(start, end)
+        if len(chunks) > 1 and self.parallel_workers(chunks) > 1:
+            factor._refuse_unless_owner("build")
+            ranges = self._ranges(start, end, chunks)
+            for index, ((_, last), piece) in enumerate(zip(ranges, self._pieces(ranges, chunks))):
+                if index == 0:
+                    factor._create_store(piece, start, last)
+                else:
+                    factor._append_store(piece, last)
+                del piece
+                release_memory()
+            return self
         with self.keep_compiled():
             if len(chunks) <= 1:
                 factor.build(start, end)
@@ -352,12 +417,123 @@ class ChunkedFactor(Factor):
             return self
         after = last_moment(recorded[1]) + pd.Timedelta(1, "ns")
         _, chunks = self.plan(after, end)
+        if len(chunks) > 1 and self.parallel_workers(chunks) > 1:
+            factor._extendable_range(end)
+            ranges = self._ranges(after, end, chunks)
+            for (_, last), piece in zip(ranges, self._pieces(ranges, chunks)):
+                factor._append_store(piece, last)
+                del piece
+                release_memory()
+            return self
         with self.keep_compiled():
             for _, last in chunks[:-1]:
                 factor.extend(last)
                 release_memory()
             factor.extend(end)
         return self
+
+    def parallel_workers(self, chunks: list) -> int:
+        """Return how many worker processes compute ``chunks``: ``config.workers``, cut to fit.
+
+        No more than there are chunks, and no more than the largest chunk's
+        peak (``cell_bytes``, warm-up included) fits in ``memory_budget()``
+        side by side; a cut below ``config.workers`` is logged.
+
+        Raises
+        ------
+        ValueError
+            If more than one worker would run and the wrapped factor does not
+            rebuild from its config.
+
+        Examples
+        --------
+        >>> chunked.config.workers, len(chunks)
+        (8, 3)
+        >>> chunked.parallel_workers(chunks)
+        3
+        """
+        wanted = min(self.config.workers, len(chunks))
+        if wanted <= 1:
+            return 1
+        self._worker_config()  # refuse a factor no worker could rebuild, before sizing it
+        bars = self.config.dataset.calendar(chunks[0][0], chunks[-1][1])
+        fit = max(int(memory_budget() // max(self._peak_bytes(self._longest(bars, chunks)), 1)), 1)
+        if fit < wanted:
+            logger.warning(
+                f"{self.class_name}: {wanted} worker(s) asked for, but only {fit} chunk(s) of "
+                f"{self.config.factor.class_name} fit in memory at once; computing {fit} at a time."
+            )
+        return min(wanted, fit)
+
+    @staticmethod
+    def _longest(bars: pd.DatetimeIndex, chunks: list) -> int:
+        """Return the bars of the longest of ``chunks``."""
+        return max(bars.searchsorted(last, "right") - bars.searchsorted(first) for first, last in chunks)
+
+    def _ranges(self, start, end, chunks: list) -> list[tuple]:
+        """Return the ``(first, last)`` each chunk is computed over.
+
+        The first starts at ``start`` and the last ends at ``end``; every
+        other starts just after the chunk before it, as ``extend`` would ask
+        for it: a resampled bar's label (a session's date, an hour's end) can
+        lie before the chunk's first source bar, and the range must still
+        take it.
+        """
+        firsts = [start, *(last + pd.Timedelta(1, "ns") for _, last in chunks[:-1])]
+        lasts = [*(last for _, last in chunks[:-1]), end]
+        return list(zip(firsts, lasts))
+
+    def _pieces(self, ranges: list[tuple], chunks: list) -> Iterator[xr.Dataset]:
+        """Yield the wrapped factor's ``compute`` over each range, in order.
+
+        With one worker the chunks are computed here, one after another, on
+        one compiled graph; with more, in worker processes, at most
+        ``parallel_workers`` at a time.
+        """
+        factor = self.config.factor
+        workers = self.parallel_workers(chunks)
+        if workers <= 1:
+            with self.keep_compiled():
+                for first, last in ranges:
+                    yield factor.compute(first, last)
+            return
+        config = self._worker_config()
+        # In order, at most `workers` chunks dispatched ahead of the one written.
+        yield from Parallel(n_jobs=workers, backend="loky", return_as="generator", pre_dispatch="n_jobs")(
+            delayed(_compute_chunk)(config, first, last) for first, last in ranges
+        )
+
+    def _worker_config(self) -> dict:
+        """Return the wrapped factor's config, checked to rebuild into an equal factor.
+
+        Raises
+        ------
+        ValueError
+            If the wrapped factor does not rebuild from its config (a dataset
+            held in memory, say), so a worker process could not compute it.
+        """
+        factor = self.config.factor
+        try:
+            config = json.loads(json.dumps(factor.get_config()))
+            same = rebuild(config) == factor
+        except Exception as error:  # noqa: BLE001 - any failure means a worker cannot rebuild it
+            raise ValueError(
+                f"{self.class_name}: workers rebuild {factor.class_name} from its config, which "
+                f"failed ({error}); use workers=1."
+            ) from error
+        if not same:
+            raise ValueError(
+                f"{self.class_name}: {factor.class_name} does not rebuild from its config into an "
+                f"equal factor, so workers cannot compute it; use workers=1."
+            )
+        return config
+
+    def _output_bars(self, bars: pd.DatetimeIndex) -> int:
+        """Return how many bars the wrapped factor outputs over the dataset ``bars``."""
+        freq = self.config.factor.config.resample_freq
+        if freq is None or not len(bars):
+            return len(bars)
+        return len(np.unique(self.config.dataset._resample_labels(bars.values, freq)))
 
     def _chunks(self, bars: pd.DatetimeIndex, granularity: str) -> list:
         """Return the ``(first, last)`` bars of the ``granularity`` chunks of ``bars``."""

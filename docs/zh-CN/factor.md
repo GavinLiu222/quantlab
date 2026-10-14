@@ -524,7 +524,7 @@ style_features = RosterFactor(RosterConfig(factor=styles, roster=membership))
 
 ### 构建放不进内存的存储
 
-`ChunkedFactor`（`quantlab.factor.predefined.chunked`）把另一个因子按时间一块一块地计算，用于整段一次算不下的区间。它的配置是 `ChunkedConfig`：`factor` 是被包装的因子，`granularity` 为 `None` 或一个 `TimeChunkPlanner` 周期（`"year"`、`"quarter"`、`"month"`、`"day"`、`"hour"`）。为 `None` 时，若整段的峰值（含 warm-up）放得进可用内存的一半（`memory_budget()`），就整段计算；否则按最大一块放得下的最粗周期切分，连一小时都放不下时抛出 `MemoryError`。每个 bar、每个标的的峰值取被包装因子的 `cell_bytes()`，已在 us3000 上校准（`PEAK_COPIES`：KunQuant 为 1，Polars 为 16，其余为 4），再乘以被包装因子输出的标的数 `output_symbols()`：默认是其数据集的标的，`NeutralizedFactor` 取它包装的因子的标的（而不是暴露数据的），`RosterFactor` 取保留下来的名单。`build` 对第一块调用被包装因子的 `build`，之后每块调用它的 `extend`，每块都用被包装因子的 `warmup_bars` 预热，所以内存里只有一块，也只有存储的拥有者写存储；中途失败的构建会保留已完成的块，再调用 `extend(end)` 即可续跑。`compute` 返回一整块面板，所以只是计算放不下时，它逐块填入；输出本身就放不下时抛出 `MemoryError`。只沿时间切分，被包装因子的图对所有块只编译一次（`Factor.keep_compiled`）。重采样过的因子会被拒绝：先分块构建它的源因子，再重采样，重采样只读取源存储。各块拼起来与整段一次算出的结果在浮点容差内相同（float32 为 `rtol=1e-5, atol=1e-6`），这依赖于所有 KunQuant 批量图都用 `quantlab.factor.kunquant.BATCH_OPTIONS` 编译。`store_path`、`store_range()` 和 `read` 都是被包装因子的，所以模型读哪个都一样。
+`ChunkedFactor`（`quantlab.factor.predefined.chunked`）把另一个因子按时间一块一块地计算，用于整段一次算不下的区间。它的配置是 `ChunkedConfig`：`factor` 是被包装的因子，`granularity` 为 `None` 或一个 `TimeChunkPlanner` 周期（`"year"`、`"quarter"`、`"month"`、`"day"`、`"hour"`）。为 `None` 时，若整段的峰值（含 warm-up）放得进可用内存的一半（`memory_budget()`），就整段计算；否则按最大一块放得下的最粗周期切分，连一小时都放不下时抛出 `MemoryError`。每个 bar、每个标的的峰值取被包装因子的 `cell_bytes()`，已在 us3000 上校准（`PEAK_COPIES`：KunQuant 为 1，Polars 为 16，其余为 4），再乘以被包装因子输出的标的数 `output_symbols()`：默认是其数据集的标的，`NeutralizedFactor` 取它包装的因子的标的（而不是暴露数据的），`RosterFactor` 取保留下来的名单。`build` 对第一块调用被包装因子的 `build`，之后每块调用它的 `extend`，每块都用被包装因子的 `warmup_bars` 预热，所以内存里只有一块，也只有存储的拥有者写存储；中途失败的构建会保留已完成的块，再调用 `extend(end)` 即可续跑。`compute` 返回一整块面板，所以只是计算放不下时，它逐块填入；输出本身就放不下时抛出 `MemoryError`。只沿时间切分，被包装因子的图对所有块只编译一次（`Factor.keep_compiled`）。重采样过的因子在其源 bar 上分块，块不会比重采样后的 bar 更细（`"1d"` 因子拒绝 `granularity="hour"`，自动选择时也会跳过它），所以分钟因子的日线存储可以按月构建；包装器本身不能被重采样。`workers`（默认 1）在工作进程里同时计算这么多块，每个进程从配置重建被包装因子，并用它自己的 `njobs` 个线程；本进程按时间顺序写入，写法与被包装因子的 `build` 和 `extend` 写入一块计算结果相同，所以存储仍只由拥有者写入。`workers` 大于 1 且未设 `granularity` 时，计划选“切出至少 `workers` 块、且最大一块的 `workers` 倍放得进 `memory_budget()`”的最粗粒度，让每个工作进程都有块可算（找不到时与单进程的计划相同）；为 1 时计划不变。工作进程数不超过块数，也不超过能在 `memory_budget()` 里同时放下的块数（`parallel_workers(chunks)`，被削减时写日志）。它适合单块耗时主要不在被包装因子自身线程里的情况（读取、解压、映射分钟 bar）；耗时主要在 KunQuant 图里的因子靠 `njobs` 已经用满核心，多开工作进程只会成倍增加内存。被包装因子不能从配置重建成相等的因子时（例如数据集在内存里），多于一个工作进程会被拒绝。工作进程是一个 `joblib.Parallel` 扇出（loky 后端），与仓库里其他扇出相同。各块拼起来与整段一次算出的结果在浮点容差内相同（float32 为 `rtol=1e-5, atol=1e-6`），这依赖于所有 KunQuant 批量图都用 `quantlab.factor.kunquant.BATCH_OPTIONS` 编译。`store_path`、`store_range()` 和 `read` 都是被包装因子的，所以模型读哪个都一样。
 
 在 us3000 上（3103 个 bar x 7625 个标的，按年分块），Alpha158 构建的峰值为 3.0 GB，整段构建为 13.8 GB。
 
@@ -559,6 +559,33 @@ beta = BenchmarkBeta(BenchmarkBetaConfig(
 ))
 ```
 
+### 分钟 bar 的高频因子
+
+`IntradayStats`（`quantlab.factor.predefined.intraday`）计算每个交易日一分钟 bar 的日内统计量，输入是 permaticker 轴上的 Massive Trade bars（`MappedTradeBarDataset` 或 `PermatickerTradeBarDataset`，见 [massive.md](../massive.md)）。输出包括：已实现波动率、偏度、峰度，signed jump，跳跃在 bipower variation 中的占比，分钟收益自相关；日内、隔夜、开盘和收盘前 30 分钟收益，收盘价相对 VWAP；tick-rule 买卖不平衡，收益-成交量和价格-成交量相关；成交量离散度和尾盘 30 分钟成交占比，收盘竞价占比，场外成交占比，分钟 Amihud 和笔均成交量。每个公式及其文献出处见模块 docstring。在每根 bar 上，各输出是“当日截至此刻”的统计量，所以用 `"last"` 重采样到 `"1d"` 后就是每只股票每天一个值。`data_columns` 必须是 `INTRADAY_COLUMNS`，`warmup_bars` 至少覆盖一个交易日（`session_bars`，390）。`kwargs` 接受 `session_bars`、`edge_bars`（30）和 `min_returns`（有成交的 bar 不少于 60，否则为 NaN）。只支持 batch 模式。
+
+KunQuant 不认交易日，所以因子在图运行之前，先由 bar 时间戳算出几个附加输入：bar 在当日的位置和距收盘的 bar 数、当日内最新成交价、计算该 bar 收益的参考价、当日首笔成交价、前一交易日的官方收盘价。日内求和是在 390 根 bar 的窗口上跑一遍循环，只累加当前交易日的 bar，所以半日市只累加自己的 210 根。分钟收益是最新成交价的 `log(p_t / p_{t-1})`（没有成交的 bar 收益为 0），第一根有成交的 bar 从它的开盘价算起。计算用的是 `log1p` 的级数展开，因为 KunQuant 的 float32 `Log` 有约 1e-6 的绝对误差，和平静时一分钟的收益同一量级。
+
+`IntradayAverage` 对一个已存储因子的每个输出取最近 `window` 根 bar 的均值（`IntradayAverageConfig`：`factor`、`window` 20、`min_count` 10）。它读取被包装因子的 store，所以这个 store 必须先在相应区间上建好。十年分钟数据的日线 store 由 `ChunkedFactor` 按月构建，多个月并行计算：
+
+```python
+from quantlab.factor.config import FactorConfig, IntradayAverageConfig
+from quantlab.factor.config import ChunkedConfig
+from quantlab.factor.predefined.chunked import ChunkedFactor
+from quantlab.factor.predefined.intraday import INTRADAY_COLUMNS, IntradayAverage, IntradayStats
+
+daily = IntradayStats(FactorConfig(
+    warmup_bars=390, dataset=minute_bars, mode="batch", data_columns=INTRADAY_COLUMNS,
+    file_path=str(store_path(FACTORS, "intraday_stats")), njobs=4,
+)).resample("1d", "last")
+ChunkedFactor(ChunkedConfig(factor=daily, granularity="month", workers=24)).build("2016-10-11", "2026-10-13")
+monthly = IntradayAverage(IntradayAverageConfig(
+    factor=daily, window=20, file_path=str(store_path(FACTORS, "intraday_stats_20d")),
+))
+monthly.build("2016-10-11", "2026-10-13")
+```
+
+在 S&P 500 名单（783 个 permaticker）上，训练服务器单进程算一个季度的分钟数据约 43 秒，其中读取和映射 bar 占 34 秒，KunQuant 占 4 秒。算一个月约占 2.6 个核、4 GB 内存，所以按月并行构建：24 个工作进程、每个 4 线程，十年用 645 秒；12 个工作进程算 2024 全年用 68 秒。
+
 ### 已有的因子
 
 | 类 | 后端 | 说明 |
@@ -569,6 +596,7 @@ beta = BenchmarkBeta(BenchmarkBetaConfig(
 | `ResidualMomentumFF3` | KunQuant | Fama-French 三因子残差动量；因子序列来自 Fama-French CSV 或面板本身 |
 | `BarraStyle` | KunQuant | USE4 风格暴露：20 个标准化描述子和 12 个风格因子（Size、Beta、Momentum、Residual Volatility、Non-linear Size、Non-linear Beta、Liquidity、Dividend Yield、Book-to-Price、Earnings Yield、Leverage、Growth；Residual Volatility 和两个非线性因子已正交化）以及估计域标记，双精度计算。读取价格与分红（SEP）、市值（DAILY）、八个 SF1 ART 基本面字段、财年历史和无风险利率：见 `BarraStyleParameters().panel_columns`。缺失的风格因子按行业和 Size 插补，然后每个风格再标准化一次，并原样输出时点行业代码 `industry`。与 USE4 的偏离：Earnings Yield 和 Growth 用的是滚动与历史口径，没有分析师预测描述子；CETOP 的现金收益取 `netinccmn + depamor`；优先股取 0；只支持批量 |
 | `BenchmarkBeta` | xarray | 单 bar 收益对单标的基准的滚动 OLS beta；配置类 `BenchmarkBetaConfig` |
+| `IntradayStats`、`IntradayAverage` | KunQuant | 一分钟 bar 的日内统计量（用 `"last"` 重采样到 `"1d"`），以及已存储因子最近若干交易日的均值；均值的配置类是 `IntradayAverageConfig` |
 | `LiteratureAlpha` | KunQuant | 覆盖价格、风险、流动性、基本面和盈利事件的 8 个原始值/排名因子 |
 | `MarketFeatures` | xarray | 每个指数或 ETF 序列 21 个收益和成交额特征，每个有 bar 的标的取值相同；配置类 `MarketFeatureConfig` |
 | `Forward` | 任意 | 把一个因子向前平移成标签 |
@@ -742,7 +770,7 @@ Polars 因子引用了存储中不存在的列时，构造对象就会失败，�
 
 `FactorKunQuant.symbols` 和 `num_symbols` 只在流式模式下存在，取值是数据集配置上固定的标的。批量模式下计算覆盖所请求面板中的标的，访问它们会抛出 `ValueError: MaDeviation.symbols: only a stream-mode factor has a fixed symbol list; a batch computation runs over the symbols of the requested panel. config.mode is 'batch'.` 同样，在流式模式的因子上调用 `compute()` 会抛出 `ValueError: MaDeviation.compute(): a date-range computation runs the batch graph, but config.mode is 'stream'.`
 
-重采样后的因子是其源面板的一个视图：`extend()`、`init_stream()` 和 `cal_stream()` 会拒绝：`Momentum.extend(): a resampled factor (resample_freq='1d') is a view of its source panel and does not support extend. Compute or update the source factor, then resample it.` 构建出的重采样 store 是缓存：重新构建源因子不会刷新它。
+重采样后的因子不能流式计算：`init_stream()` 和 `cal_stream()` 会拒绝：`Momentum.init_stream(): a resampled factor (resample_freq='1d') is a view of its source panel and does not support init_stream. Compute or update the source factor, then resample it.` 它可以 `extend()` 自己的 store：`compute` 会读入一根重采样 bar 覆盖的全部源 bar，所以存下的每根 bar 都是完整的，按季度分段构建的 store 与一次构建的完全相同；分钟因子在多年分钟数据上的日线 store 就是这样构建的。构建出的重采样 store 是缓存：重新构建源因子不会刷新它。
 
 `FactorKunQuant.compute()` 每次调用都会重新编译计算图。把 `factor_names` 固定为需要的列可以让计算图保持较小。
 

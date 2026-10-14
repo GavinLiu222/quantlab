@@ -343,12 +343,26 @@ def test_resampled_read_resamples_the_source_store_without_a_sibling(minute_mome
     _assert_same_values(panel, daily.compute("2024-01-03", "2024-01-05"))
 
 
-def test_resampled_extend_is_refused(minute_momentum):
+def test_resampled_store_built_in_pieces_equals_one_built_whole(minute_momentum):
     daily = minute_momentum.resample("1d", "last")
+    whole = daily.compute("2024-01-02", "2024-01-06")
     daily.build("2024-01-02", "2024-01-04")
 
-    with pytest.raises(ValueError, match="resampled factor"):
-        daily.extend("2024-01-06")
+    daily.extend("2024-01-06")
+
+    assert daily.store_range() == ("2024-01-02", "2024-01-06")
+    _assert_same_values(daily.read("2024-01-02", "2024-01-06"), whole)
+
+
+def test_resampled_extend_mid_day_does_not_repeat_a_bar(minute_momentum):
+    daily = minute_momentum.resample("1d", "last")
+    daily.build("2024-01-02", "2024-01-03 12:00")
+
+    daily.extend("2024-01-05")
+
+    panel = daily.read("2024-01-02", "2024-01-05")
+    assert _days(panel) == ["2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05"]
+    _assert_same_values(panel, daily.compute("2024-01-02", "2024-01-05"))
 
 
 # -- a shared store: its owner and a view pinned to some of its outputs --------------

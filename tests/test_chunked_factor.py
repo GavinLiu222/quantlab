@@ -229,11 +229,117 @@ def test_the_graph_is_compiled_once_for_every_chunk(tmp_path, prices, monkeypatc
     assert inner._lib is None
 
 
-def test_a_resampled_factor_is_refused(tmp_path, prices):
-    daily = _kunquant(prices, tmp_path / "chunked.zarr").resample("1d", "last")
+# --- a resampled factor, built a chunk at a time ------------------------------
 
+_HOURS = np.datetime64("2024-01-01T00") + np.arange(91 * 24).astype("timedelta64[h]")
+
+
+@pytest.fixture
+def hourly(tmp_path):
+    rng = np.random.default_rng(11)
+    close = 50 + rng.normal(0, 0.2, size=(len(_HOURS), len(_SYMBOLS))).cumsum(axis=0)
+    close[: 20 * 24, 2] = np.nan
+    panel = xr.Dataset(
+        {"Close": (("timestamp", "symbol"), close)},
+        coords={"timestamp": _HOURS, "symbol": _SYMBOLS},
+    )
+    return FrameDataset(panel).to_zarr(tmp_path / "hourly.zarr")
+
+
+def _daily(hourly, store):
+    return _kunquant(hourly, store).resample("1d", "last")
+
+
+def test_a_resampled_factor_builds_in_chunks(tmp_path, hourly):
+    whole = _daily(hourly, tmp_path / "whole.zarr").compute(_START, _END)
+    inner = _daily(hourly, tmp_path / "chunked.zarr")
+
+    ChunkedFactor(ChunkedConfig(factor=inner, granularity="month")).build(_START, _END)
+
+    assert inner.store_range() == (_START, _END)
+    _assert_same(inner.read(_START, _END), whole)
+
+
+def test_a_resampled_factor_computes_in_chunks(tmp_path, hourly):
+    whole = _daily(hourly, tmp_path / "whole.zarr").compute("2024-01-15", _END)
+    chunked = ChunkedFactor(ChunkedConfig(factor=_daily(hourly, tmp_path / "c.zarr"), granularity="month"))
+
+    _assert_same(chunked.compute("2024-01-15", _END), whole)
+
+
+def test_chunks_finer_than_the_resampled_bars_are_refused(tmp_path, hourly):
+    with pytest.raises(ValueError, match="finer than"):
+        ChunkedFactor(ChunkedConfig(factor=_daily(hourly, tmp_path / "c.zarr"), granularity="hour"))
+
+
+def test_the_wrapper_itself_cannot_be_resampled(tmp_path, prices):
     with pytest.raises(ValueError, match="resample"):
-        ChunkedFactor(ChunkedConfig(factor=daily))
+        ChunkedFactor(ChunkedConfig(factor=_kunquant(prices, tmp_path / "c.zarr"), resample_freq="1d",
+                                    resample_how="last"))
+
+
+# --- chunks computed in parallel worker processes ------------------------------
+
+
+def test_a_parallel_build_equals_the_whole_build(tmp_path, prices, make):
+    whole = make(prices, tmp_path / "whole.zarr").build(_START, _END)
+    inner = make(prices, tmp_path / "chunked.zarr")
+
+    ChunkedFactor(ChunkedConfig(factor=inner, granularity="month", workers=2)).build(_START, _END)
+
+    assert inner.store_range() == (_START, _END)
+    _assert_same(_stored(inner), _stored(whole))
+
+
+def test_a_parallel_extend_equals_the_whole_build(tmp_path, prices):
+    whole = _kunquant(prices, tmp_path / "whole.zarr").build(_START, _END)
+    inner = _kunquant(prices, tmp_path / "chunked.zarr").build(_START, "2024-01-20")
+
+    ChunkedFactor(ChunkedConfig(factor=inner, granularity="month", workers=2)).extend(_END)
+
+    _assert_same(_stored(inner), _stored(whole))
+
+
+def test_a_parallel_resampled_build_equals_the_whole(tmp_path, hourly):
+    whole = _daily(hourly, tmp_path / "whole.zarr").compute(_START, _END)
+    inner = _daily(hourly, tmp_path / "chunked.zarr")
+
+    ChunkedFactor(ChunkedConfig(factor=inner, granularity="month", workers=3)).build(_START, _END)
+
+    _assert_same(inner.read(_START, _END), whole)
+
+
+def test_a_parallel_compute_equals_the_whole_compute(tmp_path, prices):
+    whole = _kunquant(prices, tmp_path / "whole.zarr").compute("2024-01-10", _END)
+    chunked = ChunkedFactor(ChunkedConfig(
+        factor=_kunquant(prices, tmp_path / "c.zarr"), granularity="month", workers=2,
+    ))
+
+    _assert_same(chunked.compute("2024-01-10", _END), whole)
+
+
+def test_parallel_workers_need_a_factor_that_rebuilds_from_its_config(tmp_path):
+    held = _kunquant(FrameDataset(_prices()), tmp_path / "c.zarr")  # a panel in memory, no store
+
+    with pytest.raises(ValueError, match="rebuild"):
+        ChunkedFactor(ChunkedConfig(factor=held, granularity="month", workers=2)).build(_START, _END)
+
+
+def test_workers_are_cut_to_the_chunks_that_fit_at_once(tmp_path, prices, monkeypatch):
+    chunked = ChunkedFactor(ChunkedConfig(
+        factor=_kunquant(prices, tmp_path / "c.zarr"), granularity="month", workers=8,
+    ))
+    _, chunks = chunked.plan(_START, _END)
+    assert chunked.parallel_workers(chunks) == 3  # three chunks
+
+    one_chunk = chunked._peak_bytes(31)
+    monkeypatch.setattr(chunked_module, "memory_budget", lambda: 2 * one_chunk)
+    assert chunked.parallel_workers(chunks) == 2
+
+
+def test_workers_must_be_positive(tmp_path, prices):
+    with pytest.raises(ValueError, match="workers"):
+        ChunkedFactor(ChunkedConfig(factor=_kunquant(prices, tmp_path / "c.zarr"), workers=0))
 
 
 def test_read_reads_the_wrapped_store(tmp_path, prices):
@@ -317,3 +423,29 @@ def test_a_neutralized_factor_is_sized_on_its_inner_factors_symbols(tmp_path, pr
     # The exposures' fifteen symbols, the old count, would have cut it.
     monkeypatch.setattr(wrapper, "output_symbols", neutral.config.dataset.stored_symbols)
     assert wrapper.plan(_START, _END)[0] is not None
+
+
+def test_workers_make_the_automatic_plan_cut_enough_chunks(tmp_path, prices):
+    inner = _kunquant(prices, tmp_path / "c.zarr")
+
+    assert ChunkedFactor(ChunkedConfig(factor=inner)).plan(_START, _END)[0] is None  # fits whole
+    granularity, chunks = ChunkedFactor(ChunkedConfig(factor=inner, workers=3)).plan(_START, _END)
+    assert granularity == "month" and len(chunks) == 3  # the coarsest with three chunks
+
+
+def test_workers_fall_back_when_no_granularity_gives_them_all_a_chunk(tmp_path, prices):
+    inner = _kunquant(prices, tmp_path / "c.zarr")
+
+    granularity, chunks = ChunkedFactor(ChunkedConfig(factor=inner, workers=500)).plan(_START, _END)
+
+    assert granularity is None and len(chunks) == 1  # as with one worker
+
+
+def test_workers_take_a_finer_granularity_when_their_chunks_do_not_fit_side_by_side(tmp_path, prices, monkeypatch):
+    chunked = ChunkedFactor(ChunkedConfig(factor=_kunquant(prices, tmp_path / "c.zarr"), workers=3))
+    month = chunked._peak_bytes(31)
+    monkeypatch.setattr(chunked_module, "memory_budget", lambda: 3 * month - 1)
+
+    granularity, _ = chunked.plan(_START, _END)
+
+    assert granularity == "day"

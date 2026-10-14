@@ -103,6 +103,57 @@ def _release_executors() -> None:
 BATCH_OPTIONS: dict = {"opt_reduce": False}
 
 
+def run_batch_graph(
+    name: str,
+    function: Function,
+    arrays: dict[str, np.ndarray],
+    timestamps: np.ndarray,
+    symbols: np.ndarray,
+    njobs: int,
+) -> xr.Dataset:
+    """Compile ``function`` for a whole range and run it over ``arrays``.
+
+    For a computation whose inputs do not come from a dataset panel (a
+    factor reading another factor's store, say). The graph is compiled in
+    the ``TS`` layout with ``BATCH_OPTIONS``, the symbols padded and cut as
+    ``FactorKunQuant`` does, and run on the shared executor.
+
+    Parameters
+    ----------
+    name : str
+        The compiled module's name.
+    function : KunQuant.Stage.Function
+        The graph; its ``Input`` names are the keys of ``arrays``.
+    arrays : dict[str, np.ndarray]
+        Contiguous float32 ``[time, symbol]`` inputs.
+    timestamps, symbols : np.ndarray
+        The axes of the inputs and of the returned panel.
+    njobs : int
+        Executor threads.
+
+    Returns
+    -------
+    xr.Dataset
+        Every output of the graph on ``(timestamp, symbol)``.
+
+    Examples
+    --------
+    >>> with Builder() as b:
+    ...     Output(Input("x") * 2.0, "y")
+    >>> run_batch_graph("Double", Function(b.ops), {"x": x}, times, symbols, 2)["y"].shape
+    (3, 8)
+    """
+    lib = cfake.compileit(
+        [(name, function, KunCompilerConfig(input_layout="TS", output_layout="TS", options=dict(BATCH_OPTIONS)))],
+        name,
+        cfake.CppCompilerConfig(),
+    )
+    padded = FactorKunQuant._pad_symbols(arrays, len(symbols))
+    with Timer(f" {name}: cal"):
+        outputs = kr.runGraph(shared_executor(njobs), lib.getModule(name), padded, 0, len(timestamps))
+    return FactorKunQuant._output_panel(FactorKunQuant._cut_symbols(outputs, len(symbols)), timestamps, symbols)
+
+
 class FactorKunQuant(Factor):
     """Factor backend that compiles a KunQuant op graph to native code.
 

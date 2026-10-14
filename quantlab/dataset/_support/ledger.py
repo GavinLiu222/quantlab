@@ -122,6 +122,11 @@ class TimeChunkPlanner:
     #: Accepted granularities, from coarsest to finest. The ingest command
     #: line offers the same values for its ``--chunk`` option.
     GRANULARITIES: tuple[str, ...] = ("year", "quarter", "month", "day", "hour")
+    #: The shortest window of each granularity, in seconds: what a window is
+    #: sure to hold whole (a resampled bar, say).
+    PERIOD_SECONDS: dict[str, int] = {
+        "year": 365 * 86400, "quarter": 89 * 86400, "month": 28 * 86400, "day": 86400, "hour": 3600,
+    }
 
     def __init__(self, granularity: str = "year") -> None:
         """Initialize the planner; see the class docstring for parameters."""
