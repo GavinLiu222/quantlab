@@ -16,6 +16,8 @@
 #
 # Environment (files readable by the owner only):
 #   ~/.config/quantlab/sharadar.env  SHARADAR_API_KEY
+#   $QUANTLAB_DIR/.env               MASSIVE_API_KEY, MASSIVE_S3_ACCESS_KEY_ID (the intraday
+#                                    stage; cron does not read ~/.zshenv, which loads it)
 #   ~/.config/quantlab/mail.env      QUANTLAB_SMTP_USER, QUANTLAB_SMTP_PASSWORD,
 #                                    QUANTLAB_MAIL_TO (see scripts/notify/send_mail.py)
 # Overrides: DATA_DIR, QUANTLAB_DIR, CPUS, UPDATE_FLAGS (e.g. "--dry-run").
@@ -34,7 +36,8 @@ log_file=$log_dir/$(ny +%F).log
 run_update() {
     exec 9> "$log_dir/.lock"
     flock -n 9 || { echo "$(ny '+%F %T %Z') already running" >> "$log_file"; return 0; }
-    [ -r "$HOME/.config/quantlab/sharadar.env" ] && { set -a; . "$HOME/.config/quantlab/sharadar.env"; set +a; }
+    load_env "$HOME/.config/quantlab/sharadar.env"
+    load_env "$QUANTLAB_DIR/.env"
     echo "$(ny '+%F %T %Z') data update: start ${UPDATE_FLAGS:-}" >> "$log_file"
     # shellcheck disable=SC2086
     (cd "$QUANTLAB_DIR" && QUANTLAB_DATA_DIR=$DATA_DIR OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \

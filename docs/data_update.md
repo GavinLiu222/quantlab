@@ -62,7 +62,7 @@ Massive's intraday trades up (see the [Massive guide](massive.md)):
 rows to the Ticker map `market/massive/massive_ticker_map`, up to the last bar of Sharadar's SEP
 store, which the raw stage has brought up. Both are `run` steps with `allow_failure: true`, each
 does at most five days (`--max-days 5`; a store far behind is caught up by a run of its own), and
-neither store is in `ready`: Massive publishes a day's files the morning after, and a late file
+neither store is in `ready`: Massive publishes a day's files at about 00:30 ET the next day, and a late file
 never holds the paper trading, which reads neither store. Both scripts write their folder's
 `component.json` and `README.md` when missing.
 
@@ -116,8 +116,11 @@ holiday, but not a done day). `--check` exits 1 when it finds a problem.
 
 `scripts/data_update/update_daily.sh` is the cron entry. cron calls it every hour and it checks the time in
 New York itself, so daylight-saving changes need no edit; at 04 ET on a weekday it runs the update,
-with `SHARADAR_API_KEY` from `~/.config/quantlab/sharadar.env`, on NUMA Node 1, under a lock, and
-logs to `<data-dir>/logs/data_update/<date>.log`:
+with `SHARADAR_API_KEY` from `~/.config/quantlab/sharadar.env` and the Massive keys
+(`MASSIVE_API_KEY`, `MASSIVE_S3_ACCESS_KEY_ID`) from the repository's `.env` (cron reads no shell
+profile), on NUMA Node 1, under a lock, and logs to `<data-dir>/logs/data_update/<date>.log`.
+Massive publishes a day's files at about 00:30 ET the next day (S3 `LastModified`, August to
+October 2026: 23:40 to 05:14 ET), before the 04 ET run:
 
 ```
 0 * * * * $HOME/projects/quantlab2/scripts/data_update/update_daily.sh
