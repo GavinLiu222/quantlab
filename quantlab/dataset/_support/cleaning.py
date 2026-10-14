@@ -288,6 +288,67 @@ def bad_print_mask(
     return candidate & ~(at_last_priced_bar(candidate.astype(np.float64)) == 1.0)
 
 
+def intrabar_bad_print_mask(price: np.ndarray, close: np.ndarray, *, jump: float = 5.0, lookback: int = 20) -> np.ndarray:
+    """Return where an intrabar price (an open, high or low) is a bad print of its own.
+
+    A vendor can get one price of a bar wrong and the rest right: Sharadar
+    SEP opens SLND (permaticker 636783) at 2000.00 on 2023-02-16, a bar
+    that closed at 8.601 after a close of 8.94, while its trades that day
+    ran from 8.10 to 10.00. ``bad_print_mask`` reads the close and cannot
+    see it. A price is flagged when it is more than ``jump`` times away, up
+    or down, both from its bar's close and from the last priced close among
+    the ``lookback`` bars before it: a real gap is near one of them (a stock
+    that gaps up and holds closes near its open). It reads the bar and the
+    bars before it only, all known at the bar's close.
+
+    On the Sharadar SEP history, at 5 times, it finds 174 opens of 129
+    permatickers the close rule leaves (25 since 2016-10, every one of them
+    wrong: SLND, opens of fractions of a cent), 135 highs and 446 lows. A
+    real day's high or low can fail it: TPST gapped up 7 times on
+    2023-10-11 and closed 40 times up, so its low is more than 5 times from
+    either close. ``BadPrintMaskedDataset`` checks the open only by default.
+
+    Parameters
+    ----------
+    price : np.ndarray
+        ``[T, S]`` adjusted intrabar prices.
+    close : np.ndarray
+        ``[T, S]`` adjusted closes, on the same basis.
+    jump : float, default 5.0
+        Fold distance, above 1, beyond which a price is far.
+    lookback : int, default 20
+        Bars before a bar the last priced close is read from. At least 1.
+
+    Returns
+    -------
+    np.ndarray
+        ``[T, S]`` booleans; ``True`` marks a bad intrabar price.
+
+    Raises
+    ------
+    ValueError
+        If ``jump`` is not above 1 or ``lookback`` below 1.
+
+    Examples
+    --------
+    >>> close = np.array([[8.9], [8.94], [8.6], [8.4]])
+    >>> opens = np.array([[9.0], [8.9], [2000.0], [8.5]])
+    >>> intrabar_bad_print_mask(opens, close).ravel().tolist()
+    [False, False, True, False]
+    """
+    check_bad_print_rule(jump, 1.0, lookback)
+    price = np.asarray(price, dtype=np.float64)
+    close = np.asarray(close, dtype=np.float64)
+    before = pd.DataFrame(close).shift(1).ffill(limit=lookback - 1).to_numpy()
+
+    def far(reference: np.ndarray) -> np.ndarray:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratio = price / reference
+        return np.isfinite(ratio) & ((ratio > jump) | (ratio < 1.0 / jump))
+
+    return far(close) & far(before)
+
+
 def validate_schema(
     data: xr.Dataset, required_columns: tuple[str, ...] = REQUIRED_COLUMNS
 ) -> xr.Dataset:

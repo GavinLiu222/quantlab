@@ -1067,6 +1067,15 @@ class BadPrintMaskedDatasetConfig(MergedDatasetConfig):
         "open", "high", "low", "close", "adjOpen", "adjHigh", "adjLow", "adjClose",
         "marketcap",
     )
+    #: Adjusted intrabar prices checked on their own against the bar's close
+    #: and the close before (``intrabar_bad_print_mask``); a flagged one is
+    #: set to NaN with its unadjusted twin (``adjOpen`` with ``open``) and the
+    #: rest of the bar is kept. ``()`` switches the check off. The open only
+    #: by default: a real day's high or low can be far from both closes (TPST
+    #: on 2023-10-11 gapped up 7 times and closed 40 times up, so its low is
+    #: more than 5 times from either), while an open far from both is wrong
+    #: in every case found since 2016 (25 bars, among them SLND's 2000.00).
+    intrabar_variables: tuple[str, ...] = ("adjOpen",)
 
 
 @dataclass(kw_only=True, frozen=True)

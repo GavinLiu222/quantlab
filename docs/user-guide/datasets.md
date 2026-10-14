@@ -420,7 +420,9 @@ masking it before computing factors. For one-bar vendor errors there is a
 ready mask. `BadPrintMaskedDataset` (`quantlab.dataset.bad_prints`) merges
 datasets like `MergedDataset` and sets the prices of a bad print to NaN. A
 bad print is a move of more than 5 times on ordinary volume, judged only from
-the bar and the 40 bars before it, so a live feed and a backtest agree. Pass
+the bar and the 40 bars before it, so a live feed and a backtest agree; an
+open more than 5 times away from both its bar's close and the close before
+is masked on its own, the rest of the bar kept. Pass
 it to a consumer in place of the merged dataset. See
 [Sharadar daily stocks](../sharadar.md). Two details apply to chunked
 conversions: cleaning runs per window, so a jump that straddles a window

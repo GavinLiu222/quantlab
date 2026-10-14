@@ -232,3 +232,68 @@ def test_the_view_rebuilds_from_its_saved_config(tmp_path):
     assert type(rebuilt) is BadPrintMaskedDataset
     assert (rebuilt.config.jump, rebuilt.config.lookback) == (4.0, 15)
     xr.testing.assert_identical(rebuilt.panel(DAYS[0], DAYS[-1]), view.panel(DAYS[0], DAYS[-1]))
+
+
+# --- a bad intrabar price: an open, high or low far from the bar's own close ----
+
+
+def _intrabar_panel():
+    """SLND's 2023-02-16 shape: an open of 2000 on a bar that closes at 8.6, the close kept."""
+    panel = _panel()
+    close = panel["adjClose"]
+    opens = (close * 1.001).copy()
+    opens[SPIKE_BAR + 5, QUIET] = 200 * float(close[SPIKE_BAR + 5, QUIET])
+    highs = (close * 1.02).copy()
+    lows = (close * 0.98).copy()
+    lows[SPIKE_BAR + 7, QUIET] = float(close[SPIKE_BAR + 7, QUIET]) / 100
+    # A real gap the bar closes in: far from the close before, near its own close.
+    opens[SPIKE_BAR, JUMP] = float(close[SPIKE_BAR, JUMP]) * 0.97
+    raw = panel["close"] / panel["adjClose"]
+    return panel.assign(
+        adjOpen=opens, adjHigh=highs, adjLow=lows,
+        open=opens * raw, high=highs * raw, low=lows * raw,
+    )
+
+
+def test_an_intrabar_price_far_from_both_closes_is_masked_alone():
+    from quantlab.dataset._support.cleaning import intrabar_bad_print_mask
+
+    panel = _intrabar_panel()
+    close = panel["adjClose"].values
+    flags = intrabar_bad_print_mask(panel["adjOpen"].values, close)
+    assert np.argwhere(flags).tolist() == [[SPIKE_BAR + 5, QUIET]]
+    flags = intrabar_bad_print_mask(panel["adjLow"].values, close)
+    assert np.argwhere(flags).tolist() == [[SPIKE_BAR + 7, QUIET]]
+
+
+def test_the_view_masks_a_bad_open_and_keeps_the_bar():
+    view = BadPrintMaskedDataset([FrameDataset(_intrabar_panel())], intrabar_variables=("adjOpen", "adjLow"))
+    panel = view.panel(DAYS[0], DAYS[-1])
+    quiet = panel.sel(symbol="QUIET")  # the view's axis is sorted
+
+    for name in ("adjOpen", "open"):
+        assert np.isnan(quiet[name].values[SPIKE_BAR + 5])
+        assert np.isfinite(np.delete(quiet[name].values, SPIKE_BAR + 5)).all()
+    for name in ("adjLow", "low"):
+        assert np.isnan(quiet[name].values[SPIKE_BAR + 7])
+    for name in ("adjClose", "close", "adjHigh", "high"):
+        assert np.isfinite(quiet[name].values).all()
+    assert np.isfinite(panel["adjOpen"].sel(symbol="JUMP").values).all()  # the real gap
+
+
+def test_the_open_alone_is_checked_by_default():
+    panel = BadPrintMaskedDataset([FrameDataset(_intrabar_panel())]).panel(DAYS[0], DAYS[-1]).sel(symbol="QUIET")
+    assert np.isnan(panel["adjOpen"].values[SPIKE_BAR + 5])
+    assert np.isfinite(panel["adjLow"].values).all()
+
+
+def test_the_intrabar_rule_can_be_switched_off():
+    view = BadPrintMaskedDataset([FrameDataset(_intrabar_panel())], intrabar_variables=())
+    assert np.isfinite(view.panel(DAYS[0], DAYS[-1])["adjOpen"].sel(symbol="QUIET").values).all()
+
+
+def test_a_window_starting_at_a_bad_open_masks_it():
+    view = BadPrintMaskedDataset([FrameDataset(_intrabar_panel())])
+    first = view.panel(DAYS[SPIKE_BAR + 5], DAYS[-1])["adjOpen"].sel(symbol="QUIET")
+
+    assert np.isnan(first.values[0])

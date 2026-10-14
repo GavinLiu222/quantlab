@@ -22,7 +22,11 @@ from typing import Self, Sequence
 import pandas as pd
 import xarray as xr
 
-from quantlab.dataset._support.cleaning import bad_print_mask, check_bad_print_rule
+from quantlab.dataset._support.cleaning import (
+    bad_print_mask,
+    check_bad_print_rule,
+    intrabar_bad_print_mask,
+)
 from quantlab.dataset.base import BaseDataset, InsufficientHistoryError
 from quantlab.dataset.config import BadPrintMaskedDatasetConfig
 from quantlab.dataset.merged import MergedDataset
@@ -93,6 +97,7 @@ class BadPrintMaskedDataset(MergedDataset):
             datasets=merged.datasets,
             name=merged.name,
             masked_variables=tuple(config.masked_variables),
+            intrabar_variables=tuple(config.intrabar_variables),
         )
 
     def panel(
@@ -143,6 +148,31 @@ class BadPrintMaskedDataset(MergedDataset):
             data = data[list(variables)]
         return data
 
+    def _mask_intrabar(self, data: xr.Dataset) -> xr.Dataset:
+        """Set each bad intrabar price, and its unadjusted twin, to NaN (``intrabar_bad_print_mask``).
+
+        Run on the window read with its lookback, so a window's first bar is
+        judged against the close before it as any other bar is.
+        """
+        config = self.config
+        if config.price_variable not in data.data_vars:
+            return data
+        close = data[config.price_variable].transpose("timestamp", "symbol")
+        masked = {}
+        for name in config.intrabar_variables:
+            if name not in data.data_vars:
+                continue
+            price = data[name].transpose("timestamp", "symbol")
+            flags = xr.DataArray(
+                intrabar_bad_print_mask(price.values, close.values, jump=config.jump, lookback=config.lookback),
+                coords=price.coords, dims=price.dims,
+            )
+            twin = name[3].lower() + name[4:] if name.startswith("adj") else None
+            for target in (name, twin):
+                if target is not None and target in data.data_vars:
+                    masked[target] = data[target].where(~flags)
+        return data.assign(**masked)
+
     def bad_prints(self, start, end, symbols: "Sequence | None" = None) -> xr.DataArray:
         """Return which bars from ``start`` to ``end`` are bad prints.
 
@@ -191,7 +221,7 @@ class BadPrintMaskedDataset(MergedDataset):
             dims=price.dims,
         )
         keep = slice(pd.Timestamp(start), None)
-        return flags.sel(timestamp=keep), data.sel(timestamp=keep)
+        return flags.sel(timestamp=keep), self._mask_intrabar(data).sel(timestamp=keep)
 
     def _first_read(self, start) -> pd.Timestamp:
         """Return the bar twice ``lookback`` bars before ``start``, or the first bar."""
