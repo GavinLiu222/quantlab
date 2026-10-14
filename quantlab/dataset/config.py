@@ -36,6 +36,7 @@ from quantlab.enums.data import (
 if TYPE_CHECKING:
     from quantlab.dataset.base import BaseDataset, MarketDataset
     from quantlab.dataset.massive.ticker_map import TickerMap
+    from quantlab.dataset.massive.permaticker_bars import PermatickerTradeBarDataset
     from quantlab.dataset.massive.trade_bars import MassiveTradeBarDataset
 
 
@@ -360,6 +361,35 @@ class PermatickerTradeBarsConfig(FrozenConfig):
     trade_bars: "MassiveTradeBarDataset" = component()
     #: The map from each day's Massive ticker to its permaticker.
     ticker_map: "TickerMap" = component()
+    #: The coarser bars the panel is resampled to; ``None`` for the store's bars.
+    resample_freq: str | None = None
+    #: ``{variable: method}`` of the resample; ``None`` for the Trade bars' defaults.
+    resample_how: dict | None = None
+    #: Dotted import path of the dataset class; filled by the config setter.
+    name: str | None = None
+
+
+@dataclass(kw_only=True, frozen=True)
+class MappedTradeBarsConfig(FrozenConfig):
+    """Config of the Trade bars mapped onto permatickers and kept in a store of their own.
+
+    ``source`` is the permaticker view the store is written from (its own
+    bars, not resampled); ``zarr_file_path`` is the store. ``resample_freq``
+    and ``resample_how`` are set by ``MappedTradeBarDataset.resample``.
+
+    Examples
+    --------
+    With ``bars`` a ``PermatickerTradeBarDataset``:
+
+    >>> cfg = MappedTradeBarsConfig(source=bars, zarr_file_path="/data/massive_permaticker_bars_1m.zarr")
+    >>> sorted(cfg.to_dict())
+    ['name', 'resample_freq', 'resample_how', 'source', 'zarr_file_path']
+    """
+
+    #: The permaticker view the store is written from.
+    source: "PermatickerTradeBarDataset" = component()
+    #: The store of the mapped bars.
+    zarr_file_path: str
     #: The coarser bars the panel is resampled to; ``None`` for the store's bars.
     resample_freq: str | None = None
     #: ``{variable: method}`` of the resample; ``None`` for the Trade bars' defaults.

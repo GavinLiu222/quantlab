@@ -57,7 +57,7 @@ stages:
     steps:
       - extend: risk/use4
   # Intraday trades, run once `done` is written (`after_done`), so a late, slow or failed Massive day
-  # never holds the paper trading; neither store is in `ready`, and each step does at most five days
+  # never holds the paper trading; none of its stores is in `ready`, and each step does at most five days
   # (a store far behind is caught up by a run of its own). The Trade bars need Massive's files of t (published the
   # morning after), the Ticker map also Sharadar's SEP of t (the raw stage) and the day aggregates
   # the conversion downloads.
@@ -75,3 +75,7 @@ stages:
           writes: [market/massive/massive_ticker_map]
           reads: [market/sharadar/sharadar_sep_1d]
           allow_failure: true
+      # The Trade bars mapped onto permatickers (MappedTradeBarDataset): maps again any stored day whose
+      # map rows changed, then appends every day both stores above now hold (about 10 s a day; a store
+      # far behind is caught up by scripts/massive/permaticker_bars.py --workers N).
+      - update: {store: market/massive/massive_permaticker_bars_1m, allow_failure: true}

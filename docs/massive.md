@@ -196,3 +196,27 @@ hourly = bars.resample("1h").panel("2020-03-02", "2020-03-03")
 ```
 
 For each session day the store's ticker columns are mapped through that day's rows of the map: a ticker the map leaves unmapped is dropped, two tickers mapped to one permaticker keep the one with more volume that day, a security that changed ticker is one column across the change, and a permaticker without a ticker on a day reads as a column without a trade (NaN prices, zero volumes). Only the ticker columns the map names are read from the store. `resample` maps the store's one-minute bars first and then aggregates them per session as the Trade bars are. A read records both the store and the map's rows in an open `DataRecorder`, so a run's data fingerprint changes when either does. The view has no store of its own: `update` and `save` are refused, and the store and the map are updated by their own steps.
+
+## Mapped Trade bars
+
+`PermatickerTradeBarDataset` maps on every read: for each session day it reads the day's map rows, picks the store's ticker columns and reorders them, which is most of the cost of reading years of minute bars. `MappedTradeBarDataset` (`quantlab.dataset.massive.mapped_bars`) maps once and keeps the result in a store of its own: the view's panel, the same variables on `(timestamp, symbol)` with `symbol` the int64 permaticker. It is a drop-in `MarketDataset` (`panel`, `resample` per session, calendar, KunQuant export); read a universe through `RosterDataset`.
+
+```python
+from quantlab.core.store_folder import load_component
+from quantlab.dataset.config import MappedTradeBarsConfig
+from quantlab.dataset.massive.mapped_bars import MappedTradeBarDataset
+
+mapped = MappedTradeBarDataset(MappedTradeBarsConfig(
+    source=bars,   # the PermatickerTradeBarDataset above
+    zarr_file_path="/data/quantlab/market/massive/massive_permaticker_bars_1m/massive_permaticker_bars_1m.zarr",
+))
+mapped.update(workers=16)                              # build, or catch up
+panel = mapped.panel("2020-03-02", "2020-03-03")
+daily = mapped.resample("1d").panel("2020-03-02", "2020-03-06")
+
+mapped = load_component("/data/quantlab/market/massive/massive_permaticker_bars_1m")   # the shared one
+```
+
+The store is the view's cache, so it is only as current as the map it was mapped with. The sidecar `<store>.permaticker_map.json` holds a digest of each stored day's mapped `(ticker, permaticker)` rows and the map's rules version. `update(end=None, workers=1)` first maps again every stored day whose rows changed (a rebuilt map: new rules or a Sharadar restatement) and writes it over its own bars; then it maps the session days that both the Trade bar store and the map hold after the store's last, up to `end`, and appends them `BATCH_DAYS` (2) at a time. With `workers` above 1, that many processes map batches ahead of the writes. The sidecar is written after every write, so an interrupted update resumes where it stopped. A permaticker met for the first time is appended at the end of the symbol axis without rewriting what is stored ([ADR 0032](adr/0032-a-stores-symbol-axis-grows-at-its-end.md)) and reads as a column without a trade (NaN prices, zero volumes) before, as the view gives it. `panel` refuses a range holding a day whose map rows no longer match the sidecar (`ValueError: MappedTradeBarDataset: the Ticker map changed on 1 stored day(s) since they were mapped, ...; run update() to map them again.`), so a read never returns bars mapped by a map that has since changed. A store without its sidecar is refused by `update`.
+
+The shared store is `<data-dir>/market/massive/massive_permaticker_bars_1m/`, beside its `README.md` and `component.json`. `scripts/massive/permaticker_bars.py --data-dir ... --workers N` writes the folder when it is missing and builds or catches up the store; the daily data update brings it up to date after the Ticker map (an `update` step, [data_update.md](data_update.md)).
