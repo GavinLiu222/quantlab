@@ -45,6 +45,12 @@ raw rows now map to another permaticker; ``update()`` refuses rather than
 choose between losing history and stopping) is rebuilt from the raw tier
 with ``--rebuild-dropped``: the old store and its ledger are kept beside it
 as ``<store>.pre<YYYYMMDD>`` and the symbols removed and added are printed.
+``--keep-dropped STORE ...`` exempts stores from that rebuild: they refuse and
+are listed as not updated, keeping their history. A security still trading
+can leave a store's axis when only the vendor's TICKERS row that maps its raw
+rows disappears (2026-10-13: AMD's SF2 row, so a rebuild dropped its 5,111
+insider rows), so keep a store whose rebuild would lose such history until
+its mapping is fixed.
 
 ``SHARADAR_API_KEY`` must be set in the environment. Both directories must be
 outside this repository; the script refuses one inside it.
@@ -161,11 +167,14 @@ def _store_start(path: Path) -> str:
 _DROPPED_SYMBOL_REFUSALS = ("refusing to resume", "absent from the pinned whole-range axis")
 
 
-def _update_store(path: Path, make, rebuild_dropped: bool, failures: list) -> None:
+def _update_store(path: Path, make, rebuild_except: set[str] | None, failures: list) -> None:
     """Update one store; rebuild it on a dropped-symbol refusal when asked; record a failure.
 
-    ``make(start_date)`` returns the store's dataset.
+    ``make(start_date)`` returns the store's dataset. ``rebuild_except`` is
+    None when no store is rebuilt, else the store names (``path.stem``) that
+    are not.
     """
+    rebuild_dropped = rebuild_except is not None and path.stem not in rebuild_except
     try:
         dataset = make(_store_start(path)).update()
         print_conversion_result(dataset.last_chunk_result)
@@ -228,6 +237,16 @@ def _build_arg_parser() -> argparse.ArgumentParser:
             "Rebuild from the raw tier a store that refuses because a symbol it "
             "holds left the raw tier's symbol axis, keeping the old store as "
             "<store>.pre<YYYYMMDD>."
+        ),
+    )
+    parser.add_argument(
+        "--keep-dropped",
+        nargs="+",
+        default=[],
+        metavar="STORE",
+        help=(
+            "Stores (e.g. sharadar_insiders_1d) never rebuilt by --rebuild-dropped: "
+            "they refuse and keep their history."
         ),
     )
     add_output_dir_args(
@@ -294,6 +313,7 @@ if __name__ == "__main__":
         parser.exit(1, f"{exc}\n")
 
     failures: list[str] = []
+    rebuild_except = set(args.keep_dropped) if args.rebuild_dropped else None
     for store, fields in PRICE_STORES.items():
         _update_store(
             store_path(market_dir, store),
@@ -301,7 +321,7 @@ if __name__ == "__main__":
                 zarr_file_path=str(store_path(market_dir, store)), raw_data_dir_path=str(vendor_root),
                 **fields, start_date=start,
             )),
-            args.rebuild_dropped, failures,
+            rebuild_except, failures,
         )
     _update_store(
         membership_path,
@@ -309,7 +329,7 @@ if __name__ == "__main__":
             zarr_file_path=str(membership_path), cache_dir=str(vendor_root),
             start_date=start,
         )),
-        args.rebuild_dropped, failures,
+        rebuild_except, failures,
     )
     for store, dimension in FUNDAMENTALS_STORES.items():
         _update_store(
@@ -320,7 +340,7 @@ if __name__ == "__main__":
                     dimension=dimension, start_date=start,
                 )
             ),
-            args.rebuild_dropped, failures,
+            rebuild_except, failures,
         )
     _update_store(
         store_path(market_dir, DAILY_STORE),
@@ -328,7 +348,7 @@ if __name__ == "__main__":
             zarr_file_path=str(store_path(market_dir, DAILY_STORE)), raw_data_dir_path=str(vendor_root),
             start_date=start,
         )),
-        args.rebuild_dropped, failures,
+        rebuild_except, failures,
     )
     for store, (config_cls, dataset_cls) in PANEL_STORES.items():
         _update_store(
@@ -339,7 +359,7 @@ if __name__ == "__main__":
                     start_date=start,
                 )
             ),
-            args.rebuild_dropped, failures,
+            rebuild_except, failures,
         )
     if failures:
         parser.exit(1, f"{len(failures)} store(s) not updated: {failures}\n")
