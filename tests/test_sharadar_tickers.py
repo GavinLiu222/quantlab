@@ -98,8 +98,11 @@ def _pull(
         )
     )
     client = SharadarClient(transport=transport, sleep=lambda seconds: None)
-    for code in ("sep", "tickers", "actions"):
-        client.bulk_table(code, download_dir)
+    # Set here too: the module-scoped `built` runs before the autouse key.
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("SHARADAR_API_KEY", "synthetic-key")  # SYNTHETIC
+        for code in ("sep", "tickers", "actions"):
+            client.bulk_table(code, download_dir)
     return download_dir / "sharadar"
 
 
