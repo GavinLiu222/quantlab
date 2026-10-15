@@ -8,11 +8,9 @@ aggregates them onto ``freq`` bars and cuts the request's window.
 ``resample_on_read``; each supplies only how it opens its source bars and how
 it cuts bars (``BaseDataset.resample_labels``, which a factor takes from its
 dataset). ``resample_panel`` is the aggregation alone, which a factor's
-``compute`` and a dataset holding a panel use too. What a read records stays
-the caller's: the source bars, since the resampled panel is computed, not
-stored. It lives in the backend layer, not beside the config checks of
-``quantlab.utils.resample``, because the grouping runs in an ``XrBackend``,
-which the utils layer comes before (ADR 0022).
+``compute`` and a dataset holding a panel use too. Two things stay the
+caller's: what a read records (the source bars, since the resampled panel is
+computed, not stored) and the range check, whose message names its method.
 
 Examples
 --------
@@ -40,7 +38,7 @@ import pandas as pd
 import xarray as xr
 
 from quantlab.backend.zarr import XrBackend
-from quantlab.utils.date_range import as_label, check_range, resample_padding
+from quantlab.utils.date_range import as_label, last_moment, resample_padding
 from quantlab.utils.resample import assert_coarser, resolve_resample_how
 from quantlab.utils.timer import Timer
 
@@ -146,7 +144,8 @@ def resample_on_read(
     Raises
     ------
     ValueError
-        If ``start`` is after ``end``, or as ``resample_panel`` raises.
+        As ``resample_panel`` raises. The range is not checked here: the
+        caller checks it first (``check_range``), naming its own method.
 
     Examples
     --------
@@ -163,7 +162,7 @@ def resample_on_read(
     >>> daily["timestamp"].values.astype("datetime64[D]").tolist()
     [datetime.date(2024, 1, 2)]
     """
-    first, last = check_range(start, end, owner)
+    first, last = pd.Timestamp(start), last_moment(end)
     pad = resample_padding(freq)
     source = open_source(first - pad, last + pad)
     panel = resample_panel(source, freq, how, labels, owner)

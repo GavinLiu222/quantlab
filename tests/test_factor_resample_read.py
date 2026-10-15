@@ -1,4 +1,4 @@
-"""A resampled factor reads on resample like a resampled dataset (ADR 0002, #300).
+"""A resampled factor resamples on read like a resampled dataset (ADR 0002, #300).
 
 A resampled factor whose own ``<stem>_resample_<freq>.zarr`` store is not built
 reads the source factor's store and resamples the part the request needs, through
