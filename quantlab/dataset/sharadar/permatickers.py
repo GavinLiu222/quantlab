@@ -32,6 +32,14 @@ file pulled before a change is not in it.
    does. A change dated on the pull's own day counts from the next day, as
    the vendor applies it in its evening update.
 
+   The TICKERS history (``tables.fold_tickers_history``) adds holders too:
+   each security a folded snapshot showed under the ticker, until the day
+   before the history first shows it renamed or the ticker reused (a rename
+   TICKERS made before ACTIONS has a row of it). A holder the history shows
+   under another ticker on or after the file's pull, and under this one
+   only later, is not one of the file's, whatever date ACTIONS gives its
+   change: the vendor renames rows when TICKERS shows the new ticker.
+
    A holder is not taken when another security, under any table, held the
    ticker at the file's pull: the old ticker of a stock that a fund (SFP)
    has taken over names the fund in a file of that pull (ACTIONS and SF3A
@@ -78,6 +86,7 @@ from quantlab.dataset.sharadar.tables import (
     scan_raw_table,
     snapshot_for,
     table,
+    tickers_history,
 )
 from quantlab.utils.atomic import write_json_atomically
 
@@ -305,6 +314,8 @@ class PermatickerResolver:
         self._snapshots: dict[Path, dict[str, set[int]]] = {}
         self._snapshots_all: dict[Path, dict[str, set[int]]] = {}
         self._since: dict[str, dict[int, date | None]] | None = None
+        self._seen: dict[tuple[str, int], tuple[datetime, datetime, date | None]] | None = None
+        self._tickers_of: dict[int, list[tuple[str, datetime, datetime]]] | None = None
         #: Per raw file, the tickers it names that were not mapped, and why.
         self.unresolved: dict[Path, dict[str, str]] = {}
         #: ``{ticker: permatickers}`` mapped as the security's own ticker of a
@@ -394,6 +405,58 @@ class PermatickerResolver:
             self._current = self._pairs(scan_raw_table(self.vendor_root, "tickers"))
         return self._current
 
+    def _history_spans(self) -> dict[tuple[str, int], tuple[datetime, datetime, date | None]]:
+        """Return ``{(ticker, permaticker): (first seen, last seen, end)}`` of the TICKERS history, read once.
+
+        Over this table's TICKERS rows of every snapshot folded
+        (``tables.fold_tickers_history``). ``end`` is the day before the
+        security was first seen under another ticker, or the ticker under
+        another security, after the pair was first seen (``None``: neither).
+        """
+        if self._seen is None:
+            history = tickers_history(self.vendor_root)
+            seen: dict[tuple[str, int], tuple[datetime, datetime, date | None]] = {}
+            tickers_of: dict[int, list[tuple[str, datetime, datetime]]] = {}
+            if history is not None and history.height:
+                rows = (
+                    history.filter(pl.col("table").is_in(table(self.code).mapping_labels))
+                    .group_by("ticker", "permaticker")
+                    .agg(pl.col("first_seen").min(), pl.col("last_seen").max())
+                )
+                by_ticker: dict[str, list[datetime]] = {}
+                for ticker, permaticker, first, last in rows.iter_rows():
+                    by_ticker.setdefault(str(ticker), []).append(first)
+                    tickers_of.setdefault(int(permaticker), []).append((str(ticker), first, last))
+                for ticker, permaticker, first, last in rows.iter_rows():
+                    ticker, permaticker = str(ticker), int(permaticker)
+                    # Another pair sharing the ticker or the security, first seen later.
+                    later = [t for t in by_ticker[ticker] if t > first]
+                    later += [f for _, f, _ in tickers_of[permaticker] if f > first]
+                    end = min(later).date() - timedelta(days=1) if later else None
+                    seen[(ticker, permaticker)] = (first, last, end)
+            self._seen = seen
+            self._tickers_of = tickers_of
+        return self._seen
+
+    def _taken_after(self, ticker: str, permaticker: int, day: date) -> bool:
+        """Return whether the TICKERS history shows the security taking ``ticker`` only after ``day``.
+
+        True when a snapshot on or after ``day`` shows the security under
+        another ticker, before any shows it under ``ticker``: a file pulled
+        on ``day`` cannot name the security by ``ticker``, whatever date
+        ACTIONS gives the change (the vendor renames rows when TICKERS shows
+        it). A pair merely first seen late (the vendor dropped the row from
+        earlier snapshots) is not evidence.
+        """
+        pair = self._history_spans().get((ticker, permaticker))
+        if pair is None:
+            return False
+        first = pair[0]
+        return any(
+            other != ticker and last.date() >= day and last < first
+            for other, _, last in self._tickers_of.get(permaticker, ())
+        )
+
     def _sidecar_spans(self) -> list[tuple[str, int, date | None, date | None]]:
         """Return ``(ticker, permaticker, start, end)`` of every span the store's sidecar names.
 
@@ -431,9 +494,11 @@ class PermatickerResolver:
 
         A span's start is the security's change into the ticker (ACTIONS),
         else the sidecar's start, else its first price date (TICKERS); its
-        end the change away (ACTIONS), else the sidecar's next span, else
-        the day after its last price for a ``relatedtickers`` former ticker
-        (``related_spans``).
+        end the change away (ACTIONS), else none for its current ticker,
+        else the day before the TICKERS history first shows it renamed or
+        the ticker reused (``_history_spans``), else the sidecar's next
+        span, else the day after its last price for a ``relatedtickers``
+        former ticker (``related_spans``).
 
         Returns
         -------
@@ -477,7 +542,8 @@ class PermatickerResolver:
         for ticker, permaticker, start, end in self._sidecar_spans():
             sidecar.setdefault((ticker, permaticker), (start, end))
         related = related_spans(self.vendor_root, self.code)
-        keys = set(chain) | set(sidecar) | set(related)
+        seen = self._history_spans()
+        keys = set(chain) | set(sidecar) | set(related) | set(seen)
         keys |= {(t, p) for t, perms in self._current_pairs().items() for p in perms}
         holders: dict[str, list[HolderSpan]] = {}
         for ticker, permaticker in keys:
@@ -489,6 +555,8 @@ class PermatickerResolver:
                 end = chain_end
             elif ticker in self._current_pairs() and permaticker in self._current_pairs()[ticker]:
                 end = None
+            elif (ticker, permaticker) in seen:
+                end = seen[(ticker, permaticker)][2]
             elif (ticker, permaticker) in sidecar:
                 end = side_end
             else:
@@ -585,7 +653,10 @@ class PermatickerResolver:
             others = self._holding_on(day) if left else {}
         unresolved: dict[str, str] = {}
         for ticker in left:
-            spans = holders.get(ticker, [])
+            spans = [s for s in holders.get(ticker, []) if not self._taken_after(ticker, s.permaticker, day)]
+            held = set(others.get(ticker, ()))
+            if snapshot is None:
+                held = {p for p in held if not self._taken_after(ticker, p, day)}
             permatickers = {span.permaticker for span in spans}
             if not spans:
                 unresolved[ticker] = "no permaticker"
@@ -593,11 +664,10 @@ class PermatickerResolver:
             chosen = spans[0].permaticker if len(permatickers) == 1 else self._holder_on(spans, day)
             if chosen is None:
                 unresolved[ticker] = f"several securities used it ({sorted(permatickers)})"
-            elif ticker in others and chosen not in others[ticker]:
+            elif held and chosen not in held:
                 where = "the TICKERS snapshot of its pull" if snapshot is not None else "TICKERS"
                 unresolved[ticker] = (
-                    f"{where} gives it to another security as of its pull "
-                    f"({sorted(others[ticker])})"
+                    f"{where} gives it to another security as of its pull ({sorted(held)})"
                 )
             else:
                 mapped[ticker] = chosen

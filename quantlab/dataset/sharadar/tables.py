@@ -500,6 +500,12 @@ def scan_raw_table(
 ) -> pl.LazyFrame:
     """Scan one raw table: its bulk pull overlaid with its later pulls.
 
+    TICKERS is read with its history (``fold_tickers_history``): a row the
+    history holds and the current pull lacks is kept as of its last
+    sighting, unless another security now holds its ticker in that table.
+    The vendor drops a trading security's row for a day now and then, and a
+    security must not leave a panel, nor its rows their permaticker, for it.
+
     A window pull is a complete copy of the table over its dates, so a row
     is kept only from the newest file covering its date: the bulk file's
     rows of a window's dates, and an older window's rows of a newer
@@ -548,6 +554,8 @@ def scan_raw_table(
         return frame if annotate is None else annotate(path, frame)
 
     base = _overlay_windows(files, windows, scan)
+    if code == "tickers":
+        base = _with_history(vendor_root, base)
     if not updates:
         return base
     key = table(code).primary_key
@@ -657,6 +665,105 @@ def pull_time(path: str | Path) -> datetime:
     return datetime.fromtimestamp(path.stat().st_mtime, UTC)
 
 
+#: Name of the TICKERS history, beside ``tickers.parquet`` (``fold_tickers_history``).
+TICKERS_HISTORY_FILE = "_history.parquet"
+
+#: The columns the TICKERS history adds to TICKERS': when a row was first and
+#: last seen, as the pull times of the snapshots holding it (UTC).
+HISTORY_SEEN = ("first_seen", "last_seen")
+
+#: What one row of the TICKERS history is: a security under one ticker in one table.
+_HISTORY_KEY = ["table", "permaticker", "ticker"]
+
+
+def tickers_history_file(vendor_root: str | Path) -> Path:
+    """Return the path of the TICKERS history (``TICKERS_HISTORY_FILE``)."""
+    return raw_table_dir(vendor_root, "tickers") / TICKERS_HISTORY_FILE
+
+
+def fold_tickers_history(vendor_root: str | Path) -> Path | None:
+    """Fold every TICKERS snapshot into the TICKERS history, and return its path.
+
+    The history holds one row per table, permaticker and ticker ever seen in
+    a snapshot: TICKERS' columns as of the latest snapshot holding it, plus
+    ``first_seen`` and ``last_seen`` (``HISTORY_SEEN``), the pull times of
+    the first and last. Folding is idempotent and keeps what earlier folds
+    saw, so a snapshot pruned after it is folded (``prune_tickers_snapshots``)
+    loses nothing. Nothing is written without a snapshot or a history.
+
+    Examples
+    --------
+    >>> fold_tickers_history("/data/downloads/sharadar").name
+    '_history.parquet'
+    """
+    path = tickers_history_file(vendor_root)
+    schema = TABLES["tickers"].schema
+    frames = [] if not path.exists() else [pl.read_parquet(path)]
+    for snapshot in tickers_snapshots(vendor_root):
+        seen = pull_time(snapshot)
+        frames.append(
+            pl.read_parquet(snapshot)
+            .select([pl.col(name).cast(dtype) for name, dtype in schema.items()])
+            .with_columns(
+                pl.lit(seen).alias(HISTORY_SEEN[0]), pl.lit(seen).alias(HISTORY_SEEN[1])
+            )
+        )
+    if not frames:
+        return None
+    rows = pl.concat(frames, how="vertical_relaxed").drop_nulls(_HISTORY_KEY)
+    folded = (
+        rows.sort("last_seen")
+        .group_by(_HISTORY_KEY, maintain_order=True)
+        .agg(
+            *(pl.col(name).last() for name in schema if name not in _HISTORY_KEY),
+            pl.col("first_seen").min(),
+            pl.col("last_seen").max(),
+        )
+        .select(*schema, *HISTORY_SEEN)
+        .sort(_HISTORY_KEY)
+    )
+    partial = path.with_name(f".{path.name}.partial")
+    folded.write_parquet(partial)
+    partial.replace(path)
+    return path
+
+
+def tickers_history(vendor_root: str | Path) -> pl.DataFrame | None:
+    """Return the TICKERS history (``fold_tickers_history``), or ``None`` without one.
+
+    Examples
+    --------
+    >>> tickers_history("/data/downloads/sharadar").columns[-2:]
+    ['first_seen', 'last_seen']
+    """
+    path = tickers_history_file(vendor_root)
+    return pl.read_parquet(path) if path.exists() else None
+
+
+def _with_history(vendor_root: str | Path, current: pl.LazyFrame) -> pl.LazyFrame:
+    """Return current TICKERS plus the history's rows of securities it lacks (``scan_raw_table``).
+
+    A ``(table, permaticker)`` current TICKERS has no row of comes back as
+    of its last sighting, unless another security holds its ticker in that
+    table now (the ticker was reused, and the old row would make it
+    ambiguous); of two such rows sharing a ticker, the later seen.
+    """
+    path = tickers_history_file(vendor_root)
+    if not path.exists():
+        return current
+    columns = current.collect_schema()
+    vanished = (
+        pl.scan_parquet(path)
+        .join(current.select("table", "permaticker"), on=["table", "permaticker"], how="anti")
+        .join(current.select("table", "ticker"), on=["table", "ticker"], how="anti")
+        .sort("last_seen")
+        .unique(subset=["table", "permaticker"], keep="last", maintain_order=True)
+        .unique(subset=["table", "ticker"], keep="last", maintain_order=True)
+        .select([pl.col(name).cast(dtype) for name, dtype in columns.items()])
+    )
+    return pl.concat([current, vanished])
+
+
 def tickers_snapshots(vendor_root: str | Path) -> list[Path]:
     """Return the TICKERS snapshots, oldest first."""
     return sorted(raw_table_dir(vendor_root, "tickers").glob(f"{SNAPSHOT_PREFIX}*.parquet"))
@@ -689,8 +796,11 @@ def prune_tickers_snapshots(vendor_root: str | Path) -> list[Path]:
     The newest snapshot is always kept (the next pulls of its run map with
     it); an older one is kept while a raw file of any table pairs with it
     (``snapshot_for``). A bulk pull deletes its table's windows, so the
-    snapshots only they used go too.
+    snapshots only they used go too. Every snapshot is first folded into
+    the TICKERS history (``fold_tickers_history``), so a deleted one loses
+    nothing.
     """
+    fold_tickers_history(vendor_root)
     snapshots = tickers_snapshots(vendor_root)
     if len(snapshots) < 2:
         return []

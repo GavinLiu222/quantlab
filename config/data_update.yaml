@@ -36,9 +36,9 @@ stages:
   - name: raw
     steps:
       # A table no strategy reads failing (a vendor hiccup) must not hold the day; the ready stores decide.
-      # SF2/SF3A stores refuse rather than rebuild until a vanished TICKERS row cannot drop a
-      # trading security's history (#263): they skip the day and keep their stored history.
-      - sharadar: {args: [--rebuild-dropped, --keep-dropped, sharadar_insiders_1d, sharadar_holdings_1d], allow_failure: true, writes: [market/sharadar/, universe/sharadar/]}
+      # TICKERS is read with its history (#263), so a row the vendor drops for a day no longer
+      # takes a security off a store; --rebuild-dropped is left for a real move of rows.
+      - sharadar: {args: [--rebuild-dropped], allow_failure: true, writes: [market/sharadar/, universe/sharadar/]}
       # IWV alone from the SFP raw tier the sharadar step pulled (MASTER's market features read it);
       # scripts/sharadar/update.py keeps SPY but not IWV.
       - update: market/sharadar/sharadar_iwv_1d
