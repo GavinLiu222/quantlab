@@ -16,7 +16,7 @@ from quantlab.core.config import FrozenConfig
 from quantlab.enums.data import ResampleFrequency
 
 if TYPE_CHECKING:
-    from quantlab.dataset.base import BaseDataset, MarketDataset
+    from quantlab.dataset.base import BaseDataset, IndexConstituentDataset, MarketDataset
     from quantlab.factor.base import Factor
 
 
@@ -244,6 +244,38 @@ class RosterConfig(BaseFactorConfig):
     factor: "Factor" = component()
     #: The dataset whose store's symbol axis is the roster.
     roster: "BaseDataset" = component()
+
+
+@dataclass(kw_only=True, frozen=True)
+class MembershipMaskedFactorConfig(BaseFactorConfig):
+    """Config of ``quantlab.factor.predefined.membership_mask.MembershipMaskedFactor``.
+
+    ``factor`` is the factor masked; it keeps its own config, warm-up and
+    store, and is computed on unmasked prices. ``membership`` is the
+    point-in-time index membership (its ``is_member`` panel) the cells are
+    judged by. ``dataset`` is filled with the wrapped factor's dataset, so a
+    model counts warm-up bars on the wrapped factor's calendar. All three
+    are component fields, so ``to_dict()`` nests their configs and
+    ``MembershipMaskedFactor.from_config`` rebuilds them.
+
+    Examples
+    --------
+    With ``alphas`` a ``RosterFactor`` over a market-wide store and
+    ``membership`` the S&P 500 membership dataset:
+
+    >>> cfg = MembershipMaskedFactorConfig(factor=alphas, membership=membership)
+    >>> cfg.warmup_bars, cfg.file_path
+    (0, None)
+    """
+
+    #: The wrapped factor warms itself up; anything but 0 is refused.
+    warmup_bars: int = 0
+    #: Filled with the wrapped factor's dataset by the factor's config setter.
+    dataset: "MarketDataset | None" = component(default=None)
+    #: The factor masked.
+    factor: "Factor" = component()
+    #: The point-in-time membership the cells are judged by.
+    membership: "IndexConstituentDataset" = component()
 
 
 @dataclass(kw_only=True, frozen=True)

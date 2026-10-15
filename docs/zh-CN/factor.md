@@ -522,6 +522,20 @@ styles = BarraStyle(FactorConfig(
 style_features = RosterFactor(RosterConfig(factor=styles, roster=membership))
 ```
 
+### 按指数成员资格屏蔽因子
+
+名单包含所有曾经的成员，所以按名单读到的特征，在 t 时对当时不是成员的标的也有值，其中包括以后才进指数的标的。截面模型（GATs、MASTER）把 t 时所有特征有限的标的都当作上下文，所以只按名单读时，它在 t 的截面里会有未来成员，这是用未来信息做的选择。`MembershipMaskedFactor`（`quantlab.factor.predefined.membership_mask`）包装任意因子，凡是标的在该 bar 当天不是成员的格子都设为 NaN（`IndexConstituentDataset.is_member_at`），与 `MembershipMaskedLabel`、`MembershipMaskedPredictor` 的规则相同；非成员在 t 没有有限特征，就不进该 bar 的截面。它的配置是 `MembershipMaskedFactorConfig`：`factor` 是被包装的因子，`membership` 是点时成员资格。屏蔽的是算好的因子，绝不是价格：被包装因子在未屏蔽的价格上计算，所以在 t 进指数的标的，t 的值来自它完整的价格历史，从 t 起就在截面里。对进指数不满一个窗口的标的，模型的特征窗口里进指数之前的 bar 是 NaN。成员资格面板不覆盖的日期会抛出异常，warm-up 的 bar 也算在内；面板的标的全都不在成员资格存储的 symbol 轴上（整数 permaticker 轴对文本轴）时也会抛出异常，否则整个面板都会被屏蔽。输出沿用被包装因子的名字；和 `RosterFactor` 一样没有自己的存储，`build` 和 `extend` 抛出异常。表格模型只拟合标签经成员屏蔽后有值的格子，所以对它们没有影响。
+
+```python
+from quantlab.factor.config import MembershipMaskedFactorConfig
+from quantlab.factor.predefined.membership_mask import MembershipMaskedFactor
+
+features = MembershipMaskedFactor(MembershipMaskedFactorConfig(
+    factor=RosterFactor(RosterConfig(factor=alphas, roster=membership)),
+    membership=membership,
+))
+```
+
 ### 构建放不进内存的存储
 
 `ChunkedFactor`（`quantlab.factor.predefined.chunked`）把另一个因子按时间一块一块地计算，用于整段一次算不下的区间。它的配置是 `ChunkedConfig`：`factor` 是被包装的因子，`granularity` 为 `None` 或一个 `TimeChunkPlanner` 周期（`"year"`、`"quarter"`、`"month"`、`"day"`、`"hour"`）。为 `None` 时，若整段的峰值（含 warm-up）放得进可用内存的一半（`memory_budget()`），就整段计算；否则按最大一块放得下的最粗周期切分，连一小时都放不下时抛出 `MemoryError`。每个 bar、每个标的的峰值取被包装因子的 `cell_bytes()`，已在 us3000 上校准（`PEAK_COPIES`：KunQuant 为 1，Polars 为 16，其余为 4），再乘以被包装因子输出的标的数 `output_symbols()`：默认是其数据集的标的，`NeutralizedFactor` 取它包装的因子的标的（而不是暴露数据的），`RosterFactor` 取保留下来的名单。`build` 对第一块调用被包装因子的 `build`，之后每块调用它的 `extend`，每块都用被包装因子的 `warmup_bars` 预热，所以内存里只有一块，也只有存储的拥有者写存储；中途失败的构建会保留已完成的块，再调用 `extend(end)` 即可续跑。`compute` 返回一整块面板，所以只是计算放不下时，它逐块填入；输出本身就放不下时抛出 `MemoryError`。只沿时间切分，被包装因子的图对所有块只编译一次（`Factor.keep_compiled`）。重采样过的因子在其源 bar 上分块，块不会比重采样后的 bar 更细（`"1d"` 因子拒绝 `granularity="hour"`，自动选择时也会跳过它），所以分钟因子的日线存储可以按月构建；包装器本身不能被重采样。`workers`（默认 1）在工作进程里同时计算这么多块，每个进程从配置重建被包装因子，并用它自己的 `njobs` 个线程；本进程按时间顺序写入，写法与被包装因子的 `build` 和 `extend` 写入一块计算结果相同，所以存储仍只由拥有者写入。`workers` 大于 1 且未设 `granularity` 时，计划选“切出至少 `workers` 块、且最大一块的 `workers` 倍放得进 `memory_budget()`”的最粗粒度，让每个工作进程都有块可算（找不到时与单进程的计划相同）；为 1 时计划不变。工作进程数不超过块数，也不超过能在 `memory_budget()` 里同时放下的块数（`parallel_workers(chunks)`，被削减时写日志）。它适合单块耗时主要不在被包装因子自身线程里的情况（读取、解压、映射分钟 bar）；耗时主要在 KunQuant 图里的因子靠 `njobs` 已经用满核心，多开工作进程只会成倍增加内存。被包装因子不能从配置重建成相等的因子时（例如数据集在内存里），多于一个工作进程会被拒绝。工作进程是一个 `joblib.Parallel` 扇出（loky 后端），与仓库里其他扇出相同。各块拼起来与整段一次算出的结果在浮点容差内相同（float32 为 `rtol=1e-5, atol=1e-6`），这依赖于所有 KunQuant 批量图都用 `quantlab.factor.kunquant.BATCH_OPTIONS` 编译。`store_path`、`store_range()` 和 `read` 都是被包装因子的，所以模型读哪个都一样。
