@@ -80,7 +80,8 @@ def write_parquet_atomically(path: str | Path, frame) -> None:
 
     The frame is written to a temporary file in the destination's directory
     (created if missing) and renamed over it, so an interrupted write leaves
-    either the previous complete file or the new one. On any exception the
+    either the previous complete file or the new one. The file gets the
+    permissions a plain write would (``0o666`` less the umask). On any exception the
     temporary file is removed and the exception propagates.
 
     Parameters
@@ -105,6 +106,11 @@ def write_parquet_atomically(path: str | Path, frame) -> None:
     handle.close()
     try:
         frame.write_parquet(handle.name)
+        # The temporary file is created owner-only; give it the mode a plain
+        # write would (0o666 less the umask), as shared stores expect.
+        umask = os.umask(0)
+        os.umask(umask)
+        os.chmod(handle.name, 0o666 & ~umask)
         os.replace(handle.name, destination)
     except BaseException:
         Path(handle.name).unlink(missing_ok=True)

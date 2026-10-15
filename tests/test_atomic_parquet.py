@@ -22,6 +22,16 @@ def test_the_frame_is_written_and_parents_created(tmp_path):
     assert [p.name for p in path.parent.iterdir()] == ["b.parquet"]
 
 
+def test_the_file_gets_the_permissions_a_plain_write_would(tmp_path):
+    import os
+
+    plain = tmp_path / "plain.parquet"
+    pl.DataFrame({"x": [1]}).write_parquet(plain)
+    atomic = tmp_path / "atomic.parquet"
+    write_parquet_atomically(atomic, pl.DataFrame({"x": [1]}))
+    assert os.stat(atomic).st_mode == os.stat(plain).st_mode
+
+
 def test_a_failed_write_keeps_the_previous_file_and_leaves_no_temporary(tmp_path):
     path = tmp_path / "b.parquet"
     write_parquet_atomically(path, pl.DataFrame({"x": [1]}))
