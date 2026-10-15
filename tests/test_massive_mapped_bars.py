@@ -60,14 +60,6 @@ def test_a_resample_equals_the_views(built, tmp_path):
     _assert_same(mapped.resample("1d").panel(*RANGE), built[2].resample("1d").panel(*RANGE))
 
 
-def test_symbols_off_the_store_read_as_columns_without_a_trade(built, tmp_path):
-    panel = _mapped(built, tmp_path).update().panel(*RANGE, symbols=[505, 999], variables=["close", "volume"])
-
-    assert panel["symbol"].values.tolist() == [505, 999]
-    assert np.isnan(panel["close"].sel(symbol=999)).all()
-    assert (panel["volume"].sel(symbol=999) == 0).all()
-
-
 def test_a_changed_map_is_refused_then_remapped_by_update(built, tmp_path):
     mapped = _mapped(built, tmp_path).update()
     ticker_map: TickerMap = built[1]

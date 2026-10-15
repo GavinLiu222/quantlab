@@ -199,7 +199,7 @@ For each session day the store's ticker columns are mapped through that day's ro
 
 ## Mapped Trade bars
 
-`PermatickerTradeBarDataset` maps on every read: for each session day it reads the day's map rows, picks the store's ticker columns and reorders them, which is most of the cost of reading years of minute bars. `MappedTradeBarDataset` (`quantlab.dataset.massive.mapped_bars`) maps once and keeps the result in a store of its own: the view's panel, the same variables on `(timestamp, symbol)` with `symbol` the int64 permaticker. It is a drop-in `MarketDataset` (`panel`, `resample` per session, calendar, KunQuant export); read a universe through `RosterDataset`.
+`PermatickerTradeBarDataset` maps on every read: for each session day it reads the day's map rows, picks the store's ticker columns and reorders them, which is most of the cost of reading years of minute bars. `MappedTradeBarDataset` (`quantlab.dataset.massive.mapped_bars`) maps once and keeps the result in a store of its own: the view's panel, the same variables on `(timestamp, symbol)` with `symbol` the int64 permaticker. It is a drop-in `MarketDataset` (`panel`, `resample` per session, calendar, KunQuant export); read a universe through `RosterDataset`, which keeps the roster's permatickers the store holds. Unlike the view, `panel` treats `symbols` as a query of the store, as every dataset with a store does ([dataset.md](dataset.md#request-a-date-range-or-symbols)): a permaticker the store does not hold raises `KeyError`. A read records the store in an open `DataRecorder` with the map's rules version; a resampled read records the one-minute bars it resampled.
 
 ```python
 from quantlab.core.store_folder import load_component

@@ -2,7 +2,8 @@
 
 A leaf dataset is one that holds or opens its own bars: a Zarr store, a store
 read through its source and resampled on read, a resampled sibling store, a
-and a panel held in memory. The same requests are put to each of them:
+panel held in memory, and the mapped Trade bar store, plain and resampled. The
+same requests are put to each of them:
 
 - ``symbols`` and ``variables`` are pure queries: kept in the order given, and
   a name the bars lack raises ``KeyError`` instead of reading as an empty column;
@@ -23,12 +24,14 @@ import pytest
 import xarray as xr
 
 from quantlab.dataset.base import BaseDataset
-from quantlab.dataset.config import DatasetConfig
+from quantlab.dataset.config import DatasetConfig, MappedTradeBarsConfig
+from quantlab.dataset.massive.mapped_bars import MappedTradeBarDataset
 from quantlab.dataset.memory import FrameDataset
 from quantlab.dataset.spot import SpotKlineDataset
 from quantlab.dataset.stock import StockDataset
 from quantlab.runs.record import DataRecorder
 from tests.backtest_fixtures import write_price_store
+from tests.test_massive_permaticker_bars import built  # noqa: F401  (fixture of the mapped leaves)
 
 #: Every kline variable, aggregated onto daily bars.
 KLINE_HOW = {
@@ -70,24 +73,24 @@ def _minute_spot(tmp_path: Path) -> SpotKlineDataset:
     ))
 
 
-def _stock(tmp_path) -> Leaf:
+def _stock(tmp_path, request) -> Leaf:
     return Leaf(StockDataset(write_price_store(tmp_path / "stock")), "2024-01-03", "2024-01-10",
                 ["CCC", "AAA"], "NOPE", ["adjClose", "adjOpen"], False)
 
 
-def _resampled_from_source(tmp_path) -> Leaf:
+def _resampled_from_source(tmp_path, request) -> Leaf:
     return Leaf(_minute_spot(tmp_path).resample("1d", KLINE_HOW), "2024-01-02", "2024-01-04",
                 ["BUSDT", "AUSDT"], "NOPE", ["Volume", "Close"], True)
 
 
-def _resampled_sibling(tmp_path) -> Leaf:
+def _resampled_sibling(tmp_path, request) -> Leaf:
     daily = _minute_spot(tmp_path).resample("1d", KLINE_HOW)
     daily.save()
     return Leaf(type(daily)(daily.config), "2024-01-02", "2024-01-04",
                 ["BUSDT", "AUSDT"], "NOPE", ["Volume", "Close"], False)
 
 
-def _frame(tmp_path) -> Leaf:
+def _frame(tmp_path, request) -> Leaf:
     timestamps = pd.bdate_range("2024-01-01", periods=10)
     values = np.arange(30, dtype=float).reshape(10, 3)
     panel = xr.Dataset(
@@ -97,10 +100,21 @@ def _frame(tmp_path) -> Leaf:
     return Leaf(FrameDataset(panel), "2024-01-02", "2024-01-08", ["CCC", "AAA"], "NOPE", ["volume", "close"], False)
 
 
-@pytest.fixture(params=[_stock, _resampled_from_source, _resampled_sibling, _frame],
+def _mapped(tmp_path, request) -> Leaf:
+    view = request.getfixturevalue("built")[2]
+    mapped = MappedTradeBarDataset(MappedTradeBarsConfig(source=view, zarr_file_path=str(tmp_path / "mapped.zarr")))
+    return Leaf(mapped.update(), "2024-11-27", "2024-11-30", [505, 101], 999, ["volume", "close"], False)
+
+
+def _mapped_resampled(tmp_path, request) -> Leaf:
+    leaf = _mapped(tmp_path, request)
+    return Leaf(leaf.dataset.resample("1d"), leaf.start, leaf.end, leaf.symbols, leaf.unknown, leaf.variables, True)
+
+
+@pytest.fixture(params=[_stock, _resampled_from_source, _resampled_sibling, _frame, _mapped, _mapped_resampled],
                 ids=lambda make: make.__name__.lstrip("_"))
 def leaf(request, tmp_path) -> Leaf:
-    return request.param(tmp_path)
+    return request.param(tmp_path, request)
 
 
 def test_symbols_and_variables_come_back_in_the_order_given(leaf):

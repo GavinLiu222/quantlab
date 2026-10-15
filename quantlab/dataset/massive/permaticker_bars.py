@@ -44,14 +44,12 @@ import polars as pl
 import xarray as xr
 from loguru import logger
 
-from quantlab.backend.zarr import XrBackend
 from quantlab.dataset.base import MarketDataset
 from quantlab.dataset.config import PermatickerTradeBarsConfig
 from quantlab.dataset.massive.ticker_map import RULES_VERSION, TickerMap
 from quantlab.dataset.massive.trade_bars import TRADE_BAR_RESAMPLE_HOW, MassiveTradeBarDataset
 from quantlab.runs.record import record_read
 from quantlab.utils.date_range import as_label, check_range, resample_padding
-from quantlab.utils.resample import assert_coarser, resolve_resample_how
 from quantlab.utils.symbol_axis import sort_symbol_axis
 
 
@@ -311,14 +309,7 @@ class PermatickerTradeBarDataset(MarketDataset):
         first, last = check_range(start, end, f"{self.class_name}.panel()")
         pad = resample_padding(freq)
         source = self._mapped_panel(first - pad, last + pad, symbols, None)
-        timestamps = source["timestamp"].values
-        assert_coarser(timestamps, freq, self.class_name)
-        how = resolve_resample_how(
-            self.config.resample_how or dict(self.DEFAULT_RESAMPLE_HOW), list(source.data_vars), self.class_name
-        )
-        labels = pd.Series(self.trade_bars._resample_labels(timestamps, freq), index=timestamps)
-        data = XrBackend().to_internal(source).resample(labels, how).data
-        data = data.sel(timestamp=slice(as_label(start), as_label(end)))
+        data = self._resample_panel(source).sel(timestamp=slice(as_label(start), as_label(end)))
         return data if variables is None else data[list(variables)]
 
     def resample(self, freq: str, how: dict[str, str] | None = None) -> Self:

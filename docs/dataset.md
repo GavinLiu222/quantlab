@@ -131,7 +131,7 @@ np.timedelta64(86400000000,'us')
 
 ### Request a date range or symbols
 
-`panel(start, end, symbols=None)` returns the stored panel for an inclusive date range. It opens the store lazily on every call, loads no variable until it is used, keeps nothing on the dataset and leaves the config alone, so one dataset object answers any number of requests. The store is opened through a fresh backend of the same type as the dataset's `data_backend`, so a dataset that writes another storage medium reads it back the same way.
+`panel(start, end, symbols=None, variables=None)` returns the stored panel for an inclusive date range. It opens the store lazily on every call, loads no variable until it is used, keeps nothing on the dataset and leaves the config alone, so one dataset object answers any number of requests. The store is opened through a fresh backend of the same type as the dataset's `data_backend`, so a dataset that writes another storage medium reads it back the same way. `symbols` and `variables` are pure queries, kept in the order given: a symbol or variable the store lacks raises `KeyError` rather than reading as an empty column. Every dataset that holds its own bars (a store, a resampled store, a panel held in memory, the mapped Trade bars) answers through this one `panel`, so the rule and the run record ([ADR 0021](adr/0021-runs-record-their-data-at-the-dataset-seam-and-the-code-they-ran.md)) are the same for all of them.
 
 ```python
 >>> ds = StockDataset(config)
@@ -145,6 +145,9 @@ symbol       AAPL   MSFT
 timestamp               
 2024-01-03  103.0  303.0
 2024-01-04  104.0  304.0
+>>> ds.panel("2024-01-03", "2024-01-04", symbols=["NOPE"])
+Traceback (most recent call last):
+KeyError: "StockDataset.panel(): symbol(s) ['NOPE'] are not in the store (1 of 1 requested)."
 ```
 
 `bar_before(date, n)` counts `n` bars back from `date` on the store's own calendar, so days without data are skipped. It raises `InsufficientHistoryError`, a `ValueError`, when fewer than `n` bars exist before `date`. A resampled dataset answers both calls on its resampled bars.
@@ -509,6 +512,8 @@ TypeError: Can't instantiate abstract class Incomplete without an implementation
 A dataset that validates or completes its config overrides `_normalize_config(config)`: call `super()._normalize_config(config)` first, check the result, and return a new config made with `dataclasses.replace`. It runs on every assignment, before the config is installed, so an invalid config is refused when the dataset is created. `CrspStockDataset` refuses `symbols` and normalises `permnos` this way. Do not redefine the `config` property.
 
 For a raw source that can filter by date before it loads, implement `_raw_data_to_xr_window` to read only that window. `StockDataset` does so by pruning Parquet partitions, which bounds memory by the window. The slicing form above bounds only the write.
+
+A dataset whose bars do not come from its own Zarr store (a panel held in memory, a store written from another dataset) does not override `panel`. It overrides `_open_bars(start, end)`, which returns its bars from `start` to `end` with every symbol and variable, and `_resamples_on_read()` when `panel` should resample those bars onto `resample_freq`; `panel` applies the symbol and variable query, the resample and the run record. `FrameDataset` and `MappedTradeBarDataset` are the two examples.
 
 ### A dataset that is not OHLCV
 

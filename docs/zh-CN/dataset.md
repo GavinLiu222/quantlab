@@ -131,7 +131,7 @@ np.timedelta64(86400000000,'us')
 
 ### 按日期区间或标的请求面板
 
-`panel(start, end, symbols=None)` 返回已存储面板在一个闭区间内的部分。每次调用都惰性打开 store，变量在被用到之前不会载入内存；dataset 自身不保留任何数据，config 也不会被改动，所以同一个 dataset 对象可以应答任意多次请求。打开 store 用的是一个与 dataset 的 `data_backend` 同类型的新后端，所以换了存储介质的 dataset 也用同一种介质读回数据。
+`panel(start, end, symbols=None, variables=None)` 返回已存储面板在一个闭区间内的部分。每次调用都惰性打开 store，变量在被用到之前不会载入内存；dataset 自身不保留任何数据，config 也不会被改动，所以同一个 dataset 对象可以应答任意多次请求。打开 store 用的是一个与 dataset 的 `data_backend` 同类型的新后端，所以换了存储介质的 dataset 也用同一种介质读回数据。`symbols` 和 `variables` 是纯查询，按给出的顺序返回：store 里没有的标的或变量抛出 `KeyError`，而不是读成一列空值。所有自己持有 bar 的 dataset（store、重采样的 store、内存中的面板、映射后的 Trade bars）都通过这同一个 `panel` 应答，所以这条规则和运行记录（[ADR 0021](../adr/0021-runs-record-their-data-at-the-dataset-seam-and-the-code-they-ran.md)）对它们都一样。
 
 ```python
 >>> ds = StockDataset(config)
@@ -145,6 +145,9 @@ symbol       AAPL   MSFT
 timestamp               
 2024-01-03  103.0  303.0
 2024-01-04  104.0  304.0
+>>> ds.panel("2024-01-03", "2024-01-04", symbols=["NOPE"])
+Traceback (most recent call last):
+KeyError: "StockDataset.panel(): symbol(s) ['NOPE'] are not in the store (1 of 1 requested)."
 ```
 
 `bar_before(date, n)` 在 store 自己的日历上从 `date` 往前数 `n` 根 bar，没有数据的日子会被跳过。`date` 之前不足 `n` 根 bar 时抛出 `InsufficientHistoryError`（一种 `ValueError`）。重采样后的 dataset 在重采样后的 bar 上应答这两个调用。
@@ -509,6 +512,8 @@ TypeError: Can't instantiate abstract class Incomplete without an implementation
 需要校验或补全自己 config 的 dataset，重写 `_normalize_config(config)`：先调用 `super()._normalize_config(config)`，再检查结果，最后返回用 `dataclasses.replace` 生成的新 config。它在每次赋值、config 生效之前运行，所以无效的 config 在创建 dataset 时就被拒绝。`CrspStockDataset` 就是这样拒绝 `symbols` 并归一化 `permnos` 的。不要重新定义 `config` 属性。
 
 如果原始数据源能在加载前按日期过滤，就让 `_raw_data_to_xr_window` 只读取那个窗口。`StockDataset` 通过裁剪 Parquet 分区做到这一点，内存上限由窗口决定；上面的切片写法只限制了写入的量。
+
+bar 不来自自己的 Zarr store 的 dataset（内存中持有的面板、由另一个 dataset 写出的 store）不重写 `panel`，而是重写 `_open_bars(start, end)`，返回从 `start` 到 `end` 的全部标的和变量的 bar；需要 `panel` 把这些 bar 重采样到 `resample_freq` 时再重写 `_resamples_on_read()`。标的和变量的查询、重采样和运行记录都由 `panel` 完成。`FrameDataset` 和 `MappedTradeBarDataset` 就是这样的两个例子。
 
 ### 非 OHLCV 的 dataset
 

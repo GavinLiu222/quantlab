@@ -42,7 +42,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
 from typing import Self
@@ -61,10 +60,8 @@ from quantlab.dataset.config import MappedTradeBarsConfig
 from quantlab.dataset.massive.permaticker_bars import PermatickerTradeBarDataset
 from quantlab.dataset.massive.ticker_map import RULES_VERSION
 from quantlab.dataset.massive.trade_bars import TRADE_BAR_RESAMPLE_HOW
-from quantlab.runs.record import record_read
 from quantlab.utils.atomic import write_json_atomically
-from quantlab.utils.date_range import as_label, check_range, resample_padding
-from quantlab.utils.resample import assert_coarser, resolve_resample_how
+from quantlab.utils.date_range import last_moment
 
 #: Suffix of the sidecar holding each stored day's map digest.
 MAP_SIDECAR = ".permaticker_map.json"
@@ -271,79 +268,22 @@ class MappedTradeBarDataset(MarketDataset):
                 f"were mapped, first {stale[:5]}; run update() to map them again."
             )
 
-    def _stored_panel(self, start, end, symbols, variables) -> xr.Dataset:
-        """Return the store's bars of ``start``..``end``, at the store's own bars."""
-        first, last = check_range(start, end, f"{self.class_name}.panel()")
-        self._check_map(first, last)
-        data = self._open().sel(timestamp=slice(as_label(start), as_label(end)))
-        if symbols is not None:
-            data = data.reindex(
-                symbol=np.array([int(s) for s in symbols], dtype=np.int64),
-                fill_value=self._widen_fill_values(),
-            )
-        if variables is not None:
-            data = data[list(variables)]
-        return XrBackend().to_internal(data).get_xarray_dataset(["timestamp", "symbol"])
+    def _open_bars(self, start, end) -> xr.Dataset:
+        """Return the store's bars of ``start``..``end``, refusing a day mapped by a map since changed.
 
-    def panel(
-        self,
-        start,
-        end,
-        symbols: Sequence | None = None,
-        variables: Sequence[str] | None = None,
-    ) -> xr.Dataset:
-        """Return the mapped Trade bars from ``start`` to ``end``, read from the store.
-
-        Parameters
-        ----------
-        start, end : str, datetime.date or pd.Timestamp
-            The range to return, both inclusive.
-        symbols : sequence of int, optional
-            Permatickers to return, in the order given; one the store lacks
-            reads as a column without a trade. ``None`` returns every stored one.
-        variables : sequence of str, optional
-            Variables to keep, in the order given; ``None`` keeps every one.
-
-        Returns
-        -------
-        xr.Dataset
-            The panel on ``(timestamp, symbol)``, ``symbol`` the int64 permaticker.
-
-        Raises
-        ------
-        FileNotFoundError
-            If the store does not exist.
-        ValueError
-            If the range holds a day whose map rows changed since it was stored.
-
-        Examples
-        --------
-        >>> mapped.panel("2024-11-27", "2024-11-30", symbols=[303], variables=["close"])["symbol"].values.tolist()
-        [303]
+        The read seam's bars (``BaseDataset.panel``): the store's own
+        one-minute bars, lazily, which a resampled dataset resamples on read.
         """
-        freq = self.config.resample_freq
-        if freq is None:
-            panel = self._stored_panel(start, end, symbols, variables)
-        else:
-            first, last = check_range(start, end, f"{self.class_name}.panel()")
-            pad = resample_padding(freq)
-            source = self._stored_panel(first - pad, last + pad, symbols, None)
-            timestamps = source["timestamp"].values
-            assert_coarser(timestamps, freq, self.class_name)
-            how = resolve_resample_how(
-                self.config.resample_how or dict(self.DEFAULT_RESAMPLE_HOW), list(source.data_vars), self.class_name
-            )
-            labels = pd.Series(self._resample_labels(timestamps, freq), index=timestamps)
-            panel = XrBackend().to_internal(source).resample(labels, how).data
-            panel = panel.sel(timestamp=slice(as_label(start), as_label(end)))
-            if variables is not None:
-                panel = panel[list(variables)]
-        record_read(
-            self, panel, symbols=symbols, variables=variables, store=self.store_path,
-            reread=lambda: self.panel(start, end, symbols, variables),
-            settings={"rules_version": RULES_VERSION, "resample_freq": freq},
-        )
-        return panel
+        self._check_map(pd.Timestamp(start), last_moment(end))
+        return self._open().sel(timestamp=slice(start, end))
+
+    def _resamples_on_read(self) -> bool:
+        """Return whether the dataset is resampled: it keeps no resampled store."""
+        return self.config.resample_freq is not None
+
+    def _build_settings(self) -> dict:
+        """The Ticker map rules the stored days were mapped with."""
+        return {"rules_version": RULES_VERSION}
 
     def resample(self, freq: str, how: dict[str, str] | None = None) -> Self:
         """Return this dataset on ``freq`` bars, aggregated per session as the Trade bars are.
