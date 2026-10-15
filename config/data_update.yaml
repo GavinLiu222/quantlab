@@ -44,6 +44,14 @@ stages:
   - name: market-factors
     steps:
       - extend: factors/market/barra_style
+      # Cross-sectional factors on the whole market (common stocks), read on a roster (2026-10-15);
+      # no strategy reads them yet, so a failure does not hold the day.
+      - extend: {store: factors/market/alpha101, allow_failure: true}
+      - extend: {store: factors/market/alpha158, allow_failure: true}
+      - extend: {store: factors/market/alpha101_neutral, allow_failure: true}
+      - extend: {store: factors/market/alpha158_neutral, allow_failure: true}
+      - extend: {store: factors/market/beta_spy, allow_failure: true}
+      - extend: {store: factors/market/beta_spy_neutral, allow_failure: true}
   - name: universe
     steps:
       - update: universe/us3000/membership_estu
