@@ -134,6 +134,19 @@ steps in the body, and the log's last lines when the update did not exit 0.
 (readable by the owner only); without them nothing is sent, and a failed send never fails the run.
 The paper trading (quantlab-ibkr `live_daily.sh`) sends its own mails with the same script.
 
+A mail can carry an HTML body with inline images beside the plain text: `--html FILE` adds the
+HTML, and each `--image CID=PATH` (repeatable) an image the HTML shows with `<img src="cid:CID">`.
+The message is then `multipart/related`, a `multipart/alternative` (the plain body, then the HTML)
+followed by the images with their content ids, so a client without HTML still shows the plain
+body. Without `--html` the mail is plain text as before. `--image` without `--html`, a malformed or
+repeated `CID=PATH`, a missing or unreadable file or one that is not a PNG, JPEG or GIF is
+refused before anything is sent.
+
+```bash
+python scripts/notify/send_mail.py --subject "收盘简报" --body "纯文本正文" \
+    --html briefing.html --image nav=nav.png --image drawdown=drawdown.png
+```
+
 ```bash
 # ~/.config/quantlab/mail.env
 QUANTLAB_SMTP_HOST=smtp.163.com          # default; port 465 (SSL) by default, 587 uses STARTTLS
