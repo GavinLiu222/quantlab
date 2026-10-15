@@ -436,9 +436,9 @@ class FrameDataset(MarketDataset):
         """Return the held panel's timestamps."""
         return pd.DatetimeIndex(self._held()["timestamp"].values)
 
-    def _calendar_source(self) -> str:
-        """Return a description of what ``_calendar`` reads, for error messages."""
-        return "the panel held in memory"
+    def _read_store(self) -> None:
+        """Return ``None``: requests read the panel held in memory, never a store."""
+        return None
 
     def head(self, n: int) -> pl.LazyFrame:
         """Return at most ``n`` rows of the held panel as a ``LazyFrame``.

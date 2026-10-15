@@ -120,17 +120,22 @@ def parse_step(step: dict) -> tuple[str, dict, bool]:
 
 
 def stores_read(item) -> set[Path]:
-    """The stores a component reads: every dataset's and factor's store below it."""
+    """The stores a component reads or writes from: every dataset's and factor's store below it.
+
+    A dataset names the stores it reads itself (``BaseDataset.stores``: a
+    resample on read its source store, a view its inputs'), and its own store;
+    the components under it are walked too, so a store written from another
+    (a mapped Trade bar store from the Trade bar store) depends on both.
+    """
     paths = set()
     for _, part in walk_components(item):
-        if not isinstance(part, (BaseDataset, Factor)):
+        if isinstance(part, BaseDataset):
+            stores = [*part.stores(), part.store_path]
+        elif isinstance(part, Factor):
+            stores = [part.store_path]
+        else:
             continue
-        try:
-            store = part.store_path
-        except ValueError:  # a merged or roster dataset is a view; its inputs are walked too
-            continue
-        if store:
-            paths.add(Path(store).absolute())
+        paths.update(Path(store).absolute() for store in stores if store)
     return paths
 
 

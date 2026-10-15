@@ -69,6 +69,16 @@ class MergedDataset(MarketDataset):
             config = MergedDatasetConfig(datasets=tuple(config))
         super().__init__(config)
 
+    def inputs(self) -> tuple[BaseDataset, ...]:
+        """Return the merged datasets, every one read by ``panel``.
+
+        Examples
+        --------
+        >>> MergedDataset([index, etf]).inputs() == (index, etf)
+        True
+        """
+        return tuple(self.datasets)
+
     @property
     def datasets(self) -> tuple[BaseDataset, ...]:
         """The merged datasets, in order.
@@ -280,10 +290,6 @@ class MergedDataset(MarketDataset):
         calendars = [dataset._calendar() for dataset in self.datasets]
         return pd.DatetimeIndex(np.unique(np.concatenate([c.values for c in calendars])))
 
-    def _calendar_source(self) -> str:
-        """Return the inputs ``_calendar`` reads, for error messages."""
-        return " + ".join(_describe(dataset) for dataset in self.datasets)
-
     def _resample_labels(self, timestamps: np.ndarray, freq: str) -> np.ndarray:
         """Return the bar each timestamp belongs to, as every input cuts bars.
 
@@ -392,23 +398,6 @@ class MergedDataset(MarketDataset):
             f"input instead."
         )
 
-    @property
-    def store_path(self) -> str:
-        """Refuse: a merged view has no store; each input has its own.
-
-        Raises
-        ------
-        ValueError
-            Always.
-
-        Examples
-        --------
-        >>> merged.store_path
-        Traceback (most recent call last):
-        ValueError: MergedDataset.store_path(): a merged dataset is a view of its inputs ...
-        """
-        self._refuse("store_path")
-
     def resample(self, freq, how) -> Self:
         """Refuse: resample the inputs, then merge them.
 
@@ -515,7 +504,7 @@ def _own_names(dataset: BaseDataset, variables) -> "list[str] | None":
 
 def _describe(dataset: BaseDataset) -> str:
     """Return ``ClassName(store)`` for an input, for error messages."""
-    return f"{dataset.class_name}({dataset._calendar_source()})"
+    return f"{dataset.class_name}({dataset._stores_text()})"
 
 
 class _FirstKnownLookup(TickerLookup):

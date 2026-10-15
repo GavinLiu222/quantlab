@@ -31,9 +31,13 @@ The run directory is the strategy's recipe: `config.json` rebuilds the backteste
    the S&P 500 strategy, the roster store `sharadar_sp500_1d.zarr`).
 2. **The inputs.** The job walks the component tree under `price_dataset`, `model` and
    `constructor` (`quantlab.core.component.walk_components`). The model's labels are left
-   out, because a prediction reads no label. Every *leaf dataset* in the tree (a dataset with
-   a store of its own and no dataset under it) must already hold t. These are the vendor's
-   stores, and the job does not update them. Two options change this:
+   out, because a prediction reads no label. Every store a dataset in the tree reads must
+   already hold t. Each dataset declares those stores itself (`BaseDataset.stores()`, which
+   `quantlab.backtest.live.input_stores(backtester)` gathers): a store of its own, the source
+   store of a dataset resampled on read, or, for a view (a `RosterDataset`, a `MergedDataset`,
+   the permaticker Trade bar view), its inputs' stores. A mapped Trade bar store
+   (`MappedTradeBarDataset`) is checked itself, not the Trade bar store it is written from.
+   These are the vendor's stores, and the job does not update them. Two options change this:
    - `--may-lag STORE` lets a store end before t. Use it for a rate published the next
      business day and read lagged, such as FRED's DTB3. Its last bar is recorded.
    - `--mirror STORE` marks a store that copies variables of the price store. It gains the price store's
@@ -158,7 +162,7 @@ which is why the job passes it as `--may-lag`.
 | `reason` | When | Exit status |
 |----------|------|-------------|
 | `already_predicted` | t is already in the store: the day is done. | 3 |
-| `missing_data` | A leaf dataset does not hold t, or a factor store the run reads only through views does not. Nothing is extended, and the message names each store with its last bar. Also raised if a store still lacks t after extension, or the model predicts no row at t. | 2 |
+| `missing_data` | A store a dataset reads does not hold t, or a factor store the run reads only through views does not. Nothing is extended, and the message names each store with its last bar. Also raised if a store still lacks t after extension, or the model predicts no row at t. | 2 |
 | `foreign_store` | The store was written for another run, checkpoint or label set. | 1 |
 | `invalid` | The run has no model's predictions, an option names no store of the run, or the price store ends before the store's last bar. | 1 |
 

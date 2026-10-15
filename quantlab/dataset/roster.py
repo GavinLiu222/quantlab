@@ -85,6 +85,16 @@ class RosterDataset(MarketDataset):
             )
         super().__init__(config)
 
+    def inputs(self) -> tuple[BaseDataset, ...]:
+        """Return the wrapped dataset and the roster dataset, both read by ``panel``.
+
+        Examples
+        --------
+        >>> RosterDataset(sep, membership).inputs() == (sep, membership)
+        True
+        """
+        return (self.dataset, self.config.roster)
+
     @property
     def dataset(self) -> MarketDataset:
         """The wrapped dataset.
@@ -188,10 +198,6 @@ class RosterDataset(MarketDataset):
         """Return the wrapped dataset's calendar."""
         return self.dataset._calendar()
 
-    def _calendar_source(self) -> str:
-        """Return the store the wrapped dataset's calendar reads, for error messages."""
-        return self.dataset._calendar_source()
-
     def _resample_labels(self, timestamps: np.ndarray, freq: str) -> np.ndarray:
         """Return the bars the wrapped dataset cuts ``timestamps`` into."""
         return self.dataset._resample_labels(timestamps, freq)
@@ -284,23 +290,6 @@ class RosterDataset(MarketDataset):
             f"{self.dataset.class_name}'s store and holds no store of its own; "
             f"call {method}() on the wrapped dataset."
         )
-
-    @property
-    def store_path(self) -> str:
-        """Refuse: a roster view has no store; the wrapped dataset has one.
-
-        Raises
-        ------
-        ValueError
-            Always.
-
-        Examples
-        --------
-        >>> prices.store_path
-        Traceback (most recent call last):
-        ValueError: RosterDataset.store_path(): a roster dataset is a view of ...
-        """
-        self._refuse("store_path")
 
     def resample(self, freq, how) -> Self:
         """Refuse: resample the wrapped dataset, then wrap it.

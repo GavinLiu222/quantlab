@@ -327,10 +327,6 @@ class MappedTradeBarDataset(MarketDataset):
         finally:
             stored.close()
 
-    def _calendar_source(self) -> str:
-        """Return the store, for error messages."""
-        return self.store_path
-
     def _resample_labels(self, timestamps: np.ndarray, freq: str) -> np.ndarray:
         """Return the bars the Trade bar dataset cuts ``timestamps`` into."""
         return self.source._resample_labels(timestamps, freq)

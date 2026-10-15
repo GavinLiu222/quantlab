@@ -132,7 +132,9 @@ def test_it_answers_on_the_wrapped_calendar_and_has_no_store(market):
     assert view.calendar(_START, _END).equals(prices.calendar(_START, _END))
     assert view.bar_before("2024-01-10", 3) == prices.bar_before("2024-01-10", 3)
     assert view.stored_symbols() == ["2", "4"]
-    for refused in (lambda: view.store_path, view.update, view.save, view.from_raw_data,
+    assert view.store_path is None
+    assert view.leaves() == (prices, roster) and view.stores() == []  # held panels read no store
+    for refused in (view.update, view.save, view.from_raw_data,
                     lambda: view.resample("1w", "last")):
         with pytest.raises(ValueError, match="holds no store of its own"):
             refused()

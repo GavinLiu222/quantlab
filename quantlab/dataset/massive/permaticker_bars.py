@@ -108,6 +108,16 @@ class PermatickerTradeBarDataset(MarketDataset):
         """
         return self.config.trade_bars
 
+    def inputs(self) -> tuple[MassiveTradeBarDataset]:
+        """Return the Trade bar dataset, the one dataset ``panel`` reads (the Ticker map is not a dataset).
+
+        Examples
+        --------
+        >>> PermatickerTradeBarDataset(trade_bars, ticker_map).inputs() == (trade_bars,)
+        True
+        """
+        return (self.trade_bars,)
+
     @property
     def ticker_map(self) -> TickerMap:
         """The Ticker map.
@@ -344,10 +354,6 @@ class PermatickerTradeBarDataset(MarketDataset):
         """Return the Trade bar dataset's calendar."""
         return self.trade_bars._calendar()
 
-    def _calendar_source(self) -> str:
-        """Return the store the Trade bar calendar reads, for error messages."""
-        return self.trade_bars._calendar_source()
-
     def _resample_labels(self, timestamps: np.ndarray, freq: str) -> np.ndarray:
         """Return the bars the Trade bar dataset cuts ``timestamps`` into."""
         return self.trade_bars._resample_labels(timestamps, freq)
@@ -382,23 +388,6 @@ class PermatickerTradeBarDataset(MarketDataset):
             f"{self.class_name}.{method}(): the permaticker view reads the Trade bar store and the "
             f"Ticker map and holds no store of its own; update those instead."
         )
-
-    @property
-    def store_path(self) -> str:
-        """Refuse: the view has no store.
-
-        Raises
-        ------
-        ValueError
-            Always.
-
-        Examples
-        --------
-        >>> bars.store_path
-        Traceback (most recent call last):
-        ValueError: PermatickerTradeBarDataset.store_path(): the permaticker view reads ...
-        """
-        self._refuse("store_path")
 
     def save(self, **kwargs):
         """Refuse: the view has no store.

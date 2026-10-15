@@ -14,9 +14,9 @@ walking the component tree of the run's backtester under ``price_dataset``,
 ``model`` and ``constructor`` (``walk_components``), leaving out the model's
 labels (a prediction reads none):
 
-- every *leaf dataset* (a dataset holding a store, no other dataset under
-  it) must already hold t: they are the vendor's stores, which this job does
-  not update. A store named in ``may_lag`` may end earlier (a rate published
+- every store a dataset reads, as the dataset declares it
+  (``BaseDataset.stores``, gathered by ``input_stores``), must already hold
+  t: they are the vendor's stores, which this job does not update. A store named in ``may_lag`` may end earlier (a rate published
   the next business day, read lagged); its last bar is recorded. A store
   named in ``mirrors`` is a copy of some of the price dataset's variables
   (the example's ``prices.zarr``): it gains the price dataset's bars after
@@ -78,6 +78,7 @@ from quantlab.utils.symbol_axis import sort_symbol_axis
 __all__ = [
     "LivePrediction",
     "LivePredictionRefused",
+    "input_stores",
     "last_bar",
     "mirror_new_bars",
     "predict_live_bar",
@@ -275,9 +276,55 @@ def _inputs(backtester) -> Iterator[tuple[str, object]]:
                 yield path, item
 
 
-def _is_leaf(dataset: BaseDataset) -> bool:
-    """Whether no dataset lies under ``dataset`` (it reads a store of its own)."""
-    return not any(isinstance(item, BaseDataset) for _, item in walk_components(dataset))
+def input_stores(backtester) -> dict[str, tuple[str, BaseDataset]]:
+    """Return the stores a run's prediction and decision read, each with who reads it.
+
+    The components under ``INPUT_FIELDS`` are walked (the model's labels left
+    out, as a prediction reads none). Each dataset reached says itself which
+    stores its panel reads (``BaseDataset.stores``, through its ``leaves``),
+    so the components under a dataset are not walked: a view's inputs are
+    its leaves, and what a dataset only writes its store from (a mapped
+    Trade bar store's source view) is not read. Every store is keyed by its
+    absolute path, with the first component path reading it and the leaf
+    dataset whose calendar answers on it; a panel held in memory reads no
+    store and is keyed ``<in memory: path>``. These are the stores
+    ``predict_live_bar`` checks to hold the bar it predicts.
+
+    Parameters
+    ----------
+    backtester : BaseBacktester
+        The run's backtester, rebuilt from its directory.
+
+    Returns
+    -------
+    dict
+        ``{store: (component path, leaf dataset)}``.
+
+    Examples
+    --------
+    With ``backtester`` rebuilt from a run whose price dataset is a
+    ``RosterDataset`` of a SEP store on a membership store:
+
+    >>> list(input_stores(backtester))
+    ['/data/quantlab/market/sharadar/sharadar_sep_1d/sharadar_sep_1d.zarr', '/data/quantlab/universe/sp500/membership/membership.zarr']
+    """
+    stores: dict[str, tuple[str, BaseDataset]] = {}
+    datasets: list[str] = []
+    seen: set[int] = set()
+    for path, item in _inputs(backtester):
+        if not isinstance(item, BaseDataset):
+            continue
+        if any(path.startswith(f"{above}.") for above in datasets):
+            continue  # the dataset above declares what it reads
+        datasets.append(path)
+        for leaf in item.leaves():
+            if id(leaf) in seen:
+                continue
+            seen.add(id(leaf))
+            # A dataset held in memory reads no store; its path names it.
+            for key in [_key(store) for store in leaf.stores()] or [f"<in memory: {path}>"]:
+                stores.setdefault(key, (path, leaf))
+    return stores
 
 
 def _refuse(message: str, reason: str) -> None:
@@ -351,8 +398,9 @@ def predict_live_bar(
 
     backtester = run.rebuild_backtester()
     price = backtester.config.price_dataset
-    # A view (a roster or merged dataset) has no store; name the one its calendar reads.
-    price_store = price._calendar_source()
+    # A view (a roster or merged dataset) has no store; name those it reads.
+    price_stores = price.stores()
+    price_store = " + ".join(price_stores) or "the panel held in memory"
     t = last_bar(price)
     if t is None:
         _refuse(f"the price dataset's store {price_store} holds no bar", "missing_data")
@@ -379,12 +427,7 @@ def predict_live_bar(
         )
 
     components = list(_inputs(backtester))
-    leaves: dict[str, tuple[str, BaseDataset]] = {}
-    for path, item in components:
-        if isinstance(item, BaseDataset) and _is_leaf(item):
-            # A dataset held in memory has no store; its path names it.
-            key = _key(item.store_path) if item.store_path else f"<in memory: {path}>"
-            leaves.setdefault(key, (path, item))
+    leaves = input_stores(backtester)
     mirrored = {_key(p) for p in mirrors}
     lagging = {_key(p) for p in may_lag}
     for name, named in (("mirrors", mirrored), ("may_lag", lagging)):
@@ -394,7 +437,7 @@ def predict_live_bar(
                 f"{sorted(leaves)}",
                 "invalid",
             )
-    if _key(price_store) in mirrored:
+    if any(_key(store) in mirrored for store in price_stores):
         _refuse(f"the price dataset's own store {price_store} cannot mirror itself", "invalid")
 
     missing = [

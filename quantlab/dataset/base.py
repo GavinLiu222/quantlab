@@ -608,13 +608,15 @@ class BaseDataset(Component, ABC):
         ).symbol.values.tolist()
 
     @property
-    def store_path(self) -> str:
-        """Return the Zarr store this dataset reads and writes.
+    def store_path(self) -> str | None:
+        """Return the Zarr store this dataset keeps its own bars in, or ``None``.
 
         This is ``config.zarr_file_path`` for a dataset that is not
         resampled. A resampled dataset uses a store beside it with
         ``_resample_<freq>`` added to the name, so the resampled panel never
-        overwrites the source bars.
+        overwrites the source bars; until that store is saved, its requests
+        read the source store (see ``stores``). A view keeps no store of its
+        own: ``None``.
 
         Examples
         --------
@@ -622,10 +624,111 @@ class BaseDataset(Component, ABC):
         'data/klines.zarr'
         >>> ds.resample("1d", "last").store_path
         'data/klines_resample_1d.zarr'
+        >>> RosterDataset(ds, membership).store_path is None
+        True
         """
+        if self.inputs():
+            return None
         return resample_store_path(
             self.config.zarr_file_path, self.config.resample_freq
         )
+
+    def inputs(self) -> tuple["BaseDataset", ...]:
+        """Return the datasets this dataset's panel reads through: ``()`` for a leaf.
+
+        A *leaf* answers ``panel`` from a store (or a panel held in memory)
+        of its own; a *view* answers it by reading other datasets, its
+        inputs, and keeps no store (a roster cut, a merge, a mapping). A view
+        declares its inputs here; what a dataset merely holds in its config
+        to write its store (``MappedTradeBarDataset``'s source view) is not
+        an input. ``leaves`` and ``stores`` follow the declaration.
+
+        Returns
+        -------
+        tuple of BaseDataset
+            The inputs, in order; empty for a leaf.
+
+        Examples
+        --------
+        >>> ds.inputs()
+        ()
+        >>> RosterDataset(ds, membership).inputs() == (ds, membership)
+        True
+        """
+        return ()
+
+    def leaves(self) -> tuple["BaseDataset", ...]:
+        """Return the leaf datasets this dataset's panel reads: itself, or its inputs' leaves.
+
+        A leaf reached through two inputs is listed once, where it is first
+        reached.
+
+        Returns
+        -------
+        tuple of BaseDataset
+            The leaves, in input order.
+
+        Examples
+        --------
+        >>> ds.leaves() == (ds,)
+        True
+        >>> MergedDataset([ds, etf]).leaves() == (ds, etf)
+        True
+        """
+        inputs = self.inputs()
+        if not inputs:
+            return (self,)
+        found: dict[int, BaseDataset] = {}
+        for dataset in inputs:
+            for leaf in dataset.leaves():
+                found.setdefault(id(leaf), leaf)
+        return tuple(found.values())
+
+    def stores(self) -> list[str]:
+        """Return the stores this dataset's panel reads, in order.
+
+        A leaf reads one store: ``store_path``, or the source store
+        (``config.zarr_file_path``) while a resampled dataset resamples on
+        read; a panel held in memory reads none. A view reads its leaves'
+        stores, each listed once. This is the one answer to "which stores
+        does this read": the read seam records the store it names, and the
+        live day (``quantlab.backtest.live.input_stores``) checks these
+        stores hold the bar it predicts. Nothing is opened.
+
+        Returns
+        -------
+        list of str
+            The store paths.
+
+        Examples
+        --------
+        >>> ds.stores()
+        ['data/klines.zarr']
+        >>> ds.resample("1d", "last").stores()  # no resampled store saved yet
+        ['data/klines.zarr']
+        >>> RosterDataset(ds, membership).stores()
+        ['data/klines.zarr', 'data/membership.zarr']
+        """
+        stores: list[str] = []
+        for leaf in self.leaves():
+            store = leaf._read_store()
+            if store is not None and store not in stores:
+                stores.append(store)
+        return stores
+
+    def _read_store(self) -> str | None:
+        """Return the store a leaf's panel opens: the source store while it resamples on read.
+
+        ``None`` for a leaf whose panel is held in memory. Only asked of a
+        leaf (``stores`` asks every leaf of a view).
+        """
+        if self._resamples_on_read():
+            return self.config.zarr_file_path
+        return self.store_path
+
+    def _stores_text(self) -> str:
+        """Return the stores read, joined, for error messages."""
+        return " + ".join(self.stores()) or "the panel held in memory"
 
     def copy(self) -> Self:
         """Return a copy with its own config and an empty storage backend.
@@ -841,8 +944,7 @@ class BaseDataset(Component, ABC):
         FileNotFoundError
             If the store does not exist.
         """
-        path = self.config.zarr_file_path if self._resamples_on_read() else self.store_path
-        return self._open_store(path).sel(timestamp=slice(start, end))
+        return self._open_store(self._read_store()).sel(timestamp=slice(start, end))
 
     def _query(self, data: xr.Dataset, symbols, variables) -> xr.Dataset:
         """Return ``data`` cut to ``symbols`` and ``variables``, in the order given.
@@ -944,6 +1046,7 @@ class BaseDataset(Component, ABC):
             panel = XrBackend().to_internal(data).get_xarray_dataset(["timestamp", "symbol"])
             record_read(
                 self, panel, symbols=symbols, variables=variables,
+                store=self._read_store(),
                 reread=lambda: self.panel(start, end, symbols, variables),
                 settings=self._build_settings(),
             )
@@ -956,7 +1059,7 @@ class BaseDataset(Component, ABC):
         # The resampled panel is computed, not stored: the source bars are the read.
         record_read(
             self, read, symbols=symbols, variables=variables,
-            store=self.config.zarr_file_path, reread=lambda: read,
+            store=self._read_store(), reread=lambda: read,
             settings=self._build_settings(),
         )
         return XrBackend().to_internal(data).get_xarray_dataset(["timestamp", "symbol"])
@@ -1070,7 +1173,7 @@ class BaseDataset(Component, ABC):
         if position < n:
             raise InsufficientHistoryError(
                 f"{self.class_name}.bar_before(): only {position} bar(s) "
-                f"exist before {date!r} in {self._calendar_source()}, but {n} "
+                f"exist before {date!r} in {self._stores_text()}, but {n} "
                 f"were requested.",
                 available=position,
                 requested=n,
@@ -1126,20 +1229,11 @@ class BaseDataset(Component, ABC):
             return target
         return calendar[len(calendar) - following + min(n, following) - 1]
 
-    def _calendar_source(self) -> str:
-        """Return the store ``_calendar`` reads, for error messages."""
-        if self._resamples_on_read():
-            return self.config.zarr_file_path
-        return self.store_path
-
     def _calendar(self) -> pd.DatetimeIndex:
         """Return the sorted timestamps requests are answered on."""
+        timestamps = self._open_store(self._read_store())["timestamp"].values
         if not self._resamples_on_read():
-            timestamps = self._open_store(self.store_path)["timestamp"].values
             return pd.DatetimeIndex(timestamps)
-        timestamps = self._open_store(self.config.zarr_file_path)[
-            "timestamp"
-        ].values
         labels = self._resample_labels(timestamps, self.config.resample_freq)
         return pd.DatetimeIndex(np.unique(labels))
 
