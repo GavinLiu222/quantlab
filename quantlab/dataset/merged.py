@@ -303,6 +303,42 @@ class MergedDataset(MarketDataset):
                 )
         return labels[0]
 
+    def tradable_bars(self, prices: xr.Dataset, fill_column: str) -> xr.DataArray:
+        """Mark which symbols can be traded at each bar: tradable for every input.
+
+        Each input market dataset judges this view's panel by its own rule
+        (``MarketDataset.tradable_bars``: a real fill price at the bar, plus
+        what the input knows, such as SEP's halted bars), and a bar is
+        tradable only when every input says so. On a view that masks prices
+        (``BadPrintMaskedDataset``) a masked fill price is therefore no fill
+        price, and an input's own rule still holds.
+
+        Parameters
+        ----------
+        prices : xr.Dataset
+            A panel of this view on ``(timestamp, symbol)``.
+        fill_column : str
+            The price orders fill at.
+
+        Returns
+        -------
+        xr.DataArray
+            Booleans on the panel's ``(timestamp, symbol)``.
+
+        Examples
+        --------
+        With ``sep`` a Sharadar SEP dataset, SIVB's halted bars (volume 0,
+        the last close repeated) stay untradable through the bad-print mask::
+
+            prices = BadPrintMaskedDataset([sep])
+            prices.tradable_bars(prices.panel("2023-03-10", "2023-03-28"), "adjOpen")
+        """
+        tradable = super().tradable_bars(prices, fill_column)
+        for dataset in self.datasets:
+            if isinstance(dataset, MarketDataset):
+                tradable = tradable & dataset.tradable_bars(prices, fill_column)
+        return tradable
+
     def own_names(self, names) -> list[str]:
         """Return ``names`` as they are: the merged panel holds the shared names.
 

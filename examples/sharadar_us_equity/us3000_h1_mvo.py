@@ -235,13 +235,8 @@ def membership() -> EstuConstituentDataset:
     ))
 
 
-def price_dataset() -> RosterDataset:
-    """SEP on the roster: the backtest's prices (every print, as the vendor reports it)."""
-    return RosterDataset(sep(), membership())
-
-
 def masked_prices() -> RosterDataset:
-    """SEP with its bad prints masked (#223), on the roster: the alphas' and the label's prices."""
+    """SEP with its bad prints masked (#223), on the roster: the alphas', the label's and the backtest's prices."""
     return RosterDataset(BadPrintMaskedDataset([sep()]), membership())
 
 
@@ -412,7 +407,7 @@ def live_run(
         **{**OPTIMISER, "candidate_top_k": candidate_top_k, "exposure_bounds": bounds},
     ))
     result = USEquityCrossectionSelectStockVectorBt(CrossSectionBacktestConfig(
-        price_dataset=price_dataset(),
+        price_dataset=masked_prices(),
         model=MembershipMaskedPredictor(model(), membership()),
         model_mode="load", checkpoint=str(fold_checkpoint(fold)),
         start_date=RUN_START, end_date=RUN_END, output_dir=str(H1 / "live_runs"),

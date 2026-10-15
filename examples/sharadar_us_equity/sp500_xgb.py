@@ -101,9 +101,10 @@ def describe(store: Path, text: str) -> None:
 def index_dataset() -> SharadarStockDataset:
     """The unmasked roster store: every bar of every permaticker ever a member.
 
-    The backtest's price dataset. Membership masks the predictions, never
-    the prices, so a stock that leaves the index keeps its prices and can
-    still be sold at the next open.
+    Read through ``masked_index()`` by the factors, the label and the
+    backtest. Membership masks the predictions, never the prices, so a stock
+    that leaves the index keeps its prices and can still be sold at the next
+    open.
     """
     return SharadarStockDataset(SharadarDatasetConfig(
         zarr_file_path=str(store_path(SHARADAR, "sharadar_sp500_1d")),
@@ -112,7 +113,7 @@ def index_dataset() -> SharadarStockDataset:
 
 
 def masked_index() -> BadPrintMaskedDataset:
-    """The index prices with their bad prints masked (#223): the factors' and the label's."""
+    """The index prices with their bad prints masked (#223): the factors', the label's and the backtest's."""
     return BadPrintMaskedDataset([index_dataset()])
 
 
@@ -232,10 +233,11 @@ def backtest(checkpoint: Path):
             f"scripts/sharadar/download.py first, or pass benchmark_dataset=None below."
         )
     backtester = USEquityCrossectionSelectStockVectorBt(CrossSectionBacktestConfig(
-        # Unmasked prices; index membership masks the predictions instead,
-        # so a stock is selectable only while a member, and one that leaves
-        # the index keeps its prices and can still be sold.
-        price_dataset=index_dataset(),
+        # The roster's prices with bad prints masked (a masked open is no fill
+        # price); index membership masks the predictions, never the prices, so a
+        # stock is selectable only while a member, and one that leaves the index
+        # keeps its prices and can still be sold.
+        price_dataset=masked_index(),
         model=MembershipMaskedPredictor(build_model(), index_membership()),
         model_mode="load", checkpoint=str(checkpoint),
         start_date=TEST_START, end_date=TEST_END,

@@ -226,6 +226,29 @@ def test_a_halted_bar_repeating_the_last_close_with_no_volume_is_untradable(tmp_
     assert tail.sel(symbol=101).values.tolist() == [False, True]
 
 
+def test_through_the_bad_print_mask_a_halted_bar_and_a_bad_open_are_untradable(tmp_path):
+    """A backtest on bad-print-masked prices keeps SEP's halt rule, and a masked open is no fill price."""
+    from quantlab.dataset.bad_prints import BadPrintMaskedDataset
+    from tests.test_backtest_engine import MARKET
+
+    rows = [
+        sep_row("AAA", DAYS[0], 100.0),  # SYNTHETIC
+        sep_row("AAA", DAYS[1], 50.0),  # SYNTHETIC, the last trade before the halt
+        sep_row("AAA", DAYS[2], 50.0, open=50.0, high=50.0, low=50.0, volume=0.0),  # SYNTHETIC, halted
+        sep_row("AAA", DAYS[3], 49.0),  # SYNTHETIC
+        *(sep_row("BBB", day, 20.0) for day in (DAYS[0], DAYS[1], DAYS[3])),  # SYNTHETIC
+        sep_row("BBB", DAYS[2], 21.0, open=2000.0, high=2000.0),  # SYNTHETIC, a bad open
+    ]
+    tickers = [tickers_row("SEP", 101, "AAA"), tickers_row("SEP", 202, "BBB")]  # SYNTHETIC
+    masked = BadPrintMaskedDataset([_build(tmp_path, rows, tickers)])
+    columns = [MARKET.fill_price_column, MARKET.valuation_price_column]
+
+    tradable = masked.tradable_bars(masked.panel(DAYS[0], DAYS[3])[columns], MARKET.fill_price_column)
+
+    assert tradable.sel(symbol=101).values.tolist() == [True, True, False, True]
+    assert tradable.sel(symbol=202).values.tolist() == [True, True, False, True]
+
+
 def test_a_backtest_settles_a_delisting_at_its_last_close(tmp_path):
     """The CRSP backtest shape, unchanged, on a Sharadar store.
 
