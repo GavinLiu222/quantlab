@@ -342,6 +342,36 @@ def test_a_ticker_taken_by_a_later_listing_still_maps_the_older_rows(tmp_path):
     assert report is None
 
 
+def test_a_file_with_rows_after_the_later_listing_is_still_refused(tmp_path):
+    # One OLD row dates after the fund's first price: the file mixes both
+    # securities' rows, so the ticker stays unmapped, as #235 wants.
+    root = tmp_path / "sharadar"
+    _sf3a(
+        root,
+        [sf3a_row("2024-12-31", "OLD", 8, 31.0), sf3a_row("2026-12-31", "OLD", 2, 5.0)],  # SYNTHETIC
+        [
+            tickers_row("SEP", 707, "OLD1", relatedtickers="OLD", firstpricedate="2023-01-13"),  # SYNTHETIC
+            tickers_row("SFP", 909, "OLD", firstpricedate="2026-10-14", category="ETF"),  # SYNTHETIC
+        ],
+    )
+
+    frame, report = _sf3a_mapped(root, tmp_path)
+    assert frame.height == 0
+    assert "909" in report["unmapped"][0]["reason"]
+
+
+def test_a_malformed_text_date_does_not_stop_a_file_mapping(tmp_path):
+    root = tmp_path / "sharadar"
+    _sf3a(
+        root,
+        [sf3a_row("2024-12-31", "OLD", 8, 31.0), sf3a_row("not a date", "NEW", 3, 9.0)],  # SYNTHETIC
+        [tickers_row("SEP", 707, "OLD"), tickers_row("SEP", 808, "NEW")],  # SYNTHETIC
+    )
+
+    frame, _ = _sf3a_mapped(root, tmp_path)
+    assert frame.select("ticker", "permaticker").rows() == [("NEW", 808), ("OLD", 707)]
+
+
 def test_two_tickers_of_one_security_on_one_quarter_keep_its_own_ticker(tmp_path):
     # OLD is no one's in TICKERS: only the ACTIONS chain gives it to 707.
     root = tmp_path / "sharadar"

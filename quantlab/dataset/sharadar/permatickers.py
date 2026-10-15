@@ -333,7 +333,7 @@ class PermatickerResolver:
         self._snapshots_all: dict[Path, dict[str, set[int]]] = {}
         self._since: dict[str, dict[int, date | None]] | None = None
         self._seen: dict[int, dict[str, SeenSpan]] | None = None
-        self._first: dict[int, date] | None = None
+        self._first_price: dict[int, date] | None = None
         #: Per raw file, the tickers it names that were not mapped, and why.
         self.unresolved: dict[Path, dict[str, str]] = {}
         #: ``{ticker: permatickers}`` mapped as the security's own ticker of a
@@ -481,10 +481,14 @@ class PermatickerResolver:
             for other, seen in tickers.items()
         )
 
-    def _first_prices(self) -> dict[int, date]:
-        """Return each security's first price date in TICKERS (any table), read once."""
-        if self._first is None:
-            self._first = {
+    def _listed_after(self, permaticker: int, day: date) -> bool:
+        """Return whether the security's first price (TICKERS, any table) is after ``day``.
+
+        Such a security, a later listing that took a ticker, owns no row of
+        the ticker dated on or before ``day``. Without a first price, False.
+        """
+        if self._first_price is None:
+            self._first_price = {
                 int(permaticker): _day(first)
                 for permaticker, first in scan_raw_table(self.vendor_root, "tickers")
                 .group_by("permaticker")
@@ -493,7 +497,8 @@ class PermatickerResolver:
                 .iter_rows()
                 if permaticker is not None and first is not None
             }
-        return self._first
+        first = self._first_price.get(permaticker)
+        return first is not None and first > day
 
     def _sidecar_spans(self) -> list[tuple[str, int, date | None, date | None]]:
         """Return ``(ticker, permaticker, start, end)`` of every span the store's sidecar names.
@@ -635,10 +640,24 @@ class PermatickerResolver:
 
         Tickers left unmapped are recorded in ``unresolved`` under ``path``;
         those mapped as the security's own ticker of the pull in ``own``.
-        ``latest`` gives the date of each ticker's latest row in the file:
-        a security first priced after it cannot own the ticker's rows, so it
-        does not stop them mapping to an earlier holder (``annotate`` passes
-        it for a table with a ``date``).
+
+        Parameters
+        ----------
+        path : str or Path
+            The raw file; its pull time decides the TICKERS snapshot and the
+            holders (see the module docstring).
+        tickers : iterable of str
+            The tickers the file names.
+        latest : dict of str to date, optional
+            Each ticker's latest row date in the file. A security first
+            priced after it owns none of the ticker's rows, so it does not
+            stop them mapping to an earlier holder. ``annotate`` passes it
+            for a table with a ``date`` column.
+
+        Returns
+        -------
+        dict of str to int
+            ``{ticker: permaticker}`` of the tickers mapped.
 
         Raises
         ------
@@ -652,7 +671,7 @@ class PermatickerResolver:
         {'LESL': 632479}
         """
         path = Path(path)
-        mapped, unresolved = self._resolve(pull_time(path), tickers, latest or {})
+        mapped, unresolved = self._resolve(pull_time(path), tickers, latest)
         if unresolved:
             self.unresolved.setdefault(path, {}).update(unresolved)
         return mapped
@@ -693,7 +712,7 @@ class PermatickerResolver:
     ) -> tuple[dict[str, int], dict[str, str]]:
         """Map ``tickers`` as named by a pull at ``pulled``; return the mapped and the unresolved.
 
-        ``latest``: each ticker's latest row date (``resolve``).
+        ``latest`` is ``resolve``'s: each ticker's latest row date in the file.
         """
         latest = latest or {}
         left = {str(t) for t in tickers if t is not None}
@@ -720,9 +739,7 @@ class PermatickerResolver:
             if snapshot is None:
                 held = {p for p in held if not self._taken_after(ticker, p, day)}
             if ticker in latest:
-                # A later listing that took the ticker owns none of the file's rows.
-                firsts = self._first_prices()
-                held = {p for p in held if not (firsts.get(p) is not None and firsts[p] > latest[ticker])}
+                held = {p for p in held if not self._listed_after(p, latest[ticker])}
             permatickers = {span.permaticker for span in spans}
             if not spans:
                 unresolved[ticker] = "no permaticker"
@@ -877,7 +894,12 @@ class PermatickerResolver:
         """
         schema = frame.collect_schema()
         if "date" in schema.names():
-            day = pl.col("date").str.to_date() if schema["date"] == pl.String else pl.col("date").cast(pl.Date)
+            # SF3A writes its date as text; a malformed one is no date, not an error.
+            day = (
+                pl.col("date").str.to_date("%Y-%m-%d", strict=False)
+                if schema["date"] == pl.String
+                else pl.col("date").cast(pl.Date)
+            )
             dated = frame.group_by("ticker").agg(day.max()).collect()
             tickers = dated.get_column("ticker").to_list()
             latest = {str(t): d for t, d in dated.iter_rows() if t is not None and d is not None}
