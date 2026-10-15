@@ -200,7 +200,7 @@ def _project_capped_simplex_rows(values: np.ndarray, cap: np.ndarray, total: flo
 def _maximise_rows(
     expected: np.ndarray,
     cap: np.ndarray,
-    estimate: LowRankCovariance,
+    low_rank: LowRankCovariance,
     risk_aversion: float,
     start: np.ndarray,
     *,
@@ -214,14 +214,14 @@ def _maximise_rows(
     upper bound), the projection ``_project_capped_simplex_rows``. It stops
     when no row's weights move by more than ``tolerance`` (L1) in one step.
     """
-    curvature = risk_aversion * estimate.largest_eigenvalue()
+    curvature = risk_aversion * low_rank.largest_eigenvalue()
     scale = np.abs(expected).max(axis=1, initial=0.0)
     # Without curvature the problem is linear: a long step lands on its vertex.
     step = np.where(curvature > 0, 1.0 / np.where(curvature > 0, curvature, 1.0), 1e12 / np.maximum(scale, 1e-300))
     w = _project_capped_simplex_rows(start, cap)
     y, t = w, np.ones(len(w))
     for _ in range(iterations):
-        gradient = expected - risk_aversion * estimate.times(y)
+        gradient = expected - risk_aversion * low_rank.times(y)
         following = _project_capped_simplex_rows(y + step[:, None] * gradient, cap)
         move = np.abs(following - w).sum(axis=1)
         restart = ((y - following) * (following - w)).sum(axis=1) > 0
@@ -240,7 +240,7 @@ class _PanelProblem:
     """``MeanVarianceOptimizer.prepare``'s problem: what every bar's decision reads but its holdings."""
 
     #: Each bar's covariance on the expected-return label's span.
-    estimate: LowRankCovariance
+    low_rank: LowRankCovariance
     #: ``[bars, symbols]``: ``mu``, 0.0 where there is no prediction.
     expected_return: np.ndarray
     #: ``[bars, symbols]``: tradable and covered, so a holding there is a candidate.
@@ -959,7 +959,7 @@ class MeanVarianceOptimizer(PortfolioConstructor):
                 "MeanVarianceOptimizer is not bound to label specs; call bind() first"
             )
         config = self.config
-        estimate = config.covariance.estimate_all(panel).scaled(self._span)
+        low_rank = config.covariance.estimate_all(panel).scaled(self._span)
         prediction = np.asarray(
             panel.predictions[config.expected_return_label]
             .transpose("timestamp", "symbol")
@@ -967,11 +967,11 @@ class MeanVarianceOptimizer(PortfolioConstructor):
             .values,
             dtype=np.float64,
         )
-        selectable = np.asarray(panel.tradable, dtype=bool) & estimate.covered
+        selectable = np.asarray(panel.tradable, dtype=bool) & low_rank.covered
         predicted = selectable & np.isfinite(prediction)
         z = np.nan_to_num(cross_sectional_zscore(np.where(predicted, prediction, np.nan)), nan=0.0)
-        expected = np.where(predicted, config.ic * np.sqrt(estimate.variance) * z, 0.0)
-        return _PanelProblem(estimate, expected, selectable, predicted)
+        expected = np.where(predicted, config.ic * np.sqrt(low_rank.variance) * z, 0.0)
+        return _PanelProblem(low_rank, expected, selectable, predicted)
 
     def solve(
         self, problem: _PanelProblem, holdings: np.ndarray | None, warm_start: np.ndarray | None = None
@@ -1023,7 +1023,7 @@ class MeanVarianceOptimizer(PortfolioConstructor):
         weights[solvable] = _maximise_rows(
             problem.expected_return[solvable],
             cap,
-            problem.estimate.take(solvable),
+            problem.low_rank.take(solvable),
             config.risk_aversion,
             start,
         )
