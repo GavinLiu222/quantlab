@@ -48,12 +48,10 @@ from loguru import logger
 import quantlab.backtest.engine_vectorbt as engine_module
 from quantlab.runs.backtest_run import BacktestRun
 from quantlab.backtest.predefined.us_equity import USEquityCrossectionSelectStockVectorBt
-from quantlab.backtest.base import SimulationResult
 from quantlab.backtest.config import CrossSectionBacktestConfig
 from quantlab.portfolio.config import TopNConfig
 from quantlab.portfolio.predefined.top_n import TopNConstructor
 from quantlab.runs import backtest_stats
-from quantlab.runs.backtest_stats import in_ranges
 from tests.backtest_fixtures import (
     make_model,
     make_stock_dataset,
@@ -151,125 +149,6 @@ def _run_backtester(
     )
     kwargs.update(overrides)
     return USEquityCrossectionSelectStockVectorBt(CrossSectionBacktestConfig(**kwargs))
-
-
-def _no_rebalances(index: pd.DatetimeIndex) -> xr.Dataset:
-    """A rebalance record of ``index`` with nothing scheduled, for a hand-built simulation."""
-    never = np.zeros(index.size, dtype=bool)
-    return xr.Dataset(
-        {"scheduled": ("timestamp", never), "decided": ("timestamp", never.copy())},
-        coords={"timestamp": index.values},
-    )
-
-
-def test_slice_statistics_compare_exact_bar_timestamps_not_days(tmp_path):
-    """CR-01: slice masks, sliced returns and trade counts use exact bar times.
-
-    A 24-hour hourly market has a bar AT midnight, whose range label is the
-    bare date `2024-01-02`. The range 21:00 .. that midnight bar holds exactly
-    four bars. Day-based comparison (the old `_in_ranges`, the old open-trade
-    count and the old string `.loc` slice) stretches the end to the whole of
-    2024-01-02 and goes red: 28 bars, a compounded return over 28 bars, a
-    trade entered at 10:00 on 2024-01-02 counted as open at the range end, and
-    a trade closed at 05:00 counted as closed inside the range.
-    """
-    backtester = _unit_backtester(tmp_path)
-    index = pd.date_range("2024-01-01", periods=48, freq="h")
-    returns = pd.Series(np.linspace(0.001, 0.048, index.size), index=index)
-    trades = xr.Dataset(
-        {
-            "symbol": ("trade", np.array(["AAA", "BBB"])),
-            "entry_timestamp": (
-                "trade",
-                pd.to_datetime(["2024-01-01 22:00", "2024-01-02 10:00"]).values,
-            ),
-            "exit_timestamp": (
-                "trade",
-                pd.to_datetime(["2024-01-02 05:00", "2024-01-02 23:00"]).values,
-            ),
-            "pnl": ("trade", np.array([1.0, 2.0])),
-            "return": ("trade", np.array([0.01, 0.02])),
-            "status": ("trade", np.array(["Closed", "Open"])),
-        }
-    )
-    simulation = SimulationResult(
-        value=xr.DataArray(
-            np.ones(index.size), dims="timestamp", coords={"timestamp": index.values}
-        ),
-        returns=xr.DataArray(
-            returns.values, dims="timestamp", coords={"timestamp": index.values}
-        ),
-        orders=xr.Dataset(),
-        settlements=[],
-        bar_interval=np.timedelta64(1, "h"),
-        trades=trades,
-        native=types.SimpleNamespace(returns=lambda: returns),
-        rebalances=_no_rebalances(index),
-    )
-    ranges = [("2024-01-01T21:00:00", "2024-01-02")]
-
-    mask = in_ranges(index.values, ranges)
-    assert list(index[mask]) == list(pd.date_range("2024-01-01 21:00", periods=4, freq="h"))
-
-    stats = backtester._return_stats(simulation, ranges)
-    expected = (np.prod(1.0 + returns.iloc[21:25].values) - 1.0) * 100.0
-    assert stats["Total Return [%]"] == pytest.approx(expected, rel=1e-12)
-
-    records = backtester._period_record_stats(simulation, ranges)
-    assert records["Total Open Trades"] == 1
-    assert records["Total Closed Trades"] == 0
-
-
-def test_whole_order_count_is_zero_for_an_order_less_simulation(tmp_path, monkeypatch):
-    """`whole["Total Orders"]` must read `.sizes.get("order", 0)`, never `["order"]`.
-
-    A simulation that never filled carries `orders=xr.Dataset()`, which has no
-    `order` dimension at all, so a bare subscript raises KeyError. That raise
-    would happen while the run directory is still the staging directory, and
-    the failure handler deletes the ENTIRE staging directory -- so the cost of
-    this one-character mistake is every artifact of a completed backtest, not
-    just a missing metric (threat T-03.8-01-01, rated high).
-
-    Why this test exists at all: the mutation `.sizes.get("order", 0)` ->
-    `.sizes["order"]` was run against the whole of this file and ESCAPED, 17
-    passed. The neighbouring order-less test above calls `_period_record_stats`
-    and `_return_stats` directly and never reaches `_compute_metrics`,
-    so nothing covered this read. `_engine_stats` is stubbed here rather than
-    driven through a real `Portfolio`: what needs proving is the order-record
-    read, and a real vectorbt portfolio would only add a way for the test to
-    fail for an unrelated reason.
-    """
-    backtester = _unit_backtester(tmp_path)
-    monkeypatch.setattr(
-        type(backtester), "_engine_stats", lambda self, simulation: {}
-    )
-    index = pd.date_range("2024-01-01", periods=3, freq="h")
-    simulation = SimulationResult(
-        value=xr.DataArray(
-            np.ones(index.size), dims="timestamp", coords={"timestamp": index.values}
-        ),
-        returns=xr.DataArray(
-            np.zeros(index.size), dims="timestamp", coords={"timestamp": index.values}
-        ),
-        orders=xr.Dataset(),
-        settlements=[],
-        bar_interval=np.timedelta64(1, "h"),
-        trades=xr.Dataset(),
-        native=None,
-        rebalances=_no_rebalances(index),
-    )
-    # No in-sample and no out-of-sample range, so neither slice is computed and
-    # the assertion below can only be about the whole-window read.
-    split = {"in_sample_range": None, "out_of_sample_ranges": []}
-
-    metrics = backtester._compute_metrics(simulation, None, split)
-
-    whole = metrics["whole"]
-    assert whole["Total Orders"] == 0
-    assert isinstance(whole["Total Orders"], int) and not isinstance(
-        whole["Total Orders"], bool
-    )
-    assert metrics["in_sample"] is None and metrics["out_of_sample"] is None
 
 
 # --------------------------------------------------------------------------

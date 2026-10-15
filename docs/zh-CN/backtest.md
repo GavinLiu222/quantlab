@@ -733,6 +733,27 @@ True
 181818.18
 ```
 
+### 由账户记录组装指标块
+
+`metrics.json` 的各个块（`whole`、`execution`、`in_sample`、`out_of_sample`、`benchmark`、`relative` 以及切分键）只在一处组装：`quantlab.runs.run_metrics.run_metrics`，输入是一个 `AccountRecord`，即一个账户在其各根 bar 上做了什么（净值与收益、成交、往返交易、成交中的退市结算、调仓记录、被拒订单、最大目标偏差、初始资金、bar 间隔和一年的长度）。`BaseBacktester.account(simulation)` 返回一次模拟的账户记录。唯一与引擎相关的输入是 `engine_rows`，即引擎自身的整窗口各行（vectorbt 的组合统计），它们排在 `whole` 的最前面；其后的各行、各个切片、基准块和相对块及其顺序都由该模块决定，因此另一个执行器（quantlab-ibkr 的 trader）只要为自己的账户构造记录，报告出的块就天然相同（ADR 0034）。`within` 只度量账户的一段而非全部，`run_cv()` 的一折就是这样在拼接账户上度量的；传入 `split` 会加上各切片，传入 `BenchmarkRecord` 会加上 `benchmark` 和 `relative` 块。接着上文 `WeightsVectorBt` 的会话：
+
+```python
+>>> from quantlab.runs.run_metrics import run_metrics
+>>> account = held_backtester.account(held.simulation)
+>>> account.init_cash, account.year_freq / pd.Timedelta(account.bar_interval)
+(1000000.0, 252.0)
+>>> whole = list(held.metrics["whole"])
+>>> engine_rows = {key: held.metrics["whole"][key] for key in whole[: whole.index("Turnover per Rebalance [%]")]}
+>>> blocks = run_metrics(account, engine_rows=engine_rows)
+>>> list(blocks)
+['whole', 'execution']
+>>> blocks["whole"] == held.metrics["whole"], blocks["execution"] == held.metrics["execution"]
+(True, True)
+>>> fold = run_metrics(account, within=("2024-01-03", "2024-01-05"))
+>>> round(fold["whole"]["Total Return [%]"], 4), fold["whole"]["Total Orders"]
+(13.0435, 0)
+```
+
 ### 不用回测器回放 Execution 规则
 
 vectorbt 引擎处理一个成交 bar 所遵循的规则，是公开模块 `quantlab.execution.rules`，它只导入 numpy。这些规则包括：订单按成交价成交；没有原始成交价的订单被拒绝；退市持仓按最后估值结算；按所选 sizing basis 定仓位；先卖后买，每笔买单受剩余现金限制；收取手续费和滑点。引擎用 `plan_orders` 生成订单计划。`replay` 返回这些订单在每个 bar 之后留下的股数和现金，与 vectorbt 实际执行的结果一致，差别只在浮点舍入；它还报告引擎记录的拒单和退市结算（`tests/test_execution.py`）。`ExecutionBook` 一个 bar 一个 bar 地维护同一本账，适合那种做完每次调仓的决策后才知道权重的驱动：它 `submit` 一个 bar 的权重，再按时间顺序逐个 `trade` 各个 bar。`DecisionInputs.weights` 就是这样重放交给规则的持仓，带上运行的 sizing basis、手续费和滑点，所以规则据以决策的持仓就是引擎随后模拟的持仓。

@@ -733,6 +733,27 @@ A round trip is a position from flat to flat in one symbol: adding to or trimmin
 181818.18
 ```
 
+### Assemble the metric blocks from an account record
+
+The blocks of `metrics.json` (`whole`, `execution`, `in_sample`, `out_of_sample`, `benchmark`, `relative` and the split keys) are built in one place, `quantlab.runs.run_metrics.run_metrics`, from an `AccountRecord`: what one account did over its bars (value and returns, fills, round trips, the delisting settlements among the fills, the rebalance record, rejected orders, the largest target deviation, initial cash, bar interval and year). `BaseBacktester.account(simulation)` returns a simulation's record. The only engine-specific input is `engine_rows`, the engine's own whole-window rows (vectorbt's portfolio statistics), which open `whole`; everything after them, the slices, the benchmark and relative blocks and their order, is the module's, so another executor (quantlab-ibkr's trader) that builds a record of its own account reports the same blocks by construction (ADR 0034). `within` measures a stretch of the account instead of all of it, as a `run_cv()` fold is measured on the stitched account; a `split` adds the slices and a `BenchmarkRecord` the `benchmark` and `relative` blocks. Continuing the `WeightsVectorBt` session:
+
+```python
+>>> from quantlab.runs.run_metrics import run_metrics
+>>> account = held_backtester.account(held.simulation)
+>>> account.init_cash, account.year_freq / pd.Timedelta(account.bar_interval)
+(1000000.0, 252.0)
+>>> whole = list(held.metrics["whole"])
+>>> engine_rows = {key: held.metrics["whole"][key] for key in whole[: whole.index("Turnover per Rebalance [%]")]}
+>>> blocks = run_metrics(account, engine_rows=engine_rows)
+>>> list(blocks)
+['whole', 'execution']
+>>> blocks["whole"] == held.metrics["whole"], blocks["execution"] == held.metrics["execution"]
+(True, True)
+>>> fold = run_metrics(account, within=("2024-01-03", "2024-01-05"))
+>>> round(fold["whole"]["Total Return [%]"], 4), fold["whole"]["Total Orders"]
+(13.0435, 0)
+```
+
 ### Replay the Execution rules without a backtester
 
 The rules the vectorbt engine executes a fill bar by (an order at the fill price, rejected without a raw fill price, a delisted holding settled at its last valuation, sizing on the chosen basis, sells before buys, each buy capped by the cash left, fees and slippage) are the public module `quantlab.execution.rules`, which imports numpy only. The engine plans its orders with `plan_orders`, and `replay` returns the shares and cash those orders leave after every bar, equal to what vectorbt executes to floating-point rounding, with the rejected orders and delisting settlements the engine records (`tests/test_execution.py`). `ExecutionBook` holds the same book one bar at a time, for a driver that learns each rebalance's weights only after deciding them: it `submit`s a bar's weights and `trade`s the bars in order. `DecisionInputs.weights` replays the holdings it hands a rule this way, with the run's sizing basis, fees and slippage, so a rule decides on the holdings the engine then simulates.

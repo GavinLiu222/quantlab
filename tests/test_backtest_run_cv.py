@@ -576,12 +576,12 @@ def test_run_cv_stitches_its_folds_on_the_valuation_basis(tmp_path, cv_project):
 def test_the_stitched_block_carries_order_count_and_the_positions_view(
     tmp_path, cv_project
 ):
-    """The stitched block goes through the same `_compute_metrics` as `run()`.
+    """The stitched block goes through the same `run_metrics` as `run()`.
 
     A WIRING lock, not a second arithmetic proof: the partition identities for
     `Total Orders` are proved against a real `run()` in
     tests/test_backtest_metrics.py, and the stitched block is built by the same
-    method, so what is worth asserting on this path is that `run_cv` reaches it
+    function, so what is worth asserting on this path is that `run_cv` reaches it
     at all and reports one trade vocabulary (D-02).
     """
     result = _backtester(tmp_path, cv_project).run_cv()

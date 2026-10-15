@@ -72,6 +72,13 @@ from quantlab.runs.backtest_report import (
     write_backtest_report,
 )
 from quantlab.runs.record import DataRecorder, compare, unrecorded
+from quantlab.runs.run_metrics import (
+    AccountRecord,
+    BenchmarkRecord,
+    decided_bars,
+    run_metrics,
+    slice_ranges,
+)
 from quantlab.model.split import in_sample_window, split_ranges
 from quantlab.risk.attribution import attribution_summary, factor_attribution
 from quantlab.utils.returns import one_bar_returns
@@ -1135,7 +1142,7 @@ class BaseBacktester(Component, ABC):
                     else self._simulate_benchmark(stitched_benchmark_prices)
                 )
                 stitched_split = self._stitched_split(stitched_prices.timestamp.values, splits)
-                stitched_metrics = self._compute_metrics(
+                stitched_metrics = self._metrics(
                     stitched_simulation, stitched_benchmark, stitched_split
                 )
                 stitched_metrics.update(self._signal_metrics())
@@ -1150,7 +1157,7 @@ class BaseBacktester(Component, ABC):
                     )
                 for record, bars, split in zip(records, fold_bars, splits):
                     # A fold is the stitched account over its test segment (ADR 0033).
-                    record["metrics"] = self._compute_metrics(
+                    record["metrics"] = self._metrics(
                         stitched_simulation,
                         stitched_benchmark,
                         split,
@@ -1484,7 +1491,7 @@ class BaseBacktester(Component, ABC):
             if benchmark_prices is None
             else self._simulate_benchmark(benchmark_prices)
         )
-        metrics = self._compute_metrics(simulation, benchmark, None)
+        metrics = self._metrics(simulation, benchmark, None)
         if self.config.risk_model is not None:
             metrics["factor_attribution"] = self._factor_attribution(prices, simulation, None)
         return _BacktestWindow(
@@ -1813,7 +1820,7 @@ class BaseBacktester(Component, ABC):
             if benchmark_prices is None
             else self._simulate_benchmark(benchmark_prices)
         )
-        metrics = self._compute_metrics(simulation, benchmark, split)
+        metrics = self._metrics(simulation, benchmark, split)
         metrics.update(self._signal_metrics())
         metrics["attribution"] = self._attribution(
             predictions, prices, weights, simulation, benchmark, delisted
@@ -2404,7 +2411,7 @@ class BaseBacktester(Component, ABC):
         simulation.factor_attribution = attribution
         bars_per_year = self.MARKET.year_freq(simulation.bar_interval) / simulation.bar_interval  # type: ignore[union-attr]
         block = {"whole": attribution_summary(attribution, bars_per_year)}
-        for name, ranges in self._split_slices(split).items():
+        for name, ranges in slice_ranges(split).items():
             block[name] = (
                 attribution_summary(
                     attribution, bars_per_year, backtest_stats.in_ranges(timestamps, ranges)
@@ -2500,29 +2507,6 @@ class BaseBacktester(Component, ABC):
     def _engine_stats(self, simulation: SimulationResult) -> dict:
         """Return the engine's whole-window statistics keyed by metric name."""
 
-    def _return_stats(
-        self, simulation: SimulationResult, ranges: list[tuple[str, str]]
-    ) -> dict:
-        """Return the return statistics of ``simulation`` cut to ``ranges``.
-
-        A portfolio object cannot be sliced in time and re-simulating a
-        sub-period would reset capital and change the path, so the
-        statistics come from the return series of the same simulation, cut
-        to ``ranges`` (inclusive pairs of bar labels) and concatenated in time
-        order: ``backtest_stats.return_stats`` annualized by ``MARKET``.
-
-        Raises
-        ------
-        ValueError
-            If no simulated return falls inside ``ranges``.
-        """
-        return backtest_stats.return_stats(
-            simulation.returns,
-            bar_interval=simulation.bar_interval,
-            year_freq=self.MARKET.year_freq(simulation.bar_interval),  # type: ignore[union-attr]
-            ranges=ranges,
-        )
-
     def _window_split(
         self, window_timestamps: np.ndarray, calendar: np.ndarray, train_start, train_end
     ) -> dict:
@@ -2583,96 +2567,51 @@ class BaseBacktester(Component, ABC):
             return None
         return cls._bar_label(pair[0]), cls._bar_label(pair[1])
 
-    def _turnover(self, simulation: SimulationResult) -> xr.DataArray:
-        """Return the turnover of every rebalance fill bar of ``simulation``.
+    def account(self, simulation: SimulationResult) -> AccountRecord:
+        """Return the account record of ``simulation``, as the run's metrics read it.
 
-        ``backtest_stats.turnover`` of its orders and value, from
-        ``config.init_cash``, its delisting settlements left out.
+        The simulation's value, returns, orders, round trips, settlements,
+        rebalance record, rejected orders, largest target deviation and
+        holdings, with ``config.init_cash`` and the market's year
+        (``MARKET.year_freq``) over the simulation's bar interval.
+        ``quantlab.runs.run_metrics.run_metrics`` of it and the engine's own
+        whole-window rows are the run's metric blocks (ADR 0034).
+
+        Parameters
+        ----------
+        simulation : SimulationResult
+            A simulation this backtester measured (``result.simulation``),
+            with its rebalance record.
+
+        Returns
+        -------
+        AccountRecord
+            The record.
+
+        Examples
+        --------
+        >>> result = backtester.run_weights(weights)
+        >>> account = backtester.account(result.simulation)
+        >>> account.init_cash, account.year_freq / pd.Timedelta(account.bar_interval)
+        (1000000.0, 252.0)
         """
-        return backtest_stats.turnover(
-            simulation.orders,
-            simulation.value,
-            self.config.init_cash,
-            settlements=simulation.settlements,
-        )
-
-    @staticmethod
-    def _decided_bars(simulation: SimulationResult) -> np.ndarray:
-        """Return the bars of the decided rebalances, from ``simulation.rebalances``."""
-        record = simulation.rebalances
-        return record.timestamp.values[record["decided"].values]
-
-    def _turnover_stats(self, simulation: SimulationResult, ranges: list[tuple[str, str]]) -> dict:
-        """Return ``backtest_stats.turnover_stats`` of ``simulation`` over ``ranges``, on its decided rebalances."""
         bar_interval = simulation.bar_interval
-        return backtest_stats.turnover_stats(
-            self._turnover(simulation),
-            self._decided_bars(simulation),
-            simulation.value.timestamp.values,
-            ranges=ranges,
+        return AccountRecord(
+            value=simulation.value,
+            returns=simulation.returns,
+            orders=simulation.orders,
+            rebalances=simulation.rebalances,
+            init_cash=self.config.init_cash,
             bar_interval=bar_interval,
             year_freq=self.MARKET.year_freq(bar_interval),  # type: ignore[union-attr]
+            trades=simulation.trades,
+            settlements=simulation.settlements,
+            rejected_orders=simulation.rejected_orders,
+            max_target_deviation=simulation.max_target_deviation,
+            holdings=simulation.holdings,
         )
 
-    def _period_record_stats(
-        self, simulation: SimulationResult, ranges: list[tuple[str, str]]
-    ) -> dict:
-        """Return order, trade and turnover statistics restricted to ``ranges``.
-
-        ``Total Orders``, ``Total Fees Paid`` and ``Traded Notional`` count
-        the orders filled inside the ranges; ``Total Closed Trades`` the
-        trades with status ``"Closed"`` whose exit falls inside them;
-        ``Total Open Trades`` the trades still open at each range's end
-        (entered on or before it, and not yet exited or exited after it);
-        the three turnover rows are the ``_turnover_stats`` of the ranges
-        (the rebalance fills inside them, over the decided rebalances whose
-        fill bar is inside them, annualised over their bars). Several ranges
-        never overlap, so the counts add up across them. The names are vectorbt's whole-window names, so
-        a slice column and the whole column share a row.
-
-        The trade counts use the same position-level definition as the
-        whole-window statistics (one entry-to-flat round trip per symbol),
-        so the per-range closed trades sum to the whole window's total.
-        """
-        orders = simulation.orders
-        if orders.sizes.get("order", 0) > 0:
-            in_range = backtest_stats.in_ranges(orders["timestamp"].values, ranges)
-            sizes = np.abs(orders["size"].values.astype(np.float64))[in_range]
-            prices = orders["price"].values.astype(np.float64)[in_range]
-            fees = orders["fees"].values.astype(np.float64)[in_range]
-            order_count = int(in_range.sum())
-            fees_paid = float(fees.sum())
-            traded_notional = float((sizes * prices).sum())
-        else:
-            order_count, fees_paid, traded_notional = 0, 0.0, 0.0
-
-        trades = simulation.trades
-        closed_trade_count = open_trade_count = 0
-        if trades is not None and trades.sizes.get("trade", 0) > 0:
-            status = trades["status"].values.astype(str)
-            closed = status == "Closed"
-            closed_trade_count = int(
-                (closed & backtest_stats.in_ranges(trades["exit_timestamp"].values, ranges)).sum()
-            )
-            # Exact timestamps, not days: on intraday data a trade entered
-            # later on the range's last day is not "open at the range end".
-            entry_ts = trades["entry_timestamp"].values.astype("datetime64[ns]")
-            exit_ts = trades["exit_timestamp"].values.astype("datetime64[ns]")
-            for _, end in ranges:
-                end_ts = date_range.label_ns(end)
-                open_at_end = (entry_ts <= end_ts) & (~closed | (exit_ts > end_ts))
-                open_trade_count += int(open_at_end.sum())
-
-        return {
-            "Total Orders": order_count,
-            "Total Fees Paid": fees_paid,
-            "Traded Notional": traded_notional,
-            "Total Closed Trades": closed_trade_count,
-            "Total Open Trades": open_trade_count,
-            **self._turnover_stats(simulation, ranges),
-        }
-
-    def _compute_metrics(
+    def _metrics(
         self,
         simulation: SimulationResult,
         benchmark: SimulationResult | None,
@@ -2680,155 +2619,27 @@ class BaseBacktester(Component, ABC):
         *,
         within: tuple[str, str] | None = None,
     ) -> dict:
-        """Compute the whole, in-sample and out-of-sample metric blocks.
+        """Return ``run_metrics`` of ``simulation``'s account record.
 
-        All three come from the same continuous simulation; nothing here
-        simulates a second time. ``whole`` is the engine's whole-window
-        statistics plus the three turnover rows and ``Total Orders``; the
-        turnover rows and the win rates count the decided rebalances of
-        ``simulation.rebalances``.
-        ``in_sample`` and ``out_of_sample`` merge ``_return_stats``
-        and ``_period_record_stats`` over their ranges and are ``None`` when
-        there is no such range. ``benchmark`` and ``relative`` appear only
-        when a benchmark was simulated: ``benchmark`` holds the benchmark's
-        ``symbol`` (display name) and ``axis_symbol`` plus the same three
-        slices of return statistics (``_return_stats`` over the whole
-        window and over each slice's ranges), and ``relative`` holds the
-        three slices of ``_relative_stats``, the strategy measured against
-        the benchmark. ``execution`` holds the simulation's
-        ``rejected_order_count``, ``rejected_orders`` and
-        ``max_target_deviation``. Every key of ``split`` is copied to the top level;
-        the in-sample ranges come from ``split["in_sample_ranges"]`` when
-        present (the stitched curve) and from the single
-        ``split["in_sample_range"]`` otherwise. ``split=None`` (a
-        ``run_weights()`` run, which has no training window) computes the
-        ``whole`` blocks only: no ``in_sample`` or ``out_of_sample`` key
-        appears at any level and no split key is added.
-
-        ``within`` (a pair of inclusive bar labels) measures a stretch of
-        ``simulation`` instead of all of it: a ``run_cv()`` fold, the stitched
-        account over its test segment (ADR 0033). Its ``whole`` is then the
-        ``_return_stats``, ``_period_record_stats`` and win rates of that
-        stretch, its first bar's return included, so the folds' returns
-        chain to the stitched total; ``execution`` lists the orders rejected
-        on its fill bars and has no ``max_target_deviation`` (the stitched
-        block's covers every bar).
+        Over the whole simulation the engine's rows (``_engine_stats``) open
+        ``whole``; ``within`` (a ``run_cv()`` fold, ADR 0033) measures a
+        stretch instead. The benchmark is named as of the last bar measured.
         """
-        timestamps = simulation.value.timestamp.values
-        if within is None:
-            whole_range = [
-                (self._bar_label(timestamps[0]), self._bar_label(timestamps[-1]))
-            ]
-            whole = self._engine_stats(simulation)
-            whole.update(self._turnover_stats(simulation, whole_range))
-            # The number of fills: position-level trade counts do not say how
-            # often we traded. A run with no fills has no `order` dimension, so
-            # use `.sizes.get` rather than a subscript that would raise.
-            whole["Total Orders"] = int(simulation.orders.sizes.get("order", 0))
-            rejected = list(simulation.rejected_orders)
-            execution = {"max_target_deviation": simulation.max_target_deviation}
-        else:
-            whole_range = [within]
-            whole = {
-                **self._return_stats(simulation, whole_range),
-                **self._period_record_stats(simulation, whole_range),
-            }
-            rejected = [
-                order
-                for order in simulation.rejected_orders
-                if backtest_stats.in_ranges(
-                    [date_range.label_ns(order["fill_timestamp"])], whole_range
-                )[0]
-            ]
-            execution = {}
-        whole.update(self._win_rates(simulation, whole_range))
-        metrics: dict = {
-            "whole": whole,
-            "execution": {
-                "rejected_order_count": len(rejected),
-                "rejected_orders": rejected,
-                **execution,
-            },
-        }
-
-        slices = self._split_slices(split)
-        for name, ranges in slices.items():
-            metrics[name] = (
-                {
-                    **self._return_stats(simulation, ranges),
-                    **self._period_record_stats(simulation, ranges),
-                    **self._win_rates(simulation, ranges),
-                }
-                if ranges
-                else None
-            )
-
+        benchmark_record = None
         if benchmark is not None:
             axis_symbol = self._benchmark_axis_symbol or ""
-            metrics["benchmark"] = {
-                "symbol": self._benchmark_display_name(
-                    axis_symbol, timestamps[-1] if within is None else within[1]
-                ),
-                "axis_symbol": axis_symbol,
-                "whole": self._return_stats(benchmark, whole_range),
-                **{
-                    name: self._return_stats(benchmark, ranges) if ranges else None
-                    for name, ranges in slices.items()
-                },
-            }
-            metrics["relative"] = {
-                "whole": {
-                    **self._relative_stats(simulation, benchmark, whole_range),
-                    **self._win_rates(simulation, whole_range, benchmark),
-                },
-                **{
-                    name: (
-                        {
-                            **self._relative_stats(simulation, benchmark, ranges),
-                            **self._win_rates(simulation, ranges, benchmark),
-                        }
-                        if ranges
-                        else None
-                    )
-                    for name, ranges in slices.items()
-                },
-            }
-        metrics.update(split or {})
-        return metrics
-
-    @staticmethod
-    def _split_slices(split: dict | None) -> dict[str, list[tuple[str, str]]]:
-        """Return the ranges of the slices other than ``whole``, by name; none without a split.
-
-        ``in_sample`` comes from ``split["in_sample_ranges"]`` when present
-        (the stitched curve) and from the single ``split["in_sample_range"]``
-        otherwise; ``out_of_sample`` from ``split["out_of_sample_ranges"]``.
-        A slice without a bar has no range.
-        """
-        if split is None:
-            return {}
-        if "in_sample_ranges" in split:
-            in_sample = list(split["in_sample_ranges"])
-        else:
-            in_sample = [split["in_sample_range"]] if split["in_sample_range"] else []
-        return {"in_sample": in_sample, "out_of_sample": list(split["out_of_sample_ranges"])}
-
-    @classmethod
-    def _win_rates(
-        cls,
-        simulation: SimulationResult,
-        ranges: list[tuple[str, str]],
-        benchmark: SimulationResult | None = None,
-    ) -> dict:
-        """Return ``backtest_stats.win_rates`` of ``simulation``, its decided rebalances marking the periods.
-
-        Against ``benchmark`` when given, otherwise against zero.
-        """
-        return backtest_stats.win_rates(
-            simulation.returns,
-            cls._decided_bars(simulation),
-            ranges=ranges,
-            benchmark_returns=None if benchmark is None else benchmark.returns,
+            as_of = simulation.value.timestamp.values[-1] if within is None else within[1]
+            benchmark_record = BenchmarkRecord(
+                returns=benchmark.returns,
+                symbol=self._benchmark_display_name(axis_symbol, as_of),
+                axis_symbol=axis_symbol,
+            )
+        return run_metrics(
+            self.account(simulation),
+            engine_rows=self._engine_stats(simulation) if within is None else None,
+            split=split,
+            benchmark=benchmark_record,
+            within=within,
         )
 
     def _benchmark_display_name(self, axis_symbol: str, as_of) -> str:
@@ -2845,30 +2656,6 @@ class BaseBacktester(Component, ABC):
         if lookup is None or not axis_symbol:
             return axis_symbol
         return str(lookup.label([axis_symbol], pd.Timestamp(as_of).date())[0])
-
-    def _relative_stats(
-        self,
-        simulation: SimulationResult,
-        benchmark: SimulationResult,
-        ranges: list[tuple[str, str]],
-    ) -> dict:
-        """Return ``backtest_stats.relative_stats`` of the strategy against the benchmark.
-
-        Engine-independent: it reads only the two per-bar return series,
-        annualized by ``MARKET``.
-
-        Raises
-        ------
-        ValueError
-            If the two return series are not on the same bars.
-        """
-        return backtest_stats.relative_stats(
-            simulation.returns,
-            benchmark.returns,
-            bar_interval=simulation.bar_interval,
-            year_freq=self.MARKET.year_freq(simulation.bar_interval),  # type: ignore[union-attr]
-            ranges=ranges,
-        )
 
     def _report_notes(self) -> list[str]:
         """Return the notes attached to the report and to ``metrics.json``.
@@ -3182,7 +2969,7 @@ class BaseBacktester(Component, ABC):
             weights["weight"],
             simulation.orders,
             simulation.value,
-            rebalances=self._decided_bars(simulation),
+            rebalances=decided_bars(simulation.rebalances),
             settlements=simulation.settlements,
             init_cash=self.config.init_cash,
             bar_interval=simulation.bar_interval,
@@ -3205,7 +2992,7 @@ class BaseBacktester(Component, ABC):
         return report_holdings_inputs(
             simulation.holdings,
             weights["weight"],
-            rebalances=self._decided_bars(simulation),
+            rebalances=decided_bars(simulation.rebalances),
             label=self._symbol_names,
             prices=prices[self.MARKET.valuation_price_column],  # type: ignore[union-attr]
         )

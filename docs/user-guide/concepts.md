@@ -278,7 +278,8 @@ quantlab/
     execution/       rules.py: how the market executes a bar's orders (vectorbt's rules)
     runs/            run directories: trained_run.py, backtest_run.py, directory.py; the run
                      record (record.py: data fingerprints, code record); prediction_panel.py;
-                     backtest_stats.py and backtest_report.py (metrics.json, report.html)
+                     run_metrics.py, backtest_stats.py and backtest_report.py (metrics.json,
+                     report.html)
     universe.py      point-in-time symbol universe
     dataset/         base.py (BaseDataset, MarketDataset, IndexConstituentDataset), config.py,
                      then one entry per dataset: stock.py, spot.py, constituent.py, crsp/, nbbo/

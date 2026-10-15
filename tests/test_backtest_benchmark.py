@@ -31,7 +31,6 @@ Everything is synthetic, CPU-only and offline.
 
 import json
 import re
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -46,6 +45,8 @@ from quantlab.runs.backtest_report import write_backtest_report
 from quantlab.runs.backtest_stats import win_rates
 from quantlab.portfolio.predefined.top_n import TopNConstructor
 from quantlab.runs.backtest_run import BacktestRun
+from quantlab.runs.run_metrics import BenchmarkRecord, run_metrics
+from quantlab.utils.jsonable import to_jsonable
 from tests.backtest_fixtures import (
     make_model,
     make_stock_dataset,
@@ -193,6 +194,35 @@ def test_metrics_carry_benchmark_and_relative_blocks(benchmark_run):
     assert metrics["benchmark"]["in_sample"] is None
     assert metrics["relative"]["in_sample"] is None
     assert "Total Return [%]" in metrics["benchmark"]["whole"]
+
+
+def test_a_runs_blocks_are_run_metrics_of_its_account_record(benchmark_run):
+    """The backtester assembles no block itself: they are `run_metrics` of `account(simulation)`.
+
+    Only the engine's own rows (vectorbt's statistics, the rows of `whole`
+    before the turnover rows) and the benchmark's display name come from the
+    backtester; every other row and block, and their order, is the module's.
+    """
+    backtester, result = benchmark_run
+    metrics = result.metrics
+    whole = list(metrics["whole"])
+    engine_rows = {key: metrics["whole"][key] for key in whole[: whole.index("Turnover per Rebalance [%]")]}
+    split_keys = ("training_window", "in_sample_range", "out_of_sample_ranges")
+
+    expected = run_metrics(
+        backtester.account(result.simulation),
+        engine_rows=engine_rows,
+        split={key: metrics[key] for key in split_keys},
+        benchmark=BenchmarkRecord(
+            result.benchmark.returns,
+            symbol=metrics["benchmark"]["symbol"],
+            axis_symbol=metrics["benchmark"]["axis_symbol"],
+        ),
+    )
+
+    assert list(metrics)[: len(expected)] == list(expected)
+    for block, value in expected.items():
+        assert json.dumps(to_jsonable(metrics[block])) == json.dumps(to_jsonable(value)), block
 
 
 def test_the_benchmark_is_named_by_its_dataset_ticker_lookup(tmp_path, monkeypatch):

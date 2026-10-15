@@ -929,7 +929,10 @@ forms on and the bar it fills on, 1 for vectorbt) and implement `_simulate`,
 fees and slippage set to 0 for the attribution's cost part, and the default
 returns `None`, which leaves that part out (see the backtest guide's
 [Attribute the excess](../backtest.md#attribute-the-excess)).
-The slice, benchmark, relative and turnover statistics are computed from that
-result by `quantlab.runs.backtest_stats`, so a new engine does not provide
-them. `run()` and `run_cv()` refuse a model whose label
+The metric blocks are assembled from that result by
+`quantlab.runs.run_metrics.run_metrics` (ADR 0034): `BaseBacktester.account`
+turns it into an `AccountRecord`, and `_engine_stats` supplies only the
+engine's own whole-window rows, which open `whole`; the slice, benchmark,
+relative, turnover and win-rate rows come from the module, so a new engine
+does not provide them. `run()` and `run_cv()` refuse a model whose label
 `delay` differs from `fill_delay_bars`.

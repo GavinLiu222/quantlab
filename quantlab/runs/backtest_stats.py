@@ -7,10 +7,10 @@ rows, the last two counted on the decided rebalances a run records (its
 rebalance record), never inferred from its fills; and the round-trip trade rows and ``Max Gross Exposure [%]`` of its
 ``whole`` block, from fill records (``round_trips``, ``round_trip_stats``,
 ``exposure_stats``), with the deepest drawdown the report marks
-(``drawdown_span``). ``quantlab.backtest.base`` computes them through this module for every
-engine, and a tool that simulates a run elsewhere
-(an event-driven replay of a quantlab run) calls the same functions to report
-comparable numbers.
+(``drawdown_span``). ``quantlab.runs.run_metrics`` assembles a run's metric
+blocks from them, for the vectorbt backtester and for a tool that simulates a
+run elsewhere (an event-driven replay of a quantlab run) alike, so the
+numbers are comparable.
 
 The module imports only numpy, pandas and xarray: no quantlab model or
 dataset layer, no vectorbt and no torch, so importing it is cheap and drags
