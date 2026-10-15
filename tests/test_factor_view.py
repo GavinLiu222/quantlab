@@ -11,8 +11,16 @@ days; the roster holds 2, 3 and 4; symbol ``2`` is always a member, ``3``
 leaves on day 10, ``4`` joins on day 15.
 """
 
+import ast
+import dataclasses
+from pathlib import Path
+
 import numpy as np
 import pytest
+import xarray as xr
+
+import quantlab.factor.predefined.chunked as chunked_module
+import quantlab.factor.view as view_module
 
 from quantlab.core.component import walk_components
 from quantlab.dataset.memory import FrameDataset
@@ -199,3 +207,103 @@ def test_a_view_over_a_chunked_factor_is_a_view_of_its_store(setup):
 
     assert view.store_path == owner.store_path and view.owns_store() is False
     assert view.read(_START, _END)["symbol"].values.tolist() == ["2", "3", "4"]
+
+
+# -- the owner's public chunk-write entry (#314) -------------------------------------
+
+
+def _pinned(owner):
+    """A factor over the owner's store pinned to ``c`` alone: it reads the store, never writes it."""
+    return CloseAndMean(dataclasses.replace(owner.config, factor_names=("c",)))
+
+
+def test_rows_written_through_the_public_entry_equal_a_build_then_extend(setup, tmp_path):
+    owner = setup[0]
+    built = CloseAndMean(dataclasses.replace(owner.config, file_path=str(tmp_path / "built.zarr")))
+    written = CloseAndMean(dataclasses.replace(owner.config, file_path=str(tmp_path / "written.zarr")))
+    middle = _day(BARS[14])
+    built.build(_START, middle).extend(_END)
+
+    written.write_rows(written.compute(_START, middle), _START, middle)
+    assert written.extendable_range(_END) == (_START, middle)
+    written.append_rows(written.compute(_day(BARS[15]), _END), _END)
+
+    assert written.store_range() == built.store_range() == (_START, _END)
+    xr.testing.assert_identical(
+        xr.open_zarr(written.store_path).load(), xr.open_zarr(built.store_path).load()
+    )
+    assert Path(f"{written.store_path}.range.json").read_text() == Path(f"{built.store_path}.range.json").read_text()
+
+
+def test_the_public_entry_refuses_a_factor_that_does_not_own_the_store(setup):
+    owner = setup[0]
+    pinned = _pinned(owner)
+    rows = owner.compute(_START, _END)
+
+    refusal = r"CloseAndMean\.{}\(\): the store at .* only the factor whose outputs"
+    with pytest.raises(ValueError, match=refusal.format("build")):
+        pinned.refuse_unless_owner("build")
+    with pytest.raises(ValueError, match=refusal.format("build")):
+        pinned.write_rows(rows, _START, _END)
+    with pytest.raises(ValueError, match=refusal.format("extend")):
+        pinned.extendable_range("2024-12-31")
+    with pytest.raises(ValueError, match=refusal.format("extend")):
+        pinned.append_rows(rows, "2024-12-31")
+    owner.refuse_unless_owner("build")  # the owner passes
+
+
+@pytest.mark.parametrize("name", VIEWS)
+def test_a_view_refuses_the_public_entry(setup, name):
+    view = VIEWS[name](*setup)
+
+    with pytest.raises(ValueError, match="a view has no store of its own"):
+        view.refuse_unless_owner("build")
+    with pytest.raises(ValueError, match="a view has no store of its own"):
+        view.write_rows(setup[0].compute(_START, _END), _START, _END)
+
+
+def test_a_chunked_owner_passes_its_owners_guard(setup):
+    owner = setup[0]
+
+    _chunked(owner).refuse_unless_owner("build")
+    with pytest.raises(ValueError, match="ChunkedFactor.build\\(\\): a view has no store of its own"):
+        _chunked(_pinned(owner)).refuse_unless_owner("build")
+
+
+def _private_members_read_off_the_wrapped_factor(path) -> list[str]:
+    """Return every ``_``-prefixed attribute read off ``config.factor`` or a name bound to it."""
+    tree = ast.parse(Path(path).read_text())
+    found = []
+    for function in ast.walk(tree):
+        if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        aliases = set()
+        for node in ast.walk(function):
+            if isinstance(node, ast.Assign) and _is_wrapped_factor(node.value, aliases):
+                aliases.update(t.id for t in node.targets if isinstance(t, ast.Name))
+        for node in ast.walk(function):
+            if (
+                isinstance(node, ast.Attribute)
+                and node.attr.startswith("_")
+                and not node.attr.startswith("__")
+                and _is_wrapped_factor(node.value, aliases)
+            ):
+                found.append(f"{function.name}: {node.attr}")
+    return found
+
+
+def _is_wrapped_factor(node, aliases) -> bool:
+    """Whether ``node`` is ``<...>.config.factor`` or a name bound to it."""
+    if isinstance(node, ast.Name):
+        return node.id in aliases
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == "factor"
+        and isinstance(node.value, ast.Attribute)
+        and node.value.attr == "config"
+    )
+
+
+@pytest.mark.parametrize("module", [view_module, chunked_module])
+def test_views_read_no_private_member_of_the_wrapped_factor(module):
+    assert _private_members_read_off_the_wrapped_factor(module.__file__) == []

@@ -25,8 +25,10 @@ factor's daily store is built a month at a time.
 
 With ``workers`` above 1 the chunks are computed in that many worker
 processes at once, each rebuilding the wrapped factor from its config, and
-written in time order by this process as the wrapped factor's ``build`` and
-``extend`` write them, so the store is still only the owner's. The workers
+written in time order by this process through the wrapped factor's public
+chunk-write entry (``write_rows``, ``append_rows``, ``extendable_range``),
+which writes them as its ``build`` and ``extend`` would, behind the same
+owner guard, so the store is still only the owner's. The workers
 are a ``joblib.Parallel`` (loky) fan-out, like the repository's others.
 """
 
@@ -310,14 +312,13 @@ class ChunkedFactor(FactorView):
         factor = self.config.factor
         _, chunks = self.plan(start, end)
         if len(chunks) > 1 and self.parallel_workers(chunks) > 1:
-            store = factor._ranged_store()
-            factor._refuse_unless_owner("build")
+            factor.refuse_unless_owner("build")  # before any worker computes a chunk
             ranges = self._ranges(start, end, chunks)
             for index, ((_, last), piece) in enumerate(zip(ranges, self._pieces(ranges, chunks))):
                 if index == 0:
-                    store.write(piece, start, last)
+                    factor.write_rows(piece, start, last)
                 else:
-                    store.append(piece, last)
+                    factor.append_rows(piece, last)
                 del piece
                 release_memory()
             return self
@@ -352,11 +353,10 @@ class ChunkedFactor(FactorView):
         after = last_moment(recorded[1]) + pd.Timedelta(1, "ns")
         _, chunks = self.plan(after, end)
         if len(chunks) > 1 and self.parallel_workers(chunks) > 1:
-            store = factor._ranged_store()
-            store.extendable_range(end)
+            factor.extendable_range(end)  # before any worker computes a chunk
             ranges = self._ranges(after, end, chunks)
             for (_, last), piece in zip(ranges, self._pieces(ranges, chunks)):
-                store.append(piece, last)
+                factor.append_rows(piece, last)
                 del piece
                 release_memory()
             return self

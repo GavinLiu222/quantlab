@@ -674,6 +674,113 @@ class Factor(Component, ABC):
         self._ranged_store().extend(end)
         return self
 
+    def write_rows(
+        self,
+        rows: xr.Dataset,
+        start: "str | datetime.date | pd.Timestamp",
+        end: "str | datetime.date | pd.Timestamp",
+    ) -> Self:
+        """Replace the store with ``rows``, computed over ``start`` to ``end``, and record the range.
+
+        The write half of ``build``, for rows computed elsewhere: a chunk
+        computed in a worker process (``ChunkedFactor``). The rows are
+        written as ``build`` writes ``compute(start, end)``, through the
+        same ``quantlab.backend.ranged.RangedStore`` and the same owner
+        guard (``refuse_unless_owner``), so ``write_rows`` then
+        ``append_rows`` leave the store ``build`` then ``extend`` would.
+
+        Parameters
+        ----------
+        rows : xr.Dataset
+            The factor's outputs on ``(timestamp, symbol)`` over the range.
+        start, end : str, datetime.date or pd.Timestamp
+            The range ``rows`` cover, recorded as the store's range.
+
+        Returns
+        -------
+        Self
+            ``self``, for chaining.
+
+        Raises
+        ------
+        ValueError
+            If the factor has no store path or does not own its store.
+
+        Examples
+        --------
+        >>> factor.write_rows(factor.compute("2024-01-01", "2024-01-31"), "2024-01-01", "2024-01-31").store_range()
+        ('2024-01-01', '2024-01-31')
+        """
+        self._ranged_store().write(rows, start, end)
+        return self
+
+    def append_rows(self, rows: xr.Dataset, end: "str | datetime.date | pd.Timestamp") -> Self:
+        """Append ``rows``, the bars after the recorded range up to ``end``, and move its end.
+
+        The write half of ``extend``, for rows computed elsewhere; the axes
+        widen to fit as in ``extend``, and empty ``rows`` (no bar in the
+        range) only move the recorded end.
+
+        Parameters
+        ----------
+        rows : xr.Dataset
+            The factor's outputs on the bars after the recorded end, up to
+            ``end``.
+        end : str, datetime.date or pd.Timestamp
+            The new end of the store's range.
+
+        Returns
+        -------
+        Self
+            ``self``, for chaining.
+
+        Raises
+        ------
+        ValueError
+            As ``extendable_range``.
+
+        Examples
+        --------
+        >>> factor.append_rows(factor.compute("2024-02-01", "2024-02-29"), "2024-02-29").store_range()
+        ('2024-01-01', '2024-02-29')
+        """
+        self._ranged_store().append(rows, end)
+        return self
+
+    def extendable_range(self, end: "str | datetime.date | pd.Timestamp") -> tuple[str, str]:
+        """Return the recorded range, refusing an ``extend`` to ``end``.
+
+        ``extend``'s refusals, before anything is computed: a caller that
+        computes the rows elsewhere asks this first, then hands them to
+        ``append_rows``.
+
+        Parameters
+        ----------
+        end : str, datetime.date or pd.Timestamp
+            The end an ``extend`` would reach.
+
+        Returns
+        -------
+        tuple of str
+            The recorded ``(start, end)``.
+
+        Raises
+        ------
+        ValueError
+            If the factor has no store path, does not own its store, the
+            store has no recorded range, or the recorded range already
+            reaches ``end``.
+
+        Examples
+        --------
+        >>> factor.extendable_range("2024-03-31")
+        ('2024-01-01', '2024-02-29')
+        >>> factor.extendable_range("2024-02-10")
+        Traceback (most recent call last):
+        ValueError: Momentum.extend(): the store at ... already covers 2024-01-01 to 2024-02-29; ...
+        """
+        return self._ranged_store().extendable_range(end)
+
     def ranged_stores(self) -> tuple:
         """Return the stores this factor writes or reads by date range: ``(self,)`` with a store.
 
@@ -697,15 +804,15 @@ class Factor(Component, ABC):
         """Return the ``RangedStore`` of ``store_path`` (or ``path``) that ``build``, ``extend`` and ``read`` go through.
 
         Its rows are ``compute``'s, its writes refused unless the factor
-        owns the store (``_refuse_unless_owner``), its widened cells filled
-        from ``_widen_fill_values()``. ``ChunkedFactor`` writes a chunk
-        computed in a worker process through its ``write`` and ``append``.
+        owns the store (``refuse_unless_owner``), its widened cells filled
+        from ``_widen_fill_values()``. Rows computed elsewhere go through it
+        by ``write_rows`` and ``append_rows``.
         """
         return RangedStore(
             self.store_path if path is None else path,
             self.class_name,
             self.compute,
-            guard=self._refuse_unless_owner,
+            guard=self.refuse_unless_owner,
             fill_values=self._widen_fill_values(),
         )
 
@@ -732,14 +839,31 @@ class Factor(Component, ABC):
         """Return the variable names of the store at ``store_path``."""
         return sorted(map(str, XrBackend().read(self.store_path).data.data_vars))
 
-    def _refuse_unless_owner(self, method: str) -> None:
-        """Raise unless the factor owns its store (see ``owns_store``).
+    def refuse_unless_owner(self, method: str) -> None:
+        """Raise unless the factor owns its store (see ``owns_store``): the guard of every write.
+
+        ``build``, ``extend``, ``write_rows``, ``append_rows`` and
+        ``extendable_range`` run it; a caller that computes rows elsewhere
+        runs it before computing anything. A view overrides it.
+
+        Parameters
+        ----------
+        method : str
+            The write being refused, named in the message
+            (``"build"`` or ``"extend"``).
 
         Raises
         ------
         ValueError
             If the store at ``store_path`` exists and its variables are not
             exactly ``get_factor_names()``.
+
+        Examples
+        --------
+        >>> owner.refuse_unless_owner("build")   # the owner passes
+        >>> owner_pinned_to_one_output.refuse_unless_owner("build")
+        Traceback (most recent call last):
+        ValueError: Momentum.build(): the store at ... holds [...], not just this factor's outputs [...]; ...
         """
         # A factor without a store has nothing to own; writing fails elsewhere.
         if self.store_path and not self.owns_store():
