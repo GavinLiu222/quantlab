@@ -652,6 +652,7 @@ signals.build("2016-10-11", "2026-10-13")
 | `BenchmarkBeta` | xarray | 单 bar 收益对单标的基准的滚动 OLS beta；配置类 `BenchmarkBetaConfig` |
 | `IntradayStats`、`IntradayAverage`、`IntradayComposite` | KunQuant | 一分钟 bar 的日内统计量（用 `"last"` 重采样到 `"1d"`）、已存储因子最近若干交易日的均值，以及它们滚动均值或变异系数的截面排名等权合成；配置类 `IntradayAverageConfig`、`IntradayCompositeConfig` |
 | `LiteratureAlpha` | KunQuant | 覆盖价格、风险、流动性、基本面和盈利事件的 8 个原始值/排名因子 |
+| `ShortHorizonAlpha` | KunQuant | 日线上的短周期文献因子：1、3、5 日反转（中性化后即行业内相对反转）、低 MAX、换手率条件动量、异常成交量、隔夜与日内收益均值；`data_columns` 必须是 `SHORT_HORIZON_COLUMNS` |
 | `MarketFeatures` | xarray | 每个指数或 ETF 序列 21 个收益和成交额特征，每个有 bar 的标的取值相同；配置类 `MarketFeatureConfig` |
 | `Forward` | 任意 | 把一个因子向前平移成标签 |
 | `Return`、`BinaryReturn` | KunQuant | 前瞻收益标签，`Forward` 的子类 |

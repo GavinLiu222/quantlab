@@ -652,6 +652,7 @@ signals.build("2016-10-11", "2026-10-13")
 | `BenchmarkBeta` | xarray | rolling OLS beta of one-bar returns on a single-symbol benchmark; config class `BenchmarkBetaConfig` |
 | `IntradayStats`, `IntradayAverage`, `IntradayComposite` | KunQuant | session statistics of one-minute bars (resample to `"1d"` with `"last"`), their mean over the last sessions of a stored factor, and equal-weight composites of the cross-sectional ranks of their trailing means or coefficients of variation; config classes `IntradayAverageConfig`, `IntradayCompositeConfig` |
 | `LiteratureAlpha` | KunQuant | Eight raw/ranked equity characteristics spanning price, risk, liquidity, fundamentals and earnings events |
+| `ShortHorizonAlpha` | KunQuant | Short-horizon literature factors on daily bars: reversal over 1, 3 and 5 bars (industry-relative once neutralized), low MAX, turnover-conditioned momentum, abnormal volume, mean overnight and intraday returns; `data_columns` must be `SHORT_HORIZON_COLUMNS` |
 | `MarketFeatures` | xarray | 21 return and amount features per index or ETF series, the same for every symbol with a bar; config class `MarketFeatureConfig` |
 | `Forward` | any | shifts a factor forward into a label |
 | `Return`, `BinaryReturn` | KunQuant | forward-return labels, `Forward` subclasses |
