@@ -22,7 +22,7 @@ import pytest
 import xarray as xr
 
 from quantlab.portfolio.base import InputDeclaration, PortfolioContext
-from quantlab.portfolio.config import FactorRiskStoreEstimatorConfig, LedoitWolfEstimatorConfig, MeanVarianceConfig
+from quantlab.portfolio.config import FactorRiskStoreEstimatorConfig, MeanVarianceConfig
 from quantlab.portfolio.predefined.factor_risk import FactorRiskStoreEstimator
 from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
 from quantlab.runs.prediction_panel import LabelSpec
@@ -177,9 +177,10 @@ def test_invalid_estimate_parameters_are_refused(built):
 BAR = 30
 
 
-def _context(built, *, held=None, untradable=(), drop_style=None):
+def _context(built, *, held=None, untradable=(), drop_style=None, bar=BAR):
+    """A hand-built context at ``bar``: the planted exposures and the estimate store's row there."""
     _, exposures, _, _ = _plant()
-    risk_exposures = exposures.isel(timestamp=BAR, drop=True).copy(deep=True)
+    risk_exposures = exposures.isel(timestamp=bar, drop=True).copy(deep=True)
     if drop_style is not None:
         risk_exposures[_STYLES[0]].loc[{"symbol": drop_style}] = np.nan
     symbols = np.array(_SYMBOLS)
@@ -189,7 +190,7 @@ def _context(built, *, held=None, untradable=(), drop_style=None):
     tradable = ~np.isin(symbols, untradable)
     on_symbol = {"dims": "symbol", "coords": {"symbol": symbols}}
     return PortfolioContext(
-        timestamp=pd.Timestamp(_day(BAR)),
+        timestamp=pd.Timestamp(_day(bar)),
         predictions=xr.Dataset(
             {"ret_1": ("symbol", np.linspace(-0.01, 0.01, len(symbols)))},
             coords={"symbol": symbols},
@@ -197,6 +198,7 @@ def _context(built, *, held=None, untradable=(), drop_style=None):
         tradable=xr.DataArray(tradable, **on_symbol),
         current_weights=xr.DataArray(weights, **on_symbol),
         risk_exposures=risk_exposures,
+        risk_estimate=built.estimate.read(_day(bar), _day(bar)).isel(timestamp=0, drop=True),
     )
 
 
@@ -237,7 +239,7 @@ def test_the_reader_returns_the_bar_in_factor_form(built):
 def test_a_factor_without_a_variance_leaves_out_its_symbols(built):
     # Bar 28: industry 4 has too few returns in its volatility window.
     reader = FactorRiskStoreEstimator(FactorRiskStoreEstimatorConfig(risk_model=built))
-    context = dataclasses.replace(_context(built), timestamp=pd.Timestamp(_day(28)))
+    context = _context(built, bar=28)
     estimate = reader.estimate(context)
     exposures, covariance, _ = estimate.factor_form()
     assert covariance.shape == (len(built.factor_names) - 1,) * 2
@@ -265,13 +267,27 @@ def test_a_locked_position_is_priced_for_risk(built):
     assert inputs.estimate.symbols.tolist()[-1] == locked
 
 
-def test_the_reader_refuses_a_bar_outside_the_store_and_volatilities(built):
+def test_the_reader_reads_only_the_context(built, monkeypatch):
+    context = _context(built)
+    reader = FactorRiskStoreEstimator(FactorRiskStoreEstimatorConfig(risk_model=built))
+    expected = reader.estimate(context)
+    # No store is opened: the forecast is the model's forecast of the context's row.
+    monkeypatch.setattr(xr, "open_zarr", lambda *a, **k: pytest.fail("the estimator opened a store"))
+    for x, y in zip(reader.estimate(context).factor_form(), expected.factor_form()):
+        np.testing.assert_array_equal(x, y)
+    # A hand-built row decides the forecast: doubled specific risks, four times the variances.
+    doubled = context.risk_estimate.assign(specific_risk=2.0 * context.risk_estimate["specific_risk"])
+    forecast = reader.estimate(dataclasses.replace(context, risk_estimate=doubled))
+    np.testing.assert_allclose(forecast.specific_variance, 4.0 * expected.specific_variance, rtol=0)
+
+
+def test_the_reader_refuses_a_context_without_an_estimate_row_and_volatilities(built):
     reader = FactorRiskStoreEstimator(FactorRiskStoreEstimatorConfig(risk_model=built))
     context = _context(built)
     with pytest.raises(ValueError, match="no predicted volatilities"):
         reader.estimate(context, volatility=context.current_weights)
-    with pytest.raises(ValueError, match="does not contain"):
-        reader.estimate(dataclasses.replace(context, timestamp=pd.Timestamp("2030-01-01")))
+    with pytest.raises(ValueError, match="no risk estimate: the estimate store at .* covers"):
+        reader.estimate(dataclasses.replace(context, risk_estimate=None))
     with pytest.raises(ValueError, match="no risk exposures"):
         reader.estimate(dataclasses.replace(context, risk_exposures=None))
 

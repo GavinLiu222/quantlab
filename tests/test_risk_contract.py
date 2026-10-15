@@ -148,6 +148,7 @@ def test_the_store_estimator_reads_any_factor_risk_model(model):
         tradable=xr.DataArray(np.ones(len(symbols), dtype=bool), **on_symbol),
         current_weights=xr.DataArray(np.zeros(len(symbols)), **on_symbol),
         risk_exposures=exposures.isel(timestamp=bar, drop=True),
+        risk_estimate=model.estimate.read(_day(bar), _day(bar)).isel(timestamp=0, drop=True),
     )
     reader = FactorRiskStoreEstimator(FactorRiskStoreEstimatorConfig(risk_model=model))
     estimate = reader.estimate(context)

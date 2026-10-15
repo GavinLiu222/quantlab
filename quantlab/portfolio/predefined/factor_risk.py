@@ -1,15 +1,15 @@
-"""A covariance estimator reading a factor risk model's stores: ``B F B' + diag(D)`` at each bar.
+"""A covariance estimator turning a factor risk model's context into its forecast: ``B F B' + diag(D)`` at each bar.
 
-``FactorRiskStoreEstimator`` estimates nothing itself (ADR 0024). At a bar it reads
-the factor covariance ``F`` and the specific risks of that bar from the
-estimate store of a ``quantlab.risk.base.FactorRiskModel``, builds each
-symbol's exposures ``B`` from the bar's exposures as the model gives them
-(``context.risk_exposures``) and returns the model's forecast
-(``FactorRiskModel.forecast``, a ``FactorRiskForecast``), which the
-mean-variance optimiser turns into a low-rank risk term.
+``FactorRiskStoreEstimator`` estimates nothing itself (ADR 0024) and reads
+nothing itself: the decision inputs put the bar's row of the model's
+estimate store (the factor covariance ``F`` and the specific risks,
+``context.risk_estimate``) and the bar's exposures as the model gives them
+(``context.risk_exposures``) in the context, and the estimator returns the
+model's forecast from both (``FactorRiskModel.forecast``, a
+``FactorRiskForecast``), which the mean-variance optimiser turns into a
+low-rank risk term.
 """
 
-import pandas as pd
 import xarray as xr
 
 from quantlab.portfolio.base import CovarianceEstimator, InputDeclaration, PortfolioContext
@@ -24,10 +24,11 @@ class FactorRiskStoreEstimator(CovarianceEstimator):
     decision inputs take its exposures from it (``FactorRiskModel.exposures``: the
     exposures factor's store under ``exposure_data_strategy="read"``,
     computed under ``"cal"``), exactly as its stores, factor attribution and
-    bias statistics do, and hand their values at the bar in
-    ``context.risk_exposures``. ``estimate(context)`` reads the bar's row
-    of the estimate store and returns the model's forecast from it and those
-    exposures (``FactorRiskModel.forecast``): ``B F B' + diag(D)`` of
+    bias statistics do, and its estimate store's row, and hand their values
+    at the bar in ``context.risk_exposures`` and ``context.risk_estimate``.
+    ``estimate(context)`` reads no store: it returns the model's forecast
+    from that row and those exposures (``FactorRiskModel.forecast``):
+    ``B F B' + diag(D)`` of
     one-bar returns, in factor form, over the symbols the model covers at
     the bar (coverage is the model's rule, shared with factor attribution
     and the bias statistics). It reads only what every factor risk model
@@ -43,7 +44,7 @@ class FactorRiskStoreEstimator(CovarianceEstimator):
     Examples
     --------
     With ``use4`` a ``Use4RiskModel`` whose stores are built and ``context``
-    a backtest's context at a bar inside them:
+    a backtest's context at a bar inside them (``DecisionInputs.context``):
 
     >>> risk = FactorRiskStoreEstimator(FactorRiskStoreEstimatorConfig(risk_model=use4))
     >>> risk.declared_inputs().risk_model is use4
@@ -57,7 +58,7 @@ class FactorRiskStoreEstimator(CovarianceEstimator):
     config_cls = FactorRiskStoreEstimatorConfig
 
     def declared_inputs(self) -> InputDeclaration:
-        """The factor risk model, whose exposures ``estimate`` reads from ``context.risk_exposures``; no return window.
+        """The factor risk model, whose exposures and estimate row ``estimate`` reads from the context; no return window.
 
         Examples
         --------
@@ -77,7 +78,8 @@ class FactorRiskStoreEstimator(CovarianceEstimator):
         ----------
         context : PortfolioContext
             The bar's context; its ``risk_exposures`` hold the model's
-            exposures at the bar.
+            exposures at the bar and its ``risk_estimate`` the estimate
+            store's row there.
         volatility : None
             Refused: a factor risk model takes no predicted volatilities.
 
@@ -90,8 +92,9 @@ class FactorRiskStoreEstimator(CovarianceEstimator):
         Raises
         ------
         ValueError
-            If ``volatility`` is given, the context has no
-            ``risk_exposures`` or the estimate store does not cover the bar.
+            If ``volatility`` is given, or the context has no
+            ``risk_exposures`` or no ``risk_estimate`` (the estimate store
+            has no row at the bar).
 
         Examples
         --------
@@ -109,28 +112,15 @@ class FactorRiskStoreEstimator(CovarianceEstimator):
                 f"{type(self).__name__}: the context has no risk exposures; the decision "
                 f"inputs take them from the declared risk model."
             )
-        model = self.config.risk_model
-        return model.forecast(
-            self._row(context.timestamp), context.risk_exposures.reindex(symbol=context.symbols)
-        )
-
-    def _row(self, timestamp) -> xr.Dataset:
-        """Return the estimate store's row at ``timestamp``.
-
-        Read through ``RiskStore.read`` on every call, so a store built or
-        extended since the last bar is seen.
-
-        Raises
-        ------
-        ValueError
-            If the store has no row at ``timestamp``.
-        """
-        store = self.config.risk_model.estimate
-        bar = pd.Timestamp(timestamp)
-        rows = store.read(bar, bar)
-        if rows.sizes["timestamp"] != 1:
+        if context.risk_estimate is None:
+            store = self.config.risk_model.estimate
+            covered = store.store_range()
             raise ValueError(
-                f"{type(self).__name__}: the estimate store at {store.path} has no row "
-                f"at {bar}."
+                f"{type(self).__name__}: the context at {context.timestamp} has no risk "
+                f"estimate: the estimate store at {store.path} has no row there (it "
+                + ("has no recorded range" if covered is None else f"covers {covered[0]} to {covered[1]}")
+                + "); build or extend it to cover the bar."
             )
-        return rows.isel(timestamp=0).load()
+        return self.config.risk_model.forecast(
+            context.risk_estimate, context.risk_exposures.reindex(symbol=context.symbols)
+        )

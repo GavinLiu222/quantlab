@@ -99,10 +99,51 @@ class _LogPrice:
         return xr.Dataset({"size": np.log(_price()).sel(timestamp=slice(first, last))})
 
 
+#: The last bar the stand-in estimate store covers: a few rebalance bars lie after it.
+ESTIMATE_END = TS[-8]
+#: The symbols the stand-in estimate store has a specific risk for.
+ESTIMATE_SYMBOLS = SYMBOLS[2:]
+
+
+def _estimate_rows():
+    """The stand-in estimate store: a factor covariance and specific risks of each bar to ``ESTIMATE_END``."""
+    bars = TS[TS <= ESTIMATE_END]
+    rng = np.random.default_rng(9)
+    return xr.Dataset(
+        {
+            "factor_covariance": (
+                ("timestamp", "factor_i", "factor_j"),
+                np.repeat(np.array([[[0.04, 0.01], [0.01, 0.09]]]), len(bars), axis=0),
+            ),
+            "specific_risk": (("timestamp", "symbol"), rng.uniform(0.01, 0.03, (len(bars), len(ESTIMATE_SYMBOLS)))),
+            "diagnostic": ("timestamp", np.arange(len(bars), dtype=float)),
+        },
+        coords={"timestamp": bars, "symbol": ESTIMATE_SYMBOLS, "factor_i": ["a", "b"], "factor_j": ["a", "b"]},
+    )
+
+
+class _EstimateStore:
+    """Stands in for a ``RiskStore``: the recorded range and the rows of ``_estimate_rows``, reads recorded."""
+
+    calls: list
+
+    def store_range(self):
+        return TS[0].date().isoformat(), ESTIMATE_END.date().isoformat()
+
+    def read(self, start, end):
+        self.calls.append((pd.Timestamp(start), pd.Timestamp(end)))
+        assert pd.Timestamp(start) >= TS[0] and pd.Timestamp(end) <= ESTIMATE_END + pd.Timedelta(1, "D")
+        return _estimate_rows().sel(timestamp=slice(start, end))
+
+
 class _RiskModel:
     """Stands in for a ``FactorRiskModel``: its exposures are the log close, read once per call."""
 
     calls: list
+
+    def __init__(self):
+        self.estimate = _EstimateStore()
+        self.estimate.calls = []
 
     def exposures(self, first, last):
         self.calls.append((pd.Timestamp(first), pd.Timestamp(last)))
@@ -165,7 +206,10 @@ def _rule(kind):
 
 def _assert_same_context(built: PortfolioContext, looped: PortfolioContext):
     assert built.timestamp == looped.timestamp
-    for name in ("predictions", "tradable", "current_weights", "returns", "staleness", "factors", "risk_exposures"):
+    for name in (
+        "predictions", "tradable", "current_weights", "returns", "staleness", "factors",
+        "risk_exposures", "risk_estimate",
+    ):
         a, b = getattr(built, name), getattr(looped, name)
         if b is None:
             assert a is None, name
@@ -219,6 +263,46 @@ def test_a_risk_models_exposures_are_read_once_over_the_panel_and_reindexed():
     assert rule.risk.calls[-1] == (t, t)
     assert context.risk_exposures.symbol.values.tolist() == context.symbols.tolist()
     assert context.risk_exposures["size"].sel(symbol="S1") == np.log(_price()).sel(timestamp=t, symbol="S1")
+
+
+def test_a_risk_models_estimate_rows_are_read_once_over_the_scheduled_bars_and_reindexed():
+    rule = _rule("risk")
+    predictions = _predictions()
+    _inputs(rule).weights(predictions)
+    scheduled = TS[WARMUP:][schedule(BARS, PERIODS)]
+    # One request from the first scheduled bar to the store's end, never one per bar.
+    ((first, last),) = rule.risk.estimate.calls
+    assert first == scheduled[0] and last.normalize() == ESTIMATE_END
+    stored = _estimate_rows()
+    covered = [c for c in rule.seen if c.timestamp <= ESTIMATE_END]
+    assert covered and len(covered) < len(rule.seen)
+    for context in covered:
+        estimate = context.risk_estimate
+        # The store contract's variables only, specific risks on the bar's symbols.
+        assert sorted(estimate.data_vars) == ["factor_covariance", "specific_risk"]
+        assert estimate["specific_risk"].dims == ("symbol",)
+        assert estimate.symbol.values.tolist() == SYMBOLS
+        row = stored.sel(timestamp=context.timestamp)
+        xr.testing.assert_equal(
+            estimate["specific_risk"], row["specific_risk"].reindex(symbol=SYMBOLS).drop_vars("timestamp")
+        )
+        np.testing.assert_array_equal(estimate["factor_covariance"].values, row["factor_covariance"].values)
+    # A bar past the store has no estimate row.
+    assert all(c.risk_estimate is None for c in rule.seen if c.timestamp > ESTIMATE_END)
+
+    # One bar reads its own row, on the bar's symbols with a held one.
+    t = TS[WARMUP + 3]
+    held = xr.DataArray([0.4], dims="symbol", coords={"symbol": ["S1"]})
+    context = _inputs(rule).context(t, predictions.sel(timestamp=t).drop_sel(symbol="S7"), held)
+    assert rule.risk.estimate.calls[-1] == (t, t)
+    assert context.risk_estimate.symbol.values.tolist() == context.symbols.tolist()
+    assert context.risk_estimate["specific_risk"].sel(symbol="S6") == stored["specific_risk"].sel(timestamp=t, symbol="S6")
+    assert np.isnan(context.risk_estimate["specific_risk"].sel(symbol="S1"))
+    # A bar past the store reads nothing and has none.
+    late = TS[-5]
+    calls = len(rule.risk.estimate.calls)
+    assert _inputs(rule).context(late, predictions.sel(timestamp=late), held).risk_estimate is None
+    assert len(rule.risk.estimate.calls) == calls
 
 
 def test_a_held_symbol_without_a_prediction_joins_the_bar_locked():

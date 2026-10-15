@@ -78,7 +78,9 @@ that bar into a `FactorRiskForecast`, `B F B' + diag(D)` over the symbols it
 covers, with a book's exposures, variance and x-sigma-rho contributions. It
 is the one coverage rule: a symbol with every exposure and a specific risk,
 not exposed to a factor without a covariance at the bar (`covered_factors`).
-A portfolio rule reads it through `FactorRiskStoreEstimator` (see
+A portfolio rule reads it through `FactorRiskStoreEstimator`, which builds
+it from the bar's estimate row and exposures that the decision inputs put in
+the context (see
 [Portfolio construction](../portfolio.md#factor-form-reading-a-factor-risk-model)),
 and factor attribution and the random portfolios of the bias statistics
 build it too. `forecast_window(timestamps)` reads, for consecutive bars,

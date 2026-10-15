@@ -32,6 +32,7 @@
 | `staleness` | 每个标的在最近 `history_bars` 根 bar 内距上一个真实价格已过了多少根 bar；窗口内没有真实价格时为 NaN。 |
 | `factors` | 规则声明的因子（`declared_inputs().factors`）在这根 bar 上的值；没有声明时为 `None`。 |
 | `risk_exposures` | 规则声明的因子风险模型（`declared_inputs().risk_model`）在这根 bar 上的暴露，按模型给出的口径（`FactorRiskModel.exposures`：按 `exposure_data_strategy` 读暴露因子的 store 或现算）；没有声明时为 `None`。 |
+| `risk_estimate` | 同一模型的 estimate store 在这根 bar 上的那一行，即它对下一根 bar 风险的预测：`factor_covariance` 在 `(factor_i, factor_j)` 上，`specific_risk` 在 `symbol` 上。规则没有声明风险模型、或 store 在这根 bar 上没有行时为 `None`。 |
 
 规则为每个标的返回一个权重：
 
@@ -127,7 +128,7 @@ True
 
 - `rebalances(t)` 回答 bar `t` 是否是日程中的调仓 bar；构造时传入 `end=` 可以让回放的最后一根 bar 不调仓。
 - `context(t, predictions, current_weights)` 构造这根 bar 的 `PortfolioContext`。`predictions` 和 `current_weights` 是这根 bar 在 `symbol` 上的取值；`current_weights` 中缺失的标的视为未持有，没有预测的持仓标的以 NaN 预测加入这根 bar。可交易性、截至 `t` 的最近 `history_bars` 个估值价格得出的收益窗口和停牌时长（staleness），以及 `t` 上的因子值，都从数据集读取，所以执行器最多只需保留 `history_bars` 根 bar 的价格。给定回测重放出的持仓，得到的 context 与回测构造的相同。
-- `preloaded(start, end)` 是一个上下文管理器，供逐根 bar 构造 context 的回放使用（事件驱动回测、对其决策的复核）。进入时它在窗口上一次性读取（经由同样会被记录的读取接口）带预热的价格、可交易性、声明的因子和声明的风险模型暴露，并把风险模型的 estimate 存储保存在内存中（`RiskStore.held`）。在其中，窗口内某根 bar 的 `context` 从内存切片得到，与不预加载时构造的 context 相同；窗口外的 bar 抛出 `ValueError`。实盘每次只决定新的一根 bar，不做预加载。
+- `preloaded(start, end)` 是一个上下文管理器，供逐根 bar 构造 context 的回放使用（事件驱动回测、对其决策的复核）。进入时它在窗口上一次性读取（经由同样会被记录的读取接口）带预热的价格、可交易性、声明的因子，以及声明的风险模型的暴露和 estimate 行（在窗口中 estimate store 覆盖的部分）。在其中，窗口内某根 bar 的 `context` 从内存切片得到，与不预加载时构造的 context 相同；窗口外的 bar 抛出 `ValueError`。实盘每次只决定新的一根 bar，不做预加载。
 - `decide(context)` 调用 `construct`，并按权重契约检查这一行。它返回 `Decision(weights, failure, events)`：context 各标的上的权重，全 NaN 表示保持；使这根 bar 保持仓位的 `PortfolioConstructionError` 的消息，或 `None`；以及这一行报告的事件。违反契约的行（NaN 与有限权重混合、改动了锁定仓位、给既不可交易也未持有的标的分配权重）是规则的 bug，抛出 `ValueError`。
 
 这里直接构造 `inputs`，即 `DecisionInputs(dataset, rule, fill_column=..., valuation_column=..., rebalance_periods=..., anchor=...)`，价格只有三根 bar，`DDD` 在 `context.timestamp` 上没有价格（`from_run` 从一次运行构造同样的输入）：
@@ -438,8 +439,8 @@ array([0.4, 0.4, 0. , 0.2])
 
 `FactorRiskStoreEstimator(FactorRiskStoreEstimatorConfig(risk_model=model))` 读取因子风险模型（`quantlab.risk.base.FactorRiskModel`，例如 `Use4RiskModel`）的 store：
 
-- 它返回模型在这根 bar 上的预测 `model.forecast(row, exposures)`，即 `FactorRiskForecast`（`quantlab.risk.base`）：因子形式的协方差 `B F B' + diag(D)`，暴露 `B`、因子协方差 `F` 和特异方差 `D`，取自估计 store 在这根 bar 上的那一行和 context 中的风险暴露。它的 `factor_form()` 让优化器把风险写成 `|F^(1/2) B' w|^2 + w' diag(D) w`，不需要构造稠密矩阵。
-- 它声明模型（`declared_inputs().risk_model`），不声明任何因子。回测从模型本身取暴露，即 `model.exposures(start, end)`，与模型的 store、因子归因和偏差统计同一来源：`exposure_data_strategy="read"` 时读暴露因子的 store（此时 store 须覆盖回测区间），`"cal"` 时现算。它把这根 bar 上的值放进 `context.risk_exposures`。
+- 它返回模型在这根 bar 上的预测 `model.forecast(row, exposures)`，即 `FactorRiskForecast`（`quantlab.risk.base`）：因子形式的协方差 `B F B' + diag(D)`，暴露 `B`、因子协方差 `F` 和特异方差 `D`，取自 context 中的 estimate 行（`context.risk_estimate`）和风险暴露。它自己不读任何 store，所以可以直接用手工构造的 context 调用。它的 `factor_form()` 让优化器把风险写成 `|F^(1/2) B' w|^2 + w' diag(D) w`，不需要构造稠密矩阵。
+- 它声明模型（`declared_inputs().risk_model`），不声明任何因子。回测从模型本身取暴露，即 `model.exposures(start, end)`，与模型的 store、因子归因和偏差统计同一来源：`exposure_data_strategy="read"` 时读暴露因子的 store（此时 store 须覆盖回测区间），`"cal"` 时现算。它把这根 bar 上的值放进 `context.risk_exposures`，并把 estimate store 在这根 bar 上的那一行放进 `context.risk_estimate`：对一个面板在调仓 bar 上读一次，`context` 每根 bar 读一次，预加载时在窗口上读一次。store 在某根 bar 上没有行时为 `None`，估计器会拒绝这根 bar。
 
 覆盖规则是模型的，因子归因和偏差统计用的也是这一条：在这根 bar 上有全部暴露和特异风险、且不暴露于缺协方差因子的标的（这样的因子不进入预测）。它不读收益窗口，所以没有停牌过滤，锁定的持仓和其他持仓一样计入风险。模型的 store 必须覆盖回测区间。
 

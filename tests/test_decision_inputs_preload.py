@@ -4,7 +4,8 @@ What is locked here, and what turns it red:
 
 - Inside ``preloaded(start, end)``, ``context`` at every bar of the window
   equals the context built without the preload, value for value (prices
-  window, returns, staleness, tradability, factors, risk exposures), for
+  window, returns, staleness, tradability, factors, risk exposures and
+  estimate row), for
   top-n, mean-variance on Ledoit-Wolf, a rule declaring a factor and one
   reading a risk model's exposures, at every bar of a window starting
   mid-panel (its first bars' history lies before it) and on a dataset holding
@@ -19,9 +20,10 @@ What is locked here, and what turns it red:
   unpreloaded ones bit for bit, a decided bar opens no store (it opened
   several without the preload), and a ``DataRecorder`` records the window's
   exposures and estimate reads as one request each.
-- ``RiskStore.held`` answers reads inside its range from memory with the
-  store's values, records them as ``read`` does, and opens the store for a
-  read outside it.
+- The estimate rows are decision inputs (#287): a panel opens the estimate
+  store once (it opened it once per decided bar) and records the request the
+  per-bar reads made; the risk layer holds no rows in memory (``RiskStore``
+  has no ``held``, no ``ContextVar``).
 """
 
 import numpy as np
@@ -262,22 +264,44 @@ def test_a_preloaded_replay_records_each_read_once_over_the_window(factor_risk_r
     assert all(entry["digest"] for entries in records.values() for entry in entries)
 
 
-def test_a_held_risk_store_answers_from_memory_inside_its_range(factor_risk_run, monkeypatch):
-    _, result = factor_risk_run
-    model = DecisionInputs.from_run(result.run_dir).declared.risk_model
-    _, decided = _decided_bars(result)
-    first, last, inside = (pd.Timestamp(decided[k]) for k in (1, -2, 3))
+def test_a_panel_reads_the_estimate_store_once_and_records_the_request_per_bar_reads_made(
+    factor_risk_run, monkeypatch
+):
+    strategy, result = factor_risk_run
+    inputs = DecisionInputs.from_run(result.run_dir)
+    predictions = BacktestRun.open(result.run_dir).predictions().predictions
+    model = inputs.declared.risk_model
+    path = model.estimate.path
+    weights, decided = _decided_bars(result)
+    assert len(decided) > 3
+    opened = []
+    original = xr.open_zarr
 
-    stored = model.estimate.read(inside, inside).load()
-    opens = _StoreOpens(monkeypatch)
-    with DataRecorder(keys=[(model, "risk")]) as recorder, model.estimate.held(first, last):
-        held_opens = opens.count
-        row = model.estimate.read(inside, inside)  # a new RiskStore of the same path
-        assert opens.count == held_opens
-        model.estimate.read(decided[0], decided[0])  # outside: from the store
-        assert opens.count == held_opens + 1
-    xr.testing.assert_identical(row.load(), stored)
-    entry, = recorder.records["risk.estimate"]
-    assert (entry["request"]["start"], entry["request"]["end"]) == (
-        pd.Timestamp(decided[0]).isoformat(), last.isoformat()
+    def counting(store, *args, **kwargs):
+        opened.append(str(store))
+        return original(store, *args, **kwargs)
+
+    monkeypatch.setattr(xr, "open_zarr", counting)
+    with DataRecorder(keys=_keys(inputs)) as recorder:
+        again = inputs.weights(predictions)
+        # Once over the panel, not once per decided bar (#287); the recorder
+        # re-reads it once more on closing, to hash it.
+        assert opened.count(path) == 1
+    np.testing.assert_array_equal(again["weight"].values, weights.values)
+    # The request the per-bar reads made: the first to the last rebalance bar.
+    scheduled = again.timestamp.values[again["scheduled"].values]
+    estimate, = recorder.records["constructor.covariance.risk_model.estimate"]
+    assert (estimate["request"]["start"], estimate["request"]["end"]) == (
+        pd.Timestamp(scheduled[0]).isoformat(), pd.Timestamp(scheduled[-1]).isoformat()
     )
+    # And the run recorded the same request when it ran.
+    run_fingerprint = BacktestRun.open(result.run_dir).data_fingerprint
+    recorded, = run_fingerprint["constructor.covariance.risk_model.estimate"]
+    assert recorded["request"] == estimate["request"] and recorded["digest"] == estimate["digest"]
+
+
+def test_the_risk_store_holds_nothing_in_memory():
+    from quantlab.risk import base
+
+    assert not hasattr(base.RiskStore, "held")
+    assert not any(isinstance(v, __import__("contextvars").ContextVar) for v in vars(base).values())

@@ -214,9 +214,11 @@ request made while it is open:
   store while a resampled dataset resamples on read);
 - `Factor.read(start, end)`, a factor store;
 - `RiskStore.read(start, end)`, the regression or estimate store of a factor
-  risk model. Both its readers go through it: the covariance estimator
-  (`FactorRiskStoreEstimator`), which reads the estimate row of each bar, and
-  the backtest's factor attribution, which reads both stores over its window.
+  risk model. Both its readers go through it: the decision inputs
+  (`DecisionInputs`), which read the estimate rows a rule's contexts carry
+  (over a panel's rebalance bars, one bar, or a preloaded window) for the
+  covariance estimator (`FactorRiskStoreEstimator`), and the backtest's
+  factor attribution, which reads both stores over its window.
   A risk store is keyed by the model's path and the store
   (`risk_model.regression`, `risk_model.estimate`), and its reads that differ
   only in their range are one request, over the first to the last bar read,

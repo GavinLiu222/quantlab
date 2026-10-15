@@ -29,7 +29,8 @@ model's forecast (``quantlab.risk.base.FactorRiskForecast``), whose
 ``factor_form()`` lets an optimiser build a low-rank risk term, and it
 declares its risk model, whose exposures at the bar the decision inputs take
 from the model itself (read or computed per its ``exposure_data_strategy``)
-and put in each bar's context.
+and put in each bar's context beside the bar's row of its estimate store, so
+the estimator reads nothing but the context.
 
 What a rule reads at each bar besides its predictions and holdings is one
 value, its ``InputDeclaration`` (``declared_inputs()``): the return window
@@ -128,6 +129,14 @@ class PortfolioContext:
         model's ``exposure_data_strategy``): its ``exposure_names`` and
         estimation-universe flag, on ``symbol``, NaN where a symbol has
         none. ``None`` when the rule declares no risk model.
+    risk_estimate : xr.Dataset or None
+        The estimate store's row at the bar of the same factor risk model,
+        its forecast made at the bar of the next bar's risk
+        (``quantlab.risk.base.ESTIMATE_VARIABLES``): ``factor_covariance``
+        on ``(factor_i, factor_j)`` and ``specific_risk`` on ``symbol``, NaN
+        where a symbol has none. With ``risk_exposures`` it is everything
+        ``FactorRiskModel.forecast`` reads. ``None`` when the rule declares
+        no risk model or the store has no row at the bar.
 
     Examples
     --------
@@ -153,6 +162,7 @@ class PortfolioContext:
     factors: xr.Dataset | None = None
     staleness: xr.DataArray | None = None
     risk_exposures: xr.Dataset | None = None
+    risk_estimate: xr.Dataset | None = None
 
     @property
     def symbols(self) -> np.ndarray:
@@ -236,9 +246,11 @@ class InputDeclaration:
         ``warmup_bars``. Any ``Factor`` qualifies (KunQuant, Polars, a plain
         one such as a one-hot industry exposure).
     risk_model : FactorRiskModel or None
-        The factor risk model whose exposures at each bar the rule reads
-        from ``context.risk_exposures``, taken from the model
-        (``FactorRiskModel.exposures``), never computed as a factor.
+        The factor risk model whose exposures and estimate row at each bar
+        the rule reads from ``context.risk_exposures`` and
+        ``context.risk_estimate``, taken from the model
+        (``FactorRiskModel.exposures``, its ``estimate`` store), never
+        computed as a factor.
 
     Raises
     ------
@@ -459,7 +471,9 @@ class CovarianceEstimator(_Configured, ABC):
     ``declared_inputs()``; the decision inputs take the model's
     exposures from the model itself (``FactorRiskModel.exposures``, so a
     decision, the model's stores, attribution and bias statistics share one
-    source) and put their values at the bar in ``context.risk_exposures``.
+    source) and its estimate store's row, and put their values at the bar in
+    ``context.risk_exposures`` and ``context.risk_estimate``: the estimator
+    reads no store.
     An estimator in factor form returns a ``FactorRiskForecast``
     (``quantlab.risk.base``), whose ``factor_form()`` makes the
     mean-variance optimiser build a low-rank risk term.

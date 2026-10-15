@@ -25,13 +25,11 @@ subclass's; shipped models live in ``quantlab.risk.predefined`` (USE4 on the
 ``BarraStyle`` exposures).
 """
 
-import contextvars
 import dataclasses
 import datetime
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable
 from pathlib import Path
 from typing import Self
 
@@ -51,13 +49,6 @@ from quantlab.utils.timer import Timer
 
 #: A date a store is asked for.
 Date = str | datetime.date | pd.Timestamp
-
-#: The rows each open ``RiskStore.held`` holds, by store path: the held range
-#: (its start and its last moment) and the rows, in memory.
-_HELD: contextvars.ContextVar[dict[str, tuple[pd.Timestamp, pd.Timestamp, xr.Dataset]] | None] = (
-    contextvars.ContextVar("quantlab_risk_held_rows", default=None)
-)
-
 
 def covered_factors(covariance: np.ndarray) -> np.ndarray:
     """Return the factors of a ``[K, K]`` covariance whose block is all finite.
@@ -296,9 +287,9 @@ class RiskStore:
     recorded under the model's key and the store's ``part``
     (``risk_model.estimate``); one store's reads are merged into one request
     over the first to the last bar read, so a reader taking a row per bar
-    costs one record. Inside ``held(start, end)`` the reads inside that range
-    are answered from memory instead of opening the store, and recorded the
-    same way.
+    costs one record. Every ``read`` opens the store: a reader wanting rows
+    in memory reads its range once and keeps them (the decision inputs read
+    the estimate rows of a panel or a replay window this way).
 
     Parameters
     ----------
@@ -517,61 +508,9 @@ class RiskStore:
                 f"{recorded_end}, which does not contain {start} to {end}. Extend it "
                 f"with extend(end) or rebuild it with build(start, end)."
             )
-        window = slice(as_label(start), as_label(end))
-        held = (_HELD.get() or {}).get(path)
-        if held is not None and held[0] <= pd.Timestamp(start) and last_moment(end) <= held[1]:
-            rows = held[2].sel(timestamp=window)
-        else:
-            rows = xr.open_zarr(path).sel(timestamp=window)
+        rows = xr.open_zarr(path).sel(timestamp=slice(as_label(start), as_label(end)))
         record_read(self.model, rows, part=self.part, store=path, reread_range=self.read)
         return rows
-
-    @contextmanager
-    def held(self, start: Date, end: Date) -> Iterator[Self]:
-        """Read the store from ``start`` to ``end`` once and answer reads inside it from memory.
-
-        The rows are read with ``read`` (so a ``DataRecorder`` open around
-        the call records them as one request) and loaded. While the context
-        is open, every ``read`` of this store, through any ``RiskStore`` of
-        the same path, whose range lies inside ``start`` to ``end`` slices
-        those rows instead of opening the store, and is recorded as
-        ``read`` records it; a read outside the range opens the store as
-        usual. The values are the store's, so a read returns the same rows
-        either way. For a replay that reads a row per bar (the estimator's
-        estimate row of each decision); a store rewritten while the context
-        is open is not seen.
-
-        Parameters
-        ----------
-        start, end : str, datetime.date or pd.Timestamp
-            The range to hold, inside the store's recorded range.
-
-        Yields
-        ------
-        RiskStore
-            ``self``.
-
-        Raises
-        ------
-        ValueError
-            As ``read``.
-
-        Examples
-        --------
-        >>> with model.estimate.held("2024-01-02", "2024-12-31"):
-        ...     row = model.estimate.read("2024-06-03", "2024-06-03")  # from memory
-        >>> dict(row.sizes)["timestamp"]
-        1
-        """
-        rows = self.read(start, end).load()
-        path = self._require_path("held")
-        token = _HELD.set(
-            {**(_HELD.get() or {}), path: (pd.Timestamp(start), last_moment(end), rows)}
-        )
-        try:
-            yield self
-        finally:
-            _HELD.reset(token)
 
     def store_range(self) -> tuple[str, str] | None:
         """Return the ``(start, end)`` the store was built for, or ``None``.
@@ -825,7 +764,8 @@ class FactorRiskModel(Component, ABC):
         estimate : xr.Dataset
             The estimate store's row at the bar (``factor_covariance`` on
             ``(factor_i, factor_j)``, ``specific_risk`` on ``symbol``), as
-            ``estimate.read(t, t).isel(timestamp=0)`` gives it.
+            ``estimate.read(t, t).isel(timestamp=0)`` gives it and a
+            decision's context carries it (``PortfolioContext.risk_estimate``).
         exposures : xr.Dataset
             The exposures at the bar on ``symbol`` (``exposure_names``), as
             ``exposures(t, t)`` gives them: the symbols the forecast may
