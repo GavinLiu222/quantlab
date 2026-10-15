@@ -547,6 +547,19 @@ config = CrossSectionBacktestConfig(
 
 反过来用成分遮蔽价格（价格面板 `.where(is_member)`）会让被剔除的股票在第一个非成分 bar 变得不可交易，并以最后一个成分日的收盘价结算，而实盘中这笔卖出从未发生。
 
+### 在时间上平滑预测
+
+`quantlab.model.predefined.smoothed` 中的 `SmoothedPredictor(model, halflife_bars, warmup_bars=None, standardize=True)` 把每根 bar 的预测换成该标的截至这根 bar 的预测的指数加权均值，没有记忆的规则在它上面只交易信号的慢成分。每根 bar 先在截面上做 z-score（`cross_sectional_zscore`），各 checkpoint 之间的尺度变化不会让某一段 bar 权重更大，`label_scales` 变为 `"standardized"`；`standardize=False` 则按原单位平滑原始值。相隔 `age` 根 bar 的值权重为 `2 ** (-age / halflife_bars)`，在该标的已有的值上归一化（pandas `ewm(halflife=..., adjust=True, ignore_na=False)`）；没有值的 bar 不贡献，但更早的值照样衰减；被包装预测在 t 为 NaN 的格子在 t 仍为 NaN，成分遮蔽依然有效。bar t 不读取 t 之后的任何数据。
+
+窗口开头几根 bar 的均值要读窗口之前的 `warmup_bars` 根 bar（默认十个半衰期），这些也向被包装的预测器请求，按它的 bar 计数（请求会放宽到取回这么多根为止；它持有的更少时，均值从它的第一根 bar 开始，并发出给出实际根数的警告，`last_warmup_bars` 记下该数）。模型用已加载的 checkpoint 预测它们，所以落在该 checkpoint 拟合训练窗口（`fitted_train_bounds`）内的预热 bar 是样本内拟合，会被拒绝。在 `run_cv` 回放中包装 `RecordedPredictor(model, run_dir, history=True)`：`history=True` 时它还提供已加载 checkpoint 窗口之前的 bar，即当时在用的 checkpoint 在这些 bar 上做出的预测（更早的折），但从不提供该 checkpoint 窗口之后的 bar。于是每折的预热就是它之前的拼接预测，也就是一个平滑自身历史预测的实盘账户会持有的历史；从任何起点回放得到的平滑预测，都与对整个拼接面板一次性平滑相同。
+
+```python
+from quantlab.model.predefined.recorded import RecordedPredictor
+from quantlab.model.predefined.smoothed import SmoothedPredictor
+
+model = SmoothedPredictor(RecordedPredictor(model, whole.run_dir, history=True), halflife_bars=20)
+```
+
 ### 与基准对比
 
 把 `benchmark_dataset` 设为只含一个标的的市场数据集，例如 `scripts/wrds/etf.py --etf qqq` 写出的 QQQ store（`CrspDatasetConfig.qqq_benchmark`）。它和价格数据集一样是 `(timestamp, symbol)` 面板，放在单独的 store 里，带有相同的 `adjOpen` / `adjClose` 列。直接传入数据集对象：

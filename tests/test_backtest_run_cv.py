@@ -944,6 +944,9 @@ def test_a_recorded_predictor_replays_a_run_cv_from_another_start(tmp_path, cv_p
     xr.testing.assert_allclose(replay.simulation.value, direct.simulation.value)
     rebuilt = BacktestRun.open(replay.run_dir).rebuild("model")
     assert type(rebuilt).__name__ == "RecordedPredictor"
+    # The record is a read of the replay: every fold's fingerprint holds it.
+    for fold in replay.folds:
+        assert any(key.startswith("model") for key in fold["data_fingerprint"]), fold["data_fingerprint"].keys()
 
 
 def test_a_recorded_predictor_serves_only_its_checkpoints_fold(tmp_path, cv_project):
@@ -970,3 +973,75 @@ def test_a_recorded_predictor_serves_only_its_checkpoints_fold(tmp_path, cv_proj
     other.load(cv_project.checkpoints[0])
     with pytest.raises(ValueError, match="holds no prediction of checkpoint"):
         other.predict_window(_day(_test_bars(cv_project, 0)[0]), _day(_test_bars(cv_project, 0)[-1]))
+
+
+# --------------------------------------------------------------------------
+# #313: RecordedPredictor(history=True) and SmoothedPredictor across folds
+# --------------------------------------------------------------------------
+
+
+def _smoothed_expected(panel: xr.Dataset, halflife: float) -> xr.Dataset:
+    """Smooth a whole stitched panel at once: EWM of the per-bar z-scores."""
+    import pandas as pd
+    from quantlab.utils.cross_section import cross_sectional_zscore
+
+    out = panel.copy()
+    for name in panel.data_vars:
+        z = cross_sectional_zscore(panel[name].transpose("timestamp", "symbol").values)
+        smooth = pd.DataFrame(z).ewm(halflife=halflife, adjust=True, ignore_na=False).mean()
+        out[name] = (("timestamp", "symbol"), np.where(np.isfinite(z), smooth.values, np.nan))
+    return out
+
+
+def test_a_recorded_predictor_with_history_serves_earlier_folds_but_nothing_later(
+    tmp_path, cv_project
+):
+    whole = _backtester(tmp_path / "whole", cv_project).run_cv()
+    recorded = _recorded(tmp_path, cv_project, whole.run_dir)
+    recorded = type(recorded)(recorded.predictor, whole.run_dir, history=True)
+    recorded.load(cv_project.checkpoints[2])
+
+    served = recorded.predict_window(_day(cv_project.bars[0]), _day(_test_bars(cv_project, 2)[-1]))
+
+    stitched = BacktestRun.open(whole.run_dir).predictions().predictions
+    np.testing.assert_array_equal(
+        served.timestamp.values.astype("datetime64[ns]"),
+        np.concatenate([_test_bars(cv_project, k) for k in range(3)]),
+    )
+    xr.testing.assert_equal(served, stitched.isel(timestamp=slice(0, 3 * TEST_PERIODS)))
+    with pytest.raises(ValueError, match="outside"):
+        recorded.predict_window(_day(_test_bars(cv_project, 2)[0]), _day(_test_bars(cv_project, 3)[0]))
+
+
+def test_a_smoothed_replay_smooths_the_stitched_predictions_across_folds(tmp_path, cv_project):
+    """#313: the warm-up of every fold comes from the earlier folds' recorded
+    predictions, so the replay equals smoothing the whole stitched panel at
+    once, and a later start gives the same predictions on the bars it shares."""
+    from quantlab.model.predefined.smoothed import SmoothedPredictor
+
+    whole = _backtester(tmp_path / "whole", cv_project).run_cv()
+    stitched = BacktestRun.open(whole.run_dir).predictions().predictions
+
+    def replay(name, start_bar):
+        recorded = _recorded(tmp_path / name, cv_project, whole.run_dir)
+        model = SmoothedPredictor(
+            type(recorded)(recorded.predictor, whole.run_dir, history=True),
+            halflife_bars=2, warmup_bars=60,
+        )
+        backtester = _backtester(tmp_path / name, cv_project, start_bar=start_bar)
+        backtester.config = dataclasses.replace(backtester.config, model=model)
+        return backtester.run_cv()
+
+    full = replay("full", FIRST_TEST_BAR)
+    later = replay("later", FIRST_TEST_BAR + 2 * TEST_PERIODS + 3)
+
+    panel = BacktestRun.open(full.run_dir).predictions()
+    expected = _smoothed_expected(stitched, 2)
+    xr.testing.assert_allclose(panel.predictions, expected)
+    assert {spec.scale for spec in panel.labels} == {"standardized"}
+    late = BacktestRun.open(later.run_dir).predictions().predictions
+    xr.testing.assert_allclose(late, expected.sel(timestamp=late.timestamp))
+    rebuilt = BacktestRun.open(full.run_dir).rebuild("model")
+    assert type(rebuilt).__name__ == "SmoothedPredictor"
+    assert rebuilt.halflife_bars == 2 and rebuilt.warmup_bars == 60
+    assert rebuilt.predictor.history is True

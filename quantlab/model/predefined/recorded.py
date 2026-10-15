@@ -7,6 +7,12 @@ started, so a run that only moves the window over the same checkpoints, a
 ``run_cv`` started from cash on another bar for example, can read them back
 instead of computing every feature and running every model again.
 
+With ``history=True`` the record also serves the bars before the loaded
+checkpoint's window, as the earlier folds' checkpoints predicted them: the
+history a wrapper that reads past predictions (``SmoothedPredictor``) needs
+at a fold's first bars, each value made at its own bar by the checkpoint
+live then, so nothing is known before its bar.
+
 ``RecordedPredictor`` wraps the predictor that made them and answers
 ``predict_window`` from the record. Everything else forwards to the wrapped
 predictor, ``load`` included, so the backtester checks and loads each
@@ -22,6 +28,7 @@ import pandas as pd
 import xarray as xr
 
 from quantlab.core.component import Component, component
+from quantlab.runs.record import record_read
 from quantlab.runs.backtest_run import BacktestRun
 
 
@@ -32,13 +39,15 @@ class RecordedPredictorConfig:
     Examples
     --------
     >>> sorted(RecordedPredictorConfig(predictor=model, run_dir="runs/x").__dataclass_fields__)
-    ['predictor', 'run_dir']
+    ['history', 'predictor', 'run_dir']
     """
 
     #: The predictor that made the recorded predictions.
     predictor: object = component()
     #: The recorded backtest run (``run`` or ``run_cv``) whose predictions are served.
     run_dir: str = ""
+    #: Also serve the record's bars before the loaded checkpoint's window.
+    history: bool = False
 
 
 class RecordedPredictor(Component):
@@ -50,8 +59,13 @@ class RecordedPredictor(Component):
     passed to ``load`` predicted in that run: for a ``run_cv`` record, the
     fold whose trained unit holds that checkpoint, inside the fold's traded
     window; for a ``run`` record, the run's own checkpoint inside the run's
-    window. The recorded label names and scales must be the wrapped
-    predictor's. Every other protocol member forwards to the wrapped
+    window. With ``history=True`` the window may also start earlier: the
+    bars before the checkpoint's window are the record's stitched panel,
+    what the checkpoint live at each of those bars predicted there (a
+    ``run_cv`` record's earlier folds), and the record's first bar is the
+    first one served; the window still may not end after the checkpoint's
+    window, so no prediction is served before it was made. The recorded
+    label names and scales must be the wrapped predictor's. Every other protocol member forwards to the wrapped
     predictor; ``train`` is refused.
 
     Parameters
@@ -61,6 +75,9 @@ class RecordedPredictor(Component):
         ``MembershipMaskedPredictor`` the recorded run was configured with.
     run_dir : str or os.PathLike
         The recorded backtest run's directory.
+    history : bool, default False
+        Whether a window may start before the loaded checkpoint's window,
+        served from the record's earlier bars.
 
     Examples
     --------
@@ -71,15 +88,23 @@ class RecordedPredictor(Component):
         ...     backtester.config, model=RecordedPredictor(model, whole.run_dir)
         ... )
         >>> replay = backtester.run_cv()  # no fold is predicted again
+
+    With ``history=True`` the bars before a fold come from the earlier folds:
+
+        >>> recorded = RecordedPredictor(model, whole.run_dir, history=True)
+        >>> fold_2 = recorded.load(checkpoints[2]).predict_window(first_bar, fold_2_end)
+        >>> bool(fold_2.equals(whole_predictions.sel(timestamp=slice(first_bar, fold_2_end))))
+        True
     """
 
     #: The config dataclass the wrapper is serialised and rebuilt with.
     config_cls = RecordedPredictorConfig
 
-    def __init__(self, predictor, run_dir) -> None:
+    def __init__(self, predictor, run_dir, history: bool = False) -> None:
         """Initialize the wrapper; see the class docstring for parameters."""
         self.predictor = predictor
         self.run_dir = str(run_dir)
+        self.history = bool(history)
         self._checkpoint: Path | None = None
         self._record_run: BacktestRun | None = None
         self._panel: xr.Dataset | None = None
@@ -134,7 +159,8 @@ class RecordedPredictor(Component):
         ------
         ValueError
             If no checkpoint is loaded, the record holds no prediction of
-            it, or the window reaches outside what it predicted there.
+            it, or the window reaches outside what it predicted there
+            (with ``history``, only past its end).
 
         Examples
         --------
@@ -143,14 +169,21 @@ class RecordedPredictor(Component):
         """
         first, last = self._served_window()
         start_day, end_day = pd.Timestamp(start).normalize(), pd.Timestamp(end).normalize()
-        if start_day < pd.Timestamp(first).normalize() or end_day > pd.Timestamp(last).normalize():
+        early = start_day < pd.Timestamp(first).normalize() and not self.history
+        if early or end_day > pd.Timestamp(last).normalize():
             raise ValueError(
                 f"{type(self).__name__}: window {start}..{end} is outside {first}..{last}, "
                 f"what checkpoint {self._checkpoint} predicted in {self.run_dir}"
             )
-        _, panel = self._record()
+        run, panel = self._record()
         days = panel["timestamp"].to_index().normalize()
-        return panel.isel(timestamp=(days >= start_day) & (days <= end_day))
+        served = panel.isel(timestamp=(days >= start_day) & (days <= end_day))
+        # The record is this predictor's data: a replay's fingerprint holds the read.
+        record_read(
+            self, served, store=str(run.path),
+            reread=lambda: self._record()[1].isel(timestamp=(days >= start_day) & (days <= end_day)),
+        )
+        return served
 
     # -- Predictor protocol ----------------------------------------------
     # Everything but ``predict_window``, ``load`` and ``train`` forwards to
@@ -217,10 +250,12 @@ class RecordedPredictor(Component):
     @property
     def config(self) -> RecordedPredictorConfig:
         """The wrapped predictor and the recorded run; ``get_config()`` serialises it."""
-        return RecordedPredictorConfig(predictor=self.predictor, run_dir=self.run_dir)
+        return RecordedPredictorConfig(
+            predictor=self.predictor, run_dir=self.run_dir, history=self.history
+        )
 
     @classmethod
     def from_config(cls, config: dict, run_dir=None) -> Self:
         """Rebuild the wrapper and its predictor from ``get_config()``."""
         fields = cls._rebuilt_fields(config, run_dir)
-        return cls(fields["predictor"], fields["run_dir"])
+        return cls(**fields)

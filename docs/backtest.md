@@ -547,6 +547,19 @@ The wrapper satisfies the `Predictor` protocol. Its `predict_window` sets a pred
 
 Masking the prices with membership instead (a price panel `.where(is_member)`) makes a leaver untradable on its first non-member bar and settles it at its last member close, a sale that never happens live.
 
+### Smooth the predictions in time
+
+`SmoothedPredictor(model, halflife_bars, warmup_bars=None, standardize=True)` from `quantlab.model.predefined.smoothed` replaces each bar's prediction with an exponentially weighted mean of the symbol's own predictions up to that bar, so a rule without memory trades only the slow part of the signal. Each bar is first z-scored over its symbols (`cross_sectional_zscore`), so a change of scale between checkpoints weighs no stretch of bars more than another, and `label_scales` becomes `"standardized"`; `standardize=False` smooths the raw values in their own units. A value `age` bars old weighs `2 ** (-age / halflife_bars)`, normalised over the values the symbol has (pandas `ewm(halflife=..., adjust=True, ignore_na=False)`); a bar without a value adds nothing but its older values keep ageing, and a cell NaN in the wrapped predictions at t stays NaN at t, so a membership mask still holds. Bar t reads nothing after t.
+
+The mean at a window's first bars reads `warmup_bars` bars before it (ten halflives by default), which the wrapped predictor is asked for too, counted in its bars (the request is widened until they come back; when it holds fewer, the mean starts at its first bar, a warning gives the count and `last_warmup_bars` holds it). A model predicts them with its loaded checkpoint, so a warm-up bar inside the checkpoint's fitted training window (`fitted_train_bounds`) would be an in-sample fit and is refused. In a `run_cv` replay, wrap `RecordedPredictor(model, run_dir, history=True)`: with `history=True` it also serves the bars before the loaded checkpoint's window, as the checkpoints live at those bars predicted them (the earlier folds), never a bar after the checkpoint's window. Every fold's warm-up is then the stitched predictions before it, the history a live account smoothing its own past predictions would hold, and a replay from any start gives the same smoothed predictions as smoothing the whole stitched panel at once.
+
+```python
+from quantlab.model.predefined.recorded import RecordedPredictor
+from quantlab.model.predefined.smoothed import SmoothedPredictor
+
+model = SmoothedPredictor(RecordedPredictor(model, whole.run_dir, history=True), halflife_bars=20)
+```
+
 ### Compare against a benchmark
 
 Set `benchmark_dataset` to a market dataset that holds exactly one symbol, for example the QQQ store written by `scripts/wrds/etf.py --etf qqq` (`CrspDatasetConfig.qqq_benchmark`). It is a `(timestamp, symbol)` panel like the price dataset, in a store of its own, with the same `adjOpen` / `adjClose` columns. Pass the dataset object itself:
