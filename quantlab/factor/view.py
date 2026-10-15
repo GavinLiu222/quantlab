@@ -1,7 +1,8 @@
 """Factor views: factors that read the store of the factor they wrap.
 
 A **factor view** wraps another factor and answers from that factor's store:
-it has no store of its own, only the store's owner writes the store (ADR
+it has no store of its own (``store_path`` is ``None``; ``store_uses``
+names the wrapped store), only the store's owner writes the store (ADR
 0029), and the view changes only what it says it changes about the panel,
 such as which symbols it keeps (``RosterFactor``) or which cells it masks
 (``MembershipMaskedFactor``). ``FactorView`` holds the rules for every
@@ -19,6 +20,7 @@ from typing import Self
 import pandas as pd
 import xarray as xr
 
+from quantlab.core.store_uses import OWNS, READS, SOURCE, StoreUse
 from quantlab.factor.base import Factor
 from quantlab.factor.config import FactorViewConfig
 
@@ -29,7 +31,8 @@ class FactorView(Factor):
     Every store query is the wrapped factor's, through the view:
 
     =====================  ==================================================
-    ``store_path``         the wrapped factor's: the store ``read`` reads
+    ``store_path``         ``None``: a view has no store of its own
+    ``store_uses()``       the wrapped factor's store, this view its handle
     ``store_range()``      the wrapped factor's
     ``owns_store()``       ``False``: a view has no store of its own
     ``stored_symbols()``   the wrapped factor's, cut by ``_kept_symbols``
@@ -65,8 +68,8 @@ class FactorView(Factor):
     symbols 1..5 and ``roster`` a dataset on symbols 2, 3 and 4:
 
     >>> view = RosterFactor(RosterConfig(factor=owner, roster=roster))
-    >>> view.store_path == owner.store_path, view.owns_store()
-    (True, False)
+    >>> view.store_path, view.store_uses()[0].path == owner.store_path, view.owns_store()
+    (None, True, False)
     >>> view.stored_symbols()
     ['2', '3', '4']
     """
@@ -134,14 +137,38 @@ class FactorView(Factor):
 
     @property
     def store_path(self) -> str | None:
-        """Return the wrapped factor's store, the one ``read`` reads.
+        """Return ``None``: a view keeps no store of its own (ADR 0029).
+
+        The store ``read`` reads is the wrapped factor's, declared by
+        ``store_uses``.
 
         Examples
         --------
-        >>> view.store_path == view.config.factor.store_path
+        >>> view.store_path is None
         True
         """
-        return self.config.factor.store_path
+        return None
+
+    def store_uses(self) -> tuple:
+        """Return the wrapped factor's store, with this view as its handle.
+
+        A view reads the store its wrapped factor declares (``"reads"``,
+        with the view's ``store_range()``), or, when it writes through the
+        store's owner (``ChunkedFactor``, see ``owns_store``), owns it, so
+        ``extend`` on the view extends the store. The wrapped factor
+        declares the store itself as well; see ``Component.store_uses``.
+
+        Examples
+        --------
+        >>> [(use.path == owner.store_path, use.relation) for use in view.store_uses()]
+        [(True, 'reads')]
+        """
+        relation = OWNS if self.owns_store() else READS
+        return tuple(
+            StoreUse(use.path, relation, self)
+            for use in self.config.factor.store_uses()
+            if isinstance(use, StoreUse) and use.relation != SOURCE
+        )
 
     def owns_store(self) -> bool:
         """Return ``False``: a view has no store of its own, so it writes none (ADR 0029).
@@ -275,6 +302,48 @@ class FactorView(Factor):
         """
         self.refuse_unless_owner("extend")
         raise self._no_store("extend")
+
+    def write_rows(self, rows: xr.Dataset, start, end) -> Self:
+        """Write ``rows`` through the wrapped factor's ``write_rows``, once the view may write.
+
+        A view has no store of its own (``store_path`` is ``None``); one
+        that writes through the store's owner (``ChunkedFactor``) writes
+        the owner's store, any other is refused (``refuse_unless_owner``).
+
+        Examples
+        --------
+        >>> view.write_rows(owner.compute("2024-01-01", "2024-01-30"), "2024-01-01", "2024-01-30")
+        Traceback (most recent call last):
+        ValueError: RosterFactor.build(): a view has no store of its own; ...
+        """
+        self.refuse_unless_owner("build")
+        self.config.factor.write_rows(rows, start, end)
+        return self
+
+    def append_rows(self, rows: xr.Dataset, end) -> Self:
+        """Append ``rows`` through the wrapped factor's ``append_rows``, once the view may write.
+
+        Examples
+        --------
+        >>> view.append_rows(owner.compute("2024-02-01", "2024-02-10"), "2024-02-10")
+        Traceback (most recent call last):
+        ValueError: RosterFactor.extend(): a view has no store of its own; ...
+        """
+        self.refuse_unless_owner("extend")
+        self.config.factor.append_rows(rows, end)
+        return self
+
+    def extendable_range(self, end) -> tuple[str, str]:
+        """Return the wrapped factor's ``extendable_range(end)``, once the view may write.
+
+        Examples
+        --------
+        >>> view.extendable_range("2024-02-10")
+        Traceback (most recent call last):
+        ValueError: RosterFactor.extend(): a view has no store of its own; ...
+        """
+        self.refuse_unless_owner("extend")
+        return self.config.factor.extendable_range(end)
 
     def refuse_unless_owner(self, method: str) -> None:
         """Raise unless the view writes through the wrapped store's owner (see ``owns_store``).

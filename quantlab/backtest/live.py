@@ -9,27 +9,30 @@ to the last closed bar t and appends the model's prediction of t to a
 **The bar.** t is the last bar of the run's price dataset, whose vendor store
 a vendor update (``scripts/sharadar/update.py``) has just extended.
 
-**The inputs.** The stores the prediction and the decision read are found by
-walking the component tree of the run's backtester under ``price_dataset``,
-``model`` and ``constructor`` (``walk_components``), leaving out the model's
-labels (a prediction reads none):
+**The inputs.** The stores the prediction and the decision read are the ones
+the components under the run's backtester's ``price_dataset``, ``model`` and
+``constructor`` declare (``Component.store_uses``, gathered by
+``walk_store_uses``), leaving out the model's labels (a prediction reads
+none):
 
-- every store a dataset reads, as the dataset declares it
-  (``BaseDataset.stores``, gathered by ``input_stores``), must already hold
-  t: they are the vendor's stores, which this job does not update. A store named in ``may_lag`` may end earlier (a rate published
+- every dataset store they read (``"reads"``, gathered by ``input_stores``)
+  must already hold t: they are the vendor's stores, which this job does not
+  update. A store a dataset is only built from (``"source"``) is not
+  checked. A store named in ``may_lag`` may end earlier (a rate published
   the next business day, read lagged); its last bar is recorded. A store
   named in ``mirrors`` is a copy of some of the price dataset's variables
   (the example's ``prices.zarr``): it gains the price dataset's bars after
   its last, or, when the price dataset has gained a symbol, is rewritten from
   it over its own range, so its new symbol has its history;
-- every store a component writes by date range and has a recorded range
-  (``Component.ranged_stores``, gathered by ``ranged_stores``: a factor's
-  store, a factor risk model's regression and estimate stores) is extended
-  to t with its ``extend``, in one loop, deepest in the tree first (so a risk
+- every store a component owns, written by date range, with a recorded
+  range (``"owns"``, gathered by ``ranged_stores``: a factor's store, a
+  factor risk model's regression and estimate stores) is extended to t with
+  its handle's ``extend``, in one loop, deepest in the tree first (so a risk
   model's exposures before its regression store, and that before its
-  estimate store). Only a store's owner extends it (ADR 0029); a store
-  reached only through views (a factor pinned to some of its variables) is
-  an outside input and must already hold t.
+  estimate store). Only a store's owner extends it (ADR 0029); a ranged
+  store only read (a factor view, a factor pinned to some of its
+  variables), with no owner in the run, is an outside input and must
+  already hold t.
 
 A store already reaching t is left alone, so a run interrupted after some
 stores were extended is finished by the next one. Each store is then checked
@@ -58,18 +61,18 @@ bit. A vendor restatement of a stored bar reaches no extended store.
 
 import os
 import shutil
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable
 from dataclasses import dataclass
 from os import PathLike
 from pathlib import Path
-from typing import Protocol, runtime_checkable
 
 import pandas as pd
 import xarray as xr
 from loguru import logger
 
 from quantlab.backend.zarr import XrBackend
-from quantlab.core.component import Component, walk_components
+from quantlab.core.component import walk_components
+from quantlab.core.store_uses import OWNS, READS, FoundStoreUse, RangedStoreHandle, walk_store_uses
 from quantlab.dataset.base import BaseDataset
 from quantlab.enums.constant import Date
 from quantlab.runs.backtest_run import BacktestRun
@@ -81,7 +84,6 @@ from quantlab.utils.symbol_axis import sort_symbol_axis
 __all__ = [
     "LivePrediction",
     "LivePredictionRefused",
-    "RangedStoreHandle",
     "input_stores",
     "last_bar",
     "mirror_new_bars",
@@ -269,31 +271,30 @@ def _rewrite(data: xr.Dataset, store: str) -> None:
     shutil.rmtree(superseded)
 
 
-def _inputs(backtester) -> Iterator[tuple[str, object]]:
-    """Every component under ``INPUT_FIELDS`` with its path, the model's labels left out."""
-    config = backtester.config
-    for name in INPUT_FIELDS:
-        root = getattr(config, name, None)
-        if root is None:
-            continue
-        for path, item in [(name, root), *walk_components(root, name)]:
-            if "labels" not in path.split("."):
-                yield path, item
+def _is_input(path: str) -> bool:
+    """Whether a component path lies under ``INPUT_FIELDS``, outside the model's labels."""
+    parts = path.split(".")
+    return parts[0] in INPUT_FIELDS and "labels" not in parts
+
+
+def _uses(backtester) -> tuple[FoundStoreUse, ...]:
+    """The store uses the components under ``INPUT_FIELDS`` declare, the labels left out."""
+    roots = {name: getattr(backtester.config, name, None) for name in INPUT_FIELDS}
+    return walk_store_uses(roots, descend=_is_input)
 
 
 def input_stores(backtester) -> dict[str, tuple[str, BaseDataset]]:
     """Return the stores a run's prediction and decision read, each with who reads it.
 
-    The components under ``INPUT_FIELDS`` are walked (the model's labels left
-    out, as a prediction reads none). Each dataset reached says itself which
-    stores its panel reads (``BaseDataset.stores``, through its ``leaves``),
-    so the components under a dataset are not walked: a view's inputs are
-    its leaves, and what a dataset only writes its store from (a mapped
-    Trade bar store's source view) is not read. Every store is keyed by its
-    absolute path, with the first component path reading it and the leaf
-    dataset whose calendar answers on it; a panel held in memory reads no
-    store and is keyed ``<in memory: path>``. These are the stores
-    ``predict_live_bar`` checks to hold the bar it predicts.
+    The ``"reads"`` uses of datasets (not of ranged stores) declared under
+    ``INPUT_FIELDS`` (``walk_store_uses``; the model's labels are left out,
+    as a prediction reads none): a leaf dataset's store, a view's inputs'
+    stores, and not what a dataset only writes its store from (a mapped
+    Trade bar store's source view is a ``"source"``). Every store is keyed
+    by its absolute path, with the component path of the leaf dataset
+    reading it, whose calendar answers on it, deepest first. A panel held
+    in memory reads no store and is keyed ``<in memory: path>``. These are
+    the stores ``predict_live_bar`` checks to hold the bar it predicts.
 
     Parameters
     ----------
@@ -314,87 +315,37 @@ def input_stores(backtester) -> dict[str, tuple[str, BaseDataset]]:
     ['/data/quantlab/market/sharadar/sharadar_sep_1d/sharadar_sep_1d.zarr', '/data/quantlab/universe/sp500/membership/membership.zarr']
     """
     stores: dict[str, tuple[str, BaseDataset]] = {}
-    datasets: list[str] = []
-    seen: set[int] = set()
-    for path, item in _inputs(backtester):
-        if not isinstance(item, BaseDataset):
-            continue
-        if any(path.startswith(f"{above}.") for above in datasets):
-            continue  # the dataset above declares what it reads
-        datasets.append(path)
-        for leaf in item.leaves():
-            if id(leaf) in seen:
-                continue
-            seen.add(id(leaf))
+    for use in _uses(backtester):
+        if use.relation == READS and not use.ranged:
             # A dataset held in memory reads no store; its path names it.
-            for key in [_key(store) for store in leaf.stores()] or [f"<in memory: {path}>"]:
-                stores.setdefault(key, (path, leaf))
+            key = f"<in memory: {use.where}>" if use.path is None else _key(use.path)
+            stores.setdefault(key, (use.where, use.component))
     return stores
 
 
-@runtime_checkable
-class RangedStoreHandle(Protocol):
-    """What the live day and the data update read of a store written by date range.
-
-    The members a caller reads of each store a component declares
-    (``Component.ranged_stores``), whatever writes it: a factor
-    (``quantlab.factor.base.Factor``, its views included) and a factor risk
-    model's ``quantlab.risk.base.RiskStore`` are the two adapters, neither
-    deriving from the other; both write through
-    ``quantlab.backend.ranged.RangedStore``.
-
-    Attributes
-    ----------
-    store_path : str or None
-        The Zarr store, the key the store is gathered by.
-
-    Examples
-    --------
-    >>> isinstance(factor, RangedStoreHandle), isinstance(model.regression, RangedStoreHandle)
-    (True, True)
-    """
-
-    store_path: "str | None"
-
-    def store_range(self) -> "tuple[str, str] | None":
-        """The recorded ``(start, end)``, ``None`` when nothing is recorded."""
-
-    def owns_store(self) -> bool:
-        """Whether this handle may write the store (a view may not)."""
-
-    def extend(self, end):
-        """Append the bars after the recorded range up to ``end``."""
-
-
 def ranged_stores(
-    components: Iterable[tuple[str, object]],
+    backtester,
 ) -> tuple[dict[str, tuple[str, RangedStoreHandle]], dict[str, tuple[str, RangedStoreHandle]]]:
-    """Return the ranged stores of ``components`` with a recorded range, the owners' and the views'.
+    """Return a run's ranged stores with a recorded range, the owned and the only read.
 
-    Every component declares the stores it writes or reads by date range
-    (``Component.ranged_stores``; a component not deriving from
-    ``Component`` declares none). Those with a path and a recorded range are
-    gathered by absolute store path, deepest component path first: a
-    component's inputs lie below it wherever it is held, so the order is one
-    to extend in (a risk model's exposures factor before its regression
-    store, its regression store before its estimate store). A store is
-    listed among the owners when a handle owning it (``owns_store()``)
-    reaches it, among the views otherwise; a key may be in both.
+    The ranged stores declared under ``INPUT_FIELDS`` (``walk_store_uses``,
+    the labels left out) with a recorded range, by absolute store path, in
+    the walk's extension order, deepest component path first (a risk
+    model's exposures factor before its regression store, its regression
+    store before its estimate store): the ``"owns"`` uses, which the live
+    day extends, and the ``"reads"`` uses (a factor view, a factor pinned to
+    some of a store's variables), each with the component path and the
+    handle; a key may be in both.
 
     Parameters
     ----------
-    components : iterable of (str, object)
-        Component paths and components, as ``walk_components`` yields them.
+    backtester : BaseBacktester
+        The run's backtester, rebuilt from its directory.
 
     Returns
     -------
     owners, views : dict
         ``{store: (component path, handle)}`` each, in extension order.
-
-    Raises
-    ------
-    TypeError
-        If a declared store lacks a member of ``RangedStoreHandle``.
 
     Examples
     --------
@@ -402,7 +353,7 @@ def ranged_stores(
     store and whose covariance is a ``FactorRiskStoreEstimator`` of a USE4
     model:
 
-    >>> owners, views = ranged_stores(walk_components(backtester))
+    >>> owners, views = ranged_stores(backtester)
     >>> [(Path(key).name, path) for key, (path, _) in owners.items()]
     [('past_ret.zarr', 'model.predictor.factors.0'), ('exposures.zarr', 'constructor.covariance.risk_model.exposures'), ('regression.zarr', 'constructor.covariance.risk_model'), ('estimate.zarr', 'constructor.covariance.risk_model')]
     >>> views
@@ -410,19 +361,10 @@ def ranged_stores(
     """
     owners: dict[str, tuple[str, RangedStoreHandle]] = {}
     views: dict[str, tuple[str, RangedStoreHandle]] = {}
-    for path, item in sorted(components, key=lambda pair: -pair[0].count(".")):
-        if not isinstance(item, Component):
-            continue
-        for store in item.ranged_stores():
-            if not isinstance(store, RangedStoreHandle):
-                raise TypeError(
-                    f"{path}: {type(item).__name__}.ranged_stores() declared "
-                    f"{type(store).__name__}, which lacks a member of RangedStoreHandle "
-                    f"(store_path, store_range, owns_store, extend)"
-                )
-            if store.store_path and store.store_range() is not None:
-                found = owners if store.owns_store() else views
-                found.setdefault(_key(store.store_path), (path, store))
+    for use in _uses(backtester):
+        if use.ranged and use.relation in (OWNS, READS) and use.handle.store_range() is not None:
+            found = owners if use.relation == OWNS else views
+            found.setdefault(_key(use.path), (use.where, use.handle))
     return owners, views
 
 
@@ -525,7 +467,6 @@ def predict_live_bar(
             f"({bar_label(skipped[0])}..{bar_label(skipped[-1])})"
         )
 
-    components = list(_inputs(backtester))
     leaves = input_stores(backtester)
     mirrored = {_key(p) for p in mirrors}
     lagging = {_key(p) for p in may_lag}
@@ -556,7 +497,7 @@ def predict_live_bar(
         for key in sorted(lagging)
     }
 
-    owners, views = ranged_stores(components)
+    owners, views = ranged_stores(backtester)
     short = [
         f"{key} (read by {path}, recorded to {view.store_range()[1]})"
         for key, (path, view) in views.items()

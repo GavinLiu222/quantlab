@@ -44,8 +44,9 @@ class MembershipMaskedFactor(FactorView):
     know: a small loss of information, not look-ahead.
 
     The store queries are a view's (see ``FactorView``): every symbol of the
-    wrapped factor is kept, ``store_path`` and ``store_range()`` are the
-    wrapped factor's, ``owns_store()`` is false and ``build`` and
+    wrapped factor is kept, ``store_path`` is ``None``, ``store_uses()``
+    reads the wrapped factor's store, ``store_range()`` is the wrapped
+    factor's, ``owns_store()`` is false and ``build`` and
     ``extend`` are refused.
 
     Parameters

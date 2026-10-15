@@ -232,8 +232,10 @@ and `panel` does the query, the resample and the run record
 (`quantlab.runs.record`, see [Data fingerprints](internals.md#data-fingerprints)).
 A *view*, a dataset that only composes other datasets, overrides `panel`,
 records nothing itself, passes the request on, and declares the datasets it
-reads with `inputs()`, so `stores()` (what the live day and the data update
-check) names its inputs' stores; its `store_path` is `None`.
+reads with `inputs()`, so `store_uses()` declares nothing of its own and
+`stores()` (what the live day and the data update check) names its inputs'
+stores; its `store_path` is `None`. A component it only builds its store
+from is declared a source (`BuiltFrom`), not read on a day.
 
 A Sharadar table whose rows become public on some day (a filing, a 13F
 quarter) is a *release* table. Its panel subclasses `ReleasePanelDataset`

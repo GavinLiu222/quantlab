@@ -12,7 +12,7 @@ normalised ISO dates, ``panel(start, end, symbols, variables)`` (the one read
 seam of every leaf dataset, recorded in an open ``DataRecorder``),
 ``calendar``, ``bar_before`` and ``bar_after``, resampling, the shared
 variable names, and each dataset's declaration of the stores it reads
-(``inputs``, ``leaves``, ``stores``). ``MarketDataset`` adds the market rules
+(``inputs``, ``store_uses``, ``stores``). ``MarketDataset`` adds the market rules
 (tradable and delisting bars) and the ``to_kunquant`` export (arrays for the
 KunQuant factor engine).
 
@@ -42,7 +42,8 @@ import pandas as pd
 import polars as pl
 import xarray as xr
 
-from quantlab.core.component import Component
+from quantlab.core.component import Component, child_components
+from quantlab.core.store_uses import READS, SOURCE, BuiltFrom, StoreUse, walk_store_uses
 from quantlab.dataset.config import BaseDatasetConfig, DatasetConfig
 from quantlab.backend.resample import resample_on_read, resample_panel
 from quantlab.backend.zarr import XrBackend
@@ -455,7 +456,7 @@ class BaseDataset(Component, ABC):
         inputs, and keeps no store (a roster cut, a merge, a mapping). A view
         declares its inputs here; what a dataset merely holds in its config
         to write its store (``MappedTradeBarDataset``'s source view) is not
-        an input. ``leaves`` and ``stores`` follow the declaration.
+        an input. ``store_uses`` and ``stores`` follow the declaration.
 
         Returns
         -------
@@ -471,43 +472,53 @@ class BaseDataset(Component, ABC):
         """
         return ()
 
-    def leaves(self) -> tuple["BaseDataset", ...]:
-        """Return the leaf datasets this dataset's panel reads: itself, or its inputs' leaves.
+    def store_uses(self) -> tuple:
+        """Return the stores this dataset uses itself: a leaf reads its store.
 
-        A leaf reached through two inputs is listed once, where it is first
-        reached.
+        A leaf reads one store (``"reads"``): ``store_path``, or the source
+        store (``config.zarr_file_path``) while a resampled dataset
+        resamples on read; a panel held in memory reads no store (a
+        ``"reads"`` use without a path). A resampled
+        dataset's store is written from the source store, so that is a
+        ``"source"`` use as well. A view uses no store itself: its inputs
+        declare theirs. A component the dataset holds that is not one of
+        its inputs (``MappedTradeBarDataset``'s source view, the ticker map
+        of a ``PermatickerTradeBarDataset``) is one it is only built from
+        (``BuiltFrom``), so every store under it is a source, not read on a
+        day. See ``Component.store_uses``; nothing is opened.
 
         Returns
         -------
-        tuple of BaseDataset
-            The leaves, in input order.
+        tuple of StoreUse or BuiltFrom
 
         Examples
         --------
-        >>> ds.leaves() == (ds,)
-        True
-        >>> MergedDataset([ds, etf]).leaves() == (ds, etf)
-        True
+        >>> ds.store_uses()
+        (StoreUse(path='data/klines.zarr', relation='reads', handle=None),)
+        >>> RosterDataset(ds, membership).store_uses()   # its inputs declare theirs
+        ()
         """
-        inputs = self.inputs()
+        inputs = {id(dataset) for dataset in self.inputs()}
+        uses: list = [
+            BuiltFrom(child) for _, child in child_components(self) if id(child) not in inputs
+        ]
         if not inputs:
-            return (self,)
-        found: dict[int, BaseDataset] = {}
-        for dataset in inputs:
-            for leaf in dataset.leaves():
-                found.setdefault(id(leaf), leaf)
-        return tuple(found.values())
+            store = self._read_store()
+            uses.append(StoreUse(store, READS))
+            if store is not None and self.config.resample_freq is not None:
+                uses.append(StoreUse(self.config.zarr_file_path, SOURCE))
+        return tuple(uses)
 
     def stores(self) -> list[str]:
         """Return the stores this dataset's panel reads, in order.
 
-        A leaf reads one store: ``store_path``, or the source store
-        (``config.zarr_file_path``) while a resampled dataset resamples on
-        read; a panel held in memory reads none. A view reads its leaves'
-        stores, each listed once. This is the one answer to "which stores
-        does this read": the read seam records the store it names, and the
-        live day (``quantlab.backtest.live.input_stores``) checks these
-        stores hold the bar it predicts. Nothing is opened.
+        The ``"reads"`` uses of the tree under the dataset, itself included
+        (``walk_store_uses`` over ``store_uses``): a leaf's store, or the
+        source store while a resampled dataset resamples on read; a view's
+        inputs' stores, each listed once; none for a panel held in memory.
+        The read seam records the store it names, and the live day
+        (``quantlab.backtest.live.input_stores``) checks these stores hold
+        the bar it predicts. Nothing is opened.
 
         Returns
         -------
@@ -523,18 +534,16 @@ class BaseDataset(Component, ABC):
         >>> RosterDataset(ds, membership).stores()
         ['data/klines.zarr', 'data/membership.zarr']
         """
-        stores: list[str] = []
-        for leaf in self.leaves():
-            store = leaf._read_store()
-            if store is not None and store not in stores:
-                stores.append(store)
-        return stores
+        return [
+            use.path for use in walk_store_uses(self)
+            if use.relation == READS and not use.ranged and use.path is not None
+        ]
 
     def _read_store(self) -> str | None:
         """Return the store a leaf's panel opens: the source store while it resamples on read.
 
         ``None`` for a leaf whose panel is held in memory. Only asked of a
-        leaf (``stores`` asks every leaf of a view).
+        leaf (``store_uses`` declares it).
         """
         if self._resamples_on_read():
             return self.config.zarr_file_path

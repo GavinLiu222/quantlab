@@ -24,7 +24,7 @@ root `--data-dir`. Each step is one action on one store folder (paths relative t
 | `benchmarks` | `scripts/sharadar/price_return_benchmark.py --refresh` for the listed tickers (`market/benchmarks/`) |
 | `update` | rebuilds the dataset of a store folder from its `component.json` and calls `update()` |
 | `mirror` | appends a source dataset's new bars to a store that copies its variables (`quantlab.backtest.live.mirror_new_bars`) |
-| `extend` | rebuilds the folder's component from its `component.json` and extends every store it writes by date range to t (`Component.ranged_stores()`: a factor's store, or a factor risk model's regression and estimate stores, in that order); the step's result names each store, `extended to <t>` or `current` |
+| `extend` | rebuilds the folder's component from its `component.json` and extends every store it declares it owns, written by date range, to t (`Component.store_uses()`, the `owns` uses: a factor's store, or a factor risk model's regression and estimate stores, in that order); the step's result names each store, `extended to <t>` or `current` |
 | `run` | runs any script under the repository: `{script: ..., args: [...], writes: [...], reads: [...]}`; `{data_dir}` and `{download_dir}` in `args` are filled in (other braces are kept) |
 
 Any other action is an error, in a run and in `--check`. A `sharadar`, `benchmarks` or `run` step

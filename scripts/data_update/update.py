@@ -13,9 +13,9 @@ holding ``<stem>.zarr``, its README.md and a ``component.json``: the component's
 - ``update``: ``update()`` the dataset of a store folder;
 - ``mirror``: append a source dataset's new bars to a store copying its variables
   (``quantlab.backtest.live.mirror_new_bars``);
-- ``extend``: extend to t every store the component declares it writes by date range
-  (``Component.ranged_stores``: a factor's store, which only its owner may extend, or a
-  factor risk model's regression and estimate stores, in that order);
+- ``extend``: extend to t every store the component declares it owns, written by date
+  range (``Component.store_uses``: a factor's store, which only its owner may extend, or
+  a factor risk model's regression and estimate stores, in that order);
 - ``run``: any script under the repository, with ``args`` in which ``{data_dir}`` and
   ``{download_dir}`` are filled in.
 
@@ -71,7 +71,7 @@ from loguru import logger
 from quantlab.acquisition.config import AcquisitionConfig
 from quantlab.acquisition.fred import FredAcquisition
 from quantlab.backtest.live import mirror_new_bars
-from quantlab.core.component import walk_components
+from quantlab.core.store_uses import OWNS, StoreUse, walk_store_uses
 from quantlab.core.store_folder import COMPONENT_FILE, load_component
 from quantlab.dataset.base import BaseDataset
 from quantlab.utils.cli import add_output_dir_args, resolve_output_dirs
@@ -119,22 +119,14 @@ def parse_step(step: dict) -> tuple[str, dict, bool]:
 
 
 def stores_read(item) -> set[Path]:
-    """The stores a component reads or writes from: every dataset's and ranged store below it.
+    """The stores a component depends on: every store the components below it use.
 
-    A dataset names the stores it reads itself (``BaseDataset.stores``: a
-    resample on read its source store, a view its inputs'), and its own store;
-    every other component its stores written by date range
-    (``Component.ranged_stores``: a factor's, a factor risk model's two). The
-    components under it are walked too, so a store written from another (a
-    mapped Trade bar store from the Trade bar store) depends on both.
+    Every relation of ``walk_store_uses`` counts (``Component.store_uses``): a store
+    read on a day, a store written by date range, a store another is written from (a
+    mapped Trade bar store from the Trade bar store under its source view). The
+    component's own declaration is left out: those are the stores its step writes.
     """
-    paths = set()
-    for _, part in walk_components(item):
-        stores = [store.store_path for store in part.ranged_stores()]
-        if isinstance(part, BaseDataset):
-            stores += [*part.stores(), part.store_path]
-        paths.update(Path(store).absolute() for store in stores if store)
-    return paths
+    return {Path(use.path).absolute() for use in walk_store_uses(item) if use.where and use.path}
 
 
 def overlaps(a: Path, b: Path) -> bool:
@@ -154,22 +146,27 @@ def last_bar(path: Path) -> pd.Timestamp | None:
         store.close()
 
 
-def range_end(store, where: str) -> pd.Timestamp:
+def range_end(use, where: str) -> pd.Timestamp:
     """The end of a ranged store's recorded range; raises when there is none."""
-    recorded = store.store_range()
+    recorded = use.handle.store_range()
     if recorded is None:
-        raise ValueError(f"{where}: {store.store_path} has no recorded range; build it first")
+        raise ValueError(f"{where}: {use.path} has no recorded range; build it first")
     return pd.Timestamp(recorded[1])
+
+
+def ranged_uses(item) -> list:
+    """The stores a component declares itself written by date range, in extension order."""
+    return [use for use in item.store_uses() if isinstance(use, StoreUse) and use.ranged]
 
 
 def extend_problems(item) -> list[str]:
     """Why ``extend`` cannot take a component: it declares no ranged store, or does not own one."""
-    stores = item.ranged_stores()
-    if not stores:
+    uses = ranged_uses(item)
+    if not uses:
         return [f"extend takes a component writing stores by date range (a factor or a factor "
                 f"risk model), got {type(item).__name__}"]
-    return [f"the component is not the owner of {store.store_path}; write the owner's config"
-            for store in stores if not store.owns_store()]
+    return [f"the component is not the owner of {use.path}; write the owner's config"
+            for use in uses if use.relation != OWNS]
 
 
 def write_status(path: Path, status: dict) -> None:
@@ -267,10 +264,10 @@ class Update:
         if problems := extend_problems(item):
             raise ValueError(f"{store}: {'; '.join(problems)}")
         done = []
-        for part in item.ranged_stores():  # in extension order
-            name = Path(part.store_path).name
-            if range_end(part, store) < self.t:
-                part.extend(day)
+        for use in ranged_uses(item):  # in extension order, every one owned
+            name = Path(use.path).name
+            if range_end(use, store) < self.t:
+                use.handle.extend(day)
                 done.append(f"{name} extended to {day}")
             else:
                 done.append(f"{name} current")

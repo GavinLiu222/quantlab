@@ -29,14 +29,18 @@ The run directory is the strategy's recipe: `config.json` rebuilds the backteste
 
 1. **The bar.** t is the last bar of the run's price dataset (`config.price_dataset`; for
    the S&P 500 strategy, the roster store `sharadar_sp500_1d.zarr`).
-2. **The inputs.** The job walks the component tree under `price_dataset`, `model` and
-   `constructor` (`quantlab.core.component.walk_components`). The model's labels are left
-   out, because a prediction reads no label. Every store a dataset in the tree reads must
-   already hold t. Each dataset declares those stores itself (`BaseDataset.stores()`, which
-   `quantlab.backtest.live.input_stores(backtester)` gathers): a store of its own, the source
-   store of a dataset resampled on read, or, for a view (a `RosterDataset`, a `MergedDataset`,
-   the permaticker Trade bar view), its inputs' stores. A mapped Trade bar store
-   (`MappedTradeBarDataset`) is checked itself, not the Trade bar store it is written from.
+2. **The inputs.** Every component declares the stores it uses itself
+   (`Component.store_uses()`), each a `StoreUse` of a path and a relation: `reads` (read on
+   the day), `owns` (written by date range and extended by it) or `source` (its store is
+   written from it, not read on the day). The job gathers the declarations of the component
+   tree under `price_dataset`, `model` and `constructor` with one walk
+   (`quantlab.core.store_uses.walk_store_uses`). The model's labels are left out, because a
+   prediction reads no label. Every dataset store the tree reads must already hold t
+   (`quantlab.backtest.live.input_stores(backtester)`, the `reads` of datasets): a leaf's own
+   store, or the source store of a dataset resampled on read; a view (a `RosterDataset`, a
+   `MergedDataset`, the permaticker Trade bar view) declares nothing itself, its inputs do. A
+   mapped Trade bar store (`MappedTradeBarDataset`) is checked itself: the Trade bar store it
+   is written from is a `source` and is not checked.
    These are the vendor's stores, and the job does not update them. Two options change this:
    - `--may-lag STORE` lets a store end before t. Use it for a rate published the next
      business day and read lagged, such as FRED's DTB3. Its last bar is recorded.
@@ -44,20 +48,22 @@ The run directory is the strategy's recipe: `config.json` rebuilds the backteste
      bars after its last bar (`mirror_new_bars`). If the price store has gained a symbol, the
      mirror is instead rewritten from the price store over its own range, so the new symbol
      keeps its history. The rewrite goes through a sidecar and two renames.
-3. **The stores the run built.** Every component declares the stores it writes by date range
-   (`Component.ranged_stores()`): a factor its own store, a factor risk model its regression
-   and estimate stores. `ranged_stores(components)` gathers those with a recorded range, and
-   one loop extends each to t with its `extend`, deepest in the tree first, so the risk
+3. **The stores the run built.** A factor declares its own store, `owns` when it owns it, a
+   factor risk model its regression and estimate stores. `ranged_stores(backtester)` gathers
+   the `owns` uses with a recorded range, and one loop extends each to t with its handle's
+   `extend`, deepest in the tree first, so the risk
    model's exposures factor (`BarraStyle`) comes before its regression store and that before
    its estimate store. A store is extended by its owner only (`owns_store()`): for a factor,
    the factor whose outputs are every variable of the store; a risk model owns its two
    stores. These are the model's factors, the exposures factor and the risk stores. A factor
    pinned to some outputs of a store, such as the 12 styles a `RosterFactor` reads from the
-   Barra store, is a view and never extends it; a store the run reaches only through views
+   Barra store, declares it `reads` and never extends it; a factor view (`RosterFactor`,
+   `MembershipMaskedFactor`) has no store of its own (`store_path` is `None`) and declares
+   the wrapped store `reads`. A ranged store the run only reads, with no owner in the run,
    must already hold t, or the day is refused before anything is extended. A store that
    already reaches t is left alone, so the next run finishes a run that was interrupted.
-   Afterwards each store must hold t. What the loop reads of a store is `RangedStoreHandle`
-   (`store_path`, `store_range()`, `owns_store()`, `extend(end)`); a factor and a
+   Afterwards each store must hold t. What the loop asks of a store's handle is
+   `RangedStoreHandle` (`store_range()`, `extend(end)`, in `quantlab.core.store_uses`); a factor and a
    `RiskStore` both answer it and both write through `quantlab.backend.ranged.RangedStore`.
 4. **The prediction.** The run's model (for an index strategy, the
    `MembershipMaskedPredictor`) loads the checkpoint and predicts `predict_window(t, t)`.
@@ -73,7 +79,7 @@ The S&P 500 Barra mean-variance run (`examples/sharadar_us_equity/sp500_xgb_mvo.
 | `market/fred/fred_dtb3_1d` | `--may-lag` |
 | `factors/sp500/alpha101`, `factors/sp500/alpha158` | `Factor.extend` |
 | `factors/market/barra_style` | `Factor.extend` |
-| `risk/use4/regression`, then `risk/use4/estimate` | `RiskStore.extend` (the risk model's `ranged_stores()`) |
+| `risk/use4/regression`, then `risk/use4/estimate` | `RiskStore.extend` (the risk model's `store_uses()`) |
 
 The us3000 run of `examples/sharadar_us_equity/us3000_h1_mvo.py` reads its 12 style
 features straight from `factors/market/barra_style/barra_style.zarr` through a `RosterFactor`,

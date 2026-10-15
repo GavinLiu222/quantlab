@@ -52,8 +52,8 @@ the module a factor's store is written through too: the range is recorded in
 are that module's, so a risk store and a factor store say the same thing
 about the same problem. A subclass supplies only the rows of a range
 (`_compute_regression`, `_compute_estimate`). The model declares its two
-stores, regression first, with `ranged_stores()`; the live day and the daily
-data update extend what it declares (each store's `owns_store()` is true).
+stores, regression first, with `store_uses()` (each `owns`, its `RiskStore`
+the handle); the live day and the daily data update extend what it declares.
 
 ```python
 from quantlab.risk.config import Use4RiskConfig

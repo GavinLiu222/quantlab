@@ -193,13 +193,19 @@ through one on `config.file_path` (ADR 0002). `ChunkedFactor` writes a chunk
 computed in a worker process through the wrapped factor's ranged store
 (`write`, `append`).
 
-Callers that lengthen stores (the live day, `quantlab.backtest.live`, and the
-daily data update, `scripts/data_update/update.py`) ask each component what
-it writes by date range, `Component.ranged_stores()` (`()` by default, a
-factor `(self,)`, a risk model `(regression, estimate)`), and read of each
-only `store_path`, `store_range()`, `owns_store()` and `extend(end)`
-(`RangedStoreHandle`, beside its consumer as ADR 0017 asks). `Factor` and
-`RiskStore` are its two adapters; neither inherits from the other.
+Which stores a component uses is one declaration, `Component.store_uses()`
+(`()` by default): each component lists only its own direct uses, a
+`StoreUse(path, relation, handle)` with relation `reads`, `owns` or
+`source`, and a `BuiltFrom(component)` for a sub-component its store is only
+built from (a dataset's non-input sub-components). One walk in core,
+`quantlab.core.store_uses.walk_store_uses`, visits every sub-component,
+de-duplicates and orders the uses deepest first, owners first. Callers filter
+by relation: the live day (`quantlab.backtest.live`) checks the dataset
+`reads` and extends the `owns`, the daily data update
+(`scripts/data_update/update.py`) reads all three and extends a component's
+own `owns`. An `owns` use carries a `RangedStoreHandle` (`store_range()`,
+`extend(end)`); `Factor` and `RiskStore` are its two adapters; neither
+inherits from the other.
 
 ## Data fingerprints
 
@@ -235,7 +241,7 @@ request made while it is open:
 
 - `BaseDataset.panel(start, end, symbols=None, variables=None)` on a leaf
   dataset, a store or a panel held in memory, keyed by the store the leaf
-  declares it reads (`BaseDataset.stores()`: its own store, or the source
+  declares it reads (`BaseDataset.store_uses()`: its own store, or the source
   store while a resampled dataset resamples on read);
 - `Factor.read(start, end)`, a factor store;
 - `RiskStore.read(start, end)`, the regression or estimate store of a factor

@@ -38,6 +38,7 @@ import xarray as xr
 
 from quantlab.backend.ranged import RangedStore
 from quantlab.core.component import Component
+from quantlab.core.store_uses import OWNS, StoreUse
 from quantlab.dataset.merged import MergedDataset
 from quantlab.risk.config import FactorRiskConfig
 from quantlab.runs.record import record_read
@@ -388,7 +389,7 @@ class RiskStore:
     the order of ``build`` and ``extend`` and their refusals are that
     module's. The model writes its own stores, so ``owns_store()`` is true;
     a factor risk model declares its two stores to the live day and the data
-    update (``FactorRiskModel.ranged_stores``).
+    update (``FactorRiskModel.store_uses``).
 
     A ``read`` inside an open ``quantlab.runs.record.DataRecorder`` is
     recorded under the model's key and the store's ``part``
@@ -1102,21 +1103,23 @@ class FactorRiskModel(Component, ABC):
             warmup_bars=self.estimate_warmup_bars,
         )
 
-    def ranged_stores(self) -> tuple[RiskStore, ...]:
-        """Return the model's stores written by date range: regression, then estimate.
+    def store_uses(self) -> tuple:
+        """Return the model's own stores, owned and written by date range: regression, then estimate.
 
+        Each is declared ``"owns"`` with its ``RiskStore`` as the handle.
         The order is the order they are extended in, the estimate being
-        computed from the regression store. A store whose path the config
-        leaves unset is left out. The live day and the data update extend
-        what a component declares here (see ``Component.ranged_stores``).
+        computed from the regression store; the exposures factor and the
+        datasets declare their own stores (see ``Component.store_uses``). A
+        store whose path the config leaves unset is left out.
 
         Examples
         --------
-        >>> [store.part for store in model.ranged_stores()]
-        ['regression', 'estimate']
+        >>> [(use.relation, use.handle.part) for use in model.store_uses()]
+        [('owns', 'regression'), ('owns', 'estimate')]
         """
         return tuple(
-            store for store in (self.regression, self.estimate) if store.store_path
+            StoreUse(store.store_path, OWNS, store)
+            for store in (self.regression, self.estimate) if store.store_path
         )
 
     def _checked(self, rows: xr.Dataset, variables: dict, store: str) -> xr.Dataset:

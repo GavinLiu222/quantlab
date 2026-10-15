@@ -105,9 +105,11 @@ class ChunkedFactor(FactorView):
     ones it outputs (``output_symbols()``), not its dataset's.
 
     It is a factor view (see ``FactorView``) that writes the wrapped store
-    through its owner: ``store_path``, ``store_range()``, the symbols and
-    ``read`` are the wrapped factor's, so a model can read either, and
-    ``owns_store()`` is the wrapped factor's. Over a view, ``build`` and
+    through its owner: ``store_range()``, the symbols and ``read`` are the
+    wrapped factor's, so a model can read either, ``owns_store()`` is the
+    wrapped factor's, ``store_path`` is ``None`` and ``store_uses()`` owns
+    the wrapped store when the wrapped factor owns it, with this factor
+    as the handle that extends it chunk by chunk. Over a view, ``build`` and
     ``extend`` are refused as the view refuses them.
 
     A resampled wrapped factor is chunked on its source bars, never finer

@@ -37,8 +37,9 @@ class RosterFactor(FactorView):
     factor on its whole dataset and cuts afterwards: a cross-sectional
     factor standardizes over the whole market, so computing it on the
     roster alone would change its values. The store queries are a view's
-    (see ``FactorView``): ``store_path`` and ``store_range()`` are the
-    wrapped factor's, ``owns_store()`` is false and ``build`` and
+    (see ``FactorView``): ``store_path`` is ``None``, ``store_uses()``
+    reads the wrapped factor's store, ``store_range()`` is the wrapped
+    factor's, ``owns_store()`` is false and ``build`` and
     ``extend`` are refused, so a live day extends the wrapped store only
     through its owner.
 

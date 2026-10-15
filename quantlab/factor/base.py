@@ -36,6 +36,7 @@ import xarray as xr
 
 from quantlab.analysis.factor_report import FactorAnalyzer
 from quantlab.core.component import Component, component_fields
+from quantlab.core.store_uses import OWNS, READS, StoreUse
 from quantlab.factor.config import BaseFactorConfig
 from quantlab.backend.ranged import RangedStore
 from quantlab.backend.zarr import XrBackend
@@ -781,24 +782,30 @@ class Factor(Component, ABC):
         """
         return self._ranged_store().extendable_range(end)
 
-    def ranged_stores(self) -> tuple:
-        """Return the stores this factor writes or reads by date range: ``(self,)`` with a store.
+    def store_uses(self) -> tuple:
+        """Return the store this factor uses itself: its store, owned or only read.
 
-        The factor itself answers what a caller reads of a ranged store
-        (``store_path``, ``store_range()``, ``owns_store()``, ``extend``),
-        so the live day and the data update extend a factor and a factor
-        risk model's stores in one loop. A view (``FactorView``) declares
-        itself too and answers ``owns_store()`` false; a factor without a
-        store declares none.
+        A factor with a store declares it with itself as the
+        ``RangedStoreHandle`` (``store_range()``, ``extend``), so the live
+        day and the data update extend a factor and a factor risk model's
+        stores in one loop: ``"owns"`` when it may write the store
+        (``owns_store``), ``"reads"`` when it is pinned to some of the
+        store's variables. A factor without a store declares none; a view
+        (``FactorView``) declares the wrapped store. See
+        ``Component.store_uses``.
 
         Examples
         --------
-        >>> factor.ranged_stores() == (factor,)
-        True
-        >>> factor_without_file_path.ranged_stores()
+        >>> [(use.relation, use.handle is factor) for use in factor.store_uses()]
+        [('owns', True)]
+        >>> [use.relation for use in owner_pinned_to_one_output.store_uses()]
+        ['reads']
+        >>> factor_without_file_path.store_uses()
         ()
         """
-        return (self,) if self.store_path else ()
+        if not self.store_path:
+            return ()
+        return (StoreUse(self.store_path, OWNS if self.owns_store() else READS, self),)
 
     def _ranged_store(self, path: str | None = None) -> RangedStore:
         """Return the ``RangedStore`` of ``store_path`` (or ``path``) that ``build``, ``extend`` and ``read`` go through.

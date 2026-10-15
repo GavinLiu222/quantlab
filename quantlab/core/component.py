@@ -25,7 +25,9 @@ records an in-memory dataset reading its copy under the run). A component
 held at several places of a tree is written at each place with a
 ``"shared_as"`` key naming its first path, and one ``rebuild`` call builds
 every config carrying the same mark into one object, so a rebuilt tree
-shares what the saved one shared.
+shares what the saved one shared. Which stores a tree uses is declared on
+each component (``Component.store_uses``) and gathered by
+``quantlab.core.store_uses.walk_store_uses``.
 Only a class that declares a config class is ever rebuilt, so a saved dict
 cannot instantiate an arbitrary importable callable.
 
@@ -270,6 +272,34 @@ def walk_components(root: Any, path: str = "") -> Iterator[tuple[str, Any]]:
     >>> [path for path, _ in walk_components(label)]
     ['factor', 'factor.dataset']
     """
+    for here, item in child_components(root, path):
+        yield here, item
+        yield from walk_components(item, here)
+
+
+def child_components(root: Any, path: str = "") -> Iterator[tuple[str, Any]]:
+    """Yield the components held directly in ``root``'s declared fields, with their paths.
+
+    The first level of ``walk_components``: each item of a declared
+    component field of ``root.config``, in field order, ``None`` skipped.
+
+    Parameters
+    ----------
+    root : Component
+        The component whose fields are read.
+    path : str, optional
+        The path of ``root`` itself, prefixed to every path yielded.
+
+    Yields
+    ------
+    tuple[str, Component]
+        A path and the component found there.
+
+    Examples
+    --------
+    >>> [path for path, _ in child_components(label)]
+    ['factor']
+    """
     config = getattr(root, "config", None)
     if not dataclasses.is_dataclass(config) or isinstance(config, type):
         return
@@ -290,7 +320,6 @@ def walk_components(root: Any, path: str = "") -> Iterator[tuple[str, Any]]:
             if key is not None:
                 here = f"{here}.{key}"
             yield here, item
-            yield from walk_components(item, here)
 
 
 @contextmanager
@@ -535,24 +564,23 @@ class Component:
         """
         return {**config_to_dict(self.config), "name": self.import_path}
 
-    def ranged_stores(self) -> tuple:
-        """Return the stores this component writes or reads by date range; none here.
+    def store_uses(self) -> tuple:
+        """Return the stores this component uses itself, and how; none here.
 
-        A *ranged store* records the date range it was built for beside it
-        (``quantlab.backend.ranged.RangedStore``) and is lengthened with
-        ``extend(end)``. A factor declares itself when it has a store, a
-        factor risk model its regression and estimate stores. Each answers
-        what the live day (``quantlab.backtest.live``) and the data update
-        read of it: ``store_path``, ``store_range()``, ``owns_store()`` and
-        ``extend(end)``; they loop over the declarations of every component
-        of a run without asking its type.
+        Each entry is a ``quantlab.core.store_uses.StoreUse`` (a store path
+        and its relation: ``"reads"``, ``"owns"`` or ``"source"``) or a
+        ``BuiltFrom`` naming a sub-component the store is only built from.
+        A component declares only its own direct uses: the components in
+        its fields declare theirs, and ``walk_store_uses`` gathers a whole
+        tree. A dataset declares the store its panel reads, a factor its
+        store, a factor risk model its regression and estimate stores.
 
         Examples
         --------
-        >>> label.ranged_stores()          # a Forward label writes through its factor
+        >>> label.store_uses()          # a Forward label writes through its factor
         ()
-        >>> factor.ranged_stores() == (factor,)
-        True
+        >>> [(use.relation, use.handle is factor) for use in factor.store_uses()]
+        [('owns', True)]
         """
         return ()
 

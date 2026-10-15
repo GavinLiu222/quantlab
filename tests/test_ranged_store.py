@@ -302,8 +302,8 @@ def test_check_covers_answers_as_a_read(tmp_path):
         store.check_covers("2024-01-02", "2024-01-11")
 
 
-def test_a_component_declares_no_ranged_store_by_default():
-    assert Component.ranged_stores(object()) == ()
+def test_a_component_declares_no_store_by_default():
+    assert Component.store_uses(object()) == ()
 
 
 # -- the declaration ----------------------------------------------------------------------
@@ -312,8 +312,8 @@ def test_a_component_declares_no_ranged_store_by_default():
 def test_a_factor_with_a_store_declares_itself(tmp_path):
     factor = _factor(tmp_path)
 
-    assert factor.ranged_stores() == (factor,)
-    assert _factor(tmp_path / "other", path=False).ranged_stores() == ()
+    assert [(u.path, u.relation, u.handle) for u in factor.store_uses()] == [(factor.store_path, "owns", factor)]
+    assert _factor(tmp_path / "other", path=False).store_uses() == ()
 
 
 def test_a_view_declares_the_store_it_reads_without_owning_it(tmp_path):
@@ -321,18 +321,17 @@ def test_a_view_declares_the_store_it_reads_without_owning_it(tmp_path):
     owner.build(START, MIDDLE)
     view = FactorView(FactorViewConfig(factor=owner))
 
-    (declared,) = view.ranged_stores()
+    (declared,) = view.store_uses()
 
-    assert declared is view
-    assert declared.store_path == owner.store_path
-    assert declared.store_range() == owner.store_range()
-    assert declared.owns_store() is False
+    assert declared.handle is view and declared.relation == "reads"
+    assert declared.path == owner.store_path and view.store_path is None
+    assert declared.handle.store_range() == owner.store_range()
 
 
 def test_a_factor_risk_model_declares_its_two_stores_in_extension_order(tmp_path):
     model = _risk_model(tmp_path)
 
-    assert [store.part for store in model.ranged_stores()] == ["regression", "estimate"]
-    assert [store.part for store in _risk_model(tmp_path / "other", regression=False).ranged_stores()] == [
+    assert [u.handle.part for u in model.store_uses()] == ["regression", "estimate"]
+    assert [u.handle.part for u in _risk_model(tmp_path / "other", regression=False).store_uses()] == [
         "estimate"
     ]

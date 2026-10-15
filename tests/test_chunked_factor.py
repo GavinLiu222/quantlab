@@ -347,7 +347,8 @@ def test_read_reads_the_wrapped_store(tmp_path, prices):
     wrapper = ChunkedFactor(ChunkedConfig(factor=inner, granularity="month")).build(_START, _END)
 
     xr.testing.assert_equal(wrapper.read("2024-02-01", _END), inner.read("2024-02-01", _END))
-    assert wrapper.store_path == inner.store_path
+    assert wrapper.store_path is None
+    assert [use.path for use in wrapper.store_uses()] == [inner.store_path]
     assert wrapper.store_range() == inner.store_range()
     assert wrapper.get_factor_names() == ("ma_dev",)
 

@@ -133,7 +133,7 @@ def test_it_answers_on_the_wrapped_calendar_and_has_no_store(market):
     assert view.bar_before("2024-01-10", 3) == prices.bar_before("2024-01-10", 3)
     assert view.stored_symbols() == ["2", "4"]
     assert view.store_path is None
-    assert view.leaves() == (prices, roster) and view.stores() == []  # held panels read no store
+    assert view.store_uses() == () and view.stores() == []  # held panels read no store
     assert not any(hasattr(view, name) for name in ("update", "save", "from_raw_data"))
     with pytest.raises(ValueError, match="a view of its inputs is not resampled"):
         view.resample("1w", "last")

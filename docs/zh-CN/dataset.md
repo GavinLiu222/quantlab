@@ -42,7 +42,7 @@ for month, days in {"2024-01": [2, 3, 4], "2024-02": [1, 2]}.items():
 
 每个 dataset 都回答同一套读取接口 `BaseDataset`：`panel(start, end, symbols, variables)`、`calendar`、`bar_before`、`bar_after`、`stored_symbols` 和 `head`。*叶子*读取自己的 store（或内存中持有的面板）；*视图*读取其他 dataset，即它的 `inputs()`，自己不保存 store（`RosterDataset`、`MergedDataset`、按 permaticker 读取的 Trade bar 视图）。只有把原始文件转换成自己的 store 的 dataset 才有构建路径（`from_raw_data`、`save`、`from_raw_data_chunked`、`update`）：它继承 `RawDataset`，价格 bar 则继承 `RawMarketDataset`。视图和 `FrameDataset` 根本没有构建方法。
 
-每个 dataset 都声明自己的面板读取哪些 store：`stores()` 列出它们（叶子自己的 store、读取时重采样的 dataset 的源 store、视图各输入的 store），`leaves()` 列出背后的叶子 dataset，`store_path` 是 dataset 保存自己 bar 的 store，视图为 `None`。实盘日检查这些 store 是否含有要预测的那根 bar，运行的数据指纹记录每次读取来自哪个 store。设 `sep` 是读取 `sep.zarr` 的 `StockDataset`，`members` 是读取成分 store `members.zarr` 的 dataset：
+每个 dataset 都声明自己的面板读取哪些 store：`store_uses()` 声明叶子自己的读取（它的 store，或读取时重采样的 dataset 的源 store；视图自己不声明，由其输入声明；只用来构建自身 store 的组件，例如 `MappedTradeBarDataset` 的源视图，是 source），`stores()` 列出面板读取的 store（含视图各输入的 store），`store_path` 是 dataset 保存自己 bar 的 store，视图为 `None`。实盘日检查这些 store 是否含有要预测的那根 bar，运行的数据指纹记录每次读取来自哪个 store。设 `sep` 是读取 `sep.zarr` 的 `StockDataset`，`members` 是读取成分 store `members.zarr` 的 dataset：
 
 ```python
 >>> from quantlab.dataset.roster import RosterDataset
@@ -530,7 +530,7 @@ TypeError: Can't instantiate abstract class Incomplete without an implementation
 
 如果原始数据源能在加载前按日期过滤，就让 `_raw_data_to_xr_window` 只读取那个窗口。`StockDataset` 通过裁剪 Parquet 分区做到这一点，内存上限由窗口决定；上面的切片写法只限制了写入的量。
 
-不从原始文件构建 store 的 dataset 继承 `BaseDataset` 或 `MarketDataset`，而不是 raw 类，因此没有需要拒绝的构建方法。视图用 `inputs()` 声明它读取的 dataset，`stores()` 和 `leaves()` 随之而来。bar 不来自自己的 Zarr store 的 dataset（内存中持有的面板、由另一个 dataset 写出的 store）不重写 `panel`，而是重写 `_open_bars(start, end)`，返回从 `start` 到 `end` 的全部标的和变量的 bar；需要 `panel` 把这些 bar 重采样到 `resample_freq` 时再重写 `_resamples_on_read()`。标的和变量的查询、重采样和运行记录都由 `panel` 完成。`FrameDataset` 和 `MappedTradeBarDataset` 就是这样的两个例子。
+不从原始文件构建 store 的 dataset 继承 `BaseDataset` 或 `MarketDataset`，而不是 raw 类，因此没有需要拒绝的构建方法。视图用 `inputs()` 声明它读取的 dataset，`store_uses()` 和 `stores()` 随之而来。bar 不来自自己的 Zarr store 的 dataset（内存中持有的面板、由另一个 dataset 写出的 store）不重写 `panel`，而是重写 `_open_bars(start, end)`，返回从 `start` 到 `end` 的全部标的和变量的 bar；需要 `panel` 把这些 bar 重采样到 `resample_freq` 时再重写 `_resamples_on_read()`。标的和变量的查询、重采样和运行记录都由 `panel` 完成。`FrameDataset` 和 `MappedTradeBarDataset` 就是这样的两个例子。
 
 ### 非 OHLCV 的 dataset
 

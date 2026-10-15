@@ -1,7 +1,7 @@
 """Every dataset declares the stores its panel reads (#283).
 
 ``BaseDataset.inputs`` names the datasets a view reads (``()`` for a leaf),
-``leaves`` follows them down, ``stores`` lists the stores read and
+``store_uses`` declares a leaf's store (#317), ``stores`` lists the stores read and
 ``store_path`` is the store a dataset keeps its own bars in (``None`` for a
 view). The live day, the data fingerprint and the data update script ask
 this declaration instead of guessing from the component tree; a
@@ -44,7 +44,7 @@ def stores(tmp_path):
 
 def test_a_store_is_a_leaf_reading_its_store(stores):
     prices, _, _ = stores
-    assert prices.inputs() == () and prices.leaves() == (prices,)
+    assert prices.inputs() == () and [u.relation for u in prices.store_uses()] == ["reads"]
     assert prices.stores() == [prices.store_path] == [prices.config.zarr_file_path]
 
 
@@ -62,7 +62,8 @@ def test_a_resample_reads_its_source_until_its_own_store_is_saved(stores):
 def test_a_held_panel_reads_no_store(stores, tmp_path):
     prices, _, _ = stores
     held = FrameDataset(prices.panel("2024-01-01", "2024-12-31"))
-    assert held.leaves() == (held,) and held.stores() == [] and held.store_path is None
+    assert [(u.path, u.relation) for u in held.store_uses()] == [(None, "reads")]
+    assert held.stores() == [] and held.store_path is None
     on_disk = held.to_zarr(tmp_path / "copy.zarr")
     assert on_disk.store_path == str(tmp_path / "copy.zarr") and on_disk.stores() == []
     assert FrameDataset(FrameDatasetConfig(zarr_file_path=on_disk.store_path)).stores() == []
@@ -75,7 +76,7 @@ def test_views_read_their_inputs_stores_and_keep_none(stores):
     masked = BadPrintMaskedDataset([prices, other])
     for view in (roster, merged, masked):
         assert view.inputs() == (prices, other)
-        assert view.leaves() == (prices, other)
+        assert view.store_uses() == ()  # its inputs declare theirs
         assert view.stores() == [prices.store_path, other.store_path]
         assert view.store_path is None
 
@@ -83,7 +84,6 @@ def test_views_read_their_inputs_stores_and_keep_none(stores):
 def test_a_leaf_reached_twice_is_listed_once(stores):
     prices, other, _ = stores
     view = MergedDataset([RosterDataset(prices, other), other])
-    assert view.leaves() == (prices, other)
     assert view.stores() == [prices.store_path, other.store_path]
 
 
@@ -98,7 +98,7 @@ def test_a_mapped_store_is_a_leaf_not_a_view_of_its_source(built, tmp_path):
     path = str(tmp_path / "mapped.zarr")
     mapped = MappedTradeBarDataset(MappedTradeBarsConfig(source=built[2], zarr_file_path=path)).update()
     for dataset in (mapped, mapped.resample("1d")):
-        assert dataset.inputs() == () and dataset.leaves() == (dataset,)
+        assert dataset.inputs() == ()
         assert dataset.stores() == [path]
 
 

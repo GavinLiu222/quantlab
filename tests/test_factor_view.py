@@ -2,9 +2,10 @@
 
 A view (``RosterFactor``, ``MembershipMaskedFactor``, ``ChunkedFactor``)
 has no store of its own. Every store query a factor answers
-(``store_path``, ``store_range``, ``owns_store``, ``stored_symbols``,
+(``store_uses``, ``store_range``, ``owns_store``, ``stored_symbols``,
 ``output_symbols``, ``read``) is answered by the same rules on every view,
-so views nest.
+so views nest. A view's ``store_path`` is ``None``: it keeps no store of its
+own, and ``store_uses`` names the wrapped store (#317).
 
 The owner store holds ``c`` and ``m5`` on symbols 1..5 over 30 business
 days; the roster holds 2, 3 and 4; symbol ``2`` is always a member, ``3``
@@ -117,7 +118,9 @@ def test_a_view_answers_every_store_query_from_the_wrapped_store(setup, name):
     owner = setup[0]
     view = VIEWS[name](*setup)
 
-    assert view.store_path == owner.store_path
+    assert view.store_path is None
+    assert [(use.path, use.relation, use.handle) for use in view.store_uses()] == [
+        (owner.store_path, "reads", view)]
     assert view.store_range() == owner.store_range()
     assert view.owns_store() is False
     assert view.stored_symbols() == KEPT[name]
@@ -166,6 +169,12 @@ def test_a_roster_view_refuses_a_symbol_off_the_roster(setup):
         view.read(_START, _END, symbols=["2", "5"])
 
 
+def owner_path(view) -> str:
+    """The store a view reads, as it declares it."""
+    (use,) = view.store_uses()
+    return use.path
+
+
 def _chunked(factor):
     return ChunkedFactor(ChunkedConfig(factor=factor, granularity="month"))
 
@@ -175,7 +184,8 @@ def test_a_chunked_view_answers_the_views_store_queries(setup, name):
     view = VIEWS[name](*setup)
     chunked = _chunked(view)
 
-    assert chunked.store_path == view.store_path
+    assert chunked.store_path is None
+    assert [(use.path, use.relation) for use in chunked.store_uses()] == [(owner_path(view), "reads")]
     assert chunked.store_range() == view.store_range()
     assert chunked.owns_store() is False
     assert chunked.stored_symbols() == view.stored_symbols()
@@ -191,7 +201,9 @@ def test_a_chunked_owner_writes_the_store_through_its_owner(setup):
     chunked = _chunked(owner)
 
     assert chunked.owns_store() is True
-    assert chunked.store_path == owner.store_path
+    assert chunked.store_path is None
+    assert [(use.path, use.relation, use.handle) for use in chunked.store_uses()] == [
+        (owner.store_path, "owns", chunked)]
     assert chunked.cell_bytes() == owner.cell_bytes()
     chunked.build(_START, "2024-01-31")
     assert owner.store_range() == (_START, "2024-01-31")
@@ -205,7 +217,8 @@ def test_a_view_over_a_chunked_factor_is_a_view_of_its_store(setup):
 
     view = _roster(_chunked(owner), roster)
 
-    assert view.store_path == owner.store_path and view.owns_store() is False
+    assert view.store_path is None and view.owns_store() is False
+    assert [use.path for use in view.store_uses()] == [owner.store_path]
     assert view.read(_START, _END)["symbol"].values.tolist() == ["2", "3", "4"]
 
 
