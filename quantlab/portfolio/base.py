@@ -21,12 +21,14 @@ cannot solve raises ``PortfolioConstructionError``, and the loop holds it
 instead.
 
 A *covariance estimator* (``CovarianceEstimator``) estimates the covariance
-of one-bar returns at a bar, as a ``CovarianceEstimate``; a rule that prices
+of one-bar returns at a bar, as a ``quantlab.risk.base.ReturnCovariance``
+(the dense ``CovarianceEstimate`` here, for example); a rule that prices
 risk, such as a mean-variance optimiser, holds one. It is not a factor risk
 model (``quantlab.risk``), which is estimated ahead as stores; one estimator,
 ``FactorRiskStoreEstimator``, reads those stores: its estimate is the
 model's forecast (``quantlab.risk.base.FactorRiskForecast``), whose
-``factor_form()`` lets an optimiser build a low-rank risk term, and it
+``factor_form()`` lets an optimiser build a low-rank risk term and whose
+``factor_exposure`` gives a risk factor's exposures, and it
 declares its risk model, whose exposures at the bar the decision inputs take
 from the model itself (read or computed per its ``exposure_data_strategy``)
 and put in each bar's context beside the bar's row of its estimate store, so
@@ -57,7 +59,7 @@ from quantlab.runs.prediction_panel import LabelSpec
 
 if TYPE_CHECKING:
     from quantlab.factor.base import Factor
-    from quantlab.risk.base import FactorRiskModel
+    from quantlab.risk.base import FactorRiskModel, ReturnCovariance
 
 class PortfolioConstructionError(RuntimeError):
     """A rule could not decide a bar: the optimisation failed, was infeasible or had no solution.
@@ -371,6 +373,9 @@ class _Configured(Component):
 class CovarianceEstimate:
     """A covariance estimator's covariance of returns at one bar, over the symbols it covers.
 
+    The dense ``quantlab.risk.base.ReturnCovariance``: it has no factor form
+    and no risk factors.
+
     Attributes
     ----------
     symbols : np.ndarray
@@ -448,6 +453,28 @@ class CovarianceEstimate:
         """
         return None
 
+    def factor_exposure(self, name: str, symbols: np.ndarray) -> np.ndarray:
+        """Refuse: a dense estimate has no risk factors.
+
+        A factor risk model's ``FactorRiskForecast`` answers with its column
+        of ``B`` (``ReturnCovariance.factor_exposure``).
+
+        Raises
+        ------
+        ValueError
+            Always.
+
+        Examples
+        --------
+        >>> estimate.factor_exposure("market", np.array(["AAA"]))
+        Traceback (most recent call last):
+        ...
+        ValueError: the covariance estimate has no risk factors, so no exposure to 'market'
+        """
+        raise ValueError(
+            f"the covariance estimate has no risk factors, so no exposure to {name!r}"
+        )
+
 
 class CovarianceEstimator(_Configured, ABC):
     """Base class of every covariance estimator: the covariance of returns at one bar.
@@ -474,8 +501,8 @@ class CovarianceEstimator(_Configured, ABC):
     source) and its estimate store's row, and put their values at the bar in
     ``context.risk_exposures`` and ``context.risk_estimate``: the estimator
     reads no store.
-    An estimator in factor form returns a ``FactorRiskForecast``
-    (``quantlab.risk.base``), whose ``factor_form()`` makes the
+    Its estimate is a ``quantlab.risk.base.ReturnCovariance``; one in factor
+    form is a ``FactorRiskForecast``, whose ``factor_form()`` makes the
     mean-variance optimiser build a low-rank risk term.
 
     Parameters
@@ -511,7 +538,7 @@ class CovarianceEstimator(_Configured, ABC):
     @abstractmethod
     def estimate(
         self, context: PortfolioContext, volatility: xr.DataArray | None = None
-    ) -> CovarianceEstimate:
+    ) -> "ReturnCovariance":
         """Estimate the covariance of one-bar returns at the context's bar.
 
         Parameters
@@ -524,9 +551,10 @@ class CovarianceEstimator(_Configured, ABC):
 
         Returns
         -------
-        CovarianceEstimate or FactorRiskForecast
-            The covariance over the symbols with enough history; in factor
-            form when the model has one.
+        ReturnCovariance
+            The covariance over the symbols with enough history: a
+            ``CovarianceEstimate``, or a ``FactorRiskForecast`` when the model
+            has a factor form.
 
         Examples
         --------

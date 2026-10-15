@@ -30,7 +30,7 @@ import dataclasses
 import datetime
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from typing import Self
+from typing import Protocol, Self, runtime_checkable
 
 import numpy as np
 import pandas as pd
@@ -66,6 +66,71 @@ def covered_factors(covariance: np.ndarray) -> np.ndarray:
         if not missing.any():
             return kept
         kept[np.argmax(missing.sum(axis=1))] = False
+
+
+@runtime_checkable
+class ReturnCovariance(Protocol):
+    """The covariance of one-bar returns at a bar, over the symbols it covers: what a covariance estimator returns.
+
+    What a rule holding a covariance estimator may ask of its estimate, whatever
+    the estimator. Two types satisfy it and stay two types (ADR 0028): the dense
+    ``quantlab.portfolio.base.CovarianceEstimate`` (Ledoit-Wolf) and a factor
+    risk model's ``FactorRiskForecast``. A rule asks the estimate and does not
+    tell the types apart.
+
+    Attributes
+    ----------
+    symbols : np.ndarray
+        The ``n`` symbols covered, in the order of every per-symbol array.
+    covariance : np.ndarray
+        The dense ``[n, n]`` covariance.
+    variance : np.ndarray
+        Each symbol's variance, ``[n]``.
+
+    Examples
+    --------
+    >>> forecast = FactorRiskForecast(
+    ...     symbols=np.array(["AAA", "BBB"]),
+    ...     factor_names=("market",),
+    ...     exposures=np.array([[1.0], [0.5]]),
+    ...     factor_covariance=np.array([[0.04]]),
+    ...     specific_variance=np.array([0.01, 0.02]),
+    ... )
+    >>> isinstance(forecast, ReturnCovariance)
+    True
+    """
+
+    @property
+    def symbols(self) -> np.ndarray: ...
+
+    @property
+    def covariance(self) -> np.ndarray: ...
+
+    @property
+    def variance(self) -> np.ndarray: ...
+
+    def scaled(self, factor: float) -> Self:
+        """Return the estimate with every variance multiplied by ``factor`` (one bar to ``factor`` bars)."""
+        ...
+
+    def subset(self, rows: np.ndarray) -> Self:
+        """Return the estimate over the symbols at positions ``rows``, in that order."""
+        ...
+
+    def factor_form(self) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+        """Return ``(B, F, D)`` when the covariance is ``B F B' + diag(D)``, else ``None``.
+
+        From the factor form an optimiser prices risk without the dense matrix.
+        """
+        ...
+
+    def factor_exposure(self, name: str, symbols: np.ndarray) -> np.ndarray:
+        """Return each of ``symbols``' exposure to risk factor ``name``, ``[len(symbols)]``.
+
+        NaN for a symbol the estimate does not cover. An estimate without risk
+        factors raises ``ValueError``.
+        """
+        ...
 
 
 @dataclasses.dataclass(frozen=True)
@@ -187,6 +252,44 @@ class FactorRiskForecast:
         array([0.01, 0.02])
         """
         return self.exposures, self.factor_covariance, self.specific_variance
+
+    def factor_exposure(self, name: str, symbols: np.ndarray) -> np.ndarray:
+        """Return each of ``symbols``' exposure to factor ``name``: its column of ``B``.
+
+        The forecast's coverage rule decides it: NaN for a symbol the forecast
+        does not cover, and 0 on every covered symbol when ``name`` is not one
+        of ``factor_names`` (a factor of the model without a covariance at the
+        bar, which no covered symbol is exposed to).
+
+        Parameters
+        ----------
+        name : str
+            A factor of the model.
+        symbols : np.ndarray
+            The symbols to answer for, in any order; ones outside ``symbols``
+            of the forecast included.
+
+        Returns
+        -------
+        np.ndarray
+            ``[len(symbols)]`` floats.
+
+        Examples
+        --------
+        >>> forecast.factor_exposure("market", np.array(["BBB", "ZZZ"]))
+        array([0.5, nan])
+        >>> forecast.factor_exposure("value", np.array(["AAA"]))  # not carried at the bar
+        array([0.])
+        """
+        position = pd.Index(self.symbols).get_indexer(np.asarray(symbols))
+        covered = position >= 0
+        values = np.full(len(position), np.nan)
+        if name in self.factor_names:
+            column = self.exposures[:, self.factor_names.index(name)]
+            values[covered] = column[position[covered]]
+        else:
+            values[covered] = 0.0
+        return values
 
     def exposure(self, weights: np.ndarray) -> np.ndarray:
         """Return a book's net exposures ``w B``, ``[..., k]``.

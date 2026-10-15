@@ -31,7 +31,6 @@ except ImportError as exc:
 
 from quantlab.portfolio.config import MeanVarianceConfig
 from quantlab.portfolio.base import (
-    CovarianceEstimate,
     InputDeclaration,
     PortfolioConstructionError,
     PortfolioConstructor,
@@ -41,7 +40,7 @@ from quantlab.runs.prediction_panel import LabelSpec
 from quantlab.utils.cross_section import cross_sectional_zscore
 
 if TYPE_CHECKING:
-    from quantlab.risk.base import FactorRiskForecast
+    from quantlab.risk.base import ReturnCovariance
 
 _SOLVED = (cp.OPTIMAL, cp.OPTIMAL_INACCURATE)
 
@@ -59,7 +58,7 @@ class MeanVarianceInputs:
     expected_return : np.ndarray
         ``mu`` per candidate, on the expected-return label's span; 0.0 for a
         held candidate without a prediction.
-    estimate : CovarianceEstimate or FactorRiskForecast
+    estimate : ReturnCovariance
         The covariance estimator's estimate, on the same span, over the
         candidates, then the locked symbols it covers, then, with a
         reference book, the reference's other symbols it covers.
@@ -100,7 +99,7 @@ class MeanVarianceInputs:
 
     symbols: np.ndarray
     expected_return: np.ndarray
-    estimate: "CovarianceEstimate | FactorRiskForecast"
+    estimate: "ReturnCovariance"
     current_weights: np.ndarray
     locked_symbols: np.ndarray = field(default_factory=lambda: np.array([]))
     locked_weights: np.ndarray = field(default_factory=lambda: np.array([]))
@@ -125,31 +124,18 @@ class MeanVarianceInputs:
         return self.estimate.covariance
 
 
-def _bounded_exposure(context: PortfolioContext, estimate, name: str, symbols) -> np.ndarray:
-    """Return a bounded exposure per symbol: a declared factor's output, else a risk factor's ``B`` column.
+def _bounded_exposure(
+    context: PortfolioContext, estimate: "ReturnCovariance", name: str, symbols
+) -> np.ndarray:
+    """Return a bounded exposure per symbol: a declared factor's output, else the estimate's risk factor exposure.
 
-    A risk factor's exposure is the forecast's (``FactorRiskForecast``): NaN
-    for a symbol it does not cover, 0 on a factor it left out at the bar (no
-    covered symbol is exposed to it).
+    A risk factor's exposure is the estimate's own answer
+    (``ReturnCovariance.factor_exposure``, the forecast's coverage rule); a
+    dense estimate has none and refuses.
     """
     if context.factors is not None and name in context.factors:
         return np.asarray(context.factors[name].sel(symbol=symbols).values, dtype=np.float64)
-    names = getattr(estimate, "factor_names", None)
-    if names is None:
-        raise ValueError(
-            f"the context holds no factor output {name!r} and the covariance estimate "
-            f"has no risk factors"
-        )
-    position = pd.Index(estimate.symbols).get_indexer(symbols)
-    covered = position >= 0
-    column = (
-        estimate.exposures[:, list(names).index(name)]
-        if name in names
-        else np.zeros(len(estimate.symbols))
-    )
-    values = np.full(len(symbols), np.nan)
-    values[covered] = column[position[covered]]
-    return values
+    return estimate.factor_exposure(name, symbols)
 
 
 def _zscore(values: np.ndarray) -> np.ndarray:
@@ -214,7 +200,7 @@ def _clean_long_short(
     return w
 
 
-def _risk_term(w: cp.Expression, estimate) -> tuple[cp.Expression, list]:
+def _risk_term(w: cp.Expression, estimate: "ReturnCovariance") -> tuple[cp.Expression, list]:
     """``w' Sigma w`` and the constraints it needs: low-rank when the estimate has a factor form, else dense.
 
     With ``Sigma = B F B' + diag(D)`` the term is ``|R y|^2 + sum(D w^2)``

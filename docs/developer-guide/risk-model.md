@@ -84,7 +84,10 @@ lives entirely in `Use4RiskModel`.
 
 `forecast(row, exposures)` turns one estimate row and the exposures at
 that bar into a `FactorRiskForecast`, `B F B' + diag(D)` over the symbols it
-covers, with a book's exposures, variance and x-sigma-rho contributions. It
+covers, with a book's exposures, variance and x-sigma-rho contributions, and
+a factor's exposures over any symbols (`factor_exposure`, which the
+mean-variance optimiser's exposure bounds read). It satisfies the
+`ReturnCovariance` protocol a covariance estimator's estimate meets. It
 is the one coverage rule: a symbol with every exposure and a specific risk,
 not exposed to a factor without a covariance at the bar (`covered_factors`).
 A portfolio rule reads it through `FactorRiskStoreEstimator`, which builds
