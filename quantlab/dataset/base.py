@@ -775,21 +775,27 @@ class BaseDataset(Component, ABC):
         """Return ``data`` aggregated onto ``config.resample_freq`` bars.
 
         ``data`` is not changed; the grouping runs in a backend of its own.
+        A config without ``resample_how`` aggregates as
+        ``DEFAULT_RESAMPLE_HOW`` says.
         """
         freq = self.config.resample_freq
         timestamps = data["timestamp"].values
         assert_coarser(timestamps, freq, self.class_name)
         how = resolve_resample_how(
-            self.config.resample_how, list(data.data_vars), self.class_name
+            self.config.resample_how or dict(self.DEFAULT_RESAMPLE_HOW or {}),
+            list(data.data_vars), self.class_name,
         )
         labels = pd.Series(self._resample_labels(timestamps, freq), index=timestamps)
         with Timer(f"{self.__class__.__name__}: resample to {freq}"):
             return XrBackend().to_internal(data).resample(labels, how).data
 
-    def _reads_source_store(self) -> bool:
-        """Return whether requests must resample the source store.
+    def _resamples_on_read(self) -> bool:
+        """Return whether ``panel`` resamples the bars ``_open_bars`` opens.
 
-        True for a resampled dataset whose own store has not been saved.
+        True for a resampled dataset whose own store has not been saved: its
+        requests read the source store and resample the part they need. A
+        leaf whose bars are already on its resampled bars, or one that never
+        keeps a resampled store, overrides this.
         """
         return (
             self.config.resample_freq is not None
@@ -810,6 +816,58 @@ class BaseDataset(Component, ABC):
             .get_xarray_dataset(["timestamp", "symbol"])
         )
 
+    def _open_bars(self, start, end) -> xr.Dataset:
+        """Return the bars ``panel`` reads from ``start`` to ``end``, both inclusive.
+
+        The one hook of the read seam where leaf datasets differ: how their
+        bars are opened. ``panel`` does everything else (the symbol and
+        variable query, resample on read, recording), so an override returns
+        every symbol and variable, at the bars the dataset reads before any
+        resample on read (the source store's when ``_resamples_on_read``),
+        opened lazily where it can. This one opens the Zarr store.
+
+        Parameters
+        ----------
+        start, end : str or pd.Timestamp
+            Inclusive ``timestamp`` labels; a date-only string covers its day.
+
+        Returns
+        -------
+        xr.Dataset
+            The bars on ``(timestamp, symbol)``.
+
+        Raises
+        ------
+        FileNotFoundError
+            If the store does not exist.
+        """
+        path = self.config.zarr_file_path if self._resamples_on_read() else self.store_path
+        return self._open_store(path).sel(timestamp=slice(start, end))
+
+    def _query(self, data: xr.Dataset, symbols, variables) -> xr.Dataset:
+        """Return ``data`` cut to ``symbols`` and ``variables``, in the order given.
+
+        Both are pure queries: a name ``data`` lacks raises instead of
+        reading as an empty column (ADR 0029).
+
+        Raises
+        ------
+        KeyError
+            If a symbol or a variable is not in ``data``.
+        """
+        if symbols is not None:
+            symbols = list(symbols)
+            missing = pd.Index(symbols).difference(pd.Index(data["symbol"].values))
+            if len(missing):
+                raise KeyError(
+                    f"{self.class_name}.panel(): symbol(s) {missing.tolist()[:10]} "
+                    f"are not in the store ({len(missing)} of {len(symbols)} requested)."
+                )
+            data = data.sel(symbol=symbols)
+        if variables is not None:
+            data = data[list(variables)]
+        return data
+
     def panel(
         self,
         start: "str | datetime.date | pd.Timestamp",
@@ -824,16 +882,19 @@ class BaseDataset(Component, ABC):
         dataset object can answer several requests with different ranges
         and serve several consumers at once. The config is not changed.
 
-        This is the dataset read seam: inside an open
-        ``quantlab.runs.record.DataRecorder`` the request is logged
-        and fingerprinted when the recorder closes, together with the
-        store's ``_build_settings``; outside one nothing is recorded.
+        This is the dataset read seam, one implementation for every leaf
+        dataset: a leaf only says how its bars are opened (``_open_bars``).
+        Inside an open ``quantlab.runs.record.DataRecorder`` the request is
+        logged after the cut to ``symbols`` and ``variables``, and
+        fingerprinted when the recorder closes, together with the store's
+        ``_build_settings``; outside one nothing is recorded.
 
         A date-only ``end`` such as ``"2024-01-05"`` includes every bar of
         that day. A resampled dataset answers on its resampled bars: from
         its own store when one has been saved (see ``store_path``),
         otherwise by resampling the part of the source store the range
-        needs, which loads that part into memory.
+        needs, which loads that part into memory; the source bars read are
+        what is recorded.
 
         Parameters
         ----------
@@ -843,7 +904,7 @@ class BaseDataset(Component, ABC):
             Last bar to include.
         symbols : sequence, optional
             Symbol labels to keep, in the order given, of the store's own
-            label type (integer PERMNOs on CRSP and NBBO stores). ``None``
+            label type (integer permatickers on Sharadar stores). ``None``
             keeps every symbol of the store.
         variables : sequence of str, optional
             Variables to keep, in the order given; only those are read.
@@ -872,42 +933,33 @@ class BaseDataset(Component, ABC):
         {'timestamp': 4, 'symbol': 3}
         >>> list(ds.panel("2024-01-02", "2024-01-05", variables=["close"]).data_vars)
         ['close']
+        >>> ds.panel("2024-01-02", "2024-01-05", symbols=["ZZZ"])
+        Traceback (most recent call last):
+        KeyError: "DemoDataset.panel(): symbol(s) ['ZZZ'] are not in the store (1 of 1 requested)."
         """
         first, last = check_range(start, end, f"{self.class_name}.panel()")
         window = slice(as_label(start), as_label(end))
-        if self._reads_source_store():
-            pad = resample_padding(self.config.resample_freq)
-            source = self._open_store(self.config.zarr_file_path).sel(
-                timestamp=slice(first - pad, last + pad)
-            )
-            if symbols is not None:
-                source = source.sel(symbol=list(symbols))
-            # resample_how names every source variable, so narrow afterwards.
-            data = self._resample_panel(source).sel(timestamp=window)
-            if variables is not None:
-                source = source[list(variables)]
-            # The view records nothing itself: the source store is the read.
-            record_read(
-                self, source, symbols=symbols,
-                variables=variables, store=self.config.zarr_file_path,
-                reread=lambda: source, settings=self._build_settings(),
-            )
-        else:
-            data = self._open_store(self.store_path).sel(timestamp=window)
-            if symbols is not None:
-                data = data.sel(symbol=list(symbols))
-        if variables is not None:
-            data = data[list(variables)]
-        panel = XrBackend().to_internal(data).get_xarray_dataset(
-            ["timestamp", "symbol"]
-        )
-        if not self._reads_source_store():
+        if not self._resamples_on_read():
+            data = self._query(self._open_bars(window.start, window.stop), symbols, variables)
+            panel = XrBackend().to_internal(data).get_xarray_dataset(["timestamp", "symbol"])
             record_read(
                 self, panel, symbols=symbols, variables=variables,
                 reread=lambda: self.panel(start, end, symbols, variables),
                 settings=self._build_settings(),
             )
-        return panel
+            return panel
+        pad = resample_padding(self.config.resample_freq)
+        source = self._query(self._open_bars(first - pad, last + pad), symbols, None)
+        # resample_how names every source variable, so narrow afterwards.
+        data = self._query(self._resample_panel(source).sel(timestamp=window), None, variables)
+        read = self._query(source, None, variables)
+        # The resampled panel is computed, not stored: the source bars are the read.
+        record_read(
+            self, read, symbols=symbols, variables=variables,
+            store=self.config.zarr_file_path, reread=lambda: read,
+            settings=self._build_settings(),
+        )
+        return XrBackend().to_internal(data).get_xarray_dataset(["timestamp", "symbol"])
 
     def _build_settings(self) -> dict | None:
         """Return the settings the store was built with that its values do not show.
@@ -1076,13 +1128,13 @@ class BaseDataset(Component, ABC):
 
     def _calendar_source(self) -> str:
         """Return the store ``_calendar`` reads, for error messages."""
-        if self._reads_source_store():
+        if self._resamples_on_read():
             return self.config.zarr_file_path
         return self.store_path
 
     def _calendar(self) -> pd.DatetimeIndex:
         """Return the sorted timestamps requests are answered on."""
-        if not self._reads_source_store():
+        if not self._resamples_on_read():
             timestamps = self._open_store(self.store_path)["timestamp"].values
             return pd.DatetimeIndex(timestamps)
         timestamps = self._open_store(self.config.zarr_file_path)[

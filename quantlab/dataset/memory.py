@@ -11,7 +11,7 @@ construction: this is how a saved run's inputs come back when the run is rebuilt
 
 import dataclasses
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Self
 
@@ -23,8 +23,6 @@ import xarray as xr
 from quantlab.backend.zarr import XrBackend
 from quantlab.dataset.config import FrameDatasetConfig
 from quantlab.dataset.base import MarketDataset
-from quantlab.utils.date_range import as_label, check_range
-from quantlab.runs.record import record_read
 from quantlab.dataset._support.frame import to_panel
 
 class FrameDataset(MarketDataset):
@@ -426,62 +424,13 @@ class FrameDataset(MarketDataset):
         """
         return super().resample(freq, how)
 
-    def panel(
-        self,
-        start: "str | pd.Timestamp",
-        end: "str | pd.Timestamp",
-        symbols: Sequence | None = None,
-        variables: Sequence[str] | None = None,
-    ) -> xr.Dataset:
-        """Return the held panel from ``start`` to ``end``, both inclusive.
+    def _open_bars(self, start, end) -> xr.Dataset:
+        """Return the held bars from ``start`` to ``end``: the read seam's bars (``BaseDataset.panel``)."""
+        return self._held().sel(timestamp=slice(start, end))
 
-        A read seam like ``BaseDataset.panel``: inside an open ``DataRecorder`` the
-        request is logged, and the held panel is what gets fingerprinted.
-
-        Parameters
-        ----------
-        start, end : str, datetime.date or pd.Timestamp
-            The range to return. A date-only ``end`` includes every bar of that day.
-        symbols : sequence, optional
-            Symbols to keep, in the order given. ``None`` keeps every symbol.
-        variables : sequence of str, optional
-            Variables to keep, in the order given. ``None`` keeps every variable.
-
-        Returns
-        -------
-        xr.Dataset
-            The panel on ``(timestamp, symbol)``.
-
-        Raises
-        ------
-        ValueError
-            If ``start`` is after ``end``.
-        KeyError
-            If a requested symbol or variable is not held.
-
-        Examples
-        --------
-        >>> import pandas as pd
-        >>> from quantlab.dataset.memory import FrameDataset
-        >>> frame = pd.DataFrame({
-        ...     "timestamp": pd.to_datetime(["2024-01-02", "2024-01-02", "2024-01-03"]),
-        ...     "symbol": ["AAA", "BBB", "AAA"], "close": [10.0, 20.0, 11.0]})
-        >>> ds = FrameDataset(frame)
-        >>> dict(ds.panel("2024-01-03", "2024-01-03", symbols=["BBB"]).sizes)
-        {'timestamp': 1, 'symbol': 1}
-        """
-        check_range(start, end, f"{self.class_name}.panel()")
-        data = self._held().sel(timestamp=slice(as_label(start), as_label(end)))
-        if symbols is not None:
-            data = data.sel(symbol=list(symbols))
-        if variables is not None:
-            data = data[list(variables)]
-        panel = XrBackend().to_internal(data).get_xarray_dataset(["timestamp", "symbol"])
-        record_read(
-            self, panel, symbols=symbols, variables=variables,
-            reread=lambda: self.panel(start, end, symbols, variables),
-        )
-        return panel
+    def _resamples_on_read(self) -> bool:
+        """Return ``False``: a resampled copy already holds its resampled panel."""
+        return False
 
     def _calendar(self) -> pd.DatetimeIndex:
         """Return the held panel's timestamps."""
