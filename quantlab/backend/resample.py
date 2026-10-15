@@ -16,8 +16,7 @@ which the utils layer comes before (ADR 0022).
 
 Examples
 --------
-Three days of hourly bars of one symbol (``hourly_bars``, used by the
-examples below too), cut by the clock:
+Three days of hourly bars of one symbol, cut by the clock:
 
 >>> from quantlab.utils.resample import clock_labels
 >>> hours = pd.date_range("2024-01-01", periods=72, freq="h")
@@ -88,6 +87,14 @@ def resample_panel(
 
     Examples
     --------
+    Three days of hourly bars of one symbol, cut by the clock:
+
+    >>> from quantlab.utils.resample import clock_labels
+    >>> hours = pd.date_range("2024-01-01", periods=72, freq="h")
+    >>> hourly_bars = xr.Dataset(
+    ...     {"close": (["timestamp", "symbol"], np.arange(72.0).reshape(72, 1))},
+    ...     coords={"timestamp": hours, "symbol": ["A"]},
+    ... )
     >>> daily = resample_panel(hourly_bars, "1d", "last", clock_labels, "Demo")
     >>> daily.sizes["timestamp"]
     3
@@ -143,6 +150,12 @@ def resample_on_read(
 
     Examples
     --------
+    >>> from quantlab.utils.resample import clock_labels
+    >>> hours = pd.date_range("2024-01-01", periods=72, freq="h")
+    >>> hourly_bars = xr.Dataset(
+    ...     {"close": (["timestamp", "symbol"], np.arange(72.0).reshape(72, 1))},
+    ...     coords={"timestamp": hours, "symbol": ["A"]},
+    ... )
     >>> source, daily = resample_on_read(
     ...     lambda a, b: hourly_bars.sel(timestamp=slice(a, b)),
     ...     "2024-01-02", "2024-01-02", "1d", "last", clock_labels, "Demo",
