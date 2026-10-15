@@ -287,7 +287,7 @@ out_of_sample -5.61 -4.27 13
 | `market` | 回测器类的 `fill_price_column` 和 `valuation_price_column`，读取运行的工具不必导入该类就能知道这两列。 |
 | `execution`、`rebalance_periods` | 来自运行配置的 `ExecutionSettings`（`sizing_basis`、`fees`、`slippage`）与调仓间隔 bar 数。 |
 | `annualization`、`init_cash` | 统计年化所用的每年交易日数与每日交易分钟数，以及模拟的初始资金。 |
-| `backtester_class`、`benchmark_source`、`recipe()` | 回测器类的导入路径；基准的来源（其 store，或内存中持有的数据集；没有基准时为 `None`）；重建配方本身，即 `report_summary` 读取的配置映射。 |
+| `backtester_class`、`benchmark_source`、`recipe()` | 回测器类的导入路径；基准的来源（其 store，或内存中持有的数据集；没有基准时为 `None`）；重建配方本身，即 `write_backtest_report` 为 Setup 各行读取的配置映射。 |
 | `data_fingerprint` | 本次运行读了什么，在读取处记录：每个数据集或因子 store 按其组件路径（`price_dataset`、`model.factors.0.dataset`、`benchmark_dataset`）为键，每个不同的请求一条摘要和范围，并带有每个变量的摘要和 dtype，供不一致告警指出哪里变了。覆盖价格列、退市判断向后读取的部分、规则在窗口之前读取的价格历史、每个因子的输入、合并数据集的各个输入，以及因子风险模型的 store（`risk_model.regression`、`risk_model.estimate`），每个 store 一个请求，覆盖因子归因和 `FactorRiskStoreEstimator` 读过的 bar。`run_cv()` 运行记录的是拼接段，每一折记录自己的读取。训练读取记录在训练单元上（`trained_run().data_fingerprint`）。 |
 | `code` | 运行所用的代码：quantlab 的 git commit 以及已跟踪文件是否有改动，回测器组件树中每个定义了类的模块的 SHA-256（区分框架模块与组件模块，并列出使用它的组件路径），以及 numpy、pandas、xarray、polars、xgboost、torch、vectorbt、KunQuant 和 cvxpy 的版本。 |
 | `trained_run()` | 回测所用的训练单元，即一个 `TrainedRun`：train 模式下是训练出的单元，load 模式下是 checkpoint 所在的单元，`run_cv()` 是 walk-forward 单元，一折则是该折自己的单元；`run_weights()` 为 `None`。 |
@@ -774,37 +774,33 @@ vectorbt 引擎处理一个成交 bar 所遵循的规则，是公开模块 `quan
 
 ### 以 quantlab 的格式写报告
 
-`report.html` 的输入在 `quantlab.runs.backtest_report` 中有接收普通数据的公开构建函数，因此在别处模拟的执行器能写出与 quantlab 格式完全一致的页面。quantlab 自己的页面也经由它们构建。
+`report.html` 由运行所记录的内容绘制。`quantlab.runs.backtest_report` 中的 `write_backtest_report(account, path, *, title, metrics=None, weights=None, config=None, benchmark=None, folds=None, extras=None)` 接收上文的账户记录、运行的指标（包括 `run_cv()` 运行的 `stitched` / `folds` / `notes` 布局）、目标权重、配置映射和 `BenchmarkRecord`，并自行推导页面的全部输入：样本内区间、注释和各折行取自指标，换手率取自账户的成交（不计退市结算），已决策的再平衡取自其再平衡记录，Rolling 窗口取自其一年长度，最深回撤取自其净值，Setup 各行取自配置，基准曲线取自基准记录（其 `value`，记录没有时按账户初始资金买入持有）。因此在别处模拟的执行器只需交出自己的记录，就能写出与 quantlab 格式完全一致的页面；quantlab 自己的页面也走同一个调用。`backtest_report_figure(account, *, metrics=None, benchmark=None)` 单独返回 Performance 图。
 
-| 函数 | 对应 `write_backtest_report` 的参数 |
+只有部分运行才有的内容放进一个 `ReportExtras`：
+
+| 字段 | 增加的内容 |
 |---|---|
-| `report_summary(config, block, *, bar_interval, drawdown_span=None, benchmark_source=None)` | `summary`，即 "Setup" 各行，来自回测器的配置映射（`get_config()`）及其指标块 |
-| `report_windows(timestamps, block, folds=None)` | `windows`，即时间线；`folds` 是 `run_cv()` 运行的各折行（`fold`、`training_window`、`traded`、`in_sample_range`） |
-| `report_chart_inputs(block, notes, *, returns, init_cash, drawdown_span=None, benchmark_value=None, benchmark_returns=None)` | 图表与基准参数 |
-| `report_portfolio_inputs(weights, orders, value, *, init_cash, bar_interval, trading_days_per_year, session_minutes_per_day)` | `weights`、`turnover` 和 `bars_per_year`，即 Portfolio 与 Rolling 分区 |
-| `report_holdings_inputs(holdings, weights, *, label=None, prices=None)` | `holdings`、`holding_names`（每个标的由 `label(symbols, day)` 得到的 `(起始 bar, 代码, 公司)` 区间）、`holding_returns`（每个 bar 按估值价格 `prices` 计算的持有期收益率）和 `holding_contributions`（每个 bar 上一收盘所持每个标的的贡献，按持仓从大到小排列），不传 `prices` 时两者都为 `None`，即 Holdings 分区；不传持仓时页面没有 Holdings 分区 |
+| `attribution`、`factor_attribution` | Attribution 与 Factor attribution 分区，需配合指标中对应的块 |
+| `tables` | 指标表之后带标题的表格（`{标题: {行名: 值}}`），用于只有执行器才有的统计量 |
+| `setup` | Setup 各行：页面已有的标签原位替换，新标签追加在后 |
+| `names` | `names(symbols, day)` 返回 `(代码, 公司)`，即 Holdings 分区显示的名称 |
+| `prices` | 估值价格，用于 Holdings 分区的持有期收益率与贡献 |
 
-给 summary 的某个键赋值即可替换该行且位置不变；`write_backtest_report(..., extra_tables={标题: {行名: 值}})` 在指标表之后追加带标题的表格，用于只有执行器才有的统计量。接上文：
+接上文：
 
 ```python
->>> from quantlab.runs.backtest_report import report_summary, report_windows, write_backtest_report
->>> summary = report_summary(held_backtester.get_config(), held.metrics, bar_interval="1D")
->>> summary["Fees"] = "IBKR tiered, 0.0035 USD a share"
->>> list(summary)
-['Bar interval', 'Signal', 'Rebalance every', 'Fees']
->>> report_windows(held.simulation.value.timestamp.values, held.metrics)["backtest"]
-('2024-01-01', '2024-01-05')
->>> from quantlab.runs.backtest_report import report_chart_inputs
+>>> from quantlab.runs.backtest_report import ReportExtras, write_backtest_report
 >>> write_backtest_report(
-...     held.simulation.value, "replay.html", title="replay", summary=summary,
-...     windows=report_windows(held.simulation.value.timestamp.values, held.metrics),
-...     metrics=held.metrics,
-...     **report_chart_inputs(held.metrics, ["Fills from the event-driven replay."],
-...                           returns=held.simulation.returns, init_cash=1_000_000.0),
-...     extra_tables={"Execution (event-driven)": {"Commissions": 12.5, "Dividends": 3}},
+...     account, "replay.html", title="replay",
+...     metrics=held.metrics, weights=held.weights["weight"], config=held_backtester.get_config(),
+...     extras=ReportExtras(
+...         setup={"Fees": "IBKR tiered, 0.0035 USD a share"},
+...         tables={"Execution (event-driven)": {"Commissions": 12.5, "Dividends": 3}},
+...     ),
 ... )
->>> "<h2>Execution (event-driven)</h2>" in open("replay.html").read()
-True
+>>> page = open("replay.html").read()
+>>> "<h2>Execution (event-driven)</h2>" in page, "<td>IBKR tiered, 0.0035 USD a share</td>" in page
+(True, True)
 ```
 
 ## 扩展

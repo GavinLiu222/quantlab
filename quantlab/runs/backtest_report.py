@@ -37,16 +37,18 @@ For the same reason every string that comes from the run passes through
 CDN so a run directory stays a few kilobytes (viewing the page needs network
 access).
 
-The inputs of the page have public builders taking plain data, so an
-executor that simulates elsewhere (an event-driven replay of a quantlab run)
-writes a page in exactly this format: ``report_summary`` (the "Setup"
-lines, from a run's config mapping), ``report_windows`` (the timeline),
-``report_chart_inputs`` (the chart and benchmark arguments),
-``report_portfolio_inputs`` (the Portfolio and Rolling sections) and
-``report_holdings_inputs`` (the Holdings section).
-``quantlab.backtest.base`` builds its own pages through them. This module
-imports only the standard library, numpy, pandas, xarray, plotly,
-``quantlab.runs.backtest_stats`` and ``quantlab.runs.factor_attribution_report``.
+The page is drawn from what the run recorded: the account record of
+``quantlab.runs.run_metrics`` (value, returns, fills, settlements, the
+rebalance record, holdings, initial cash, bar interval and year), the run's
+metrics, its target weights, its config mapping and its benchmark record,
+plus one ``ReportExtras`` slot for what only some runs have. Every chart
+input (turnover, the decided rebalances, the deepest drawdown, the Rolling
+window, the timeline, the Setup lines, the benchmark curve) is derived here
+from those, so an executor that simulates elsewhere (an event-driven replay
+of a quantlab run) writes a page in exactly this format by handing over its
+own record (ADR 0035). This module imports only the standard library, numpy,
+pandas, xarray, plotly, ``quantlab.runs.backtest_stats``,
+``quantlab.runs.run_metrics`` and ``quantlab.runs.factor_attribution_report``.
 """
 
 import bisect
@@ -56,6 +58,7 @@ import json
 import math
 import numbers
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -67,17 +70,14 @@ from plotly.subplots import make_subplots
 from quantlab.utils import date_range
 from quantlab.utils.returns import one_bar_returns
 from quantlab.runs import backtest_stats
+from quantlab.runs.run_metrics import AccountRecord, BenchmarkRecord, decided_bars
 from quantlab.runs.factor_attribution_report import (
     AXIS, CHART_FONT, GRID, INK2, MUTED, factor_attribution_section,
 )
 
 __all__ = [
+    "ReportExtras",
     "backtest_report_figure",
-    "report_chart_inputs",
-    "report_holdings_inputs",
-    "report_portfolio_inputs",
-    "report_summary",
-    "report_windows",
     "write_backtest_report",
 ]
 
@@ -171,7 +171,330 @@ _STYLE = """
 """
 
 
+@dataclass(frozen=True)
+class ReportExtras:
+    """What only some runs put on their page: the one optional slot of ``write_backtest_report``.
+
+    Attributes
+    ----------
+    attribution : xarray.Dataset or None
+        The attribution curves of a model run (``universe_value``,
+        ``gross_value``, ``group_value``; ``quantlab.runs.backtest_attribution``).
+        With them and an ``attribution`` block in the metrics the page gets
+        an Attribution section: the excess split into its parts, the
+        cumulative log growth of the strategy, before costs, the universe
+        and the benchmark, and each score group's annualised return.
+    factor_attribution : xarray.Dataset or None
+        The per-bar factor attribution of a run with a risk model
+        (``factor_attribution.zarr``). With it and a ``factor_attribution``
+        block in the metrics the page gets a Factor attribution section
+        (``quantlab.runs.factor_attribution_report``), summarizing the
+        out-of-sample segment when the run has an in-sample part.
+    tables : Mapping or None
+        More tables after the metric tables: heading -> ordered mapping of
+        row label to value, each value shown as an unknown metric is (a
+        number by its magnitude, a percent when the label ends in ``[%]``, a
+        string as it is). For statistics only an executor has, such as an
+        event-driven replay's commissions.
+    setup : Mapping or None
+        Setup lines applied after the standard ones: a label the page
+        already has is replaced in place (an executor states its own fee
+        model under ``Fees``), a new one is appended.
+    names : callable or None
+        ``names(symbols, day)`` returns a ``(ticker, company)`` pair for each
+        of ``symbols`` as of the date ``day``, the company ``None`` when
+        unknown; the Holdings section shows symbols by them, a new span
+        wherever a name changes. Without it a symbol is shown by its id.
+    prices : xarray.DataArray or None
+        The valuation prices on ``(timestamp, symbol)`` the engine marks the
+        book with. With them the Holdings section shows each holding
+        period's return (the symbol's price at the period's last close over
+        its price at the signal bar's close, less one, carried forward over
+        a bar without one) and the contributions by position size.
+
+    Examples
+    --------
+    >>> extras = ReportExtras(tables={"Execution": {"Commissions": 12.5}}, setup={"Fees": "IBKR tiered"})
+    >>> extras.setup["Fees"], extras.attribution is None
+    ('IBKR tiered', True)
+    """
+
+    attribution: xr.Dataset | None = None
+    factor_attribution: xr.Dataset | None = None
+    tables: Mapping[str, Mapping] | None = None
+    setup: Mapping[str, str] | None = None
+    names: Callable[[list, datetime.date], list[tuple[str, str | None]]] | None = None
+    prices: xr.DataArray | None = None
+
+
 def write_backtest_report(
+    account: AccountRecord,
+    path: str | Path,
+    *,
+    title: str,
+    metrics: Mapping | None = None,
+    weights: xr.DataArray | None = None,
+    config: Mapping | None = None,
+    benchmark: BenchmarkRecord | None = None,
+    folds: Sequence[Mapping] | None = None,
+    extras: ReportExtras | None = None,
+) -> None:
+    """Write the HTML report of one backtest run to ``path``, drawn from its record.
+
+    The page opens with a header (the run, its window and benchmark), a
+    sidebar of sections and a row of headline numbers. Each section holds
+    its charts beside the tables that explain them: Overview (the windows
+    timeline, in-sample against out-of-sample when the run has an in-sample
+    part, the Performance chart of NAV, drawdown, monthly returns and the
+    monthly heatmap, and the strategy against the benchmark by group),
+    Excess (cumulative excess return with a log / arithmetic toggle, the
+    excess drawdown, and the excess over the benchmark), Rolling (one-year
+    panels), Portfolio (turnover, holdings and exposure per rebalance, and
+    trading), Holdings (each bar's targets, holdings and cash, when the
+    account has holdings), Attribution and Factor attribution (from
+    ``extras``) and Setup & notes. Every headline number, metric row and
+    chart explains itself on hover. The headline numbers and the main tables
+    are the out-of-sample slice when the run has an in-sample part, else the
+    whole window. Drawdown is ``value / running max - 1``, negative below a
+    peak, in every table, card and chart. A section, card or table whose
+    input is missing is left off the page, and a metric the page does not
+    know is still shown, in an "Other" table.
+
+    Every chart input is derived from the arguments: the in-sample range
+    (shaded) and the notes from the metrics; the turnover per rebalance fill
+    bar (``backtest_stats.turnover`` of the account's fills, its settlements
+    left out); the decided rebalances from its rebalance record; the Rolling
+    window (``year_freq`` over the bar interval); the deepest drawdown,
+    marked from its valley to its recovery (``backtest_stats.drawdown_span``
+    of the value); the timeline; and the benchmark's curve.
+
+    Parameters
+    ----------
+    account : AccountRecord
+        What the account did (``quantlab.runs.run_metrics``): its value
+        (drawn as is, so the page and the persisted equity carry the same
+        numbers), returns, fills, settlements, rebalance record, initial
+        cash, bar interval and year, and its holdings (each symbol's value
+        at each bar's close over the book's value), which give the page a
+        Holdings section.
+    path : str | Path
+        The ``report.html`` to write.
+    title : str
+        Page title, typically the run directory name.
+    metrics : Mapping, optional
+        The run's metrics, as ``metrics.json`` holds them: the slices
+        ``whole``, ``in_sample`` and ``out_of_sample``, ``benchmark`` and
+        ``relative``, ``execution`` and ``portfolio_construction``, the split
+        keys (``in_sample_range`` is shaded), ``trained_checkpoint`` and
+        ``notes`` (listed in the Notes section). A ``run_cv()`` run's mapping
+        (``stitched``, ``folds``, ``notes``) is read through ``stitched``,
+        and its ``folds`` are the timeline's rows.
+    weights : xarray.DataArray, optional
+        Target weights on ``(timestamp, symbol)``, an all-NaN row on a bar
+        that holds; the Portfolio section draws the holdings and exposure of
+        the decided rebalances' rows (a NaN cell counted at that symbol's
+        last target) and the Holdings section the targets in force.
+    config : Mapping, optional
+        The run's config mapping (``BaseBacktester.get_config()``, a run
+        directory's ``config.json``), read for the Setup lines: ``Bar
+        interval``; ``Benchmark`` with its ``source``; the deepest drawdown;
+        ``Model mode`` (or ``Signal`` for a run without a model);
+        ``Rebalance every``; ``Portfolio construction`` (the rule's
+        ``repr``), or ``Top N`` and ``Direction``; ``Fees``; ``Trained
+        checkpoint``. Every key is read with ``.get()``. Without it the page
+        has only the lines of ``extras.setup``.
+    benchmark : BenchmarkRecord, optional
+        The benchmark (``quantlab.runs.run_metrics``), drawn beside the
+        portfolio and named by the metrics' ``benchmark`` symbol (else its
+        own ``symbol``, else "benchmark"); its curve is its ``value``, or
+        ``init_cash * cumprod(1 + returns)`` (bought and held from the
+        account's capital) when it has none. A benchmark that does not cover
+        the account's bars is left off.
+    folds : sequence of Mapping, optional
+        The timeline's rows of a run traded by several models, each with
+        ``fold`` (its number), ``training_window``, ``traded`` (its first
+        and last traded bar label) and ``in_sample_range``. Default: the
+        rows of ``metrics["folds"]`` (a ``run_cv()`` run), else one "model"
+        row when the metrics have a ``training_window``, else none.
+    extras : ReportExtras, optional
+        What only some runs have (attribution, extra tables, Setup lines,
+        the Holdings section's names and prices).
+
+    Examples
+    --------
+    >>> import pandas as pd, xarray as xr
+    >>> from quantlab.runs.run_metrics import AccountRecord
+    >>> bars = pd.bdate_range("2024-01-01", periods=5)
+    >>> on_bars = dict(dims="timestamp", coords={"timestamp": bars})
+    >>> account = AccountRecord(
+    ...     value=xr.DataArray([100.0, 104.0, 98.0, 103.0, 110.0], **on_bars),
+    ...     returns=xr.DataArray([0.0, 0.04, -0.0577, 0.051, 0.068], **on_bars),
+    ...     orders=xr.Dataset(),
+    ...     rebalances=xr.Dataset({"scheduled": ("timestamp", [False] * 5),
+    ...                            "decided": ("timestamp", [False] * 5)}, coords={"timestamp": bars}),
+    ...     init_cash=100.0, bar_interval="1D", year_freq=pd.Timedelta(days=252),
+    ... )
+    >>> write_backtest_report(
+    ...     account, "demo.html", title="demo_run",
+    ...     metrics={"whole": {"Total Return [%]": 10.0}, "notes": ["No borrow cost is modelled."]},
+    ...     config={"rebalance_periods": 5, "fees": 0.001},
+    ... )
+    >>> page = open("demo.html").read()
+    >>> "<h1>demo_run</h1>" in page, "<td>5 bars</td>" in page
+    (True, True)
+    """
+    _render(account.value, path, title=title,
+            **_page_inputs(account, metrics, weights, config, benchmark, folds, extras or ReportExtras()))
+
+
+def backtest_report_figure(
+    account: AccountRecord,
+    *,
+    metrics: Mapping | None = None,
+    benchmark: BenchmarkRecord | None = None,
+) -> go.Figure:
+    """Return the Performance chart of a run's ``report.html`` as a plotly figure.
+
+    Equity, drawdown and compounded monthly returns on a shared time axis,
+    the in-sample range shaded, the deepest drawdown marked and the notes
+    below; with a benchmark, its NAV, drawdown and monthly returns beside the
+    portfolio's. The excess over the benchmark is not drawn here:
+    ``report.html`` draws it on its own tab, apart from the drawdowns,
+    because the drawdown of the relative NAV is a different quantity from
+    either NAV's drawdown. The arguments mean what they mean for
+    ``write_backtest_report``, whose Performance tab is this chart without
+    the notes (the page lists them in its own section).
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        The figure, not yet shown or written.
+
+    Examples
+    --------
+    >>> import pandas as pd, xarray as xr
+    >>> from quantlab.runs.run_metrics import AccountRecord
+    >>> bars = pd.bdate_range("2024-01-01", periods=5)
+    >>> on_bars = dict(dims="timestamp", coords={"timestamp": bars})
+    >>> account = AccountRecord(
+    ...     value=xr.DataArray([100.0, 104.0, 98.0, 103.0, 110.0], **on_bars),
+    ...     returns=xr.DataArray([0.0, 0.04, -0.0577, 0.051, 0.068], **on_bars),
+    ...     orders=xr.Dataset(),
+    ...     rebalances=xr.Dataset({"scheduled": ("timestamp", [False] * 5),
+    ...                            "decided": ("timestamp", [False] * 5)}, coords={"timestamp": bars}),
+    ...     init_cash=100.0, bar_interval="1D", year_freq=pd.Timedelta(days=252),
+    ... )
+    >>> figure = backtest_report_figure(account)
+    >>> sorted(trace.name for trace in figure.data)
+    ['deepest_drawdown_end', 'deepest_drawdown_valley', 'drawdown', 'equity', 'monthly_return']
+    """
+    block = _block(metrics)
+    return _performance_figure(account.value, notes=_notes(metrics),
+                               **_chart_inputs(account, block, benchmark))
+
+
+def _block(metrics: Mapping | None) -> dict:
+    """The metric level carrying the split keys: ``stitched`` of a ``run_cv()`` run, else the metrics."""
+    metrics = dict(metrics or {})
+    stitched = metrics.get("stitched")
+    return dict(stitched) if isinstance(stitched, Mapping) else metrics
+
+
+def _notes(metrics: Mapping | None) -> list[str]:
+    """The run's notes, ``metrics["notes"]``."""
+    return list((metrics or {}).get("notes") or [])
+
+
+def _chart_inputs(account: AccountRecord, block: Mapping, benchmark: BenchmarkRecord | None) -> dict:
+    """The arguments the Performance chart shares with the page, from the record.
+
+    ``in_sample_range`` (the block's, shaded), the account's ``returns`` and
+    ``init_cash``, its deepest ``drawdown_span``, and with a benchmark its
+    ``benchmark_value`` (its own, or bought and held from the account's
+    capital), ``benchmark_returns`` and ``benchmark_name``.
+    """
+    inputs = {
+        "in_sample_range": block.get("in_sample_range"),
+        "returns": account.returns,
+        "init_cash": account.init_cash,
+        "drawdown_span": backtest_stats.drawdown_span(account.value),
+    }
+    if benchmark is not None:
+        value = benchmark.value
+        if value is None:
+            value = account.init_cash * (1.0 + benchmark.returns.fillna(0.0)).cumprod("timestamp")
+        info = block.get("benchmark") or {}
+        inputs.update(
+            benchmark_value=value,
+            benchmark_returns=benchmark.returns,
+            benchmark_name=info.get("symbol") or benchmark.symbol or "benchmark",
+        )
+    return inputs
+
+
+def _fold_rows(metrics: Mapping | None) -> list[dict] | None:
+    """The timeline rows of a ``run_cv()`` run's ``metrics["folds"]``, or ``None`` without folds.
+
+    Each fold's number, its ``training_window`` and ``in_sample_range``, and
+    the first and last bar it traded (its ``whole`` ``Start`` and ``End``).
+    """
+    folds = (metrics or {}).get("folds")
+    if not isinstance(folds, list):
+        return None
+    return [
+        {
+            "fold": fold["fold"],
+            "training_window": fold["metrics"].get("training_window"),
+            "traded": tuple(date_range.bar_label(fold["metrics"]["whole"][key]) for key in ("Start", "End")),
+            "in_sample_range": fold["metrics"].get("in_sample_range"),
+        }
+        for fold in folds
+    ]
+
+
+def _page_inputs(
+    account: AccountRecord,
+    metrics: Mapping | None,
+    weights: xr.DataArray | None,
+    config: Mapping | None,
+    benchmark: BenchmarkRecord | None,
+    folds: Sequence[Mapping] | None,
+    extras: ReportExtras,
+) -> dict:
+    """Every input of the page but its value and title, derived from what the run recorded."""
+    block = _block(metrics)
+    chart = _chart_inputs(account, block, benchmark)
+    summary = None
+    if config is not None:
+        summary = _summary(
+            dict(config), block, bar_interval=account.bar_interval, drawdown_span=chart["drawdown_span"],
+            benchmark_source=None if benchmark is None else benchmark.source,
+        )
+    if extras.setup:
+        summary = {**(summary or {}), **extras.setup}
+    rebalances = decided_bars(account.rebalances)
+    inputs = {
+        **chart,
+        "notes": _notes(metrics),
+        "summary": summary,
+        "metrics": block,
+        "windows": _windows(
+            account.value.timestamp.values, block,
+            _fold_rows(metrics) if folds is None else [dict(fold) for fold in folds],
+        ),
+        **_portfolio_inputs(weights, account, rebalances),
+        "extra_tables": None if extras.tables is None else {k: dict(v) for k, v in extras.tables.items()},
+        "attribution": extras.attribution,
+        "factor_attribution": extras.factor_attribution,
+    }
+    if account.holdings is not None:
+        inputs.update(_holdings_inputs(
+            account.holdings, weights, rebalances=rebalances, label=extras.names, prices=extras.prices,
+        ))
+    return inputs
+
+
+def _render(
     value: xr.DataArray,
     path: str | Path,
     *,
@@ -199,189 +522,22 @@ def write_backtest_report(
     holding_returns: xr.DataArray | None = None,
     holding_contributions: xr.DataArray | None = None,
 ) -> None:
-    """Write the HTML report for one backtest run to ``path``.
+    """Write the page from its derived inputs (``_page_inputs``); see ``write_backtest_report``.
 
-    The page opens with a header (the run, its window and benchmark), a
-    sidebar of sections and a row of headline numbers. Each section holds
-    its charts beside the tables that explain them: Overview (the windows
-    timeline, in-sample against out-of-sample when the run has an in-sample
-    part, the Performance chart of NAV, drawdown, monthly returns and the
-    monthly heatmap, and the strategy against the benchmark by group),
-    Excess (cumulative excess return with a log / arithmetic toggle, the
-    excess drawdown, and the excess over the benchmark), Rolling (one-year
-    panels), Portfolio (turnover, holdings and exposure per rebalance, and
-    trading), Attribution, Factor attribution (see ``attribution`` and
-    ``factor_attribution``) and Setup & notes. Every headline number, metric
-    row and chart explains itself on hover. The headline numbers and the
-    main tables are the out-of-sample slice when the run has an in-sample
-    part, else the whole window. Drawdown is ``value / running max - 1``,
-    negative below a peak, in every table, card and chart. Everything after
-    ``title`` is optional; a section, card or table whose input is missing
-    is left off the page, and a metric the page does not know is still
-    shown, in an "Other" table.
-
-    Parameters
-    ----------
-    value : xr.DataArray
-        Portfolio value on the ``timestamp`` dimension. It is drawn as
-        is, so the page and the persisted equity carry the same numbers.
-    path : str | Path
-        The ``report.html`` to write.
-    in_sample_range : tuple[str, str] | None
-        ``(first, last)`` bar labels of the in-sample part of
-        the window, shaded grey, or ``None`` for a fully out-of-sample
-        window. A midnight bar is labelled by its ISO date and any other
-        bar by its full ISO timestamp; plotly reads both.
-    notes : list[str]
-        Lines listed in the page's Notes section, such as what the
-        simulation does not model.
-    title : str
-        Page title, typically the run directory name.
-    summary : dict[str, str] | None
-        Ordered mapping of display label to already-formatted text,
-        rendered as the dates-and-setup table. Nothing is computed or
-        formatted here, so the page can state the same strings the run's
-        ``metrics.json`` carries.
-    metrics : dict | None
-        The metrics mapping of one curve: the slices ``whole``,
-        ``in_sample`` and ``out_of_sample`` (each may be absent or
-        ``None``), with a benchmark ``benchmark`` and ``relative`` holding
-        the same slices, and ``execution`` and ``portfolio_construction``
-        for the trading table.
-    returns : xr.DataArray | None
-        Per-bar portfolio returns on ``timestamp``, compounded per
-        calendar month for the bar panel and the heatmap.
-    init_cash : float | None
-        Starting capital, used only to show equity as a multiple of
-        it in the hover text.
-    drawdown_span : dict | None
-        The deepest drawdown as a dict with ``valley`` and
-        ``end`` (bar labels), ``bars`` (bars from the valley to the end),
-        ``depth`` (a negative float) and ``recovered`` (bool). It is drawn
-        as an up triangle at the valley and a down triangle at the
-        recovery bar, so the pair spans bottom-back-to-even rather than
-        the whole episode. The caller chooses the episode; an endpoint the
-        equity axis does not carry drops that marker rather than raising.
-    benchmark_value : xr.DataArray | None
-        The benchmark's portfolio value on the same ``timestamp`` axis,
-        started from the same capital. When given, the page draws it with
-        the portfolio's NAV and adds the excess-return and excess-drawdown
-        rows; ``metrics["relative"]`` and ``metrics["benchmark"]`` become
-        their own tables.
-    benchmark_returns : xr.DataArray | None
-        The benchmark's per-bar returns, drawn beside the portfolio's
-        monthly returns.
-    benchmark_name : str
-        Display name of the benchmark in the legend, the headings and the
-        hover text.
-    weights : xr.DataArray | None
-        Target weights on ``(timestamp, symbol)``, an all-NaN row on a bar
-        that holds; the Portfolio tab draws the holdings and exposure of
-        the rows of ``rebalances``, a NaN cell counted at that symbol's last
-        target.
-    turnover : xr.DataArray | None
-        Turnover per rebalance fill bar on ``timestamp``: buys plus sells
-        over the previous bar's value, so replacing the whole book is about
-        2. Drawn as bars on the Portfolio tab.
-    rebalances : array_like of datetime64 | None
-        The bars of the decided rebalances, from the run's rebalance record
-        (``report_portfolio_inputs`` passes them on): the rows the Portfolio
-        tab draws and the rebalances whose targets the Holdings section
-        shows in force. Without them no rebalance is drawn.
-    bars_per_year : float | None
-        Bars in a year, the window of the Rolling tab; 252 when not given.
-    windows : dict | None
-        The run's windows, drawn as a timeline at the top of the left
-        column: ``backtest`` (first and last bar label), ``bars`` (bar
-        count), ``in_sample`` and ``out_of_sample`` (lists of label pairs)
-        and ``folds``, one dict per trained model with ``label`` (row
-        name), ``training`` (its effective training window), ``traded``
-        (the bars it traded) and ``in_sample`` (the traded bars inside its
-        training window), each pair or ``None``. A pair that does not parse
-        is left out of the drawing.
-    extra_tables : dict[str, dict] | None
-        More tables after the metric tables, one per entry: the key is the
-        table's heading and the value an ordered mapping of row label to
-        value, each value shown as an unknown metric is (a number by its
-        magnitude, a percent when the label ends in ``[%]``, a string as
-        it is). quantlab passes none; an executor adds the statistics only
-        it has, such as an event-driven replay's commissions.
-    attribution : xr.Dataset | None
-        The attribution curves of a model run (``universe_value``,
-        ``gross_value``, ``group_value``; see
-        ``quantlab.runs.backtest_attribution``). With them and an
-        ``attribution`` block in ``metrics`` the page gets an Attribution section:
-        the excess split into its parts, the cumulative log growth of the
-        strategy, before costs, the universe and the benchmark, and each
-        score group's annualised return.
-    factor_attribution : xr.Dataset | None
-        The per-bar factor attribution of a run with a risk model
-        (``factor_attribution.zarr``: ``log_contribution``,
-        ``factor_log_contribution``, ``exposure``, the ex-ante variances and
-        ``covered_weight``, its ``factor`` axis carrying each factor's
-        ``group`` and, when the risk model gave them, display ``label``).
-        With it and a ``factor_attribution`` block in ``metrics`` the page
-        gets a Factor attribution section (``factor_attribution_section``):
-        six tiles, then return and risk side by side by part, over time, for
-        the styles and for the industries, the styles' exposure over time and
-        each part's return against its realized risk. Its tiles and charts
-        summarize the out-of-sample segment when the run has an in-sample
-        part, else the whole window.
-    holdings : xr.DataArray | None
-        The holdings on ``(timestamp, symbol)``: each symbol's value at each
-        bar's close over the book's value, cash included. With them the page
-        gets a Holdings section that steps through the bars (by bar, by
-        rebalance, by date, by slider and by the arrow keys) and shows each
-        symbol held or targeted: its target weight (from ``weights``, the
-        last rebalance before the bar) and its holding, with the day's
-        summary embedded per bar (cash, number of holdings, top-ten holding,
-        the rebalance and the names new since the previous one); targets of at most
-        ``DUST_THRESHOLD`` are folded into one "Other" line. The table sorts
-        by any column, filters by ticker or company and exports the day as
-        CSV. Its data is embedded in the page as JSON. Without holdings the
-        section is left out.
-    holding_names : Mapping | None
-        The names the Holdings section shows symbols by, from
-        ``report_holdings_inputs``: per symbol id, ``(first bar label,
-        ticker, company)`` spans in time order. A symbol without a name is
-        shown by its id.
-    holding_returns : xr.DataArray | None
-        The holding-period returns the Holdings section shows, from
-        ``report_holdings_inputs``: on ``(timestamp, symbol)``, each symbol's
-        price return over the holding period the bar falls in. Without them
-        the column shows a dash.
-    holding_contributions : xr.DataArray | None
-        The contributions by position size, from ``report_holdings_inputs``:
-        on ``(timestamp, rank)``, each bar's contributions, largest holding
-        first. With them (and ``returns``, for the residual) the Holdings
-        section opens with the return of the largest positions against the
-        rest, cut at any share of the names chosen on a slider, over time, and
-        a table of the contributions by size decile and year, each as the
-        net, the gains or the losses.
-
-    Examples
-    --------
-    >>> import pandas as pd, xarray as xr
-    >>> ts = pd.bdate_range("2024-01-01", periods=5)
-    >>> value = xr.DataArray([100.0, 104.0, 98.0, 103.0, 110.0],
-    ...                      dims=("timestamp",), coords={"timestamp": ts})
-    >>> write_backtest_report(
-    ...     value,
-    ...     "demo.html",
-    ...     in_sample_range=("2024-01-01", "2024-01-02"),
-    ...     notes=["No borrow cost is modelled."],
-    ...     title="demo_run",
-    ...     metrics={"whole": {"Total Return [%]": 10.0},
-    ...              "in_sample": {"Total Return [%]": 4.0},
-    ...              "out_of_sample": {"Total Return [%]": 6.0}},
-    ...     init_cash=100.0,
-    ... )
-    >>> "<h1>demo_run</h1>" in open("demo.html").read()
-    True
+    ``in_sample_range`` is shaded; ``summary`` is the ordered Setup lines,
+    already formatted; ``metrics`` the metric level carrying the split keys;
+    ``drawdown_span`` the deepest drawdown (``valley``, ``end``, ``bars``,
+    ``depth``, ``recovered``), marked from its valley to its recovery;
+    ``benchmark_value`` and ``benchmark_returns`` the benchmark on the same
+    bars; ``turnover`` the turnover per rebalance fill bar; ``rebalances``
+    the decided rebalances' bars; ``bars_per_year`` the Rolling window
+    (252 when not given); ``windows`` the timeline (``_windows``);
+    ``holdings``, ``holding_names``, ``holding_returns`` and
+    ``holding_contributions`` the Holdings section (``_holdings_inputs``).
     """
     # The page lists the notes in its own section; inside the figure they
     # would be cut off at the plot's width.
-    fig = backtest_report_figure(
+    fig = _performance_figure(
         value,
         in_sample_range=in_sample_range,
         notes=None,
@@ -455,7 +611,7 @@ def _component_repr(config: dict) -> str:
     return f"{str(config.get('name', '')).rsplit('.', 1)[-1]}({fields})"
 
 
-def report_summary(
+def _summary(
     config: dict,
     block: dict,
     *,
@@ -463,7 +619,7 @@ def report_summary(
     drawdown_span: dict | None = None,
     benchmark_source: str | None = None,
 ) -> dict[str, str]:
-    """Return the "Setup" lines of a run's page, the ``summary`` of ``write_backtest_report``.
+    """Return the "Setup" lines of a run's page from its config mapping.
 
     Pure presentation: an ordered mapping of label to text, read from the
     run's config mapping and metric block, computing nothing. The lines,
@@ -509,7 +665,7 @@ def report_summary(
     >>> config = {"model_mode": "load", "rebalance_periods": 5, "fees": 0.001,
     ...           "constructor": {"direction": "long_only", "top_n": 2, "score_label": None,
     ...                           "name": "quantlab.portfolio.predefined.top_n.TopNConstructor"}}
-    >>> summary = report_summary(config, {"out_of_sample_ranges": []}, bar_interval="1D")
+    >>> summary = _summary(config, {"out_of_sample_ranges": []}, bar_interval="1D")
     >>> for label, text in summary.items():
     ...     print(f"{label}: {text}")
     Bar interval: 1 days 00:00:00
@@ -551,15 +707,15 @@ def report_summary(
     return summary
 
 
-def report_windows(timestamps, block: dict, folds: list[dict] | None = None) -> dict:
-    """Return the timeline of a run's page, the ``windows`` of ``write_backtest_report``.
+def _windows(timestamps, block: dict, folds: list[dict] | None = None) -> dict:
+    """Return the timeline of a run's page.
 
     Parameters
     ----------
     timestamps : array_like of datetime64
         The run's bars; the first and last are the backtest window.
     block : dict
-        The metric level carrying the split keys, as for ``report_summary``:
+        The metric level carrying the split keys, as for ``_summary``:
         ``in_sample_range`` or ``in_sample_ranges``,
         ``out_of_sample_ranges`` and, for a model backtest,
         ``training_window``.
@@ -584,7 +740,7 @@ def report_windows(timestamps, block: dict, folds: list[dict] | None = None) -> 
     Examples
     --------
     >>> bars = pd.bdate_range("2024-01-01", periods=5).values
-    >>> windows = report_windows(bars, {
+    >>> windows = _windows(bars, {
     ...     "training_window": ("2023-01-02", "2023-12-29"), "in_sample_range": None,
     ...     "out_of_sample_ranges": [("2024-01-01", "2024-01-05")],
     ... })
@@ -626,139 +782,26 @@ def report_windows(timestamps, block: dict, folds: list[dict] | None = None) -> 
     }
 
 
-def report_chart_inputs(
-    block: dict,
-    notes: list[str],
-    *,
-    returns: xr.DataArray,
-    init_cash: float,
-    drawdown_span: dict | None = None,
-    benchmark_value: xr.DataArray | None = None,
-    benchmark_returns: xr.DataArray | None = None,
-) -> dict:
-    """Return the chart keyword arguments of ``write_backtest_report`` and ``backtest_report_figure``.
+def _portfolio_inputs(weights: xr.DataArray | None, account: AccountRecord, rebalances) -> dict:
+    """Return the Portfolio and Rolling inputs of a run's page from its account record.
 
-    The run's value is passed to those functions positionally, beside these.
-
-    Parameters
-    ----------
-    block : dict
-        The metric level carrying the split keys: its ``in_sample_range``
-        is shaded (a ``run_cv()`` block has none) and its ``benchmark``
-        record names the benchmark.
-    notes : list[str]
-        The run's notes.
-    returns : xarray.DataArray
-        The run's per-bar returns.
-    init_cash : float
-        The starting capital.
-    drawdown_span : dict, optional
-        ``backtest_stats.drawdown_span`` of the run's value, marked on the
-        equity curve.
-    benchmark_value, benchmark_returns : xarray.DataArray, optional
-        The benchmark's value and returns; without a value no benchmark
-        argument is returned and the page has no benchmark.
-
-    Returns
-    -------
-    dict
-        ``in_sample_range``, ``notes``, ``returns``, ``init_cash`` and
-        ``drawdown_span``, plus ``benchmark_value``, ``benchmark_returns``
-        and ``benchmark_name`` (the block's benchmark ``symbol``, else
-        ``"benchmark"``) with a benchmark.
-
-    Examples
-    --------
-    >>> bars = pd.bdate_range("2024-01-01", periods=3)
-    >>> returns = xr.DataArray([0.0, 0.01, -0.02], dims="timestamp", coords={"timestamp": bars})
-    >>> sorted(report_chart_inputs({}, ["a note"], returns=returns, init_cash=1e6))
-    ['drawdown_span', 'in_sample_range', 'init_cash', 'notes', 'returns']
+    ``weights`` (as given), ``turnover`` (``backtest_stats.turnover`` of
+    the account's fills per rebalance fill bar, its settlements left out:
+    the sum is the ``Total Turnover [%]`` row), ``rebalances`` (the decided
+    rebalances' bars) and ``bars_per_year`` (the account's year over its bar
+    interval, the Rolling window).
     """
-    inputs = {
-        "in_sample_range": block.get("in_sample_range"),
-        "notes": notes,
-        "returns": returns,
-        "init_cash": init_cash,
-        "drawdown_span": drawdown_span,
-    }
-    if benchmark_value is not None:
-        info = block.get("benchmark") or {}
-        inputs.update(
-            benchmark_value=benchmark_value,
-            benchmark_returns=benchmark_returns,
-            benchmark_name=info.get("symbol") or "benchmark",
-        )
-    return inputs
-
-
-def report_portfolio_inputs(
-    weights: xr.DataArray,
-    orders: xr.Dataset,
-    value: xr.DataArray,
-    *,
-    rebalances,
-    settlements: Sequence[dict] = (),
-    init_cash: float,
-    bar_interval,
-    trading_days_per_year: int,
-    session_minutes_per_day: int,
-) -> dict:
-    """Return the Portfolio and Rolling tab arguments of ``write_backtest_report``.
-
-    Parameters
-    ----------
-    weights : xarray.DataArray
-        Weights on ``(timestamp, symbol)`` drawn as holdings and exposure: a
-        quantlab run's target weights, or an executor's actual holdings.
-    orders : xarray.Dataset
-        The fills, as ``backtest_stats.turnover`` takes them.
-    value : xarray.DataArray
-        The run's value after each bar.
-    rebalances : array_like of datetime64
-        The bars of the decided rebalances, from the run's rebalance record.
-    settlements : sequence of dict, optional
-        The delisting settlements among ``orders``, left out of the
-        turnover (``backtest_stats.turnover``).
-    init_cash : float
-        The value before the first bar.
-    bar_interval
-        The bar spacing, anything ``pd.Timedelta`` accepts.
-    trading_days_per_year, session_minutes_per_day : int
-        The market's calendar, as ``backtest_stats.year_freq`` takes it.
-
-    Returns
-    -------
-    dict
-        ``weights``, ``turnover`` (``backtest_stats.turnover`` per rebalance
-        fill bar, whose sum is the ``Total Turnover [%]`` row),
-        ``rebalances`` (as given) and ``bars_per_year`` (the Rolling tab's
-        window).
-
-    Examples
-    --------
-    >>> bars = pd.bdate_range("2024-01-01", periods=3)
-    >>> value = xr.DataArray([1000.0, 1000.0, 1000.0], dims="timestamp", coords={"timestamp": bars})
-    >>> orders = xr.Dataset({"timestamp": ("order", bars[[1]].values),
-    ...                      "size": ("order", [50.0]), "price": ("order", [10.0])})
-    >>> weights = xr.DataArray([[1.0], [0.5], [0.5]], dims=("timestamp", "symbol"),
-    ...                        coords={"timestamp": bars, "symbol": ["AAA"]})
-    >>> inputs = report_portfolio_inputs(weights, orders, value, rebalances=bars[[0, 1, 2]].values,
-    ...                                  init_cash=1000.0, bar_interval="1D",
-    ...                                  trading_days_per_year=252, session_minutes_per_day=390)
-    >>> inputs["turnover"].values.tolist(), inputs["bars_per_year"]
-    ([0.5], 252.0)
-    """
-    interval = pd.Timedelta(bar_interval)
-    year = backtest_stats.year_freq(interval, trading_days_per_year, session_minutes_per_day)
     return {
         "weights": weights,
-        "turnover": backtest_stats.turnover(orders, value, init_cash, settlements=settlements),
+        "turnover": backtest_stats.turnover(
+            account.orders, account.value, account.init_cash, settlements=account.settlements
+        ),
         "rebalances": np.asarray(rebalances).astype("datetime64[ns]"),
-        "bars_per_year": year / interval,
+        "bars_per_year": account.year_freq / pd.Timedelta(account.bar_interval),
     }
 
 
-def report_holdings_inputs(
+def _holdings_inputs(
     holdings: xr.DataArray,
     weights: xr.DataArray,
     *,
@@ -766,7 +809,7 @@ def report_holdings_inputs(
     label: Callable[[list, datetime.date], list[tuple[str, str | None]]] | None = None,
     prices: xr.DataArray | None = None,
 ) -> dict:
-    """Return the Holdings tab arguments of ``write_backtest_report``.
+    """Return the Holdings section's inputs of a run's page.
 
     The tab shows, on each bar, every symbol held or targeted by the last
     rebalance before it; ``label`` names those symbols as of each bar, and
@@ -822,11 +865,11 @@ def report_holdings_inputs(
     >>> def label(symbols, day):
     ...     ticker = "FB" if str(day) < "2024-01-03" else "META"
     ...     return [(ticker, "Meta Platforms") for _ in symbols]
-    >>> report_holdings_inputs(holdings, weights, rebalances=bars[:1].values, label=label)["holding_names"]
+    >>> _holdings_inputs(holdings, weights, rebalances=bars[:1].values, label=label)["holding_names"]
     {'13407': [('2024-01-02', 'FB', 'Meta Platforms'), ('2024-01-03', 'META', 'Meta Platforms')]}
     >>> prices = xr.DataArray([[10.0], [11.0], [12.1]], dims=("timestamp", "symbol"),
     ...                       coords={"timestamp": bars, "symbol": [13407]})
-    >>> inputs = report_holdings_inputs(holdings, weights, rebalances=bars[:1].values, prices=prices)
+    >>> inputs = _holdings_inputs(holdings, weights, rebalances=bars[:1].values, prices=prices)
     >>> inputs["holding_returns"].values.round(2).ravel().tolist()
     [nan, 0.21, 0.21]
     >>> inputs["holding_contributions"].values.round(3).tolist()
@@ -858,7 +901,7 @@ def report_holdings_inputs(
     }
 
 
-def backtest_report_figure(
+def _performance_figure(
     value: xr.DataArray,
     *,
     in_sample_range: tuple[str, str] | None = None,
@@ -870,32 +913,10 @@ def backtest_report_figure(
     benchmark_returns: xr.DataArray | None = None,
     benchmark_name: str = "benchmark",
 ) -> go.Figure:
-    """Return the plotly figure of a backtest report, the chart ``report.html`` embeds.
+    """The Performance chart; ``backtest_report_figure`` and the page's Performance tab draw it.
 
-    Equity, drawdown and compounded monthly returns on a shared time axis, the
-    in-sample range shaded, the deepest drawdown marked and the notes below; with a
-    benchmark, its NAV, drawdown and monthly returns beside the portfolio's. The
-    excess over the benchmark is not drawn here: ``report.html`` draws it on its
-    own tab, apart from the drawdowns, because the drawdown of the relative NAV
-    is a different quantity from either NAV's drawdown. The parameters mean what
-    they mean for ``write_backtest_report``, which draws its Performance tab with
-    this function.
-
-    Returns
-    -------
-    plotly.graph_objects.Figure
-        The figure, not yet shown or written.
-
-    Examples
-    --------
-    >>> import pandas as pd, xarray as xr
-    >>> from quantlab.runs.backtest_report import backtest_report_figure
-    >>> ts = pd.bdate_range("2024-01-01", periods=5)
-    >>> value = xr.DataArray([100.0, 104.0, 98.0, 103.0, 110.0],
-    ...                      dims=("timestamp",), coords={"timestamp": ts})
-    >>> figure = backtest_report_figure(value, init_cash=100.0)
-    >>> [trace.name for trace in figure.data]
-    ['equity', 'drawdown']
+    The parameters mean what they mean for ``_render``; ``notes`` are
+    written below the chart.
     """
     equity = value.to_pandas()
     drawdown = equity / equity.cummax() - 1.0

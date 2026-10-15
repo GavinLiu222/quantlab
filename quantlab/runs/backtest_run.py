@@ -519,14 +519,15 @@ class BacktestRun:
     def recipe(self) -> dict:
         """The run's rebuild recipe, the backtester's ``get_config()`` as recorded.
 
-        For presentation that takes a config mapping
-        (``quantlab.runs.backtest_report.report_summary``); a component is
-        rebuilt with ``rebuild(field)`` and the backtester with
-        ``rebuild_backtester``.
+        For presentation that takes a config mapping (the ``config`` of
+        ``quantlab.runs.backtest_report.write_backtest_report``, its Setup
+        lines); a component is rebuilt with ``rebuild(field)`` and the
+        backtester with ``rebuild_backtester``.
 
         Examples
         --------
-        >>> summary = report_summary(run.recipe(), run.metrics(), bar_interval="1D")
+        >>> BacktestRun.open(run_dir).recipe()["rebalance_periods"]
+        5
         """
         return self._config()
 

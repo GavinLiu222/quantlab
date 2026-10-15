@@ -287,7 +287,7 @@ A run directory is read through `BacktestRun` (`quantlab.runs.backtest_run`), or
 | `market` | The backtester class's `fill_price_column` and `valuation_price_column`, so a tool reading the run learns them without importing the class. |
 | `execution`, `rebalance_periods` | The `ExecutionSettings` (`sizing_basis`, `fees`, `slippage`) and the bars between rebalances, from the run's config. |
 | `annualization`, `init_cash` | The trading days per year and session minutes per day the statistics were annualized by, and the cash the simulation started with. |
-| `backtester_class`, `benchmark_source`, `recipe()` | The import path of the backtester class; where the benchmark was read from (its store, or the dataset held in memory; `None` without one); the recipe itself, the config mapping `report_summary` reads. |
+| `backtester_class`, `benchmark_source`, `recipe()` | The import path of the backtester class; where the benchmark was read from (its store, or the dataset held in memory; `None` without one); the recipe itself, the config mapping `write_backtest_report` reads for the Setup lines. |
 | `data_fingerprint` | What the run read, recorded where it was read: for each dataset or factor store, keyed by its component path (`price_dataset`, `model.factors.0.dataset`, `benchmark_dataset`), one digest and extent per distinct request, with a digest and dtype per variable that let a mismatch warning name what changed. It covers the price columns, the delisting check's look-ahead, the rule's price history before the window, each factor's inputs and a merge's inputs, and a factor risk model's stores (`risk_model.regression`, `risk_model.estimate`), one request each over the bars read by the factor attribution and a `FactorRiskStoreEstimator`. A `run_cv()` run's is the stitched pass; each fold holds its own. Training reads are the trained unit's (`trained_run().data_fingerprint`). |
 | `code` | The code the run used: the quantlab git commit and whether tracked files were changed, the SHA-256 of every module defining a class of the backtester's component tree (framework or component module, with the component paths using it), and the versions of numpy, pandas, xarray, polars, xgboost, torch, vectorbt, KunQuant and cvxpy. |
 | `trained_run()` | The trained unit the backtest used, as a `TrainedRun`: the unit trained in train mode, the checkpoint's unit in load mode, the walk-forward unit for `run_cv()`, the fold's own unit for a fold; `None` for `run_weights()`. |
@@ -774,37 +774,33 @@ The whole book in one stock at 10 with a 1% fee costs more than the cash, so the
 
 ### Write a report in quantlab's format
 
-The inputs of `report.html` have public builders in `quantlab.runs.backtest_report`, taking plain data, so an executor that simulates elsewhere writes a page in exactly quantlab's format. quantlab's own pages are built through them.
+`report.html` is drawn from what the run recorded. `write_backtest_report(account, path, *, title, metrics=None, weights=None, config=None, benchmark=None, folds=None, extras=None)` in `quantlab.runs.backtest_report` takes the account record above, the run's metrics (a `run_cv()` run's `stitched` / `folds` / `notes` layout included), its target weights, its config mapping and its `BenchmarkRecord`, and derives every input of the page itself: the in-sample range, the notes and the fold rows from the metrics, the turnover from the account's fills (its settlements left out), the decided rebalances from its rebalance record, the Rolling window from its year, the deepest drawdown from its value, the Setup lines from the config, and the benchmark's curve (its `value`, or bought and held from the account's capital when the record has none). An executor that simulates elsewhere therefore writes a page in exactly quantlab's format by handing over its own record; quantlab's own pages go through the same call. `backtest_report_figure(account, *, metrics=None, benchmark=None)` returns the Performance chart alone.
 
-| Function | Argument of `write_backtest_report` |
+What only some runs have goes in one `ReportExtras`:
+
+| Field | What it adds |
 |---|---|
-| `report_summary(config, block, *, bar_interval, drawdown_span=None, benchmark_source=None)` | `summary`, the "Setup" lines, from the backtester's config mapping (`get_config()`) and its metric block |
-| `report_windows(timestamps, block, folds=None)` | `windows`, the timeline; `folds` are a `run_cv()` run's rows (`fold`, `training_window`, `traded`, `in_sample_range`) |
-| `report_chart_inputs(block, notes, *, returns, init_cash, drawdown_span=None, benchmark_value=None, benchmark_returns=None)` | the chart and benchmark arguments |
-| `report_portfolio_inputs(weights, orders, value, *, init_cash, bar_interval, trading_days_per_year, session_minutes_per_day)` | `weights`, `turnover` and `bars_per_year`, the Portfolio and Rolling sections |
-| `report_holdings_inputs(holdings, weights, *, label=None, prices=None)` | `holdings`, `holding_names` (per symbol, the `(first bar, ticker, company)` spans `label(symbols, day)` gives), `holding_returns` (each bar's holding-period return on the valuation `prices`) and `holding_contributions` (each bar's contributions, one per name held at the previous close, largest holding first), both `None` without `prices`, the Holdings section; without holdings the page has no Holdings section |
+| `attribution`, `factor_attribution` | The Attribution and Factor attribution sections, with the matching block of the metrics |
+| `tables` | Titled tables after the metric tables (`{heading: {label: value}}`), for statistics only the executor has |
+| `setup` | Setup lines: a label the page already has is replaced in place, a new one is appended |
+| `names` | `names(symbols, day)` returning `(ticker, company)` pairs, the names the Holdings section shows |
+| `prices` | The valuation prices, for the Holdings section's holding-period returns and contributions |
 
-A line of the summary is replaced by assigning to its key, which keeps its place, and `write_backtest_report(..., extra_tables={heading: {label: value}})` adds titled tables after the metric tables, for statistics only the executor has. Continuing the session:
+Continuing the session:
 
 ```python
->>> from quantlab.runs.backtest_report import report_summary, report_windows, write_backtest_report
->>> summary = report_summary(held_backtester.get_config(), held.metrics, bar_interval="1D")
->>> summary["Fees"] = "IBKR tiered, 0.0035 USD a share"
->>> list(summary)
-['Bar interval', 'Signal', 'Rebalance every', 'Fees']
->>> report_windows(held.simulation.value.timestamp.values, held.metrics)["backtest"]
-('2024-01-01', '2024-01-05')
->>> from quantlab.runs.backtest_report import report_chart_inputs
+>>> from quantlab.runs.backtest_report import ReportExtras, write_backtest_report
 >>> write_backtest_report(
-...     held.simulation.value, "replay.html", title="replay", summary=summary,
-...     windows=report_windows(held.simulation.value.timestamp.values, held.metrics),
-...     metrics=held.metrics,
-...     **report_chart_inputs(held.metrics, ["Fills from the event-driven replay."],
-...                           returns=held.simulation.returns, init_cash=1_000_000.0),
-...     extra_tables={"Execution (event-driven)": {"Commissions": 12.5, "Dividends": 3}},
+...     account, "replay.html", title="replay",
+...     metrics=held.metrics, weights=held.weights["weight"], config=held_backtester.get_config(),
+...     extras=ReportExtras(
+...         setup={"Fees": "IBKR tiered, 0.0035 USD a share"},
+...         tables={"Execution (event-driven)": {"Commissions": 12.5, "Dividends": 3}},
+...     ),
 ... )
->>> "<h2>Execution (event-driven)</h2>" in open("replay.html").read()
-True
+>>> page = open("replay.html").read()
+>>> "<h2>Execution (event-driven)</h2>" in page, "<td>IBKR tiered, 0.0035 USD a share</td>" in page
+(True, True)
 ```
 
 ## Extending

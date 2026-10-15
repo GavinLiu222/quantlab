@@ -42,6 +42,7 @@ from quantlab.backtest.predefined.us_equity import USEquityCrossectionSelectStoc
 from quantlab.backtest.config import CrossSectionBacktestConfig
 from quantlab.portfolio.config import TopNConfig
 from quantlab.runs.backtest_report import write_backtest_report
+from tests.report_records import account, benchmark as benchmark_record
 from quantlab.runs.backtest_stats import win_rates
 from quantlab.portfolio.predefined.top_n import TopNConstructor
 from quantlab.runs.backtest_run import BacktestRun
@@ -383,15 +384,7 @@ def test_report_excess_curves_are_the_value_ratio(tmp_path):
     value = xr.DataArray([100.0, 110.0, 99.0, 120.0, 118.0], dims=("timestamp",), coords={"timestamp": ts})
     bench = xr.DataArray([100.0, 100.0, 100.0, 100.0, 110.0], dims=("timestamp",), coords={"timestamp": ts})
     path = tmp_path / "report.html"
-    write_backtest_report(
-        value,
-        path,
-        in_sample_range=None,
-        notes=[],
-        title="t",
-        benchmark_value=bench,
-        benchmark_name="QQQ",
-    )
+    write_backtest_report(account(value), path, title="t", benchmark=benchmark_record(bench, symbol="QQQ"))
     page = path.read_text(encoding="utf-8")
     import plotly.io as pio
 
@@ -410,7 +403,7 @@ def test_report_without_benchmark_keeps_three_rows(tmp_path):
     ts = pd.bdate_range("2024-01-01", periods=5)
     value = xr.DataArray([100.0, 110.0, 99.0, 120.0, 118.0], dims=("timestamp",), coords={"timestamp": ts})
     path = tmp_path / "report.html"
-    write_backtest_report(value, path, in_sample_range=None, notes=[], title="t")
+    write_backtest_report(account(value), path, title="t")
     page = path.read_text(encoding="utf-8")
     assert '"yaxis3"' in page and '"yaxis4"' not in page
     assert "excess_return" not in page

@@ -55,7 +55,7 @@ import pytest
 import xarray as xr
 from vectorbt.generic.enums import DrawdownStatus
 
-import quantlab.backtest.engine_vectorbt as engine_module
+from quantlab.runs import backtest_stats
 from quantlab.runs.backtest_run import BacktestRun
 from quantlab.backtest.engine_vectorbt import VectorBtBacktester
 from tests.decision_fixtures import schedule
@@ -1135,11 +1135,12 @@ def test_the_portfolio_level_metrics_are_unchanged_by_the_positions_switch(
 # Quick 260915-v6i: the deepest drawdown's span
 # --------------------------------------------------------------------------
 #
-# These call the hook directly rather than through a backtester: it reads a
-# simulation and `self._bar_label` and nothing else -- no config, no model, no
-# store -- so binding it onto a stub keeps the tests about RECORD SELECTION,
-# which is the part that can be got wrong, instead of paying for a two-minute
-# end-to-end run to reach it. That a real run's page carries the markers is
+# These call `backtest_stats.drawdown_span` on a simulated value directly
+# rather than through a backtester (since #279 the report derives the span
+# from the account's value itself; the engine hook is gone), and compare it
+# with vectorbt's own drawdown records, so the tests stay about RECORD
+# SELECTION, which is the part that can be got wrong, instead of paying for a
+# two-minute end-to-end run to reach it. That a real run's page carries the markers is
 # locked at the artifact level in tests/test_backtest_persistence.py.
 
 #: Three drawdown records with depths [-36.36%, -5.17%, -5.88%] and durations
@@ -1170,13 +1171,6 @@ DEEPEST_NEVER_RECOVERS = [100, 110, 105, 112, 90, 80, 70]
 VALLEY_IS_NOT_START = [100, 120, 115, 110, 90, 95, 105, 125]
 
 
-class _SpanHost:
-    """The hook under test, bound to the smallest object that can run it."""
-
-    _bar_label = staticmethod(BaseBacktester._bar_label)
-    _drawdown_span = VectorBtBacktester._drawdown_span
-
-
 def _drawdown_simulation(values: list[float]) -> SimulationResult:
     """A `SimulationResult` whose `native` carries real vectorbt drawdowns."""
     index = pd.bdate_range("2024-01-01", periods=len(values))
@@ -1195,7 +1189,12 @@ def _drawdown_simulation(values: list[float]) -> SimulationResult:
 
 
 def _span_of(values: list[float]) -> dict | None:
-    return _SpanHost()._drawdown_span(_drawdown_simulation(values))
+    return _drawdown_span(_drawdown_simulation(values))
+
+
+def _drawdown_span(simulation: SimulationResult) -> dict | None:
+    """The span the report marks: the deepest drawdown of the simulated value (#279)."""
+    return backtest_stats.drawdown_span(simulation.value)
 
 
 def test_the_span_is_the_deepest_record_and_never_the_longest_one():
@@ -1214,7 +1213,7 @@ def test_the_span_is_the_deepest_record_and_never_the_longest_one():
     assert drawdowns.max_duration() == pd.Timedelta(days=5)
     assert drawdowns.max_drawdown() == pytest.approx(-0.3636363, rel=1e-5)
 
-    span = _SpanHost()._drawdown_span(simulation)
+    span = _drawdown_span(simulation)
     assert span["depth"] == pytest.approx(-0.3636363, rel=1e-5)
     assert span["bars"] == 1, (
         "the marked span belongs to the deepest record, not to the 5-bar longest one"
@@ -1247,7 +1246,7 @@ def test_bars_is_the_chosen_records_end_minus_valley_and_labels_are_bar_labels()
     assert start != valley, "the fixture must separate the start from the valley"
     assert end - start != end - valley
 
-    span = _SpanHost()._drawdown_span(simulation)
+    span = _drawdown_span(simulation)
 
     assert span["bars"] == end - valley
     assert span["bars"] != end - start
@@ -1270,7 +1269,7 @@ def test_a_deepest_drawdown_still_open_at_the_last_bar_is_not_recovered():
     assert int(DrawdownStatus.Active) in status
     assert int(DrawdownStatus.Recovered) in status
 
-    span = _SpanHost()._drawdown_span(simulation)
+    span = _drawdown_span(simulation)
     assert span["recovered"] is False
     assert span["depth"] < -0.3, "the open record must be the deepest one"
     # The valley IS the last bar of this series (`valley_idx == end_idx == 6`),
@@ -1296,12 +1295,6 @@ def test_the_recovered_flag_is_decoded_from_the_enum_not_a_bare_literal():
 
 def test_a_series_that_never_draws_down_has_no_span():
     assert _span_of([1.0, 2.0, 3.0, 4.0, 5.0]) is None
-
-
-def test_the_base_hook_returns_none_so_another_engine_renders_todays_page():
-    """The base never reads `simulation.native`; it just declines."""
-    simulation = _drawdown_simulation(DEEPEST_IS_NOT_LONGEST)
-    assert BaseBacktester._drawdown_span(None, simulation) is None
 
 
 def test_the_span_payload_is_plain_python_values():

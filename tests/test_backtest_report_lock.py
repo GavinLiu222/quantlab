@@ -1,10 +1,10 @@
 """Byte lock on a backtest run's ``report.html`` and ``metrics.json`` (#115).
 
 The inputs of the report became public functions in
-``quantlab.runs.backtest_report`` (``report_summary``, ``report_windows``,
-``report_chart_inputs``, ``report_portfolio_inputs``) so another executor can
-write a report in quantlab's format. The backtester builds its own report
-through them, and its pages and metrics must not change by a byte. What is
+``quantlab.runs.backtest_report`` (#115) so another executor could write a
+report in quantlab's format; since #279 the report derives them itself from
+the run's account record (``write_backtest_report(account, path, ...)``).
+Neither change may move the backtester's pages and metrics by a byte. What is
 locked here: ``run()`` (long-only with a benchmark, long-short with a
 delisting and no benchmark), ``run_weights()`` with and without a benchmark,
 and ``run_cv()`` with and without a benchmark each write a ``report.html``
@@ -24,12 +24,11 @@ book: ``1.1e-16`` on one CI runner, 0 or ``-2.2e-16`` on another) and is
 written 0. The bytes still depend on the
 installed plotly, numpy and vectorbt; a version bump that changes them shows
 up here first.
-The same runs with the holdings left out of ``write_backtest_report`` (a
-caller with no holdings to show) must give the reports' bytes from before
-the Holdings tab (#225).
-Beside the hashes, the recipe ``report_windows`` documents for building
-``run_cv()`` fold rows from ``metrics.json`` is checked against the bars each
-fold traded.
+The same runs with the holdings left out of the account record handed to
+``write_backtest_report`` (a caller with no holdings to show) must give the
+reports' bytes from before the Holdings tab (#225).
+Beside the hashes, the recipe the report uses for building ``run_cv()`` fold
+rows from ``metrics.json`` is checked against the bars each fold traded.
 
 The hashes lock bytes on disk, so they read ``report.html`` and ``metrics.json``
 by name; the fold-row check reads the run through ``BacktestRun`` (#134).
@@ -366,14 +365,15 @@ def test_report_and_metrics_are_byte_identical_to_before_the_public_builders(
 def test_without_holdings_the_report_is_byte_identical_to_before_the_holdings_tab(
     tmp_path, cv_project, monkeypatch
 ):
-    """A caller with no holdings to show: ``write_backtest_report`` given none."""
+    """A caller with no holdings to show: ``write_backtest_report`` given an account without."""
+    import dataclasses
+
     import quantlab.backtest.base as base
 
     write = base.write_backtest_report
 
-    def without_holdings(*args, holdings=None, holding_names=None, holding_returns=None,
-                         holding_contributions=None, **kwargs):
-        write(*args, **kwargs)
+    def without_holdings(account, *args, **kwargs):
+        write(dataclasses.replace(account, holdings=None), *args, **kwargs)
 
     monkeypatch.setattr(base, "write_backtest_report", without_holdings)
     _assert_hashes(tmp_path, cv_project, WITHOUT_HOLDINGS)

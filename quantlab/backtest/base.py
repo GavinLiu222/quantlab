@@ -63,19 +63,14 @@ from quantlab.runs.backtest_attribution import (
     rebalanced_group_values,
 )
 from quantlab.runs.backtest_report import (
+    ReportExtras,
     backtest_report_figure,
-    report_chart_inputs,
-    report_holdings_inputs,
-    report_portfolio_inputs,
-    report_summary,
-    report_windows,
     write_backtest_report,
 )
 from quantlab.runs.record import DataRecorder, compare, unrecorded
 from quantlab.runs.run_metrics import (
     AccountRecord,
     BenchmarkRecord,
-    decided_bars,
     run_metrics,
     slice_ranges,
 )
@@ -1360,10 +1355,9 @@ class BaseBacktester(Component, ABC):
             )
         self._check_result_matches_config(result)
         return backtest_report_figure(
-            result.simulation.value,
-            **self._report_chart_inputs(
-                result.simulation, result.metrics, result.benchmark
-            ),
+            self.account(result.simulation),
+            metrics=result.metrics,
+            benchmark=self._benchmark_record(result.benchmark, result.simulation),
         )
 
     def _check_result_matches_config(self, result: BacktestResult) -> None:
@@ -2625,21 +2619,38 @@ class BaseBacktester(Component, ABC):
         ``whole``; ``within`` (a ``run_cv()`` fold, ADR 0033) measures a
         stretch instead. The benchmark is named as of the last bar measured.
         """
-        benchmark_record = None
-        if benchmark is not None:
-            axis_symbol = self._benchmark_axis_symbol or ""
-            as_of = simulation.value.timestamp.values[-1] if within is None else within[1]
-            benchmark_record = BenchmarkRecord(
-                returns=benchmark.returns,
-                symbol=self._benchmark_display_name(axis_symbol, as_of),
-                axis_symbol=axis_symbol,
-            )
         return run_metrics(
             self.account(simulation),
             engine_rows=self._engine_stats(simulation) if within is None else None,
             split=split,
-            benchmark=benchmark_record,
+            benchmark=self._benchmark_record(benchmark, simulation, within),
             within=within,
+        )
+
+    def _benchmark_record(
+        self,
+        benchmark: SimulationResult | None,
+        simulation: SimulationResult,
+        within: tuple[str, str] | None = None,
+    ) -> BenchmarkRecord | None:
+        """Return the benchmark's record for the metrics and the report, or ``None`` without one.
+
+        Its simulated returns and value, its display name as of the last bar
+        measured (``simulation``'s, or the end of ``within``;
+        ``_benchmark_display_name``), its axis symbol and where it was read
+        from.
+        """
+        if benchmark is None:
+            return None
+        as_of = simulation.value.timestamp.values[-1] if within is None else within[1]
+        axis_symbol = self._benchmark_axis_symbol or ""
+        dataset = self.config.benchmark_dataset
+        return BenchmarkRecord(
+            returns=benchmark.returns,
+            symbol=self._benchmark_display_name(axis_symbol, as_of),
+            axis_symbol=axis_symbol,
+            value=benchmark.value,
+            source=None if dataset is None else self._where(dataset),
         )
 
     def _benchmark_display_name(self, axis_symbol: str, as_of) -> str:
@@ -2729,73 +2740,6 @@ class BaseBacktester(Component, ABC):
         """Return ``{ClassName}_{timestamp}``, unique down to the microsecond."""
         return f"{self.class_name}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
 
-    def _drawdown_span(self, simulation: SimulationResult) -> dict | None:
-        """Return the deepest drawdown from its valley to recovery, or ``None``.
-
-        The base class does not read ``simulation.native``, so it returns
-        ``None`` and the report shows no drawdown markers. An engine that
-        can find the deepest drawdown in its own result overrides this and
-        returns ``{"valley", "end", "bars", "depth", "recovered"}``:
-        ``valley`` is the deepest bar and ``end`` the bar it recovered on
-        (both ``_bar_label`` strings), ``bars`` the number of bars between
-        them (not calendar days, and not the maximum drawdown duration),
-        ``depth`` a negative fraction and ``recovered`` whether the
-        recovery happened before the last bar. Deliberately not abstract: it
-        is a report detail no engine is forced to implement.
-        """
-        return None
-
-    def _report_summary(
-        self,
-        simulation: SimulationResult,
-        block: dict,
-        *,
-        drawdown_span: dict | None = None,
-    ) -> dict:
-        """Return the "Setup" lines of ``report.html``: ``report_summary`` of this run.
-
-        ``block`` is the metric level carrying the split keys (``run()``
-        passes the metrics, ``run_cv()`` ``metrics["stitched"]``); the
-        config mapping is ``get_config()`` and the benchmark is named with
-        where it was read from.
-        """
-        dataset = self.config.benchmark_dataset
-        return report_summary(
-            self.get_config(),
-            block,
-            bar_interval=simulation.bar_interval,
-            drawdown_span=drawdown_span,
-            benchmark_source=None if dataset is None else self._where(dataset),
-        )
-
-    def _report_windows(
-        self,
-        simulation: SimulationResult,
-        block: dict,
-        records: list[dict] | None = None,
-    ) -> dict:
-        """Return the timeline of ``report.html``: ``report_windows`` of this run.
-
-        ``records`` are the folds of a ``run_cv()`` run, each with its
-        ``fold`` number and ``metrics`` (the first and last bar it traded,
-        ``whole`` ``Start`` and ``End``, its ``training_window`` and
-        ``in_sample_range``).
-        """
-        folds = None
-        if records is not None:
-            folds = [
-                {
-                    "fold": record["fold"],
-                    "training_window": record["metrics"].get("training_window"),
-                    "traded": self._label_pair(
-                        (record["metrics"]["whole"]["Start"], record["metrics"]["whole"]["End"])
-                    ),
-                    "in_sample_range": record["metrics"].get("in_sample_range"),
-                }
-                for record in records
-            ]
-        return report_windows(simulation.value.timestamp.values, block, folds)
-
     def _report_and_persist(
         self,
         kind: str,
@@ -2829,15 +2773,18 @@ class BaseBacktester(Component, ABC):
         ``kind`` is ``"run"``, ``"run_weights"`` or ``"run_cv"``. A
         ``run_cv`` run describes the stitched curve: ``metrics`` holds
         ``stitched``, ``folds`` and ``notes``, the report reads
-        ``metrics["stitched"]`` and the fold ``records``, and each record is
+        ``metrics["stitched"]`` and its fold rows from ``metrics["folds"]``, and each record is
         written as a child run of kind ``"fold"`` (its metrics and what its
         prediction read; its curves are the run's over its window, ADR 0033),
         with ``units`` giving each fold's trained unit and ``fold_bars`` its
         bars, in record order.
 
-        ``report.html`` is self-contained: headline numbers, a timeline
-        of the backtest and training windows from ``_report_windows``, the
-        setup lines from ``_report_summary``, the metric tables (the
+        ``report.html`` is ``write_backtest_report`` of the run's account
+        record (``account``), its metrics, target weights, config mapping
+        and benchmark record, with the attribution datasets, the symbol
+        names and the valuation prices as its extras: headline numbers, a
+        timeline of the backtest and training windows, the setup lines,
+        the metric tables (the
         out-of-sample slice when the run has an in-sample part, with an
         in-sample vs out-of-sample table) and the chart tabs: Performance
         (equity, drawdown and monthly returns with the in-sample range
@@ -2859,26 +2806,22 @@ class BaseBacktester(Component, ABC):
         if self.config.output_dir is None:
             return None
         final = Path(self.config.output_dir) / self._run_name
-        stitched = metrics["stitched"] if kind == "run_cv" else None
-        block = metrics if stitched is None else stitched
-
         def _report(path: Path) -> None:
             """Write ``report.html`` of this run at ``path``."""
-            chart = self._report_chart_inputs(simulation, metrics, benchmark, block=stitched)
             write_backtest_report(
-                simulation.value,
+                self.account(simulation),
                 path,
                 title=final.name,
-                summary=self._report_summary(
-                    simulation, block, drawdown_span=chart["drawdown_span"]
+                metrics=metrics,
+                weights=weights["weight"],
+                config=self.get_config(),
+                benchmark=self._benchmark_record(benchmark, simulation),
+                extras=ReportExtras(
+                    attribution=simulation.attribution,
+                    factor_attribution=simulation.factor_attribution,
+                    names=self._symbol_names,
+                    prices=prices[self.MARKET.valuation_price_column],  # type: ignore[union-attr]
                 ),
-                windows=self._report_windows(simulation, block, list(records) or None),
-                metrics=block,
-                **chart,
-                **self._report_portfolio_inputs(weights, simulation),
-                **self._report_holdings_inputs(weights, prices, simulation),
-                attribution=simulation.attribution,
-                factor_attribution=simulation.factor_attribution,
             )
 
         return write_backtest_run(
@@ -2929,72 +2872,6 @@ class BaseBacktester(Component, ABC):
         return Market(
             fill_price_column=self.MARKET.fill_price_column,  # type: ignore[union-attr]
             valuation_price_column=self.MARKET.valuation_price_column,  # type: ignore[union-attr]
-        )
-
-    def _report_chart_inputs(
-        self,
-        simulation: SimulationResult,
-        metrics: dict,
-        benchmark: SimulationResult | None,
-        *,
-        block: dict | None = None,
-    ) -> dict:
-        """Return the chart keyword arguments shared by ``report.html`` and ``report_figure``.
-
-        ``report_chart_inputs`` of this run: ``metrics`` carries the
-        ``notes`` and, unless ``block`` is given (``run_cv()`` passes
-        ``metrics["stitched"]``), the split keys and the benchmark record;
-        ``simulation.value`` is passed positionally by the callers.
-        """
-        return report_chart_inputs(
-            metrics if block is None else block,
-            metrics["notes"],
-            returns=simulation.returns,
-            init_cash=self.config.init_cash,
-            drawdown_span=self._drawdown_span(simulation),
-            benchmark_value=None if benchmark is None else benchmark.value,
-            benchmark_returns=None if benchmark is None else benchmark.returns,
-        )
-
-    def _report_portfolio_inputs(
-        self, weights: xr.Dataset, simulation: SimulationResult
-    ) -> dict:
-        """Return the Portfolio and Rolling tab inputs: ``report_portfolio_inputs`` of this run.
-
-        ``weights`` are the run's target weights, with a ``weight`` variable
-        on ``(timestamp, symbol)``; the rebalances are the decided bars of
-        ``simulation.rebalances`` and the turnover leaves its settlements out.
-        """
-        return report_portfolio_inputs(
-            weights["weight"],
-            simulation.orders,
-            simulation.value,
-            rebalances=decided_bars(simulation.rebalances),
-            settlements=simulation.settlements,
-            init_cash=self.config.init_cash,
-            bar_interval=simulation.bar_interval,
-            trading_days_per_year=self.MARKET.trading_days_per_year,  # type: ignore[union-attr]
-            session_minutes_per_day=self.MARKET.session_minutes_per_day,  # type: ignore[union-attr]
-        )
-
-    def _report_holdings_inputs(
-        self, weights: xr.Dataset, prices: xr.Dataset, simulation: SimulationResult
-    ) -> dict:
-        """Return the Holdings tab inputs: ``report_holdings_inputs`` of this run.
-
-        Symbols are named as ``_symbol_names`` names them on each bar, and
-        holding-period returns are taken on the market's valuation prices,
-        the prices the engine values the book at; nothing is returned when
-        the engine supplied no holdings, so the page has no Holdings tab.
-        """
-        if simulation.holdings is None:
-            return {}
-        return report_holdings_inputs(
-            simulation.holdings,
-            weights["weight"],
-            rebalances=decided_bars(simulation.rebalances),
-            label=self._symbol_names,
-            prices=prices[self.MARKET.valuation_price_column],  # type: ignore[union-attr]
         )
 
     @staticmethod

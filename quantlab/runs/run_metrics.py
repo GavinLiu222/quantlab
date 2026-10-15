@@ -73,7 +73,8 @@ class AccountRecord:
         its fill bar; ``None`` when nothing rebalanced.
     holdings : xarray.DataArray or None
         Each symbol's share of the book after each bar, on ``(timestamp,
-        symbol)``; not read by ``run_metrics``, carried for the report.
+        symbol)``; not read by ``run_metrics``: the report's Holdings
+        section (``quantlab.runs.backtest_report``).
 
     Examples
     --------
@@ -123,6 +124,14 @@ class BenchmarkRecord:
         Its readable name (a ticker), as ``metrics.json`` shows it.
     axis_symbol : str or None
         Its label on the price dataset's symbol axis.
+    value : xarray.DataArray or None
+        Its value on the same bars when the engine simulated it (bought at
+        the account's capital, fees included); the report draws it, and
+        without it draws ``init_cash * cumprod(1 + returns)``. Not read by
+        ``run_metrics``.
+    source : str or None
+        Where it was read from, shown after its name on the report's Setup
+        lines. Not read by ``run_metrics``.
 
     Examples
     --------
@@ -138,6 +147,8 @@ class BenchmarkRecord:
     returns: xr.DataArray
     symbol: str | None = None
     axis_symbol: str | None = None
+    value: xr.DataArray | None = None
+    source: str | None = None
 
 
 def decided_bars(rebalances: xr.Dataset) -> np.ndarray:

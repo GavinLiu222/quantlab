@@ -1,10 +1,11 @@
 """Leaf tests for `quantlab/runs/backtest_report.py` (quick task 260915-sxx).
 
-`write_backtest_report` is a leaf: it takes arrays and already-formatted
-strings and writes one self-contained HTML page. These tests call it directly
-with small synthetic inputs -- no dataset, no model, no backtest run -- so the
-page composition is covered in milliseconds instead of behind a two-minute
-end-to-end run. The run-level locks (the page really carries the persisted
+`write_backtest_report` is a leaf: it takes what a run recorded, hand-built (an
+account record, metrics, a benchmark record, Setup lines) and writes one
+self-contained HTML page. These tests call it directly with small synthetic
+records (`tests/report_records.py`) -- no dataset, no model, no backtest run --
+so the page composition is covered in milliseconds instead of behind a
+two-minute end-to-end run. The run-level locks (the page really carries the persisted
 run's dates and numbers) live in tests/test_backtest_persistence.py.
 
 T-sxx-01: every value the caller interpolates into the page is escaped. The
@@ -21,7 +22,8 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from quantlab.runs.backtest_report import write_backtest_report
+from quantlab.runs.backtest_report import ReportExtras, write_backtest_report
+from tests.report_records import account, benchmark, series
 
 N_BARS = 12
 BARS = pd.bdate_range("2024-01-01", periods=N_BARS)
@@ -48,31 +50,58 @@ def _returns(n: int = N_BARS) -> xr.DataArray:
     )
 
 
-def _write(tmp_path, **kwargs) -> str:
-    """Write a report with the mandatory arguments defaulted, return the page."""
+def _nan_returns(n: int = N_BARS) -> xr.DataArray:
+    """Returns with nothing to draw: no monthly bar, no heatmap."""
+    return series(np.full(n, np.nan), BARS[:n])
+
+
+def _write(
+    tmp_path,
+    *,
+    value=None,
+    returns=None,
+    metrics=None,
+    notes=("a note",),
+    in_sample_range=None,
+    summary=None,
+    title="Backtester_20240101_000000_000000",
+    init_cash=None,
+    benchmark_value=None,
+    benchmark_name=None,
+) -> str:
+    """Write the page of a hand-built record (returns default to none to draw), return it.
+
+    ``notes`` and ``in_sample_range`` go into the metrics as a run records
+    them; ``summary`` is the Setup lines (no config, so no standard ones).
+    """
+    value = _value() if value is None else value
     path = tmp_path / "report.html"
-    arguments = dict(
-        in_sample_range=None,
-        notes=["a note"],
-        title="Backtester_20240101_000000_000000",
+    page_metrics = None if metrics is None and not notes and in_sample_range is None else dict(metrics or {})
+    if page_metrics is not None:
+        page_metrics["notes"] = list(notes)
+        if in_sample_range is not None:
+            page_metrics["in_sample_range"] = in_sample_range
+    write_backtest_report(
+        account(value, returns=_nan_returns(value.sizes["timestamp"]) if returns is None else returns,
+                init_cash=init_cash),
+        path,
+        title=title,
+        metrics=page_metrics,
+        benchmark=None if benchmark_value is None else benchmark(benchmark_value, symbol=benchmark_name),
+        extras=ReportExtras(setup=summary),
     )
-    arguments.update(kwargs)
-    write_backtest_report(_value(), path, **arguments)
     return path.read_text(encoding="utf-8")
 
 
-def test_the_original_five_arguments_still_write_a_page(tmp_path):
-    """The widened signature keeps the old call form legal."""
-    path = tmp_path / "report.html"
-    write_backtest_report(
-        _value(),
-        path,
+def test_a_minimal_record_writes_a_page(tmp_path):
+    """A value curve, its in-sample range and a note are enough for a page."""
+    html = _write(
+        tmp_path,
         in_sample_range=("2024-01-01", "2024-01-04"),
         notes=["short-side returns are optimistic"],
         title="a run",
     )
 
-    html = path.read_text(encoding="utf-8")
     assert html.startswith("<!DOCTYPE html>")
     assert '"name":"equity"' in html and '"name":"drawdown"' in html
     assert '"type":"rect"' in html, "the in-sample band must still be shaded"
@@ -160,25 +189,23 @@ def test_angle_brackets_in_a_note_are_escaped(tmp_path):
 
 def test_the_report_is_one_self_contained_file_loading_plotly_from_the_cdn(tmp_path):
     """D-23: one file per run, whose only external reference is the CDN."""
-    path = tmp_path / "report.html"
-    write_backtest_report(
-        _value(), path, in_sample_range=None, notes=[], title="a run"
-    )
+    html = _write(tmp_path, notes=(), title="a run")
 
     assert [p.name for p in tmp_path.iterdir()] == ["report.html"]
-    assert "cdn.plot.ly" in path.read_text(encoding="utf-8")
+    assert "cdn.plot.ly" in html
 
 
 def test_the_module_is_a_leaf():
     """The only `quantlab.*` imports of the report module are `backtest_stats`,
-    `date_range`, `returns` and `factor_attribution_report`.
+    `run_metrics`, `date_range`, `returns` and `factor_attribution_report`.
 
     All are leaves (numpy, pandas, xarray, plotly; `backtest_stats` also reads
-    the numpy-only Execution rules), so the report module still drags in no
-    quantlab layer (#115: its public builders label bars and compute turnover
-    through them; #215: the Factor attribution section; the Holdings tab's
-    contributions take their one-bar returns from `one_bar_returns`, numpy and
-    xarray only).
+    the numpy-only Execution rules, `run_metrics` only `backtest_stats` and
+    `date_range`), so the report module still drags in no quantlab layer
+    (#115: it labels bars and computes turnover through them; #215: the Factor
+    attribution section; the Holdings tab's contributions take their one-bar
+    returns from `one_bar_returns`, numpy and xarray only; #279: it draws from
+    the account and benchmark records of `run_metrics`).
     """
     import pathlib
 
@@ -194,6 +221,7 @@ def test_the_module_is_a_leaf():
             "from quantlab.utils import date_range",
             "from quantlab.utils.returns import one_bar_returns",
             "from quantlab.runs import backtest_stats",
+            "from quantlab.runs.run_metrics import AccountRecord, BenchmarkRecord, decided_bars",
             "from quantlab.runs.factor_attribution_report import (",
         )
     ]
@@ -285,7 +313,7 @@ def test_metric_names_and_values_are_escaped(tmp_path):
 
 
 def test_no_metrics_mapping_means_no_tables_and_no_cards(tmp_path):
-    html = _write(tmp_path, metrics=None)
+    html = _write(tmp_path, metrics=None, notes=())
 
     assert '<table class="metrics">' not in html and 'class="kpi"' not in html
 
@@ -300,14 +328,12 @@ def test_no_metrics_mapping_means_no_tables_and_no_cards(tmp_path):
 
 
 def _difference(tmp_path, key, strategy, benchmark) -> str:
-    ts = _value().timestamp
     html = _write(
         tmp_path,
         metrics={"whole": {key: strategy}, "benchmark": {"whole": {key: benchmark}}},
         benchmark_value=_value() * 0 + 1_000_000.0,
         benchmark_name="SPY",
     )
-    del ts
     label = next(label for label, cells in _cells(html).items() if len(cells) == 3)
     return _cells(html)[label][2]
 
@@ -351,11 +377,7 @@ def _layout(html: str) -> dict:
 
 def test_every_trace_carries_a_name(tmp_path):
     """A trace without `name` raises KeyError in the persisted-report locks."""
-    html = _write(
-        tmp_path,
-        returns=_returns(),
-        drawdown_span=_span(),
-    )
+    html = _write(tmp_path, value=_recovering(), returns=_returns())
 
     start = html.index("[", html.index("Plotly.newPlot("))
     traces, _ = json.JSONDecoder().raw_decode(html, start)
@@ -373,15 +395,6 @@ def test_the_equity_y_stays_the_raw_value_and_the_multiple_is_customdata(tmp_pat
         equity["customdata"], value.values / 1_000_000.0, rtol=1e-12
     )
     assert "customdata" in equity["hovertemplate"]
-
-
-def test_equity_renders_without_init_cash(tmp_path):
-    """`init_cash=None` must not turn into a division or a mislabelled axis."""
-    html = _write(tmp_path, init_cash=None)
-    equity = _traces(html)["equity"]
-
-    np.testing.assert_allclose(equity["y"], _value().values, rtol=1e-12)
-    assert "customdata" not in equity["hovertemplate"]
 
 
 def test_the_log_linear_toggle_defaults_to_linear(tmp_path):
@@ -418,8 +431,8 @@ def test_a_one_month_run_is_a_single_bar(tmp_path):
     assert len(_traces(html)["monthly_return"]["y"]) == 1
 
 
-def test_no_returns_means_no_monthly_trace(tmp_path):
-    assert "monthly_return" not in _traces(_write(tmp_path, returns=None))
+def test_returns_without_a_number_mean_no_monthly_trace(tmp_path):
+    assert "monthly_return" not in _traces(_write(tmp_path, returns=_nan_returns()))
 
 
 # ---------------------------------------------------------------------------
@@ -572,11 +585,10 @@ def test_the_heatmap_leaves_the_months_after_a_february_end_null(tmp_path):
 @pytest.mark.parametrize(
     "returns",
     [
-        None,
         _dated_returns(["2024-01-02", "2024-02-02"], [float("nan"), float("nan")]),
         _dated_returns([], []),
     ],
-    ids=["none", "all_nan", "empty"],
+    ids=["all_nan", "empty"],
 )
 def test_no_heatmap_div_without_returns_and_the_page_is_still_written(tmp_path, returns):
     """T-03.8-03-01: the report is written inside the run's staging directory.
@@ -750,10 +762,10 @@ def test_the_figure_draws_exactly_these_five_traces(tmp_path):
 
     An exact set rather than a bare `not in`: it catches a liquidation trace
     coming back AND any other trace arriving unnoticed. The two
-    `deepest_drawdown_*` traces are here because a span is passed, and
-    `monthly_return` because returns are.
+    `deepest_drawdown_*` traces are here because the value has a drawdown,
+    and `monthly_return` because returns are.
     """
-    traces = _traces(_write(tmp_path, returns=_returns(), drawdown_span=_span()))
+    traces = _traces(_write(tmp_path, value=_recovering(), returns=_returns()))
 
     assert set(traces) == {
         "equity",
@@ -777,7 +789,7 @@ def test_the_layout_gives_every_axis_title_room_to_render(tmp_path):
     change could re-create the collision at any height. The per-row budget is
     what actually encodes the rule, and it goes red at the old 450px default.
     """
-    html = _write(tmp_path, returns=_returns(), drawdown_span=_span())
+    html = _write(tmp_path, value=_recovering(), returns=_returns())
     layout = _layout(html)
 
     assert layout.get("height") is not None, "an inherited 450px default is the bug"
@@ -804,36 +816,37 @@ def test_the_layout_gives_every_axis_title_room_to_render(tmp_path):
 # The deepest drawdown's span (quick task 260915-v6i)
 # ---------------------------------------------------------------------------
 #
-# The report module is told WHICH episode to mark; it never selects one. So
-# these tests cover the drawing and the wording -- that the two endpoints land
-# on the equity curve with the right symbols, that the span is stated in
-# TRADING DAYS rather than as a calendar duration, that a drawdown which never
-# recovered is not described as having ended, and that an endpoint the equity
-# axis does not carry is dropped instead of raising. Choosing the deepest
-# record is the engine's job and is locked in tests/test_backtest_engine.py.
+# The page marks the deepest drawdown of the account's value
+# (`backtest_stats.drawdown_span`, locked in tests/test_backtest_stats.py):
+# these tests cover the drawing and the wording -- that the two endpoints
+# land on the equity curve with the right symbols, that the span is stated
+# in TRADING DAYS rather than as a calendar duration, and that a drawdown
+# which never recovered is not described as having ended.
 #
 # Quick 260916-hro moved the up triangle from the bar the drawdown STARTED to
 # its VALLEY, so the payload key is `valley` and the trace is
-# `deepest_drawdown_valley`. Which bar is the valley is the engine's decision
-# and is proved there; here the payload is simply taken at its word.
+# `deepest_drawdown_valley`. Since #279 the span is derived from the value,
+# so a span with an endpoint off the equity axis or missing its keys can no
+# longer reach the page, and the tests that handed it one are gone.
 
 
-def _span(**overrides) -> dict:
-    """The span payload the engine hands the report, with defaults."""
-    span = {
-        "valley": BARS[3].strftime("%Y-%m-%d"),
-        "end": BARS[8].strftime("%Y-%m-%d"),
-        "bars": 5,
-        "depth": -0.2,
-        "recovered": True,
-    }
-    span.update(overrides)
-    return span
+def _recovering() -> xr.DataArray:
+    """A value curve whose deepest drawdown has its valley on BARS[3] (a
+    Thursday, -20%) and recovers on BARS[8], the next Thursday: 5 bars."""
+    return series(
+        1_000.0 * np.array([1.0, 0.95, 0.9, 0.8, 0.85, 0.88, 0.92, 0.96, 1.01, 1.02, 1.03, 1.04]),
+        BARS,
+    )
+
+
+def _rising() -> xr.DataArray:
+    """A value curve without a drawdown."""
+    return series(1_000.0 * np.linspace(1.0, 1.5, N_BARS), BARS)
 
 
 def test_the_span_draws_one_triangle_at_each_end_on_the_equity_curve(tmp_path):
     """Up triangle at the VALLEY bar, down triangle at the recovery bar."""
-    traces = _traces(_write(tmp_path, drawdown_span=_span()))
+    traces = _traces(_write(tmp_path, value=_recovering()))
 
     valley = traces["deepest_drawdown_valley"]
     end = traces["deepest_drawdown_end"]
@@ -842,8 +855,8 @@ def test_the_span_draws_one_triangle_at_each_end_on_the_equity_curve(tmp_path):
     assert valley["mode"] == "markers" and end["mode"] == "markers"
     # One point each, sitting exactly on the plotted equity values.
     assert len(valley["y"]) == 1 and len(end["y"]) == 1
-    np.testing.assert_allclose(valley["y"], [_value().values[3]], rtol=1e-12)
-    np.testing.assert_allclose(end["y"], [_value().values[8]], rtol=1e-12)
+    np.testing.assert_allclose(valley["y"], [_recovering().values[3]], rtol=1e-12)
+    np.testing.assert_allclose(end["y"], [_recovering().values[8]], rtol=1e-12)
     # Row 1 is the equity row; the drawdown row is x2.
     assert valley["xaxis"] == "x" and end["xaxis"] == "x"
     # Folded in from `test_the_span_markers_are_not_the_liquidation_colour`,
@@ -863,7 +876,7 @@ def test_the_end_marker_states_the_span_in_trading_days_not_calendar_days(tmp_pa
     `days` count assertion is what catches a `Timedelta` leaking in: its repr
     (`7 days 00:00:00`) carries a `days` that is not part of `trading days`.
     """
-    traces = _traces(_write(tmp_path, drawdown_span=_span(bars=5)))
+    traces = _traces(_write(tmp_path, value=_recovering()))
     hover = traces["deepest_drawdown_end"]["hovertemplate"]
 
     assert "5" in hover
@@ -880,7 +893,7 @@ def test_the_end_marker_states_the_span_in_trading_days_not_calendar_days(tmp_pa
 
 def test_a_never_recovered_span_says_so_and_never_claims_it_ended(tmp_path):
     """A drawdown still open at the last bar must not be described as recovered."""
-    traces = _traces(_write(tmp_path, drawdown_span=_span(recovered=False)))
+    traces = _traces(_write(tmp_path))  # `_value` falls to its last bar
     hover = traces["deepest_drawdown_end"]["hovertemplate"]
 
     assert "not recovered" in hover
@@ -892,53 +905,16 @@ def test_a_never_recovered_span_says_so_and_never_claims_it_ended(tmp_path):
 
 def test_a_recovered_span_says_it_recovered(tmp_path):
     """The other branch: the marked episode really did end at that bar."""
-    hover = _traces(_write(tmp_path, drawdown_span=_span(recovered=True)))[
-        "deepest_drawdown_end"
-    ]["hovertemplate"]
+    hover = _traces(_write(tmp_path, value=_recovering()))["deepest_drawdown_end"]["hovertemplate"]
 
     assert "not recovered" not in hover
     assert "recovers" in hover
 
 
-def test_no_span_means_no_marker_traces(tmp_path):
-    """A run with no drawdown record renders exactly today's page."""
-    for traces in (
-        _traces(_write(tmp_path, drawdown_span=None)),
-        _traces(_write(tmp_path)),  # the argument omitted entirely
-    ):
-        assert "deepest_drawdown_valley" not in traces
-        assert "deepest_drawdown_end" not in traces
+def test_no_drawdown_means_no_marker_traces(tmp_path):
+    """A value that never falls has no drawdown to mark."""
+    traces = _traces(_write(tmp_path, value=_rising()))
 
-
-@pytest.mark.parametrize(
-    ("span", "kept"),
-    [
-        ({"valley": "1999-01-01"}, "deepest_drawdown_end"),
-        ({"end": "1999-01-01"}, "deepest_drawdown_valley"),
-    ],
-)
-def test_an_endpoint_off_the_equity_axis_drops_that_marker_only(tmp_path, span, kept):
-    """T-v6i-02: the report is the last step of a run that already succeeded.
-
-    It is written inside the staging directory, so an exception here deletes
-    the ENTIRE run, not just the report. An endpoint the equity axis does not
-    carry therefore drops its own marker and leaves the other one standing,
-    rather than raising.
-    """
-    traces = _traces(_write(tmp_path, drawdown_span=_span(**span)))
-
-    assert kept in traces
-    dropped = {"deepest_drawdown_valley", "deepest_drawdown_end"} - {kept}
-    assert dropped.isdisjoint(traces)
-
-
-def test_a_span_missing_its_keys_renders_the_page_instead_of_raising(tmp_path):
-    """Every key is read with `.get`, so a malformed payload is not fatal."""
-    html = _write(tmp_path, drawdown_span={"bars": 3})
-
-    assert html.startswith("<!DOCTYPE html>")
-    traces = _traces(html)
-    assert "equity" in traces
     assert "deepest_drawdown_valley" not in traces
     assert "deepest_drawdown_end" not in traces
 
@@ -946,13 +922,11 @@ def test_a_span_missing_its_keys_renders_the_page_instead_of_raising(tmp_path):
 @pytest.mark.parametrize("n_bars", [1, 2])
 def test_a_very_short_window_still_renders(tmp_path, n_bars):
     """A one- or two-bar window is legitimate, not an error."""
-    path = tmp_path / "report.html"
-    write_backtest_report(
-        _value(n_bars),
-        path,
-        in_sample_range=None,
-        notes=[],
+    html = _write(
+        tmp_path,
+        value=_value(n_bars),
+        notes=(),
         title="short",
         summary={"Backtest window": f"2024-01-01 .. 2024-01-02 ({n_bars} bars)"},
     )
-    assert '"name":"equity"' in path.read_text(encoding="utf-8")
+    assert '"name":"equity"' in html

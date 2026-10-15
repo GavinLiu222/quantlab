@@ -24,7 +24,6 @@ from loguru import logger
 from vectorbt.portfolio.enums import SizeType
 
 from quantlab.backtest.base import BaseBacktester, SimulationResult
-from quantlab.runs import backtest_stats
 from quantlab.execution.rules import FILL_DELAY_BARS, OrderPlan, plan_orders
 
 #: The order price a settlement at a last valuation of 0.0 is sent at: vectorbt
@@ -587,21 +586,6 @@ class VectorBtBacktester(BaseBacktester):
             silence_warnings=True,
         )
         return stats.to_dict()
-
-    def _drawdown_span(self, simulation: SimulationResult) -> dict | None:
-        """Return the deepest drawdown as a span from its valley to its recovery.
-
-        ``backtest_stats.drawdown_span`` of the simulated value: the deepest
-        of vectorbt's drawdown records by ``valley_val / peak_val - 1``,
-        never the longest, with ``valley`` and ``end`` (bar labels),
-        ``bars`` (``end_idx - valley_idx``, a bar count rather than calendar
-        days), ``depth`` (a negative float) and ``recovered``. Because it is
-        measured from the valley rather than from the drawdown's start, and
-        on the deepest episode rather than the longest, ``bars`` is usually
-        smaller than vectorbt's ``Max Drawdown Duration`` and is not
-        comparable with it. ``None`` when no drawdown has a finite depth.
-        """
-        return backtest_stats.drawdown_span(simulation.value)
 
     def _report_notes(self) -> list[str]:
         """Return the base notes plus the trade-view and drawdown-marker notes.

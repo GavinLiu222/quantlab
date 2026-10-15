@@ -1,12 +1,15 @@
 """Leaf tests of the report's Holdings tab (#225).
 
-``write_backtest_report`` gets the holdings and the names to show them by as
-plain data; ``report_holdings_inputs`` builds those names from a label
-function. These tests read the JSON the tab embeds: the targets of the last
+``write_backtest_report`` gets the holdings in the account record, and the
+names to show them by (a label function) and the valuation prices in its
+extras. These tests read the JSON the tab embeds: the targets of the last
 rebalance before each bar, the holdings, the cash, dust folded into "Other",
-and the ticker in use on each bar, the symbol id when none is known. Without
+the ticker in use on each bar (the symbol id when none is known), each row's
+holding-period return and each bar's contributions by position size. Without
 holdings the tab and its data are absent. Synthetic, offline, milliseconds.
 """
+
+import dataclasses
 
 import json
 import re
@@ -18,9 +21,10 @@ import xarray as xr
 
 from quantlab.runs.backtest_report import (
     DUST_THRESHOLD,
-    report_holdings_inputs,
+    ReportExtras,
     write_backtest_report,
 )
+from tests.report_records import account, rebalance_record
 
 BARS = pd.bdate_range("2024-01-01", periods=5)
 SYMBOLS = ["10001", "10002", "10003"]
@@ -64,15 +68,34 @@ def _rebalances(weights: xr.DataArray) -> np.ndarray:
     return weights.timestamp.values[np.isfinite(weights.values).any(axis=1)]
 
 
-def _page(tmp_path, **kwargs) -> str:
+def _page(tmp_path, *, holdings=None, weights=WEIGHTS, names=None, prices=None, returns=None,
+          rebalances=None) -> str:
+    """The page of an account holding ``holdings`` against ``weights``, rebalanced on its rows with a target."""
+    record = account(_value(), returns=returns, holdings=holdings, decided=_rebalances(weights))
+    if rebalances is not None:
+        record = dataclasses.replace(record, rebalances=rebalances)
     path = tmp_path / "report.html"
     write_backtest_report(
-        _value(), path, in_sample_range=None, notes=[], title="run",
+        record, path, title="run",
         metrics={"whole": {"Total Return [%]": 3.0, "Annualized Return [%]": 12.5,
                            "Max Drawdown [%]": 1.98}},
-        weights=WEIGHTS, rebalances=_rebalances(WEIGHTS), **kwargs,
+        weights=weights, extras=ReportExtras(names=names, prices=prices),
     )
     return path.read_text(encoding="utf-8")
+
+
+def _row_returns(page: str) -> dict:
+    """Each shown row's holding-period return, by ``(bar, symbol)``."""
+    data = _data(page)
+    return {
+        (i, data["names"][row[0]][2]): row[3]
+        for i, day in enumerate(data["days"]) for row in day["h"]
+    }
+
+
+def _expected_at(page: str, expected) -> dict:
+    """``expected`` (on ``(bar, symbol)`` of ``SYMBOLS``) at the rows the page shows."""
+    return {(i, name): expected[i, SYMBOLS.index(name)] for i, name in _row_returns(page)}
 
 
 def _data(page: str) -> dict:
@@ -127,28 +150,21 @@ def test_a_renamed_symbol_shows_the_ticker_in_use_on_each_bar(tmp_path):
             for s in symbols
         ]
 
-    inputs = report_holdings_inputs(HOLDINGS, WEIGHTS, rebalances=_rebalances(WEIGHTS), label=label)
-    assert inputs["holding_names"]["10002"] == [
-        ("2024-01-02", "T10002", ""), ("2024-01-03", "NEW", "New Co"),
-    ]
-    data = _data(_page(tmp_path, **inputs))
+    data = _data(_page(tmp_path, holdings=HOLDINGS, names=label))
 
     def tickers(day):
         return {data["names"][k][2]: data["names"][k][0] for k, _, _, _ in day["h"]}
 
     assert tickers(data["days"][1])["10002"] == "T10002"
     assert tickers(data["days"][2])["10002"] == "NEW"
-
-
-def test_report_holdings_inputs_without_a_label_names_nothing():
-    inputs = report_holdings_inputs(HOLDINGS, WEIGHTS, rebalances=_rebalances(WEIGHTS))
-    assert inputs["holding_names"] is None
-    assert inputs["holdings"] is HOLDINGS
+    assert ["NEW", "New Co", "10002"] in data["names"]
 
 
 def test_a_name_cannot_close_the_data_script(tmp_path):
-    names = {"10001": [("2024-01-01", "</script><b>x", "A & B")]}
-    page = _page(tmp_path, holdings=HOLDINGS, holding_names=names)
+    def names(symbols, day):
+        return [("</script><b>x", "A & B") if s == "10001" else (s, None) for s in symbols]
+
+    page = _page(tmp_path, holdings=HOLDINGS, names=names)
     data = _data(page)
     assert ["</script><b>x", "A & B", "10001"] in data["names"]
 
@@ -185,13 +201,7 @@ def test_names_new_since_the_previous_rebalance_are_listed_on_every_day_of_its_p
         [0.0, 0.49, 0.49],
         [0.0, 0.52, 0.47],
     ])
-    path = tmp_path / "report.html"
-    write_backtest_report(
-        _value(), path, in_sample_range=None, notes=[], title="run",
-        metrics={"whole": {"Total Return [%]": 3.0}}, weights=weights, holdings=holdings,
-        rebalances=_rebalances(weights),
-    )
-    data = _data(path.read_text(encoding="utf-8"))
+    data = _data(_page(tmp_path, holdings=holdings, weights=weights))
 
     def new(day):
         return None if day["new"] is None else sorted(
@@ -214,8 +224,8 @@ PRICES = _panel([
 ])
 
 
-def test_the_holding_period_return_runs_from_the_signal_close_to_the_period_end():
-    returns = report_holdings_inputs(HOLDINGS, WEIGHTS, rebalances=_rebalances(WEIGHTS), prices=PRICES)["holding_returns"]
+def test_the_holding_period_return_runs_from_the_signal_close_to_the_period_end(tmp_path):
+    page = _page(tmp_path, holdings=HOLDINGS, prices=PRICES)
     # Rebalance 2024-01-01 is in force on bars 1-2, rebalance 2024-01-03 on
     # bars 3-4; each bar shows the return of its whole period.
     expected = np.array([
@@ -225,23 +235,23 @@ def test_the_holding_period_return_runs_from_the_signal_close_to_the_period_end(
         [8.0 / 12.0 - 1, 22.0 / 19.0 - 1, 6.6 / 5.5 - 1],
         [8.0 / 12.0 - 1, 22.0 / 19.0 - 1, 6.6 / 5.5 - 1],
     ])
-    np.testing.assert_allclose(returns.values, expected)
-    assert returns.dims == ("timestamp", "symbol")
+    shown = _row_returns(page)
+    assert len(shown) > 0
+    assert shown == pytest.approx(_expected_at(page, expected))
 
 
-def test_a_one_bar_period_shows_the_one_bar_return():
+def test_a_one_bar_period_shows_the_one_bar_return(tmp_path):
     daily = _panel([[0.5, 0.5, 0.0]] * 5)
-    returns = report_holdings_inputs(HOLDINGS, daily, rebalances=_rebalances(daily), prices=PRICES)["holding_returns"]
+    page = _page(tmp_path, holdings=HOLDINGS, weights=daily, prices=PRICES)
     ffilled = PRICES.ffill("timestamp").values
-    np.testing.assert_allclose(returns.values[1:], ffilled[1:] / ffilled[:-1] - 1)
-
-
-def test_report_holdings_inputs_without_prices_returns_no_holding_returns():
-    assert report_holdings_inputs(HOLDINGS, WEIGHTS, rebalances=_rebalances(WEIGHTS))["holding_returns"] is None
+    expected = np.vstack([np.full(3, np.nan), ffilled[1:] / ffilled[:-1] - 1])
+    shown = {key: value for key, value in _row_returns(page).items() if key[0] > 0}
+    assert len(shown) > 0
+    assert shown == pytest.approx({key: expected[key[0], SYMBOLS.index(key[1])] for key in shown})
 
 
 def test_each_row_carries_its_holding_period_return(tmp_path):
-    data = _data(_page(tmp_path, **report_holdings_inputs(HOLDINGS, WEIGHTS, rebalances=_rebalances(WEIGHTS), prices=PRICES)))
+    data = _data(_page(tmp_path, holdings=HOLDINGS, prices=PRICES))
 
     def returns(day):
         return {data["names"][row[0]][2]: row[3] for row in day["h"]}
@@ -255,7 +265,7 @@ def test_without_holding_returns_rows_carry_none(tmp_path):
     assert {row[3] for row in days[1]["h"]} == {None}
 
 
-def test_a_period_that_starts_on_the_first_bar_takes_its_signal_close_from_the_prices():
+def test_a_period_that_starts_on_the_first_bar_takes_its_signal_close_from_the_prices(tmp_path):
     # A stitched run's first signal can sit before the holdings' first bar.
     early = pd.Timestamp("2023-12-29")
     weights = xr.DataArray(
@@ -263,8 +273,11 @@ def test_a_period_that_starts_on_the_first_bar_takes_its_signal_close_from_the_p
     )
     prices = xr.concat([_panel([[8.0, 16.0, 4.0]] * 5).isel(timestamp=[0]).assign_coords(timestamp=[early]),
                         PRICES], dim="timestamp")
-    returns = report_holdings_inputs(HOLDINGS, weights, rebalances=_rebalances(weights), prices=prices)["holding_returns"]
-    np.testing.assert_allclose(returns.values[0], [8.0 / 8.0 - 1, 22.0 / 16.0 - 1, 6.6 / 4.0 - 1])
+    page = _page(tmp_path, holdings=HOLDINGS, weights=weights, prices=prices,
+                 rebalances=rebalance_record([early, *BARS], decided=[early]))
+    shown = {name: value for (i, name), value in _row_returns(page).items() if i == 0}
+    # Bar 0 shows the two names targeted (10003's target is 0 and nothing is held).
+    assert shown == pytest.approx({"10001": 8.0 / 8.0 - 1, "10002": 22.0 / 16.0 - 1})
 
 
 def _ranked_by_hand(holdings: xr.DataArray, prices: xr.DataArray) -> list[list[float]]:
@@ -282,36 +295,37 @@ def _rows(ranked: xr.DataArray) -> list[list[float]]:
     return [row[np.isfinite(row)].tolist() for row in ranked.values]
 
 
-def test_each_bar_lists_its_contributions_by_the_size_of_the_previous_close():
-    ranked = report_holdings_inputs(HOLDINGS, WEIGHTS, rebalances=_rebalances(WEIGHTS), prices=PRICES)["holding_contributions"]
-    assert ranked.dims == ("timestamp", "rank")
+def _ranked(page: str) -> list[list[float]]:
+    """Each bar's contributions the page embeds, largest holding first."""
+    return [[value for value in row if value is not None] for row in _data(page)["contribution"]["ranked"]]
+
+
+def test_each_bar_lists_its_contributions_by_the_size_of_the_previous_close(tmp_path):
+    ranked = _ranked(_page(tmp_path, holdings=HOLDINGS, prices=PRICES))
     expected = _ranked_by_hand(HOLDINGS, PRICES)
-    for got, want in zip(_rows(ranked), expected):
+    for got, want in zip(ranked, expected, strict=True):
         np.testing.assert_allclose(got, want, rtol=1e-12, atol=0)
     # Bar 2 holds three names at bar 1's close, largest first.
-    np.testing.assert_allclose(_rows(ranked)[2], [
+    np.testing.assert_allclose(ranked[2], [
         0.59 * (12.0 / 11.0 - 1), 0.39 * (19.0 / 21.0 - 1), 0.00004 * (5.5 / 5.0 - 1),
     ])
-    assert _rows(ranked)[0] == []
+    assert ranked[0] == []
 
 
-def test_shorts_are_ranked_by_size_and_gain_when_the_price_falls():
+def test_shorts_are_ranked_by_size_and_gain_when_the_price_falls(tmp_path):
     shorted = HOLDINGS.copy()
     shorted[1, 1] = -0.7
-    ranked = report_holdings_inputs(shorted, WEIGHTS, rebalances=_rebalances(WEIGHTS), prices=PRICES)["holding_contributions"]
-    for got, want in zip(_rows(ranked), _ranked_by_hand(shorted, PRICES)):
+    ranked = _ranked(_page(tmp_path, holdings=shorted, prices=PRICES))
+    for got, want in zip(ranked, _ranked_by_hand(shorted, PRICES), strict=True):
         np.testing.assert_allclose(got, want, rtol=1e-12, atol=0)
-    assert _rows(ranked)[2][0] == pytest.approx(-0.7 * (19.0 / 21.0 - 1))
+    assert ranked[2][0] == pytest.approx(-0.7 * (19.0 / 21.0 - 1))
 
 
-def test_the_page_embeds_each_bars_ranked_contributions_and_the_nav_returns(tmp_path):
+def test_the_page_embeds_the_nav_returns_beside_the_contributions(tmp_path):
     returns = xr.DataArray([0.0, 0.01, -0.0198, 0.0303, 0.0098], dims=("timestamp",), coords={"timestamp": BARS})
-    inputs = report_holdings_inputs(HOLDINGS, WEIGHTS, rebalances=_rebalances(WEIGHTS), prices=PRICES)
-    contribution = _data(_page(tmp_path, returns=returns, **inputs))["contribution"]
-    assert contribution["ranked"] == _rows(inputs["holding_contributions"])
+    contribution = _data(_page(tmp_path, holdings=HOLDINGS, prices=PRICES, returns=returns))["contribution"]
     assert contribution["nav"] == returns.values.tolist()
 
 
 def test_without_prices_the_page_has_no_contribution_analysis(tmp_path):
-    assert report_holdings_inputs(HOLDINGS, WEIGHTS, rebalances=_rebalances(WEIGHTS))["holding_contributions"] is None
     assert _data(_page(tmp_path, holdings=HOLDINGS))["contribution"] is None

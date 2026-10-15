@@ -23,9 +23,11 @@ What is locked here, and what turns it red:
 - The windows timeline draws the backtest row and one row per trained model
   (one for a model backtest, one per walk-forward fold), with every window's
   dates as a tooltip, and names a CV run sliding or expanding.
-- The "Portfolio" tab draws the turnover series it is given, and the holdings
-  and gross exposure of the target weights on the rebalance bars, a symbol a
-  row leaves NaN counted at its last target.
+- The "Portfolio" tab draws the turnover of the account's fills, and the
+  holdings and gross exposure of the target weights on the decided
+  rebalances, a symbol a row leaves NaN counted at its last target.
+
+Every page is written from hand-built account and benchmark records (``tests/report_records.py``).
 """
 
 import json
@@ -36,6 +38,7 @@ import pandas as pd
 import xarray as xr
 
 from quantlab.runs.backtest_report import write_backtest_report
+from tests.report_records import account, benchmark, fills
 
 N = 300
 BARS = pd.bdate_range("2023-01-02", periods=N)
@@ -114,29 +117,47 @@ def _rebalances():
 
 def _turnover():
     """A turnover series on the fill bars (one bar after each rebalance)."""
-    fills = BARS[1 : N : 5]
-    return xr.DataArray(np.linspace(0.1, 0.5, len(fills)), dims=("timestamp",), coords={"timestamp": fills})
+    bars = BARS[1 : N : 5]
+    return xr.DataArray(np.linspace(0.1, 0.5, len(bars)), dims=("timestamp",), coords={"timestamp": bars})
+
+
+def _fills(value):
+    """One fill per fill bar whose notional over the previous bar's ``value`` is ``_turnover``."""
+    turnover = _turnover()
+    previous = np.asarray(value)[np.flatnonzero(BARS.isin(turnover.timestamp.values)) - 1]
+    return fills(turnover.timestamp.values, ["AAA"] * turnover.size, turnover.values * previous,
+                 np.ones(turnover.size))
+
+
+def _write(path, value, *, returns=None, metrics=None, weights=None, orders=None, rebalances=(),
+           bench=None, bench_returns=None, name="QQQ", folds=None):
+    """Write the page of a hand-built record on ``BARS``: the strategy ``value``, its fills and weights."""
+    write_backtest_report(
+        account(_series(value), returns=None if returns is None else _series(returns), orders=orders,
+                decided=rebalances, init_cash=1_000_000.0),
+        path,
+        title="t",
+        metrics=metrics,
+        weights=weights,
+        benchmark=None if bench is None else benchmark(
+            _series(bench), returns=None if bench_returns is None else _series(bench_returns), symbol=name),
+        folds=folds,
+    )
+    return path.read_text(encoding="utf-8")
 
 
 def _page(tmp_path, *, benchmark=True, in_sample=False, extra=None, portfolio=True):
     """Write a report and return its HTML with the paths it was drawn from."""
     r, b, value, bvalue = _paths()
-    kwargs = dict(
-        in_sample_range=(str(BARS[0].date()), str(BARS[99].date())) if in_sample else None,
-        notes=["a note"],
-        title="run",
-        metrics=_metrics(benchmark=benchmark, in_sample=in_sample, extra=extra),
-        returns=_series(r),
-        init_cash=1_000_000.0,
-        bars_per_year=252,
-    )
+    metrics = _metrics(benchmark=benchmark, in_sample=in_sample, extra=extra)
+    if in_sample:
+        metrics["in_sample_range"] = (str(BARS[0].date()), str(BARS[99].date()))
+    kwargs = dict(returns=r, metrics=metrics)
     if benchmark:
-        kwargs.update(benchmark_value=_series(bvalue), benchmark_returns=_series(b), benchmark_name="QQQ")
+        kwargs.update(bench=bvalue, bench_returns=b)
     if portfolio:
-        kwargs.update(weights=_weights(), turnover=_turnover(), rebalances=_rebalances())
-    path = tmp_path / "report.html"
-    write_backtest_report(_series(value), path, **kwargs)
-    return path.read_text(encoding="utf-8"), (r, b, value, bvalue)
+        kwargs.update(weights=_weights(), orders=_fills(value), rebalances=_rebalances())
+    return _write(tmp_path / "report.html", value, **kwargs), (r, b, value, bvalue)
 
 
 def _table(html, caption):
@@ -210,7 +231,7 @@ def test_drawdowns_are_negative_everywhere(tmp_path):
     html, _ = _page(tmp_path)
 
     assert _row(_table(html, "Strategy vs QQQ"), "Max drawdown")[1:3] == ["-34.32%", "-35.12%"]
-    assert _row(_table(html, f"Relative to QQQ"), "Excess max drawdown")[1] == "-35.99%"
+    assert _row(_table(html, "Relative to QQQ"), "Excess max drawdown")[1] == "-35.99%"
     assert re.search(r'class="kl">Max drawdown</div><div class="kv[^"]*">-34.32%', html)
 
 
@@ -247,11 +268,9 @@ def test_unknown_benchmark_and_relative_metrics_render_in_the_other_group(tmp_pa
     metrics["benchmark"]["whole"]["Bench Oddity"] = 2.5
     metrics["relative"]["whole"]["Relative Oddity [%]"] = 1.25
     r, b, value, bvalue = _paths()
-    path = tmp_path / "report.html"
-    write_backtest_report(_series(value), path, in_sample_range=None, notes=[], title="t", metrics=metrics,
-                          benchmark_value=_series(bvalue), benchmark_returns=_series(b), benchmark_name="QQQ")
+    html = _write(tmp_path / "report.html", value, metrics=metrics, bench=bvalue, bench_returns=b)
 
-    other = _table(path.read_text(encoding="utf-8"), "Other")
+    other = _table(html, "Other")
     assert _row(other, "QQQ: Bench Oddity")[1] == "2.5"
     assert _row(other, "relative: Relative Oddity [%]")[1] == "1.25%"
 
@@ -276,12 +295,11 @@ def test_with_an_in_sample_part_the_headline_numbers_are_out_of_sample(tmp_path)
 def test_the_end_value_card_note_comes_from_the_whole_window(tmp_path):
     metrics = _metrics(benchmark=False, in_sample=True)
     del metrics["out_of_sample"]["End Value"]
+    metrics["in_sample_range"] = (str(BARS[0].date()), str(BARS[99].date()))
     r, b, value, bvalue = _paths()
-    path = tmp_path / "report.html"
-    write_backtest_report(_series(value), path, in_sample_range=(str(BARS[0].date()), str(BARS[99].date())),
-                          notes=[], title="t", metrics=metrics)
+    html = _write(tmp_path / "report.html", value, metrics=metrics)
 
-    assert re.search(r'class="kl">Total return</div>.*?class="ks">end value 2,467,452<', path.read_text(), re.S)
+    assert re.search(r'class="kl">Total return</div>.*?class="ks">end value 2,467,452<', html, re.S)
 
 
 def test_every_chart_shades_the_in_sample_range(tmp_path):
@@ -364,11 +382,9 @@ def test_a_value_that_reaches_zero_leaves_a_gap_in_the_log_excess_instead_of_rai
     r, b, value, bvalue = _paths()
     value = value.copy()
     value[200:] = 0.0  # wiped out: the ratio (1 + r) / (1 + b) hits zero at bar 200
-    path = tmp_path / "report.html"
-    write_backtest_report(_series(value), path, in_sample_range=None, notes=[], title="t",
-                          benchmark_value=_series(bvalue), benchmark_returns=_series(b), benchmark_name="QQQ")
+    html = _write(tmp_path / "report.html", value, bench=bvalue, bench_returns=b)
 
-    traces, _ = _figure_with(path.read_text(encoding="utf-8"), "cumulative_excess_log")
+    traces, _ = _figure_with(html, "cumulative_excess_log")
     log = _y(traces["cumulative_excess_log"])
     assert np.isfinite(log[:200]).all() and np.isnan(log[200])
 
@@ -409,11 +425,10 @@ def test_a_symbol_left_nan_in_a_rebalance_row_counts_at_its_last_target(tmp_path
     rows = np.flatnonzero(np.isfinite(w).all(axis=1))
     w[rows[1]] = [np.nan, 0.25, 0.25]  # AAA kept at the previous row's 0.5
     weights = xr.DataArray(w, dims=("timestamp", "symbol"), coords={"timestamp": BARS, "symbol": SYMBOLS})
-    path = tmp_path / "report.html"
-    write_backtest_report(_series(value), path, in_sample_range=None, notes=[], title="t",
-                          weights=weights, turnover=_turnover(), rebalances=_rebalances())
+    html = _write(tmp_path / "report.html", value, weights=weights, orders=_fills(value),
+                  rebalances=_rebalances())
 
-    traces, _ = _figure_with(path.read_text(encoding="utf-8"), "holdings")
+    traces, _ = _figure_with(html, "holdings")
     assert len(_y(traces["holdings"])) == len(rows)
     assert _y(traces["holdings"])[1] == 3.0
     np.testing.assert_allclose(_y(traces["gross_exposure"])[1], 1.0)
@@ -425,11 +440,10 @@ def test_weights_below_a_tenth_of_a_percent_are_not_counted_as_holdings(tmp_path
     rows = np.flatnonzero(np.isfinite(w).all(axis=1))
     w[rows] = [0.4995, 0.5, 0.0005]  # the optimiser's residue on CCC
     weights = xr.DataArray(w, dims=("timestamp", "symbol"), coords={"timestamp": BARS, "symbol": SYMBOLS})
-    path = tmp_path / "report.html"
-    write_backtest_report(_series(value), path, in_sample_range=None, notes=[], title="t",
-                          weights=weights, turnover=_turnover(), rebalances=_rebalances())
+    html = _write(tmp_path / "report.html", value, weights=weights, orders=_fills(value),
+                  rebalances=_rebalances())
 
-    traces, _ = _figure_with(path.read_text(encoding="utf-8"), "holdings")
+    traces, _ = _figure_with(html, "holdings")
     assert set(_y(traces["holdings"])) == {2.0}
     assert (_y(traces["effective_holdings"]) < 2.01).all()
 
@@ -501,32 +515,40 @@ def test_rows_without_a_direction_or_with_a_tie_mark_nothing(tmp_path):
 # ------------------------------------------------------------------ timeline
 
 
-def _windows(n_folds, *, expanding=False, in_sample=True):
-    """Windows of a walk-forward run: 60-bar training windows, 20-bar test segments."""
-    BARS = pd.bdate_range("2020-01-01", periods=60 + 20 * n_folds + 2)  # noqa: N806
+def _walk_forward(n_folds, *, expanding=False, in_sample=True):
+    """A walk-forward run: 60-bar training windows, 20-bar test segments.
+
+    Returns the traded bars, the stitched block's split keys and the fold
+    rows, as ``write_backtest_report`` takes them.
+    """
+    bars = pd.bdate_range("2020-01-01", periods=60 + 20 * n_folds + 2)
     folds = []
     for i in range(n_folds):
         start = 0 if expanding else 20 * i
         test = 60 + 20 * i
         folds.append({
-            "label": f"fold {i}",
-            "training": [str(BARS[start].date()), str(BARS[test + 1].date())],
-            "traded": [str(BARS[test].date()), str(BARS[test + 19].date())],
-            "in_sample": [str(BARS[test].date()), str(BARS[test + 1].date())] if in_sample else None,
+            "fold": i,
+            "training_window": [str(bars[start].date()), str(bars[test + 1].date())],
+            "traded": [str(bars[test].date()), str(bars[test + 19].date())],
+            "in_sample_range": [str(bars[test].date()), str(bars[test + 1].date())] if in_sample else None,
         })
-    return {
-        "backtest": [folds[0]["traded"][0], folds[-1]["traded"][1]],
-        "bars": 20 * n_folds,
-        "in_sample": [fold["in_sample"] for fold in folds if fold["in_sample"]],
-        "out_of_sample": [[str(BARS[62 + 20 * i].date()), str(BARS[79 + 20 * i].date())] for i in range(n_folds)],
-        "folds": folds,
+    block = {
+        "in_sample_ranges": [fold["in_sample_range"] for fold in folds if fold["in_sample_range"]],
+        "out_of_sample_ranges": [[str(bars[62 + 20 * i].date()), str(bars[79 + 20 * i].date())]
+                                 for i in range(n_folds)],
     }
+    return bars[60 : 60 + 20 * n_folds], block, folds
 
 
-def _timeline_page(tmp_path, windows):
-    """Write a report carrying ``windows`` and return its HTML."""
+def _timeline_page(tmp_path, bars, block=None, folds=None):
+    """Write the page of an account on ``bars`` with the split keys ``block`` and ``folds``."""
+    from tests.report_records import series
+
     path = tmp_path / "report.html"
-    write_backtest_report(_series(_paths()[2]), path, in_sample_range=None, notes=[], title="t", windows=windows)
+    write_backtest_report(
+        account(series(np.linspace(1.0, 2.0, len(bars)), bars)), path, title="t",
+        metrics={"stitched": block} if folds is not None else block, folds=folds,
+    )
     return path.read_text(encoding="utf-8")
 
 
@@ -537,29 +559,32 @@ def _tooltips(html):
 
 
 def test_a_walk_forward_run_draws_one_timeline_row_per_fold(tmp_path):
-    windows = _windows(10)
-    tips = _tooltips(_timeline_page(tmp_path, windows))
+    folds = _walk_forward(10)[2]
+    tips = _tooltips(_timeline_page(tmp_path, *_walk_forward(10)))
 
-    for fold in windows["folds"]:
-        assert f"{fold['label']} training {fold['training'][0]} .. {fold['training'][1]}" in tips
-        assert f"{fold['label']} traded {fold['traded'][0]} .. {fold['traded'][1]}" in tips
-        assert f"{fold['label']} in-sample {fold['in_sample'][0]} .. {fold['in_sample'][1]}" in tips
+    for fold in folds:
+        label = f"fold {fold['fold']}"
+        assert f"{label} training {fold['training_window'][0]} .. {fold['training_window'][1]}" in tips
+        assert f"{label} traded {fold['traded'][0]} .. {fold['traded'][1]}" in tips
+        assert f"{label} in-sample {fold['in_sample_range'][0]} .. {fold['in_sample_range'][1]}" in tips
     assert sum(tip.startswith("out-of-sample ") for tip in tips) == 10
     assert sum(tip.startswith("in-sample ") for tip in tips) == 10
 
 
 def test_the_timeline_caption_names_the_window_and_the_kind_of_cv(tmp_path):
-    sliding = _timeline_page(tmp_path, _windows(10))
-    expanding = _timeline_page(tmp_path, _windows(10, expanding=True))
+    sliding = _timeline_page(tmp_path, *_walk_forward(10))
+    expanding = _timeline_page(tmp_path, *_walk_forward(10, expanding=True))
 
     assert "(200 bars); 10 folds, sliding training window" in sliding
     assert "10 folds, expanding training window" in expanding
 
 
 def test_a_model_backtest_is_one_row_of_training_and_traded_bars(tmp_path):
-    windows = _windows(1)
-    windows["folds"][0]["label"] = "model"
-    html = _timeline_page(tmp_path, windows)
+    bars, block, (fold,) = _walk_forward(1)
+    html = _timeline_page(tmp_path, bars, {
+        "training_window": fold["training_window"], "in_sample_range": fold["in_sample_range"],
+        "out_of_sample_ranges": block["out_of_sample_ranges"],
+    })
 
     tips = _tooltips(html)
     assert [" ".join(tip.split(" ")[:2]) for tip in tips] == ["model training", "model out-of-sample", "model in-sample"]
@@ -568,7 +593,7 @@ def test_a_model_backtest_is_one_row_of_training_and_traded_bars(tmp_path):
 
 
 def test_a_run_without_a_model_is_one_row_of_traded_bars_and_a_one_entry_legend(tmp_path):
-    html = _timeline_page(tmp_path, {"backtest": ["2020-01-02", "2020-06-30"], "bars": 125, "folds": []})
+    html = _timeline_page(tmp_path, pd.bdate_range("2020-01-02", "2020-06-30"))
 
     assert _tooltips(html) == ["traded 2020-01-02 .. 2020-06-30"]
     legend = html[html.index('<div class="legend">') : html.index("</div></div>", html.index('<div class="legend">'))]
@@ -576,23 +601,23 @@ def test_a_run_without_a_model_is_one_row_of_traded_bars_and_a_one_entry_legend(
 
 
 def test_the_legend_lists_only_the_kinds_drawn(tmp_path):
-    html = _timeline_page(tmp_path, _windows(3, in_sample=False))
+    html = _timeline_page(tmp_path, *_walk_forward(3, in_sample=False))
 
     legend = html[html.index('<div class="legend">') : html.index("</div></div>", html.index('<div class="legend">'))]
     assert re.findall(r"</span>([^<]+)</span>", legend) == ["training", "traded, out-of-sample"]
 
 
 def test_labels_with_a_utc_offset_share_the_axis_and_nothing_raises(tmp_path):
-    windows = _windows(3)
-    windows["backtest"] = [f"{windows['backtest'][0]}T14:30:00+00:00", f"{windows['backtest'][1]}T21:00:00+00:00"]
-    windows["folds"][0]["training"] = [f"{d}T14:30:00-05:00" for d in windows["folds"][0]["training"]]
-    tips = _tooltips(_timeline_page(tmp_path, windows))
+    bars, block, folds = _walk_forward(3)
+    bars = bars + pd.Timedelta(hours=14, minutes=30)  # intraday bars: full ISO labels
+    folds[0]["training_window"] = [f"{d}T14:30:00-05:00" for d in folds[0]["training_window"]]
+    tips = _tooltips(_timeline_page(tmp_path, bars, block, folds))
 
     assert any(tip.startswith("fold 0 training") and "-05:00" in tip for tip in tips)
 
 
 def test_many_folds_shrink_the_rows_and_name_every_fifth(tmp_path):
-    html = _timeline_page(tmp_path, _windows(30))
+    html = _timeline_page(tmp_path, *_walk_forward(30))
 
     block = html[html.index("<h2>Windows</h2>") : html.index("</svg>")]
     names = re.findall(r">(fold \d+)</text>", block)
@@ -602,27 +627,25 @@ def test_many_folds_shrink_the_rows_and_name_every_fifth(tmp_path):
 
 
 def test_a_window_that_does_not_parse_is_left_out_and_nothing_raises(tmp_path):
-    windows = _windows(3)
-    windows["folds"][1]["training"] = ["not a date", None]
-    windows["folds"][2]["traded"] = "2024"
-    tips = _tooltips(_timeline_page(tmp_path, windows))
+    bars, block, folds = _walk_forward(3)
+    folds[1]["training_window"] = ["not a date", None]
+    folds[2]["traded"] = "2024"
+    tips = _tooltips(_timeline_page(tmp_path, bars, block, folds))
 
     assert not any(tip.startswith("fold 1 training") for tip in tips)
     assert not any(tip.startswith("fold 2 traded") for tip in tips)
     assert any(tip.startswith("fold 0 training") for tip in tips)
 
 
-def test_without_windows_there_is_no_timeline(tmp_path):
+def test_every_page_has_a_timeline_of_its_bars(tmp_path):
     html, _ = _page(tmp_path)
-    assert "<h2>Windows</h2>" not in html
+    assert "<h2>Windows</h2>" in html
+    assert f"traded {BARS[0].date()} .. {BARS[-1].date()}" in _tooltips(html)
 
 
 def test_the_timeline_axis_labels_every_other_year_over_thirteen_years(tmp_path):
-    windows = {
-        "backtest": ["2020-01-02", "2024-12-31"],
-        "folds": [{"label": "model", "training": ["2012-01-03", "2019-12-31"], "traded": ["2020-01-02", "2024-12-31"]}],
-    }
-    html = _timeline_page(tmp_path, windows)
+    html = _timeline_page(tmp_path, pd.bdate_range("2020-01-02", "2024-12-31"),
+                          {"training_window": ["2012-01-03", "2019-12-31"]})
 
     block = html[html.index("<h2>Windows</h2>") : html.index("</svg>")]
     assert re.findall(r'text-anchor="middle">([^<]+)</text>', block) == ["2014", "2016", "2018", "2020", "2022", "2024"]
