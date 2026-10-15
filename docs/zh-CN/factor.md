@@ -623,6 +623,23 @@ monthly.build("2016-10-11", "2026-10-13")
 
 在 S&P 500 名单（783 个 permaticker）上，训练服务器单进程算一个季度的分钟数据约 43 秒，其中读取和映射 bar 占 34 秒，KunQuant 占 4 秒。算一个月约占 2.6 个核、4 GB 内存，所以按月并行构建：24 个工作进程、每个 4 线程，十年用 645 秒；12 个工作进程算 2024 全年用 68 秒。
 
+`IntradayComposite` 把一个已存储因子的滚动统计量组合成等权的截面排名合成因子（`IntradayCompositeConfig`：`factor`、`composites`）。每个输出把自己的组成部分写成 `"[-]<输出>:<mean|cv>:<窗口>"`：某个已存储输出在 `window` 根 bar 上的滚动均值或变异系数（样本标准差除以均值），跳过缺失值，有值的 bar 不到窗口一半时为 NaN（store 还不满一个窗口时也是 NaN），前面加 `-` 表示取负。每个部分先在该 bar 的所有标的之间排名（KunQuant `Rank`，取值在 (0, 1] 的百分位），输出是各部分排名的均值，任一部分缺失时为 NaN。排名覆盖被包装面板里的所有标的，所以要在全市场上构建，再按名单读取。2026-10-15 的 us3000 实验用全市场的分钟统计量构建了五个这样的日频因子，每个在 us3000 成员上的 20 日 RankIC 都高于 0.03：
+
+```python
+from quantlab.factor.config import IntradayCompositeConfig
+from quantlab.factor.predefined.intraday import IntradayComposite
+
+signals = IntradayComposite(IntradayCompositeConfig(
+    factor=daily,
+    composites={
+        "hf_small_lit_trades": ("-trade_size:mean:60", "-offexchange_share:mean:60"),
+        "hf_efficiency": ("ret_autocorr:mean:120", "corr_rv:mean:120", "-corr_pv:mean:60"),
+    },
+    file_path=str(store_path(FACTORS, "intraday_signals")),
+))
+signals.build("2016-10-11", "2026-10-13")
+```
+
 ### 已有的因子
 
 | 类 | 后端 | 说明 |
@@ -633,7 +650,7 @@ monthly.build("2016-10-11", "2026-10-13")
 | `ResidualMomentumFF3` | KunQuant | Fama-French 三因子残差动量；因子序列来自 Fama-French CSV 或面板本身 |
 | `BarraStyle` | KunQuant | USE4 风格暴露：20 个标准化描述子和 12 个风格因子（Size、Beta、Momentum、Residual Volatility、Non-linear Size、Non-linear Beta、Liquidity、Dividend Yield、Book-to-Price、Earnings Yield、Leverage、Growth；Residual Volatility 和两个非线性因子已正交化）以及估计域标记，双精度计算。读取价格与分红（SEP）、市值（DAILY）、八个 SF1 ART 基本面字段、财年历史和无风险利率：见 `BarraStyleParameters().panel_columns`。缺失的风格因子按行业和 Size 插补，然后每个风格再标准化一次，并原样输出时点行业代码 `industry`。与 USE4 的偏离：Earnings Yield 和 Growth 用的是滚动与历史口径，没有分析师预测描述子；CETOP 的现金收益取 `netinccmn + depamor`；优先股取 0；只支持批量 |
 | `BenchmarkBeta` | xarray | 单 bar 收益对单标的基准的滚动 OLS beta；配置类 `BenchmarkBetaConfig` |
-| `IntradayStats`、`IntradayAverage` | KunQuant | 一分钟 bar 的日内统计量（用 `"last"` 重采样到 `"1d"`），以及已存储因子最近若干交易日的均值；均值的配置类是 `IntradayAverageConfig` |
+| `IntradayStats`、`IntradayAverage`、`IntradayComposite` | KunQuant | 一分钟 bar 的日内统计量（用 `"last"` 重采样到 `"1d"`）、已存储因子最近若干交易日的均值，以及它们滚动均值或变异系数的截面排名等权合成；配置类 `IntradayAverageConfig`、`IntradayCompositeConfig` |
 | `LiteratureAlpha` | KunQuant | 覆盖价格、风险、流动性、基本面和盈利事件的 8 个原始值/排名因子 |
 | `MarketFeatures` | xarray | 每个指数或 ETF 序列 21 个收益和成交额特征，每个有 bar 的标的取值相同；配置类 `MarketFeatureConfig` |
 | `Forward` | 任意 | 把一个因子向前平移成标签 |

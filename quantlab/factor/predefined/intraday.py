@@ -91,6 +91,7 @@ from KunQuant.Op import (
     IterValue,
     OpBase,
     Output,
+    Rank,
     WindowedTempOutput,
     WindowLoopIndex,
 )
@@ -110,7 +111,7 @@ from KunQuant.ops import (
 from KunQuant.Stage import Function
 
 from quantlab.factor.base import Factor
-from quantlab.factor.config import IntradayAverageConfig
+from quantlab.factor.config import IntradayAverageConfig, IntradayCompositeConfig
 from quantlab.factor.kunquant import FactorKunQuant, run_batch_graph
 from quantlab.utils.date_range import as_label, check_range
 
@@ -666,4 +667,222 @@ class IntradayAverage(Factor):
                 total = WindowedSum(_zero_if_missing(value), window)
                 count = WindowedSum(_present(value), window)
                 Output(Select(LessThan(count, ConstantOp(least)), ConstantOp("nan"), total / count), name)
+        return Function(builder.ops)
+
+
+#: Statistics a part of an ``IntradayComposite`` takes over its window.
+COMPOSITE_STATISTICS = ("mean", "cv")
+
+
+@dataclass(frozen=True)
+class CompositePart:
+    """One part of an ``IntradayComposite`` output, parsed from ``"[-]<output>:<statistic>:<window>"``.
+
+    Examples
+    --------
+    >>> CompositePart.parse("-trade_size:mean:60")
+    CompositePart(output='trade_size', statistic='mean', window=60, sign=-1.0)
+    """
+
+    output: str
+    statistic: str
+    window: int
+    sign: float
+
+    @classmethod
+    def parse(cls, text: str) -> "CompositePart":
+        """Parse ``"[-]<output>:<statistic>:<window>"``.
+
+        Raises
+        ------
+        ValueError
+            If the text has not three ``:``-separated fields, the statistic
+            is not one of ``COMPOSITE_STATISTICS`` or the window is not an
+            integer of at least 2.
+
+        Examples
+        --------
+        >>> CompositePart.parse("auction_share:cv:120").sign
+        1.0
+        """
+        fields_ = str(text).split(":")
+        if len(fields_) != 3:
+            raise ValueError(f"composite part {text!r} is not '[-]<output>:<statistic>:<window>'")
+        output, statistic, window = fields_
+        sign = -1.0 if output.startswith("-") else 1.0
+        output = output.lstrip("-")
+        if statistic not in COMPOSITE_STATISTICS:
+            raise ValueError(f"composite part {text!r}: statistic must be one of {COMPOSITE_STATISTICS}")
+        if not window.isdigit() or int(window) < 2:
+            raise ValueError(f"composite part {text!r}: window must be an integer of at least 2")
+        return cls(output, statistic, int(window), sign)
+
+    @property
+    def min_count(self) -> int:
+        """Fewest present values the window needs: half of it, rounded up."""
+        return (self.window + 1) // 2
+
+
+class IntradayComposite(Factor):
+    """Equal-weight combinations of the cross-sectional ranks of trailing statistics of a stored factor.
+
+    Meant for a resampled ``IntradayStats``. Each output combines its parts
+    (``IntradayCompositeConfig.composites``): a part is the trailing mean,
+    or the coefficient of variation (sample standard deviation over mean),
+    of one stored output over ``window`` bars, missing values skipped and
+    NaN with fewer than half the window present; negated when its sign is
+    ``-``; then ranked across the symbols of the bar (KunQuant ``Rank``, in
+    ``(0, 1]``, over the symbols with a value). The output is the mean of
+    its parts' ranks, NaN when any part is missing: the usual way to join
+    weak, partly independent signals without fitting weights. Ranks are
+    taken over every symbol of the wrapped factor's panel, so compute it on
+    the whole market and read it on a roster (``RosterFactor``,
+    ``MembershipMaskedFactor``).
+
+    The wrapped factor's store is read from ``max(window) - 1`` stored bars
+    before ``start`` to ``end``, so it must be built over the range first.
+    The first ``window - 1`` bars of the store are NaN in every part that
+    window covers.
+
+    Parameters
+    ----------
+    config : IntradayCompositeConfig
+        The wrapped ``factor`` and the ``composites``.
+
+    Raises
+    ------
+    ValueError
+        If ``warmup_bars`` is not 0, the config is resampled, there is no
+        composite, a composite has no part, or a part does not parse or
+        names an output the wrapped factor lacks.
+
+    Examples
+    --------
+    >>> signals = IntradayComposite(IntradayCompositeConfig(factor=daily, composites={
+    ...     "small_lit_trades": ("-trade_size:mean:60", "-offexchange_share:mean:60"),
+    ... }))
+    >>> signals.get_factor_names()
+    ('small_lit_trades',)
+    """
+
+    #: The config class ``from_config`` rebuilds this factor with.
+    config_cls = IntradayCompositeConfig
+
+    # Narrower type annotation for readers and type checkers only.
+    config: IntradayCompositeConfig
+
+    @Factor.config.setter
+    def config(self, config: IntradayCompositeConfig):
+        """Install ``config`` with the wrapped factor's dataset and the parts as tuples."""
+        composites = {str(name): tuple(str(part) for part in parts) for name, parts in config.composites.items()}
+        Factor.config.fset(
+            self,
+            dataclasses.replace(config, dataset=config.factor.config.dataset, composites=composites),
+        )
+
+    def _validate_config(self) -> None:
+        """Refuse a warm-up, resampling, no composite and parts that do not parse or name no output."""
+        config = self.config
+        if config.warmup_bars != 0:
+            raise ValueError(
+                f"{self.class_name}: warmup_bars must be 0, got {config.warmup_bars}; "
+                f"the windows' history is read from the wrapped store."
+            )
+        if config.resample_freq is not None:
+            raise ValueError(f"{self.class_name}: cannot be resampled; combine a resampled factor.")
+        if not config.composites:
+            raise ValueError(f"{self.class_name}: composites is empty; name at least one.")
+        outputs = set(config.factor.get_factor_names())
+        for name, parts in config.composites.items():
+            if not parts:
+                raise ValueError(f"{self.class_name}: composite {name!r} has no part.")
+            for part in self._parts(name):
+                if part.output not in outputs:
+                    raise ValueError(
+                        f"{self.class_name}: composite {name!r} names {part.output!r}, not an "
+                        f"output of {config.factor.class_name}."
+                    )
+
+    def _parts(self, name: str) -> list[CompositePart]:
+        """Return the parsed parts of composite ``name``."""
+        return [CompositePart.parse(part) for part in self.config.composites[name]]
+
+    def _get_factor_names(self) -> tuple[str, ...]:
+        """Return the composites' names."""
+        return tuple(self.config.composites)
+
+    def output_symbols(self) -> list:
+        """Return the wrapped factor's output symbols.
+
+        Examples
+        --------
+        >>> signals.output_symbols() == daily.output_symbols()
+        True
+        """
+        return self.config.factor.output_symbols()
+
+    def compute(self, start, end) -> xr.Dataset:
+        """Combine the wrapped store's statistics from ``start`` to ``end``, both inclusive.
+
+        Raises
+        ------
+        ValueError
+            If ``start`` is after ``end``, the wrapped factor has no store or
+            its store does not cover ``end``.
+
+        Examples
+        --------
+        >>> signals.compute("2024-06-03", "2024-06-28")["small_lit_trades"].sizes["timestamp"]
+        19
+        """
+        first, _ = check_range(start, end, f"{self.class_name}.compute()")
+        factor = self.config.factor
+        recorded = factor.store_range()
+        if recorded is None:
+            raise ValueError(
+                f"{self.class_name}.compute(): {factor.class_name} has no store at "
+                f"{factor.store_path}; build it first."
+            )
+        parts = [part for name in self.config.factor_names for part in self._parts(name)]
+        sources = sorted({part.output for part in parts})
+        longest = max(part.window for part in parts)
+        stored = factor.read(recorded[0], end)[sources]
+        stamps = pd.DatetimeIndex(stored["timestamp"].values)
+        lo = max(int(stamps.searchsorted(first)) - (longest - 1), 0)
+        inputs = stored.isel(timestamp=slice(lo, None)).load()
+        timestamps, symbols = inputs["timestamp"].values, inputs["symbol"].values
+        arrays = {
+            name: np.ascontiguousarray(inputs[name].transpose("timestamp", "symbol").values, dtype=np.float32)
+            for name in sources
+        }
+        panel = run_batch_graph(self.class_name, self._function(), arrays, timestamps, symbols, self.config.njobs)
+        return panel[list(self.config.factor_names)].sel(timestamp=slice(as_label(start), as_label(end)))
+
+    def _function(self) -> Function:
+        """Build the graph: each part's windowed statistic, its rank, the mean of the ranks."""
+        builder = Builder()
+        with builder:
+            nan = ConstantOp("nan")
+            inputs: dict[str, OpBase] = {}
+            for name in self.config.factor_names:
+                ranks = []
+                for part in self._parts(name):
+                    if part.output not in inputs:
+                        inputs[part.output] = Input(part.output)
+                    value = inputs[part.output]
+                    count = WindowedSum(_present(value), part.window)
+                    total = WindowedSum(_zero_if_missing(value), part.window)
+                    mean = total / count
+                    if part.statistic == "mean":
+                        statistic = mean
+                    else:
+                        squares = WindowedSum(_zero_if_missing(value * value), part.window)
+                        variance = (squares - total * mean) / (count - 1.0)
+                        statistic = _ratio(Sqrt(Max(variance, ConstantOp(0.0))), mean)
+                    statistic = Select(LessThan(count, ConstantOp(float(part.min_count))), nan, statistic)
+                    ranks.append(Rank(statistic * part.sign))
+                combined = ranks[0]
+                for rank in ranks[1:]:
+                    combined = combined + rank
+                Output(combined * (1.0 / len(ranks)), name)
         return Function(builder.ops)

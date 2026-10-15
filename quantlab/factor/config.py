@@ -8,7 +8,7 @@ factor's ``series``, a neutralized factor's ``factor``) is declared with
 ``component()`` and written as its own config.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 from quantlab.core.component import component
@@ -374,5 +374,41 @@ class IntradayAverageConfig(BaseFactorConfig):
     window: int = 20
     #: Fewest present values a window needs; fewer gives NaN.
     min_count: int = 10
+    #: Threads used by the KunQuant executor.
+    njobs: int = 128
+
+
+@dataclass(kw_only=True, frozen=True)
+class IntradayCompositeConfig(BaseFactorConfig):
+    """Config of ``quantlab.factor.predefined.intraday.IntradayComposite``.
+
+    ``factor`` is the factor whose stored daily values are combined, usually
+    a resampled ``IntradayStats``; it keeps its own config and store, which
+    must cover the range asked for. ``composites`` maps each output name to
+    its parts, each a string ``"[-]<output>:<statistic>:<window>"``: a
+    trailing ``mean`` or ``cv`` (standard deviation over mean) of one of the
+    wrapped factor's outputs over ``window`` bars, negated by a leading
+    ``-``. ``dataset`` is filled with the wrapped factor's dataset.
+
+    Examples
+    --------
+    With ``daily`` an ``IntradayStats`` resampled to ``"1d"``:
+
+    >>> cfg = IntradayCompositeConfig(
+    ...     factor=daily,
+    ...     composites={"small_lit_trades": ("-trade_size:mean:60", "-offexchange_share:mean:60")},
+    ... )
+    >>> cfg.warmup_bars, cfg.composites["small_lit_trades"][0]
+    (0, '-trade_size:mean:60')
+    """
+
+    #: The windows' history is read from the wrapped store; anything but 0 is refused.
+    warmup_bars: int = 0
+    #: Filled with the wrapped factor's dataset by the factor's config setter.
+    dataset: "MarketDataset | None" = component(default=None)
+    #: The factor whose stored values are combined.
+    factor: "Factor" = component()
+    #: Output name to its parts, each ``"[-]<output>:<mean|cv>:<window>"``.
+    composites: dict = field(default_factory=dict)
     #: Threads used by the KunQuant executor.
     njobs: int = 128

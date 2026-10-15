@@ -623,6 +623,23 @@ monthly.build("2016-10-11", "2026-10-13")
 
 On the S&P 500 roster (783 permatickers) a quarter of minute bars computes in about 43 s in one process on the training server, 34 s of it reading and mapping the bars and 4 s in KunQuant; a month takes about 2.6 cores and 4 GB, so the build runs months in parallel: 24 workers of 4 threads built ten years in 645 s, and 12 workers built 2024 in 68 s.
 
+`IntradayComposite` combines trailing statistics of a stored factor into equal-weight rank composites (`IntradayCompositeConfig`: `factor`, `composites`). Each output names its parts as `"[-]<output>:<mean|cv>:<window>"`: the trailing mean, or the coefficient of variation (sample standard deviation over mean), of one stored output over `window` bars, missing values skipped and NaN with fewer than half the window present (and before the store holds a whole window), negated by a leading `-`. Each part is ranked across the bar's symbols (KunQuant `Rank`, a percentile in (0, 1]), and the output is the mean of its parts' ranks, NaN when a part is missing. The ranks are taken over every symbol of the wrapped panel, so build it on the whole market and read it on a roster. The us3000 experiment of 2026-10-15 built five such daily factors on the market's minute statistics, each with a 20-session rank IC above 0.03 on the us3000 members:
+
+```python
+from quantlab.factor.config import IntradayCompositeConfig
+from quantlab.factor.predefined.intraday import IntradayComposite
+
+signals = IntradayComposite(IntradayCompositeConfig(
+    factor=daily,
+    composites={
+        "hf_small_lit_trades": ("-trade_size:mean:60", "-offexchange_share:mean:60"),
+        "hf_efficiency": ("ret_autocorr:mean:120", "corr_rv:mean:120", "-corr_pv:mean:60"),
+    },
+    file_path=str(store_path(FACTORS, "intraday_signals")),
+))
+signals.build("2016-10-11", "2026-10-13")
+```
+
 ### Shipped factors
 
 | Class | Backend | Notes |
@@ -633,7 +650,7 @@ On the S&P 500 roster (783 permatickers) a quarter of minute bars computes in ab
 | `ResidualMomentumFF3` | KunQuant | Fama-French three-factor residual momentum; the factor series come from a Fama-French CSV or from the panel |
 | `BarraStyle` | KunQuant | USE4-style exposures: 20 standardized descriptors and the 12 styles (Size, Beta, Momentum, Residual Volatility, Non-linear Size, Non-linear Beta, Liquidity, Dividend Yield, Book-to-Price, Earnings Yield, Leverage, Growth; Residual Volatility and the non-linear ones orthogonalized) and the estimation-universe mask, in double precision. Reads prices and dividends (SEP), market cap (DAILY), eight SF1 ART fundamentals, the fiscal-year history and a risk-free rate: `BarraStyleParameters().panel_columns`. Missing styles are imputed from industry and Size, then every style is standardized again, and the point-in-time `industry` code is passed through. Deviations from USE4: Earnings Yield and Growth are the trailing and historical versions, without the analyst-forecast descriptors; CETOP's cash earnings are `netinccmn + depamor`; preferred equity is 0; batch only |
 | `BenchmarkBeta` | xarray | rolling OLS beta of one-bar returns on a single-symbol benchmark; config class `BenchmarkBetaConfig` |
-| `IntradayStats`, `IntradayAverage` | KunQuant | session statistics of one-minute bars (resample to `"1d"` with `"last"`) and their mean over the last sessions of a stored factor; config class of the mean `IntradayAverageConfig` |
+| `IntradayStats`, `IntradayAverage`, `IntradayComposite` | KunQuant | session statistics of one-minute bars (resample to `"1d"` with `"last"`), their mean over the last sessions of a stored factor, and equal-weight composites of the cross-sectional ranks of their trailing means or coefficients of variation; config classes `IntradayAverageConfig`, `IntradayCompositeConfig` |
 | `LiteratureAlpha` | KunQuant | Eight raw/ranked equity characteristics spanning price, risk, liquidity, fundamentals and earnings events |
 | `MarketFeatures` | xarray | 21 return and amount features per index or ETF series, the same for every symbol with a bar; config class `MarketFeatureConfig` |
 | `Forward` | any | shifts a factor forward into a label |
