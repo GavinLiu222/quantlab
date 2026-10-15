@@ -178,7 +178,7 @@ def test_a_resampled_panel_equals_resampling_the_permaticker_panel(built):
 
     trade_bars, _, dataset = built
     minute = dataset.panel("2024-11-27", "2024-11-30")
-    labels = pd.Series(trade_bars._resample_labels(minute.timestamp.values, "1h"), index=minute.timestamp.values)
+    labels = pd.Series(trade_bars.resample_labels(minute.timestamp.values, "1h"), index=minute.timestamp.values)
     expected = XrBackend().to_internal(minute).resample(labels, dict(trade_bars.DEFAULT_RESAMPLE_HOW)).data
     hourly = dataset.resample("1h").panel("2024-11-27", "2024-11-30")
     xr.testing.assert_identical(hourly.load(), expected.sel(timestamp=hourly.timestamp).load())
@@ -232,3 +232,17 @@ def test_the_view_has_the_trade_bars_calendar_and_market_rules(built):
     panel = dataset.panel("2024-11-27", "2024-11-30")
     assert dataset.tradable_bars(panel, "close").dims == ("timestamp", "symbol")
     assert dataset.delisting_bars(panel, "close").dims == ("timestamp", "symbol")
+
+
+def test_a_resampled_view_counts_its_own_bars(built):
+    """The daily resample's calendar is one bar per session, as its panel.
+
+    RED under: the Trade bar store's one-minute calendar answering for the resampled view.
+    """
+    daily = built[2].resample("1d")
+
+    calendar = daily.calendar("2024-11-27", "2024-11-30")
+
+    assert len(calendar) == 2
+    assert calendar.equals(daily.panel("2024-11-27", "2024-11-30").indexes["timestamp"])
+    assert daily.bar_before(calendar[1], 1) == calendar[0]

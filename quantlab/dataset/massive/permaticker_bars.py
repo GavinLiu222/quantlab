@@ -196,7 +196,7 @@ class PermatickerTradeBarDataset(MarketDataset):
         )
         fills = self.trade_bars._widen_fill_values()
         timestamps = bars["timestamp"].values
-        days = pd.DatetimeIndex(self.trade_bars._resample_labels(timestamps, "1d")).date if timestamps.size else []
+        days = pd.DatetimeIndex(self.trade_bars.resample_labels(timestamps, "1d")).date if timestamps.size else []
         by_day = {day: frame for (day,), frame in rows.partition_by("date", as_dict=True).items()}
         pieces = []
         missing = []
@@ -242,7 +242,7 @@ class PermatickerTradeBarDataset(MarketDataset):
         bars = self.trade_bars.panel(
             days[0], days[-1] + timedelta(days=1), symbols=tickers, variables=["volume"]
         )
-        session = pd.DatetimeIndex(self.trade_bars._resample_labels(bars["timestamp"].values, "1d")).date
+        session = pd.DatetimeIndex(self.trade_bars.resample_labels(bars["timestamp"].values, "1d")).date
         frame = bars["volume"].to_pandas().groupby(session).sum()
         return {day: {ticker: float(volume) for ticker, volume in row.items()} for day, row in frame.iterrows()}
 
@@ -351,12 +351,15 @@ class PermatickerTradeBarDataset(MarketDataset):
     # -- the Trade bar dataset's market rules ---------------------------------
 
     def _calendar(self) -> pd.DatetimeIndex:
-        """Return the Trade bar dataset's calendar."""
-        return self.trade_bars._calendar()
+        """Return the Trade bar dataset's calendar, on this view's resampled bars when resampled."""
+        calendar = self.trade_bars._calendar()
+        if self.config.resample_freq is None:
+            return calendar
+        return pd.DatetimeIndex(np.unique(self.resample_labels(calendar.values, self.config.resample_freq)))
 
-    def _resample_labels(self, timestamps: np.ndarray, freq: str) -> np.ndarray:
+    def resample_labels(self, timestamps: np.ndarray, freq: str) -> np.ndarray:
         """Return the bars the Trade bar dataset cuts ``timestamps`` into."""
-        return self.trade_bars._resample_labels(timestamps, freq)
+        return self.trade_bars.resample_labels(timestamps, freq)
 
     def _to_kunquant(self, data: xr.Dataset, data_columns: tuple[str, ...]) -> tuple[dict, np.ndarray, np.ndarray]:
         """Export the columns as the Trade bar dataset does."""

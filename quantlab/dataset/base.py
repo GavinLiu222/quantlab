@@ -844,13 +844,17 @@ class BaseDataset(Component, ABC):
                 f"or update the source dataset, then resample it."
             )
 
-    def _resample_labels(self, timestamps: np.ndarray, freq: str) -> np.ndarray:
+    def resample_labels(self, timestamps: np.ndarray, freq: str) -> np.ndarray:
         """Return the bar each source timestamp belongs to when resampled.
 
-        The default floors each timestamp on the UTC clock, labelling a bar
-        at its start; that suits bars stamped at their open time and daily
-        stores stamped at midnight. A dataset whose bars follow trading
-        sessions, or are labelled at their end, overrides this.
+        How this dataset cuts its bars onto ``freq``: its own resample, a
+        factor computed on it (``Factor.resample``) and a view over it all
+        cut them here, so they agree. The default floors each timestamp on
+        the UTC clock, labelling a bar at its start; that suits bars stamped
+        at their open time and daily stores stamped at midnight. A dataset
+        whose bars follow trading sessions, or are labelled at their end,
+        overrides this (``MassiveTradeBarDataset`` and ``NbboPanelDataset``
+        cut by session); a view answers as its inputs do.
 
         Parameters
         ----------
@@ -863,6 +867,13 @@ class BaseDataset(Component, ABC):
         -------
         np.ndarray
             One target timestamp per source timestamp.
+
+        Examples
+        --------
+        >>> bars = pd.to_datetime(["2024-01-02 09:00", "2024-01-02 15:00", "2024-01-03 10:00"])
+        >>> ds.resample_labels(bars.values, "1d")
+        array(['2024-01-02T00:00:00.000000', '2024-01-02T00:00:00.000000',
+               '2024-01-03T00:00:00.000000'], dtype='datetime64[us]')
         """
         return clock_labels(timestamps, freq)
 
@@ -888,7 +899,7 @@ class BaseDataset(Component, ABC):
             self.config.resample_how or dict(self.DEFAULT_RESAMPLE_HOW or {}),
             list(data.data_vars), self.class_name,
         )
-        labels = pd.Series(self._resample_labels(timestamps, freq), index=timestamps)
+        labels = pd.Series(self.resample_labels(timestamps, freq), index=timestamps)
         with Timer(f"{self.__class__.__name__}: resample to {freq}"):
             return XrBackend().to_internal(data).resample(labels, how).data
 
@@ -1234,7 +1245,7 @@ class BaseDataset(Component, ABC):
         timestamps = self._open_store(self._read_store())["timestamp"].values
         if not self._resamples_on_read():
             return pd.DatetimeIndex(timestamps)
-        labels = self._resample_labels(timestamps, self.config.resample_freq)
+        labels = self.resample_labels(timestamps, self.config.resample_freq)
         return pd.DatetimeIndex(np.unique(labels))
 
     def save(self, **kwargs):

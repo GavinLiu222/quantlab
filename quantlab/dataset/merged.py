@@ -290,7 +290,7 @@ class MergedDataset(MarketDataset):
         calendars = [dataset._calendar() for dataset in self.datasets]
         return pd.DatetimeIndex(np.unique(np.concatenate([c.values for c in calendars])))
 
-    def _resample_labels(self, timestamps: np.ndarray, freq: str) -> np.ndarray:
+    def resample_labels(self, timestamps: np.ndarray, freq: str) -> np.ndarray:
         """Return the bar each timestamp belongs to, as every input cuts bars.
 
         Raises
@@ -299,7 +299,7 @@ class MergedDataset(MarketDataset):
             If two inputs cut the timestamps into different bars (a UTC
             clock and trading sessions, say).
         """
-        labels = [d._resample_labels(timestamps, freq) for d in self.datasets]
+        labels = [d.resample_labels(timestamps, freq) for d in self.datasets]
         for dataset, other in zip(self.datasets[1:], labels[1:]):
             if not np.array_equal(labels[0], other):
                 raise ValueError(

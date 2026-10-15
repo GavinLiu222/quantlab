@@ -202,11 +202,17 @@ class MappedTradeBarDataset(MarketDataset):
 
     def _open(self) -> xr.Dataset:
         """Open the store lazily."""
-        if not Path(self.store_path).exists():
-            raise FileNotFoundError(
-                f"{self.class_name}: no store at {self.store_path}; write it with update()."
-            )
-        return xr.open_zarr(self.store_path)
+        return self._open_store(self.store_path)
+
+    def _open_store(self, path: str) -> xr.Dataset:
+        """Open the store at ``path`` lazily, refusing a store ``update()`` has not written.
+
+        The read root opens its calendar through this, so a resampled
+        dataset's calendar is its store's bars resampled.
+        """
+        if not Path(path).exists():
+            raise FileNotFoundError(f"{self.class_name}: no store at {path}; write it with update().")
+        return xr.open_zarr(path)
 
     def _recorded(self) -> dict[str, str]:
         """Return the sidecar's ``{day: digest}``; empty without a store."""
@@ -319,17 +325,9 @@ class MappedTradeBarDataset(MarketDataset):
 
     # -- the Trade bars' market rules ---------------------------------------------
 
-    def _calendar(self) -> pd.DatetimeIndex:
-        """Return the store's bars."""
-        stored = self._open()
-        try:
-            return pd.DatetimeIndex(stored["timestamp"].values)
-        finally:
-            stored.close()
-
-    def _resample_labels(self, timestamps: np.ndarray, freq: str) -> np.ndarray:
+    def resample_labels(self, timestamps: np.ndarray, freq: str) -> np.ndarray:
         """Return the bars the Trade bar dataset cuts ``timestamps`` into."""
-        return self.source._resample_labels(timestamps, freq)
+        return self.source.resample_labels(timestamps, freq)
 
     def _to_kunquant(self, data: xr.Dataset, data_columns: tuple[str, ...]) -> tuple[dict, np.ndarray, np.ndarray]:
         """Export the columns as the Trade bar dataset does."""
@@ -349,7 +347,7 @@ class MappedTradeBarDataset(MarketDataset):
         last = converted if end is None else min(converted, pd.Timestamp(end).date())
         mapped = set(self.source.ticker_map.days())
         sessions = pd.DatetimeIndex(self.source.trade_bars._calendar())
-        session_days = sorted({d for d in pd.DatetimeIndex(self.source._resample_labels(sessions.values, "1d")).date})
+        session_days = sorted({d for d in pd.DatetimeIndex(self.source.resample_labels(sessions.values, "1d")).date})
         return [d for d in session_days if d <= last and d in mapped]
 
     def update(self, end=None, workers: int = 1) -> Self:

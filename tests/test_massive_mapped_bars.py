@@ -110,3 +110,17 @@ def test_workers_map_ahead_and_write_in_order(built, tmp_path, monkeypatch):
 
     assert mapped.stored_days() == [FULL_DAY, HALF_DAY]
     _assert_same(mapped.panel(*RANGE), built[2].panel(*RANGE))
+
+
+def test_a_resample_counts_its_own_bars(built, tmp_path):
+    """The daily resample's calendar is one bar per session, so warm-up counts sessions.
+
+    RED under: the store's one-minute calendar answering for the resampled dataset.
+    """
+    daily = _mapped(built, tmp_path).update().resample("1d")
+
+    calendar = daily.calendar(*RANGE)
+
+    assert len(calendar) == 2
+    assert calendar.equals(daily.panel(*RANGE).indexes["timestamp"])
+    assert daily.bar_before(calendar[1], 1) == calendar[0]

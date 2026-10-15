@@ -198,9 +198,9 @@ class RosterDataset(MarketDataset):
         """Return the wrapped dataset's calendar."""
         return self.dataset._calendar()
 
-    def _resample_labels(self, timestamps: np.ndarray, freq: str) -> np.ndarray:
+    def resample_labels(self, timestamps: np.ndarray, freq: str) -> np.ndarray:
         """Return the bars the wrapped dataset cuts ``timestamps`` into."""
-        return self.dataset._resample_labels(timestamps, freq)
+        return self.dataset.resample_labels(timestamps, freq)
 
     def own_names(self, names) -> list[str]:
         """Return the wrapped dataset's own names of the shared ``names``.

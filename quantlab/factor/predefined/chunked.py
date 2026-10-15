@@ -466,7 +466,7 @@ class ChunkedFactor(FactorView):
         freq = self.config.factor.config.resample_freq
         if freq is None or not len(bars):
             return len(bars)
-        return len(np.unique(self.config.dataset._resample_labels(bars.values, freq)))
+        return len(np.unique(self.config.dataset.resample_labels(bars.values, freq)))
 
     def _chunks(self, bars: pd.DatetimeIndex, granularity: str) -> list:
         """Return the ``(first, last)`` bars of the ``granularity`` chunks of ``bars``."""

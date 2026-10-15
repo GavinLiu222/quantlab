@@ -295,7 +295,7 @@ timestamp
 2024-01-03      8.0     80.0
 ```
 
-默认按 UTC 时钟切 bar，标签取 bar 的起点，适合以开盘时间打标签的 bar。按交易时段切 bar 的 dataset 可覆盖 `_resample_labels`；`NbboPanelDataset` 按 NYSE 交易时段切分，因此 `"1d"` 给每个时段打上该日期零点的标签，能与日线 store 对齐。
+默认按 UTC 时钟切 bar，标签取 bar 的起点，适合以开盘时间打标签的 bar。按交易时段切 bar 的 dataset 可覆盖 `resample_labels`；`NbboPanelDataset` 按 NYSE 交易时段切分，因此 `"1d"` 给每个时段打上该日期零点的标签，能与日线 store 对齐。
 
 ### 在内存中持有自己的 frame
 

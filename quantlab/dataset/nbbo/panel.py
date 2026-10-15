@@ -71,7 +71,7 @@ class NbboPanelBase(StockDataset):
     three hooks: ``_check_bar_size`` (the config's frequency and bar size),
     ``_bar_interval`` (the bar size, a ``BAR_INTERVAL_SECONDS`` key) and
     ``_read_bars`` (one window's bars and drop counts).
-    ``_resample_labels`` is a different step: it cuts the finished panel
+    ``resample_labels`` is a different step: it cuts the finished panel
     into coarser bars for ``resample``.
 
     Attributes
@@ -405,7 +405,7 @@ class NbboPanelBase(StockDataset):
         """
         return self._calendar.session_bounds(dates)
 
-    def _resample_labels(self, timestamps: np.ndarray, freq: str) -> np.ndarray:
+    def resample_labels(self, timestamps: np.ndarray, freq: str) -> np.ndarray:
         """Return the bar each NBBO bar belongs to, cut by trading session.
 
         NBBO bars are labelled at their end inside a session window, so a
@@ -427,7 +427,7 @@ class NbboPanelBase(StockDataset):
         Examples
         --------
         >>> bars = pd.to_datetime(["2024-01-24 14:31", "2024-01-24 21:00"])
-        >>> ds._resample_labels(bars.values, "1d").astype("datetime64[D]")
+        >>> ds.resample_labels(bars.values, "1d").astype("datetime64[D]")
         array(['2024-01-24', '2024-01-24'], dtype='datetime64[D]')
         """
         index = pd.DatetimeIndex(timestamps).normalize()

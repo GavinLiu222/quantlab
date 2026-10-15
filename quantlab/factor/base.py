@@ -883,7 +883,7 @@ class Factor(Component, ABC):
         A resampled factor cannot stream. ``build()`` and ``extend()`` write
         to ``store_path``, the resampled store beside the
         source. The bars are cut the way the dataset cuts them (see
-        ``BaseDataset._resample_labels``).
+        ``BaseDataset.resample_labels``).
 
         Parameters
         ----------
@@ -937,7 +937,7 @@ class Factor(Component, ABC):
 
     def _resample_labels(self, timestamps: np.ndarray, freq: str) -> np.ndarray:
         """Return the bar each timestamp belongs to, as the dataset cuts bars."""
-        return self.config.dataset._resample_labels(timestamps, freq)
+        return self.config.dataset.resample_labels(timestamps, freq)
 
     def _resample_panel(self, data: xr.Dataset) -> xr.Dataset:
         """Return ``data`` aggregated onto ``config.resample_freq`` bars.

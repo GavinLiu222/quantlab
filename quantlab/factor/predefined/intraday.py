@@ -420,7 +420,7 @@ class IntradayStats(FactorKunQuant):
     def _kunquant_inputs(self, inputs: xr.Dataset) -> tuple[dict[str, np.ndarray], np.ndarray, np.ndarray]:
         """Export ``data_columns`` and add the session inputs (``session_inputs``)."""
         arrays, symbols, timestamps = super()._kunquant_inputs(inputs)
-        session = np.asarray(self.config.dataset._resample_labels(np.asarray(timestamps), "1d"))
+        session = np.asarray(self.config.dataset.resample_labels(np.asarray(timestamps), "1d"))
         arrays.update(
             session_inputs(
                 session,

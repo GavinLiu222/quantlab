@@ -548,7 +548,7 @@ class MassiveTradeBarDataset(StockDataset):
         """
         return {}
 
-    def _resample_labels(self, timestamps: np.ndarray, freq: str) -> np.ndarray:
+    def resample_labels(self, timestamps: np.ndarray, freq: str) -> np.ndarray:
         """Return the bar each Trade bar belongs to, cut by XNYS session.
 
         As ``TradeBarResampler`` cuts bars: right-closed from the session's
@@ -559,7 +559,7 @@ class MassiveTradeBarDataset(StockDataset):
         Examples
         --------
         >>> bars = pd.to_datetime(["2024-11-27 20:31", "2024-11-27 21:00"])
-        >>> ds._resample_labels(bars.values, "1h").astype("datetime64[m]").tolist()  # doctest: +SKIP
+        >>> ds.resample_labels(bars.values, "1h").astype("datetime64[m]").tolist()  # doctest: +SKIP
         [2024-11-27T21:00, 2024-11-27T21:00]
         """
         # The store's own session window, whatever config reads it.

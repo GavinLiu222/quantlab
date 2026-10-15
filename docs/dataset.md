@@ -295,7 +295,7 @@ timestamp
 2024-01-03      8.0     80.0
 ```
 
-Bars are cut on the UTC clock by default, labelled at their start, which suits bars stamped at their open time. A dataset whose bars follow trading sessions overrides `_resample_labels`; `NbboPanelDataset` cuts by NYSE session, so `"1d"` labels each session with its date at midnight and lines up with daily stores.
+Bars are cut on the UTC clock by default, labelled at their start, which suits bars stamped at their open time. A dataset whose bars follow trading sessions overrides `resample_labels`; `NbboPanelDataset` cuts by NYSE session, so `"1d"` labels each session with its date at midnight and lines up with daily stores.
 
 ### Hold your own frame in memory
 

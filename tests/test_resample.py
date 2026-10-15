@@ -6,7 +6,7 @@ dataset or factor returns a copy whose config carries ``resample_freq`` and
 ``resample_how``; the copy shares no memory with its source, reads its own
 store beside the source store when one was saved, and otherwise resamples the
 source on read. The backend does the grouping; the dataset decides how bars
-are cut (``_resample_labels``), and a factor cuts them the way its dataset
+are cut (``resample_labels``), and a factor cuts them the way its dataset
 does.
 """
 
@@ -551,5 +551,5 @@ def test_nbbo_dataset_labels_bars_by_xnys_session(tmp_path: Path):
     ds = NbboPanelDataset(config)
     # Friday 2024-01-26 with an extended close at 20:00 ET = 01:00 UTC Saturday.
     bars = pd.to_datetime(["2024-01-26 09:01", "2024-01-27 01:00"]).values
-    labels = ds._resample_labels(bars, "1d")
+    labels = ds.resample_labels(bars, "1d")
     assert labels.astype("datetime64[D]").astype(str).tolist() == ["2024-01-26", "2024-01-26"]
