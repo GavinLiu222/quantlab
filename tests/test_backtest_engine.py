@@ -58,7 +58,7 @@ from vectorbt.generic.enums import DrawdownStatus
 import quantlab.backtest.engine_vectorbt as engine_module
 from quantlab.runs.backtest_run import BacktestRun
 from quantlab.backtest.engine_vectorbt import VectorBtBacktester
-from quantlab.portfolio.decision_inputs import rebalance_mask
+from tests.decision_fixtures import schedule
 from quantlab.backtest.predefined.us_equity import (
     US_EQUITY_MARKET,
     USEquityCrossectionSelectStockVectorBt,
@@ -898,9 +898,14 @@ class EqualWeightEveryone(VectorBtBacktester):
         n_bars = prices.sizes["timestamp"]
         n_symbols = prices.sizes["symbol"]
         weights = np.full((n_bars, n_symbols), np.nan)
-        weights[rebalance_mask(n_bars, self.config.rebalance_periods)] = 1.0 / n_symbols
+        rebalance = schedule(n_bars, self.config.rebalance_periods)
+        weights[rebalance] = 1.0 / n_symbols
         return xr.Dataset(
-            {"weight": (("timestamp", "symbol"), weights)},
+            {
+                "weight": (("timestamp", "symbol"), weights),
+                "scheduled": ("timestamp", rebalance),
+                "decided": ("timestamp", rebalance),
+            },
             coords={"timestamp": prices.timestamp.values, "symbol": prices.symbol.values},
         )
 
@@ -921,7 +926,7 @@ def test_a_sibling_engine_subclass_runs_without_touching_the_base(tmp_path):
 
     weights = result.weights["weight"].values
     n_bars, n_symbols = weights.shape
-    mask = rebalance_mask(n_bars, config.rebalance_periods)
+    mask = schedule(n_bars, config.rebalance_periods)
     assert mask.any()
     np.testing.assert_allclose(weights[mask], 1.0 / n_symbols, rtol=0.0, atol=1e-15)
     assert np.isnan(weights[~mask]).all()
@@ -998,14 +1003,17 @@ class RotateOneOutEqualWeight(VectorBtBacktester):
         n_bars = prices.sizes["timestamp"]
         n_symbols = prices.sizes["symbol"]
         weights = np.full((n_bars, n_symbols), np.nan)
-        for k, bar in enumerate(
-            np.flatnonzero(rebalance_mask(n_bars, self.config.rebalance_periods))
-        ):
+        rebalance = schedule(n_bars, self.config.rebalance_periods)
+        for k, bar in enumerate(np.flatnonzero(rebalance)):
             row = np.full(n_symbols, 1.0 / (n_symbols - 1))
             row[k % n_symbols] = 0.0
             weights[bar] = row
         return xr.Dataset(
-            {"weight": (("timestamp", "symbol"), weights)},
+            {
+                "weight": (("timestamp", "symbol"), weights),
+                "scheduled": ("timestamp", rebalance),
+                "decided": ("timestamp", rebalance),
+            },
             coords={"timestamp": prices.timestamp.values, "symbol": prices.symbol.values},
         )
 

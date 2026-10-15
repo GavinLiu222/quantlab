@@ -129,7 +129,7 @@ def _selected_weights(stores, *, direction="long_only", top_n=2, periods=5) -> x
         rebalance_periods=periods,
         anchor=scores.timestamp.values[0],
         execution=ExecutionSettings(fees=BacktestConfig.fees, slippage=BacktestConfig.slippage),
-    ).weights(scores.to_dataset(name="score"))
+    ).weights(scores.to_dataset(name="score"))[["weight"]]
 
 
 def _long(weights: xr.Dataset) -> pd.DataFrame:
@@ -603,7 +603,7 @@ def test_an_xarray_panel_of_prices_gives_xarray_members(stores):
 
     assert isinstance(report.equity, xr.Dataset)
     np.testing.assert_array_equal(report.equity["value"].values, expected.equity["value"])
-    xr.testing.assert_identical(report.weights, report.raw.weights)
+    xr.testing.assert_identical(report.weights, report.raw.weights[["weight"]])
 
 
 def test_a_run_without_trades_gives_an_empty_trades_frame(stores):
@@ -650,7 +650,7 @@ def test_scores_through_the_api_match_the_library_rule_through_a_halt(stores):
 
     report = qa.backtest(frame, scores=scores, top_n=2, rebalance_periods=3)
 
-    xr.testing.assert_equal(report.raw.weights, weights)
+    xr.testing.assert_equal(report.raw.weights[["weight"]], weights)
     np.testing.assert_array_equal(
         report.equity["value"].to_numpy(), _library_run(stores, weights).simulation.value.values
     )

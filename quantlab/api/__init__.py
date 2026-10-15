@@ -442,8 +442,8 @@ def backtest(
         The selection side, with ``scores`` only.
     rebalance_periods : int, default 1
         With ``scores``, rebalance every this many bars. With ``weights``, which are
-        traded as given, the spacing they were built with: it only annualizes the
-        turnover metric (``Annualized Turnover [%]``), as in the library backtester.
+        traded as given, it is recorded with the run only: the turnover and win-rate
+        metrics count the bars that have weights, which are the rebalances.
     fill, valuation : str, default "open", "close"
         The price columns orders fill at and the portfolio is valued at.
     market : {"equity", "crypto"}, default "equity"

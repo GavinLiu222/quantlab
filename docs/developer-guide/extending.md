@@ -813,8 +813,10 @@ ones the engine settles) into target weights. The weights must follow
 the contract described in
 [Backtesting](../user-guide/backtesting.md#target-weights-the-signal-format):
 a finite weight is a target, NaN keeps a holding, and the targets of a row
-have a gross exposure of at most 1. The backtester checks this before
-simulating.
+have a gross exposure of at most 1. Beside `weight` the dataset carries the
+rebalance record, `scheduled` and `decided` booleans on `timestamp`, a decided
+bar being exactly a row with a target. The backtester checks all of this
+before simulating.
 
 This backtester trades a round-the-clock market on unadjusted `open` and
 `close` columns and holds every symbol the model scores above zero, equally
@@ -825,7 +827,6 @@ import numpy as np
 import xarray as xr
 
 from quantlab.backtest.engine_vectorbt import VectorBtBacktester
-from quantlab.portfolio.decision_inputs import rebalance_mask
 from quantlab.backtest.base import MarketSpec
 from quantlab.backtest.config import BacktestConfig
 
@@ -851,7 +852,9 @@ class PositiveScoreEqualWeight(VectorBtBacktester):
         tradable = self.config.price_dataset.tradable_bars(
             prices, self.MARKET.fill_price_column
         ).values
-        rebalance = rebalance_mask(scores.shape[0], self.config.rebalance_periods)
+        # Every rebalance_periods-th bar from the first; never the last, which has no fill bar.
+        bars = np.arange(scores.shape[0])
+        rebalance = (bars % self.config.rebalance_periods == 0) & (bars < bars.size - 1)
 
         weights = np.full(scores.shape, np.nan)  # NaN row: hold
         for t in np.flatnonzero(rebalance):
@@ -861,7 +864,12 @@ class PositiveScoreEqualWeight(VectorBtBacktester):
                 row[chosen] = 1.0 / chosen.sum()  # gross exposure <= 1
             weights[t] = row
         return xr.Dataset(
-            {"weight": (("timestamp", "symbol"), weights)},
+            {
+                "weight": (("timestamp", "symbol"), weights),
+                # The rebalance record: every scheduled bar is decided here.
+                "scheduled": ("timestamp", rebalance),
+                "decided": ("timestamp", rebalance),
+            },
             coords={"timestamp": prices.timestamp, "symbol": prices.symbol},
         )
 ```

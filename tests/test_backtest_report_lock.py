@@ -299,18 +299,28 @@ def scenarios(tmp_path: Path, cv_project) -> dict[str, tuple[Path, list[Path]]]:
 #: from the stitched curve.
 #: Four reports were re-recorded when a round-off of zero (below 1e-12: a fully
 #: invested book's cash share, a -0) was normalized to 0; their bytes did not change.
+#: Every report and four metrics were re-recorded when the turnover and win-rate
+#: rows took the decided rebalances of the run's rebalance record (#272): the
+#: annualized turnover is the total over the window's years (5833.2% for 6066.5% on
+#: the long-only and weights runs, 5 rebalances in 26 bars), the long-short run's
+#: delisting settlement left its turnover (total 1034.8% for 1060.9%, per rebalance
+#: 115.0% over 9 rebalances for 106.1% over 10 fill bars, annualized 10029.9% for
+#: 8911.8%) and stopped splitting a holding period (rebalance win rate 44.4% for
+#: 50%); the run_cv metrics did not change (12 rebalances every 4 bars filled
+#: inside 48 bars, so both formulas agree), and the reports' hover texts state the
+#: new definitions.
 EXPECTED: dict[str, str] = {
-    "run_long_only_benchmark/report.html": "e0ce0d96156ae5875321d5ba3d58e6eba18c3976662ff6662e638be896f5c17a",
-    "run_long_only_benchmark/metrics.json": "b4901c705f203ce3a769b40c357ce8a444d16df4488492ab2abf4f03e2697be6",
-    "run_long_short_delisting/report.html": "baee60caee1796f1f832ce22f7aeb326c8ea13a5990f9969926dd8144c8d68d1",
-    "run_long_short_delisting/metrics.json": "61e9a1bee817c10179cc309e8722ad9a7a9a56c896183d0a3fe5d79ee90c79ed",
-    "run_weights_benchmark/report.html": "2a2a62d488063f3b061536a5fcb76353fa65d9ee47166373159b6e55a8ea9702",
-    "run_weights_benchmark/metrics.json": "aaf9c98eca07ec66a8f01999e3a6de56221133d6cb07b0a9dd8ea175170c84b2",
-    "run_weights/report.html": "202dab36b03888b5387c94e68b6ba7c89f7b0a55f7bc1d3fd23a29d45bf9b33e",
-    "run_weights/metrics.json": "fbfd860207fe6f7410dba4f91f905b38e9a45739d4c22f7c5d48de5e0b209b73",
-    "run_cv_benchmark/report.html": "791d9f02df4c6e99631a4c3fe729bb37e675662340db6fb0057df3ac8b86b665",
+    "run_long_only_benchmark/report.html": "07b54704ddf93aff3e5fa07147cfc0ac961cf2545118811584a501898d005f4f",
+    "run_long_only_benchmark/metrics.json": "3cd2d405846f44ae7b3260989603f880e0b132e38138f159e44b3a5a2b33e2c4",
+    "run_long_short_delisting/report.html": "a1421e7fc44684bcad16c8fc6d7ab8bd607ecacf9966466371bd87b22fefad2a",
+    "run_long_short_delisting/metrics.json": "1fae26dd7c6691bd9725161988eabeb3856a9bf8889609bd04447ac48ab33d58",
+    "run_weights_benchmark/report.html": "40c755f3d477d5de738a12ed498aaaf68db1a96285556ac752116de4d2ecb784",
+    "run_weights_benchmark/metrics.json": "3f305680e5fdb3306df41c15e048c71094872eada67a1368bbd963ba31366dbd",
+    "run_weights/report.html": "816972d0dcf921cee3d869d7e30e390a7a0dc0b5879f4f2e537a80e88aeb1f48",
+    "run_weights/metrics.json": "b263a751733a6c054d03b557a86d6a9f69200a7d1cdcc8b13f598cc3f79874b4",
+    "run_cv_benchmark/report.html": "c273e52dff3a4ff3ac8c99f3c22fab7136b6b0482c5bb2210a21d056393a566a",
     "run_cv_benchmark/metrics.json": "5eb6071ba06b6922deb7bf73aaf73915ce3d2c5400d1e0a5126136172eb5b538",
-    "run_cv/report.html": "d8d0bdf27ba051940162a7c76ab5762422def9be98e44d1948aebf8b7ee05040",
+    "run_cv/report.html": "a2c27db8c8c8c9b20232909e1ae5a983ee994cd1450e990314d4b31930c60ac1",
     "run_cv/metrics.json": "c689af22c94db84dfcfbc21acf48c039ebfc734e79d5a132e9cfecac86a5bbf8",
 }
 
@@ -320,12 +330,12 @@ EXPECTED: dict[str, str] = {
 #: bytes; the two run_cv reports differ from them in their run_cv note alone
 #: (ADR 0033).
 WITHOUT_HOLDINGS: dict[str, str] = {
-    "run_long_only_benchmark/report.html": "8caaa6219ea786273f1c8a00032708572e0fc572c5f57cd198702279ba330d15",
-    "run_long_short_delisting/report.html": "54b3cea2423d40c569b90d5a32a141c8fdcf218c2fe83b3b34ee45a06ad5907f",
-    "run_weights_benchmark/report.html": "dd91414c66fc9013ceb3b93b5ae80465ea2404684ac6e0427fe83859977888fe",
-    "run_weights/report.html": "dd2b7cc3db804b68b16afbf9020ac0aa963a053e18c1bcca717a80c6476b056d",
-    "run_cv_benchmark/report.html": "b6c78dd64783a5683ee6909989a1ad7fe4872c539daf78d11fefaa1a7e5acbea",
-    "run_cv/report.html": "ab69ebb37987d411837f2bd24d119c492859df1891c7cdd80e525721325ad74b",
+    "run_long_only_benchmark/report.html": "fb5a53725d966c9842b08e4ea5602bbee86d545b53ff531528e8054ad18ed343",
+    "run_long_short_delisting/report.html": "cd3369137f5a5d0ba802c2d359d595cd48097f3e1435c0197e80c97e0cc9dad2",
+    "run_weights_benchmark/report.html": "4ff31faeb0bf34241826527d22801654c11ee5d0e68e3d1dc6adae5d2ee5af3a",
+    "run_weights/report.html": "488d2bad3e4edaf8c040c37b7583f5f542650c08adaff6927aecd75e64bb6976",
+    "run_cv_benchmark/report.html": "4286a0dd94205bd8902e0fedb58498ae1212398a8a75e654e3bdca0332495b76",
+    "run_cv/report.html": "eec70caa37d5913c073c5391e59df4a6e4149d48e38ade93cee779517276a845",
 }
 
 

@@ -328,6 +328,11 @@ class SimulationResult:
     book's value, cash included, as the fills left it (negative for a
     short, 0 where nothing is held); ``None`` from an engine that does not
     supply them.
+    ``rebalances`` is the rebalance record of the weights simulated, set by
+    the backtester: ``scheduled`` (the bars the rebalance schedule named)
+    and ``decided`` (those the rule decided; a scheduled bar it held is not),
+    booleans on ``timestamp``. Turnover, the rebalance win rate and the
+    attribution take the rebalances from it; ``None`` from a bare engine call.
 
     Examples
     --------
@@ -352,6 +357,7 @@ class SimulationResult:
     attribution: xr.Dataset | None = None
     factor_attribution: xr.Dataset | None = None
     holdings: xr.DataArray | None = None
+    rebalances: xr.Dataset | None = None
 
 
 @dataclass
@@ -1120,7 +1126,7 @@ class BaseBacktester(Component, ABC):
                 )
                 self._assert_weights_contract(stitched_weights, stitched_prices)
                 self._check_risk_model(stitched_prices.timestamp.values)
-                stitched_simulation = self._simulate(
+                stitched_simulation = self._simulate_decisions(
                     stitched_weights, stitched_prices, delisted=stitched_delisted
                 )
                 stitched_benchmark = (
@@ -1463,10 +1469,16 @@ class BaseBacktester(Component, ABC):
             start_date, end_date, prices.timestamp.values
         )
         weights = self._align_weights(weights, prices)
+        # A given weight panel is its caller's decisions: every row with a
+        # target was decided, and no schedule held any other.
+        decided = np.isfinite(weights["weight"].values).any(axis=1)
+        weights = weights.assign(
+            scheduled=("timestamp", decided), decided=("timestamp", decided.copy())
+        )
         self._assert_weights_contract(weights, prices)
         self._check_risk_model(prices.timestamp.values)
         with Timer(f"{self.class_name}: simulate"):
-            simulation = self._simulate(weights, prices)
+            simulation = self._simulate_decisions(weights, prices)
         benchmark = (
             None
             if benchmark_prices is None
@@ -1795,7 +1807,7 @@ class BaseBacktester(Component, ABC):
         self._check_risk_model(prices.timestamp.values)
 
         with Timer(f"{self.class_name}: simulate"):
-            simulation = self._simulate(weights, prices, delisted=delisted)
+            simulation = self._simulate_decisions(weights, prices, delisted=delisted)
         benchmark = (
             None
             if benchmark_prices is None
@@ -2140,6 +2152,11 @@ class BaseBacktester(Component, ABC):
         (all NaN holds the whole book). The gross exposure of a row's
         targets, the sum of their absolute values, is at most 1.
 
+        Beside it, the rebalance record: ``scheduled`` and ``decided``,
+        booleans on ``timestamp``, a decided bar scheduled, and ``decided``
+        marking exactly the rows with a finite target (the record states what
+        the rows say, so no reader tests the rows itself).
+
         Raises
         ------
         ValueError
@@ -2168,6 +2185,29 @@ class BaseBacktester(Component, ABC):
 
         values = weight.values
         timestamps = weight.timestamp.values
+        missing = [name for name in ("scheduled", "decided") if name not in weights.data_vars]
+        if missing:
+            raise ValueError(
+                f"{self.class_name}: weights must carry the rebalance record "
+                f"('scheduled' and 'decided' on timestamp); missing {missing}"
+            )
+        for name in ("scheduled", "decided"):
+            if weights[name].dims != ("timestamp",) or weights[name].dtype != bool:
+                raise ValueError(
+                    f"{self.class_name}: {name!r} must be booleans on timestamp, got "
+                    f"{weights[name].dtype} on {weights[name].dims}"
+                )
+        scheduled, decided = weights["scheduled"].values, weights["decided"].values
+        targeted = np.isfinite(values).any(axis=1)
+        wrong = (decided != targeted) | (decided & ~scheduled)
+        if wrong.any():
+            idx = int(np.argmax(wrong))
+            raise ValueError(
+                f"{self.class_name}: the rebalance record at {self._bar_label(timestamps[idx])} "
+                f"(scheduled={bool(scheduled[idx])}, decided={bool(decided[idx])}) does not "
+                f"match its weight row ({'a' if targeted[idx] else 'no'} finite target); a "
+                f"decided bar is scheduled and has a target, every other bar has none"
+            )
         gross = np.abs(np.nan_to_num(values)).sum(axis=1)
         over = gross > 1 + 1e-9
         if over.any():
@@ -2198,7 +2238,9 @@ class BaseBacktester(Component, ABC):
         delisting marks, the ones ``_simulate`` settles with. The result must pass
         ``_assert_weights_contract``: a ``weight`` variable on
         ``(timestamp, symbol)``, NaN where a symbol keeps its holding, with
-        the gross exposure of each row's targets at most 1.
+        the gross exposure of each row's targets at most 1, and the
+        rebalance record ``scheduled`` and ``decided`` on ``timestamp``
+        (``DecisionInputs.weights`` returns both).
         """
 
     #: Score groups of the attribution; a rebalance with fewer symbols holds them in cash.
@@ -2218,10 +2260,10 @@ class BaseBacktester(Component, ABC):
         The universe of a rebalance bar is every symbol with a finite score
         and a fill price on the next bar, the score being the prediction the
         portfolio rule ranks by (the constructor's ``score_label``, else the
-        first predicted label). The rebalance bars are the weight rows with a
-        finite target, so a bar the rule held after a failure is held here
-        too. ``quantlab.runs.backtest_attribution`` gives the equal-weighted
-        universe curve and the curves of ``ATTRIBUTION_GROUPS`` score groups,
+        first predicted label). The rebalance bars are the decided bars of
+        ``simulation.rebalances``, so a bar the rule held after a failure is
+        held here too. ``quantlab.runs.backtest_attribution`` gives the
+        equal-weighted universe curve and the curves of ``ATTRIBUTION_GROUPS`` score groups,
         delisted holdings settled at their last valuation as the engine
         settles them, and splits the annualised log growth over the benchmark
         (over the universe without one): ``universe`` (universe over
@@ -2241,7 +2283,11 @@ class BaseBacktester(Component, ABC):
         fill = prices[fill_column].transpose("timestamp", "symbol").values
         valuation = prices[valuation_column].transpose("timestamp", "symbol").values
         scores = predictions[label].transpose("timestamp", "symbol").values
-        rebalance = np.isfinite(weights["weight"].transpose("timestamp", "symbol").values).any(axis=1)
+        rebalance = (
+            simulation.rebalances["decided"]
+            .reindex(timestamp=prices.timestamp.values, fill_value=False)
+            .values
+        )
         marks = (
             delisted.transpose("timestamp", "symbol")
             .reindex(timestamp=prices.timestamp.values, symbol=prices.symbol.values, fill_value=False)
@@ -2395,6 +2441,18 @@ class BaseBacktester(Component, ABC):
             shares[bar:, j] -= shares[bar, j]
         return shares
 
+    def _simulate_decisions(
+        self, weights: xr.Dataset, prices: xr.Dataset, *, delisted=None
+    ) -> SimulationResult:
+        """Simulate ``weights`` and attach their rebalance record as ``rebalances``.
+
+        Every simulation a run measures goes through here, so its metrics
+        read the rebalances the decision side recorded.
+        """
+        simulation = self._simulate(weights, prices, delisted=delisted)
+        simulation.rebalances = weights[["scheduled", "decided"]]
+        return simulation
+
     def _simulate_without_costs(
         self, weights: xr.Dataset, prices: xr.Dataset, delisted: xr.DataArray
     ) -> SimulationResult | None:
@@ -2526,22 +2584,34 @@ class BaseBacktester(Component, ABC):
         return cls._bar_label(pair[0]), cls._bar_label(pair[1])
 
     def _turnover(self, simulation: SimulationResult) -> xr.DataArray:
-        """Return the turnover of every fill bar of ``simulation``.
+        """Return the turnover of every rebalance fill bar of ``simulation``.
 
         ``backtest_stats.turnover`` of its orders and value, from
-        ``config.init_cash``.
+        ``config.init_cash``, its delisting settlements left out.
         """
         return backtest_stats.turnover(
-            simulation.orders, simulation.value, self.config.init_cash
+            simulation.orders,
+            simulation.value,
+            self.config.init_cash,
+            settlements=simulation.settlements,
         )
 
-    def _turnover_stats(self, turnover: xr.DataArray, bar_interval) -> dict:
-        """Return ``backtest_stats.turnover_stats`` for this market and rebalance step."""
+    @staticmethod
+    def _decided_bars(simulation: SimulationResult) -> np.ndarray:
+        """Return the bars of the decided rebalances, from ``simulation.rebalances``."""
+        record = simulation.rebalances
+        return record.timestamp.values[record["decided"].values]
+
+    def _turnover_stats(self, simulation: SimulationResult, ranges: list[tuple[str, str]]) -> dict:
+        """Return ``backtest_stats.turnover_stats`` of ``simulation`` over ``ranges``, on its decided rebalances."""
+        bar_interval = simulation.bar_interval
         return backtest_stats.turnover_stats(
-            turnover,
+            self._turnover(simulation),
+            self._decided_bars(simulation),
+            simulation.value.timestamp.values,
+            ranges=ranges,
             bar_interval=bar_interval,
             year_freq=self.MARKET.year_freq(bar_interval),  # type: ignore[union-attr]
-            rebalance_periods=self.config.rebalance_periods,
         )
 
     def _period_record_stats(
@@ -2554,9 +2624,10 @@ class BaseBacktester(Component, ABC):
         trades with status ``"Closed"`` whose exit falls inside them;
         ``Total Open Trades`` the trades still open at each range's end
         (entered on or before it, and not yet exited or exited after it);
-        the three turnover rows are the ``_turnover_stats`` of the fill
-        bars inside the ranges. Several ranges never overlap, so the counts
-        add up across them. The names are vectorbt's whole-window names, so
+        the three turnover rows are the ``_turnover_stats`` of the ranges
+        (the rebalance fills inside them, over the decided rebalances whose
+        fill bar is inside them, annualised over their bars). Several ranges
+        never overlap, so the counts add up across them. The names are vectorbt's whole-window names, so
         a slice column and the whole column share a row.
 
         The trade counts use the same position-level definition as the
@@ -2592,17 +2663,13 @@ class BaseBacktester(Component, ABC):
                 open_at_end = (entry_ts <= end_ts) & (~closed | (exit_ts > end_ts))
                 open_trade_count += int(open_at_end.sum())
 
-        turnover = self._turnover(simulation)
-        turnover = turnover.isel(
-            timestamp=backtest_stats.in_ranges(turnover.timestamp.values, ranges)
-        )
         return {
             "Total Orders": order_count,
             "Total Fees Paid": fees_paid,
             "Traded Notional": traded_notional,
             "Total Closed Trades": closed_trade_count,
             "Total Open Trades": open_trade_count,
-            **self._turnover_stats(turnover, simulation.bar_interval),
+            **self._turnover_stats(simulation, ranges),
         }
 
     def _compute_metrics(
@@ -2617,7 +2684,9 @@ class BaseBacktester(Component, ABC):
 
         All three come from the same continuous simulation; nothing here
         simulates a second time. ``whole`` is the engine's whole-window
-        statistics plus the three turnover rows and ``Total Orders``.
+        statistics plus the three turnover rows and ``Total Orders``; the
+        turnover rows and the win rates count the decided rebalances of
+        ``simulation.rebalances``.
         ``in_sample`` and ``out_of_sample`` merge ``_return_stats``
         and ``_period_record_stats`` over their ranges and are ``None`` when
         there is no such range. ``benchmark`` and ``relative`` appear only
@@ -2647,17 +2716,15 @@ class BaseBacktester(Component, ABC):
         """
         timestamps = simulation.value.timestamp.values
         if within is None:
+            whole_range = [
+                (self._bar_label(timestamps[0]), self._bar_label(timestamps[-1]))
+            ]
             whole = self._engine_stats(simulation)
-            whole.update(
-                self._turnover_stats(self._turnover(simulation), simulation.bar_interval)
-            )
+            whole.update(self._turnover_stats(simulation, whole_range))
             # The number of fills: position-level trade counts do not say how
             # often we traded. A run with no fills has no `order` dimension, so
             # use `.sizes.get` rather than a subscript that would raise.
             whole["Total Orders"] = int(simulation.orders.sizes.get("order", 0))
-            whole_range = [
-                (self._bar_label(timestamps[0]), self._bar_label(timestamps[-1]))
-            ]
             rejected = list(simulation.rejected_orders)
             execution = {"max_target_deviation": simulation.max_target_deviation}
         else:
@@ -2746,25 +2813,20 @@ class BaseBacktester(Component, ABC):
             in_sample = [split["in_sample_range"]] if split["in_sample_range"] else []
         return {"in_sample": in_sample, "out_of_sample": list(split["out_of_sample_ranges"])}
 
-    @staticmethod
+    @classmethod
     def _win_rates(
+        cls,
         simulation: SimulationResult,
         ranges: list[tuple[str, str]],
         benchmark: SimulationResult | None = None,
     ) -> dict:
-        """Return ``backtest_stats.win_rates`` of ``simulation``, its fills marking the periods.
+        """Return ``backtest_stats.win_rates`` of ``simulation``, its decided rebalances marking the periods.
 
         Against ``benchmark`` when given, otherwise against zero.
         """
-        orders = simulation.orders
-        fills = (
-            orders["timestamp"].values
-            if orders.sizes.get("order", 0)
-            else np.array([], dtype="datetime64[ns]")
-        )
         return backtest_stats.win_rates(
             simulation.returns,
-            fills,
+            cls._decided_bars(simulation),
             ranges=ranges,
             benchmark_returns=None if benchmark is None else benchmark.returns,
         )
@@ -3113,12 +3175,15 @@ class BaseBacktester(Component, ABC):
         """Return the Portfolio and Rolling tab inputs: ``report_portfolio_inputs`` of this run.
 
         ``weights`` are the run's target weights, with a ``weight`` variable
-        on ``(timestamp, symbol)``.
+        on ``(timestamp, symbol)``; the rebalances are the decided bars of
+        ``simulation.rebalances`` and the turnover leaves its settlements out.
         """
         return report_portfolio_inputs(
             weights["weight"],
             simulation.orders,
             simulation.value,
+            rebalances=self._decided_bars(simulation),
+            settlements=simulation.settlements,
             init_cash=self.config.init_cash,
             bar_interval=simulation.bar_interval,
             trading_days_per_year=self.MARKET.trading_days_per_year,  # type: ignore[union-attr]
@@ -3140,6 +3205,7 @@ class BaseBacktester(Component, ABC):
         return report_holdings_inputs(
             simulation.holdings,
             weights["weight"],
+            rebalances=self._decided_bars(simulation),
             label=self._symbol_names,
             prices=prices[self.MARKET.valuation_price_column],  # type: ignore[union-attr]
         )

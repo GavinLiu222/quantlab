@@ -63,7 +63,6 @@ from loguru import logger
 
 import quantlab.backtest.engine_vectorbt as engine_module
 from quantlab.backtest.predefined.us_equity import USEquityCrossectionSelectStockVectorBt
-from quantlab.portfolio.decision_inputs import rebalance_mask
 from quantlab.backtest.config import CrossSectionBacktestConfig
 from quantlab.portfolio.config import TopNConfig
 from quantlab.portfolio.base import PortfolioConstructor
@@ -71,6 +70,7 @@ from quantlab.runs.prediction_panel import LabelSpec
 from quantlab.portfolio.predefined.top_n import TopNConstructor
 from quantlab.runs.backtest_run import BacktestRun, Market
 from quantlab.utils.date_range import bar_label
+from tests.decision_fixtures import schedule
 from tests.backtest_fixtures import (
     make_model,
     make_stock_dataset,
@@ -829,7 +829,7 @@ def test_the_rule_decides_each_rebalance_bar_once_on_the_holdings_the_previous_f
     result = backtester.run_cv()
 
     n_bars = LAST_TEST_BAR - FIRST_TEST_BAR + 1
-    rebalances = int(rebalance_mask(n_bars, REBALANCE_PERIODS).sum())
+    rebalances = int(schedule(n_bars, REBALANCE_PERIODS).sum())
     assert len(_SEEN) == rebalances
     boundary = pd.Timestamp(_test_bars(cv_project, 1)[0])
     carried = next(c for c in _SEEN if c.timestamp == boundary)

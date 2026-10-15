@@ -3,7 +3,8 @@
 These are the returns-based rows and the turnover rows of a backtest run's
 ``metrics.json``: the ``in_sample``, ``out_of_sample`` and ``benchmark``
 return blocks, the ``relative`` block, the win rates and the three turnover
-rows; and the round-trip trade rows and ``Max Gross Exposure [%]`` of its
+rows, the last two counted on the decided rebalances a run records (its
+rebalance record), never inferred from its fills; and the round-trip trade rows and ``Max Gross Exposure [%]`` of its
 ``whole`` block, from fill records (``round_trips``, ``round_trip_stats``,
 ``exposure_stats``), with the deepest drawdown the report marks
 (``drawdown_span``). ``quantlab.backtest.base`` computes them through this module for every
@@ -520,18 +521,55 @@ def relative_stats(
     return stats
 
 
+def rebalance_fill_bars(rebalances, timestamps) -> np.ndarray:
+    """Return the fill bar of every decided rebalance: the bar after it on ``timestamps``.
+
+    A weight decided at bar t fills at bar t + 1. A rebalance on the last
+    bar, or off ``timestamps``, has no fill bar there and is left out.
+
+    Parameters
+    ----------
+    rebalances : array_like of datetime64
+        The bars of the decided rebalances (the rebalance record's
+        ``decided`` bars).
+    timestamps : array_like of datetime64
+        The run's bars, sorted.
+
+    Returns
+    -------
+    numpy.ndarray
+        The fill bars as ``datetime64[ns]``, sorted and unique.
+
+    Examples
+    --------
+    >>> bars = pd.bdate_range("2024-01-01", periods=4)
+    >>> rebalance_fill_bars(bars[[0, 2, 3]].values, bars.values).astype(str).tolist()
+    ['2024-01-02T00:00:00.000000000', '2024-01-04T00:00:00.000000000']
+    """
+    bars = np.asarray(timestamps).astype("datetime64[ns]")
+    decided = np.unique(np.asarray(rebalances).astype("datetime64[ns]"))
+    if bars.size == 0:
+        return bars
+    position = np.searchsorted(bars, decided)
+    on_axis = (position < bars.size) & (bars[np.minimum(position, bars.size - 1)] == decided)
+    following = position[on_axis] + 1
+    return bars[following[following < bars.size]]
+
+
 def win_rates(
     returns: xr.DataArray,
-    fill_timestamps,
+    rebalances,
     *,
     ranges: Sequence[tuple[str, str]],
     benchmark_returns: xr.DataArray | None = None,
 ) -> dict:
     """Return the share of holding periods and of months the strategy won, in percent.
 
-    A *holding period* runs from a bar with fills up to the bar before the
-    next one; the bars before the first fill hold nothing and are left out.
-    A month is a calendar month of the bar labels. Each period's per-bar
+    A *holding period* runs from the fill bar of one decided rebalance (the
+    bar after it) up to the bar before the next one's, whether or not its
+    orders filled; a delisting settlement or a held bar starts none, and
+    the bars before the first fill bar hold nothing and are left out. A
+    month is a calendar month of the bar labels. Each period's per-bar
     returns inside ``ranges`` are compounded; the strategy wins a period
     when its return beats the benchmark's, or, without a benchmark, when it
     is positive. A bar where either return is NaN, or at or below -100% (a
@@ -542,9 +580,9 @@ def win_rates(
     ----------
     returns : xarray.DataArray
         The strategy's per-bar returns on a ``timestamp`` axis.
-    fill_timestamps : array_like of datetime64
-        The bar of every fill (repeats allowed); they mark the holding
-        periods.
+    rebalances : array_like of datetime64
+        The bars of the decided rebalances (the rebalance record's
+        ``decided`` bars); each starts a period on the bar after it.
     ranges : sequence of (str, str)
         Inclusive bar-label ranges of the slice; bars outside them are left
         out.
@@ -560,10 +598,13 @@ def win_rates(
 
     Examples
     --------
-    >>> bars = pd.bdate_range("2024-01-01", periods=4)
-    >>> returns = xr.DataArray([0.0, 0.01, -0.02, 0.01], dims="timestamp", coords={"timestamp": bars})
-    >>> win_rates(returns, bars[[0, 2]].values, ranges=[("2024-01-01", "2024-01-04")])
-    {'Rebalance Win Rate [%]': 50.0, 'Monthly Win Rate [%]': 0.0}
+    Decided on bars 0 and 2, so the periods are bars 1 to 2 (lost) and
+    bars 3 to 4 (won):
+
+    >>> bars = pd.bdate_range("2024-01-01", periods=5)
+    >>> returns = xr.DataArray([0.0, 0.01, -0.02, 0.01, 0.01], dims="timestamp", coords={"timestamp": bars})
+    >>> win_rates(returns, bars[[0, 2]].values, ranges=[("2024-01-01", "2024-01-05")])
+    {'Rebalance Win Rate [%]': 50.0, 'Monthly Win Rate [%]': 100.0}
     """
     ts = returns.timestamp.values.astype("datetime64[ns]")
     r = np.asarray(returns.values, dtype=np.float64)
@@ -572,8 +613,8 @@ def win_rates(
         if benchmark_returns is not None
         else np.zeros_like(r)
     )
-    fills = np.unique(np.asarray(fill_timestamps).astype("datetime64[ns]"))
-    period = np.searchsorted(fills, ts, side="right") - 1
+    starts = rebalance_fill_bars(rebalances, ts)
+    period = np.searchsorted(starts, ts, side="right") - 1
     with np.errstate(invalid="ignore"):
         valid = (r > -1.0) & (b > -1.0)
     keep = in_ranges(ts, ranges) & (period >= 0) & valid
@@ -594,32 +635,41 @@ def win_rates(
     }
 
 
-def turnover(orders: xr.Dataset, value: xr.DataArray, init_cash: float) -> xr.DataArray:
-    """Return the turnover of every bar that had fills, on a ``timestamp`` axis.
+def turnover(
+    orders: xr.Dataset, value: xr.DataArray, init_cash: float, *, settlements: Sequence[dict] = ()
+) -> xr.DataArray:
+    """Return the turnover of every bar that had rebalance fills, on a ``timestamp`` axis.
 
     Turnover is the one-sided traded notional of the bar (the sum of
     ``|size| x price`` over its orders) divided by the portfolio value of
     the previous bar, or ``init_cash`` for the first bar of the window. One
     sided means a full buy-in from cash is about 1 and replacing the whole
     book (sell then buy) about 2. Using the value before the fills keeps the
-    bar's own profit or loss out of the ratio.
+    bar's own profit or loss out of the ratio. A fill that settles a
+    delisted holding is no rebalance's trade: an order at a settlement's
+    bar and symbol is left out.
 
     Parameters
     ----------
     orders : xarray.Dataset
         One fill per entry of an ``order`` dimension, with the variables
-        ``timestamp``, ``size`` (signed or not) and ``price``; a dataset
-        without an ``order`` dimension means no fills.
+        ``timestamp``, ``size`` (signed or not) and ``price``, and ``symbol``
+        when ``settlements`` are given; a dataset without an ``order``
+        dimension means no fills.
     value : xarray.DataArray
         Portfolio value after each bar, on a ``timestamp`` axis that holds
         every order's bar.
     init_cash : float
         Value before the first bar.
+    settlements : sequence of dict, optional
+        The delisting settlements among the orders, each with its
+        ``settlement_timestamp`` and ``axis_symbol`` (the order's
+        ``symbol``), as ``SimulationResult.settlements`` records them.
 
     Returns
     -------
     xarray.DataArray
-        One entry per bar with fills; empty when there are none.
+        One entry per bar with rebalance fills; empty when there are none.
 
     Raises
     ------
@@ -632,20 +682,40 @@ def turnover(orders: xr.Dataset, value: xr.DataArray, init_cash: float) -> xr.Da
     >>> value = xr.DataArray([1000.0, 1100.0, 1100.0], dims="timestamp", coords={"timestamp": bars})
     >>> orders = xr.Dataset({
     ...     "timestamp": ("order", bars[[1, 2, 2]].values),
+    ...     "symbol": ("order", ["AAA", "AAA", "BBB"]),
     ...     "size": ("order", [100.0, -50.0, 40.0]),
     ...     "price": ("order", [10.0, 11.0, 11.0]),
     ... })
     >>> turnover(orders, value, init_cash=1000.0).values.tolist()
     [1.0, 0.9]
+    >>> settled = [{"settlement_timestamp": bars[2], "axis_symbol": "BBB"}]
+    >>> turnover(orders, value, init_cash=1000.0, settlements=settled).values.tolist()
+    [1.0, 0.5]
     """
-    if orders.sizes.get("order", 0) == 0:
+    count = orders.sizes.get("order", 0)
+    order_ts = orders["timestamp"].values.astype("datetime64[ns]") if count else None
+    if count and len(settlements):
+        settled = {
+            (np.datetime64(pd.Timestamp(record["settlement_timestamp"]), "ns"), str(record["axis_symbol"]))
+            for record in settlements
+        }
+        kept = np.array(
+            [
+                (bar, str(symbol)) not in settled
+                for bar, symbol in zip(order_ts, orders["symbol"].values)
+            ],
+            dtype=bool,
+        )
+        orders = orders.isel(order=kept)
+        order_ts = order_ts[kept]
+        count = int(kept.sum())
+    if count == 0:
         return xr.DataArray(
             np.array([], dtype=np.float64),
             dims=("timestamp",),
             coords={"timestamp": np.array([], dtype="datetime64[ns]")},
         )
 
-    order_ts = orders["timestamp"].values.astype("datetime64[ns]")
     notional = np.abs(orders["size"].values.astype(np.float64)) * orders[
         "price"
     ].values.astype(np.float64)
@@ -668,29 +738,39 @@ def turnover(orders: xr.Dataset, value: xr.DataArray, init_cash: float) -> xr.Da
 
 def turnover_stats(
     turnover: xr.DataArray,
+    rebalances,
+    timestamps,
     *,
+    ranges: Sequence[tuple[str, str]],
     bar_interval,
     year_freq: pd.Timedelta,
-    rebalance_periods: int,
 ) -> dict:
-    """Summarize per-fill-bar turnover as the three percent-valued metric rows.
+    """Summarize the rebalance turnover of a slice as the three percent-valued metric rows.
 
-    ``Turnover per Rebalance [%]`` is the mean over the fill bars, ``Total
-    Turnover [%]`` their sum and ``Annualized Turnover [%]`` the mean times
-    bars per year (``year_freq / bar_interval``) divided by
-    ``rebalance_periods``. With no fills the mean and the annualized value
-    are NaN and the total is 0.
+    ``Total Turnover [%]`` is the sum of ``turnover`` over the fill bars in
+    ``ranges``. ``Turnover per Rebalance [%]`` is that total over the
+    decided rebalances whose fill bar (the bar after the rebalance) is in
+    ``ranges``, so a rebalance that placed no order counts as zero; NaN
+    without one. ``Annualized Turnover [%]`` is the total over the slice's
+    years: its bars over the bars of a year (``year_freq / bar_interval``);
+    NaN for a slice without a bar.
 
     Parameters
     ----------
     turnover : xarray.DataArray
-        ``turnover``'s output, possibly cut to a slice.
+        ``turnover``'s output over the run (rebalance fills only).
+    rebalances : array_like of datetime64
+        The bars of the decided rebalances (the rebalance record's
+        ``decided`` bars).
+    timestamps : array_like of datetime64
+        The run's bars: the axis a rebalance's fill bar and the slice's
+        length are counted on.
+    ranges : sequence of (str, str)
+        Inclusive bar-label ranges of the slice.
     bar_interval
         The bar spacing, anything ``pd.Timedelta`` accepts.
     year_freq : pd.Timedelta
         One year, as ``year_freq`` returns it.
-    rebalance_periods : int
-        Bars between rebalances.
 
     Returns
     -------
@@ -699,21 +779,30 @@ def turnover_stats(
 
     Examples
     --------
-    >>> flows = xr.DataArray([1.0, 0.5], dims="timestamp")
+    Decided on bars 0, 2 and 4 of six; the last decision placed no order:
+
+    >>> bars = pd.bdate_range("2024-01-01", periods=6)
+    >>> flows = xr.DataArray([1.0, 0.5], dims="timestamp", coords={"timestamp": bars[[1, 3]]})
     >>> stats = turnover_stats(
-    ...     flows, bar_interval="1D", year_freq=year_freq("1D", 252, 390), rebalance_periods=5
+    ...     flows, bars[[0, 2, 4]].values, bars.values, ranges=[("2024-01-01", "2024-01-08")],
+    ...     bar_interval="1D", year_freq=year_freq("1D", 252, 390),
     ... )
     >>> {key: round(value, 6) for key, value in stats.items()}
-    {'Turnover per Rebalance [%]': 75.0, 'Total Turnover [%]': 150.0, 'Annualized Turnover [%]': 3780.0}
+    {'Turnover per Rebalance [%]': 50.0, 'Total Turnover [%]': 150.0, 'Annualized Turnover [%]': 6300.0}
     """
-    values = np.asarray(turnover.values, dtype=np.float64)
-    interval = pd.Timedelta(bar_interval)
-    bars_per_year = pd.Timedelta(year_freq) / interval
-    mean = float(values.mean()) if values.size else float("nan")
+    bars = np.asarray(timestamps).astype("datetime64[ns]")
+    flows = np.asarray(turnover.values, dtype=np.float64)
+    total = float(flows[in_ranges(turnover.timestamp.values, ranges)].sum()) if flows.size else 0.0
+    fills = rebalance_fill_bars(rebalances, bars)
+    count = int(in_ranges(fills, ranges).sum()) if fills.size else 0
+    bars_in_slice = int(in_ranges(bars, ranges).sum()) if bars.size else 0
+    bars_per_year = pd.Timedelta(year_freq) / pd.Timedelta(bar_interval)
     return {
-        "Turnover per Rebalance [%]": mean * 100.0,
-        "Total Turnover [%]": float(values.sum()) * 100.0,
-        "Annualized Turnover [%]": mean * bars_per_year / rebalance_periods * 100.0,
+        "Turnover per Rebalance [%]": total / count * 100.0 if count else float("nan"),
+        "Total Turnover [%]": total * 100.0,
+        "Annualized Turnover [%]": (
+            total / (bars_in_slice / bars_per_year) * 100.0 if bars_in_slice else float("nan")
+        ),
     }
 
 

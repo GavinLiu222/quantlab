@@ -153,6 +153,15 @@ def _run_backtester(
     return USEquityCrossectionSelectStockVectorBt(CrossSectionBacktestConfig(**kwargs))
 
 
+def _no_rebalances(index: pd.DatetimeIndex) -> xr.Dataset:
+    """A rebalance record of ``index`` with nothing scheduled, for a hand-built simulation."""
+    never = np.zeros(index.size, dtype=bool)
+    return xr.Dataset(
+        {"scheduled": ("timestamp", never), "decided": ("timestamp", never.copy())},
+        coords={"timestamp": index.values},
+    )
+
+
 def test_slice_statistics_compare_exact_bar_timestamps_not_days(tmp_path):
     """CR-01: slice masks, sliced returns and trade counts use exact bar times.
 
@@ -195,6 +204,7 @@ def test_slice_statistics_compare_exact_bar_timestamps_not_days(tmp_path):
         bar_interval=np.timedelta64(1, "h"),
         trades=trades,
         native=types.SimpleNamespace(returns=lambda: returns),
+        rebalances=_no_rebalances(index),
     )
     ranges = [("2024-01-01T21:00:00", "2024-01-02")]
 
@@ -246,6 +256,7 @@ def test_whole_order_count_is_zero_for_an_order_less_simulation(tmp_path, monkey
         bar_interval=np.timedelta64(1, "h"),
         trades=xr.Dataset(),
         native=None,
+        rebalances=_no_rebalances(index),
     )
     # No in-sample and no out-of-sample range, so neither slice is computed and
     # the assertion below can only be about the whole-window read.

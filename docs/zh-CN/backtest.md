@@ -4,7 +4,7 @@
 
 回测拿一个训练好的收益模型和一份价格数据集，展示模型的预测如果拿来交易会得到什么结果。模型对每个标的、每根 bar 给出一个分数，选股规则把分数变成目标权重，模拟引擎按这些权重成交并记录净值曲线。每次运行都会写出一个运行目录，里面有权重、净值曲线、指标、HTML 报告，以及重建这次运行所需的配置。
 
-主要的类有：`BaseBacktester`（`quantlab/backtest/base.py`）、vectorbt 引擎 `VectorBtBacktester`（`quantlab/backtest/engine_vectorbt.py`）、决策输入与调仓时点（`quantlab/portfolio/decision_inputs.py` 中的 `DecisionInputs` 和 `rebalance_mask`）、配置里 `constructor` 持有的组合构建规则（继承 `quantlab/portfolio/base.py` 中的 `PortfolioConstructor`：这里用 `TopNConstructor`，也可以用[组合构建](portfolio.md)里的均值-方差优化器），以及美股回测器 `USEquityCrossectionSelectStockVectorBt`（`quantlab/backtest/predefined/us_equity.py`）。
+主要的类有：`BaseBacktester`（`quantlab/backtest/base.py`）、vectorbt 引擎 `VectorBtBacktester`（`quantlab/backtest/engine_vectorbt.py`）、决策输入与调仓时点（`quantlab/portfolio/decision_inputs.py` 中的 `DecisionInputs`）、配置里 `constructor` 持有的组合构建规则（继承 `quantlab/portfolio/base.py` 中的 `PortfolioConstructor`：这里用 `TopNConstructor`，也可以用[组合构建](portfolio.md)里的均值-方差优化器），以及美股回测器 `USEquityCrossectionSelectStockVectorBt`（`quantlab/backtest/predefined/us_equity.py`）。
 
 ## 前置条件
 
@@ -186,6 +186,13 @@ timestamp
 
 窗口的第一根 bar 调仓，之后每隔 `rebalance_periods` 根 bar 调仓一次。最后一根 bar 从不调仓，因为在它上面形成的信号在窗口内已经没有下一根 bar 可供成交。`direction="long_short"` 时，分数最高的 `top_n` 个标的各得 `+0.5/top_n`，分数最低的 `top_n` 个各得 `-0.5/top_n`。
 
+除 `weight` 外，权重还带着*调仓记录*：`timestamp` 上的两个布尔变量，`scheduled` 是调仓时点表排到的 bar，`decided` 是其中规则做了决定的 bar。规则在排到的 bar 上保持不动（组合构建失败，或规则返回全 NaN）的是*保持 bar*：排到了、没有决定，这一行全为 NaN。`decided` 恰好标出有有限目标的行，记录与权重行不符时回测器会拒绝。换手率、调仓胜率、归因和报告都从这份记录读调仓。交给 `run_weights()` 的权重是调用方自己的决定，所以它的记录就是有目标的那些行，既排到也已决定。
+
+```python
+>>> int(result.weights["scheduled"].sum()), int(result.weights["decided"].sum())
+(6, 6)
+```
+
 ### t 时刻的信号在 t+1 时刻成交
 
 在 bar `t` 形成的权重行，按 bar `t + 1` 的成交价执行。美股的成交价是复权开盘价（`adjOpen`），组合按复权收盘价（`adjClose`）估值。下面第一批订单出现在 2024-02-13，也就是第一次调仓后的下一根 bar。买入价等于当天开盘价加上默认的 0.05% 滑点。
@@ -263,10 +270,10 @@ out_of_sample -5.61 -4.27 13
 >>> list(m["whole"])[:6]
 ['Start', 'End', 'Period', 'Start Value', 'End Value', 'Total Return [%]']
 >>> round(m["whole"]["Turnover per Rebalance [%]"])
-134
+125
 ```
 
-换手是某根 bar 的单边成交额除以成交前的组合价值，和其他带 `[%]` 的行一样以百分数表示，所以从现金一次性建仓约为 100，整本书全部换掉约为 200。这里的分数来自随机游走收益，负收益没有任何含义。
+换手是一次调仓成交的单边成交额除以成交前的组合价值，和其他带 `[%]` 的行一样以百分数表示，所以从现金一次性建仓约为 100，整本书全部换掉约为 200。这几行按[调仓记录](#目标权重契约)里已决定的调仓计算：`Total Turnover [%]` 是它们成交换手之和（退市结算不是调仓的交易，不计入；它仍记在 `settlements()`、`Total Orders` 和费用里），`Turnover per Rebalance [%]` 是该总和除以成交 bar 落在区间内的已决定调仓数（没有下单的调仓记为 0，保持 bar 不计），`Annualized Turnover [%]` 是总和除以区间的年数，即区间 bar 数除以一年的 bar 数。`rebalance_periods` 不参与其中任何一项。调仓胜率的持有期从一次已决定调仓的成交 bar 开始，到下一次的成交 bar 之前为止，所以退市结算不会开始新的持有期。这里的分数来自随机游走收益，负收益没有任何含义。
 
 ### 运行目录
 
@@ -284,7 +291,7 @@ out_of_sample -5.61 -4.27 13
 | `data_fingerprint` | 本次运行读了什么，在读取处记录：每个数据集或因子 store 按其组件路径（`price_dataset`、`model.factors.0.dataset`、`benchmark_dataset`）为键，每个不同的请求一条摘要和范围，并带有每个变量的摘要和 dtype，供不一致告警指出哪里变了。覆盖价格列、退市判断向后读取的部分、规则在窗口之前读取的价格历史、每个因子的输入、合并数据集的各个输入，以及因子风险模型的 store（`risk_model.regression`、`risk_model.estimate`），每个 store 一个请求，覆盖因子归因和 `FactorRiskStoreEstimator` 读过的 bar。`run_cv()` 运行记录的是拼接段，每一折记录自己的读取。训练读取记录在训练单元上（`trained_run().data_fingerprint`）。 |
 | `code` | 运行所用的代码：quantlab 的 git commit 以及已跟踪文件是否有改动，回测器组件树中每个定义了类的模块的 SHA-256（区分框架模块与组件模块，并列出使用它的组件路径），以及 numpy、pandas、xarray、polars、xgboost、torch、vectorbt、KunQuant 和 cvxpy 的版本。 |
 | `trained_run()` | 回测所用的训练单元，即一个 `TrainedRun`：train 模式下是训练出的单元，load 模式下是 checkpoint 所在的单元，`run_cv()` 是 walk-forward 单元，一折则是该折自己的单元；`run_weights()` 为 `None`。 |
-| `weights()`、`equity()` | `(timestamp, symbol)` 上的目标权重；`timestamp` 上的组合 `value` 与每根 bar 的 `returns`，跑了基准时另有 `benchmark_value` 和 `benchmark_returns`。 |
+| `weights()`、`equity()` | `(timestamp, symbol)` 上的目标权重，以及调仓记录（`timestamp` 上的 `scheduled` 与 `decided`）；`timestamp` 上的组合 `value` 与每根 bar 的 `returns`，跑了基准时另有 `benchmark_value` 和 `benchmark_returns`。 |
 | `holdings()` | 引擎模拟出的持仓（`holdings.zarr`），`(timestamp, symbol)` 上的 `holding` 面板：每根 bar 收盘时各标的的市值占组合净值（含现金）的比例，覆盖窗口内每根 bar，空头为负，没有持仓处为 0。调仓成交时持仓等于目标权重（扣除成本），之后随价格漂移到下一次调仓；被拒订单和退市结算也体现在其中。`run_cv()` 一折的持仓是所属运行的持仓在该折窗口上的切片。不带持仓写出的运行（引擎不提供持仓）为 `None`。 |
 | `metrics()` | 与 `result.metrics` 相同的映射，按 JSON 保存的形式：NaN 和无穷大变为 `None`，元组变为列表。每次运行都记录 `execution`（被拒订单和最大目标偏差）。`run()` 和 `run_cv()` 的拼接过程还记录 `portfolio_construction`：`failed_bar_count` 和 `failed_bars`，即组合构建规则无法决定（优化失败或不可行）、回测改为维持原仓位的调仓 bar，以及组合构建规则报告的事件，例如均值-方差优化器的 `closed_without_risk`（因风险模型没有估计而被平仓的持仓），或 top-n 规则的 `tie_at_cutoff`（截断点落在并列分数中间时被排除的并列标的，说明入选是按标的顺序而不是按分数决定的），带 `count`（所有 bar 上的标的总数）和 `bars`，每个 bar 一条记录，记录列出涉及的标的，`tie_at_cutoff` 则只记数量。 |
 | `settlements()` | 退市结算记录。 |
@@ -574,11 +581,11 @@ bool(np.allclose(per_bar["contribution"].sum("term"), attributed.simulation.retu
 
 `report.html` 是一个页面：深色页头写明运行名、窗口和基准，左侧是分区导航，上方是一排关键指标，每个分区里用卡片把图表和解释它的表格并排放在一起。鼠标悬停在关键指标、指标名、因子归因的数字卡片或图表标题旁的 ⓘ 上，会显示一段通俗的英文说明。
 
-- **关键指标**：总收益、超额收益、信息比率、胜率、Sharpe、最大回撤、beta 和年化换手，每项下面给出基准的对应值或相关数字。没有基准时是总收益、年化收益、胜率、Sharpe、最大回撤、波动率和换手。胜率是跑赢基准的持有期（从一个有成交的 bar 到下一个有成交的 bar 之前）所占的比例，下面附跑赢基准的自然月比例；没有基准时是收益为正的比例。
+- **关键指标**：总收益、超额收益、信息比率、胜率、Sharpe、最大回撤、beta 和年化换手，每项下面给出基准的对应值或相关数字。没有基准时是总收益、年化收益、胜率、Sharpe、最大回撤、波动率和换手。胜率是跑赢基准的持有期（从一次已决定调仓的成交 bar 到下一次的成交 bar 之前）所占的比例，下面附跑赢基准的自然月比例；没有基准时是收益为正的比例。
 - **Overview**："Windows" 时间轴，画出训练窗口和回测窗口（样本外交易的 bar 为绿色，落在训练窗口内交易的 bar 为红色，训练窗口为浅蓝色）：`run()` 只有一行；`run_cv()` 最上面是回测窗口，下面每折一行；鼠标悬停显示各窗口的日期；运行带 in-sample 部分时还有 "In-sample vs out-of-sample"，并列样本内、样本外、两者之差和整个窗口；*Performance* 图（带线性/对数切换的净值、回撤、月度收益和按年按月的热力图）旁边是 "Strategy vs *基准*"，按收益、风险、风险调整后指标分组，策略旁边列出基准和差值（百分比指标的差值用百分点）。页面不认识的指标，无论来自策略、基准还是 relative 块，都列在 "Other" 下。
 - **Excess**，有基准时显示：累计超额收益，可在对数 `Σ log((1+r)/(1+b))` 与算术 `Σ(r − b)` 之间切换，前者取指数减 1 就是几何超额，后者的读法与累计 IC 相同；下面是超额回撤；旁边是 "Relative to *基准*"（几何与算术超额、超额回撤、跟踪误差、信息比率、beta、相关系数、CAPM alpha）。
 - **Rolling**：滚动一年的超额收益、信息比率和 beta，没有基准时是滚动一年的收益、波动率和 Sharpe。
-- **Portfolio**：每个成交 bar 的换手、目标权重的持股数与总敞口，有空头时还有净敞口；旁边是 "Trading"（换手、费用、订单、往返交易、被拒订单、组合构建失败与事件）。
+- **Portfolio**：每次调仓成交的换手、已决定调仓的目标权重的持股数与总敞口，有空头时还有净敞口；旁边是 "Trading"（换手、费用、订单、往返交易、被拒订单、组合构建失败与事件）。
 - **Holdings**：先看收益来自哪些持仓：每天把上一收盘持有的标的按持仓大小排序，每个标的的贡献为持仓乘以当天收益；用滑条任意选择最大的一部分标的，与其余标的和残差（开盘成交与交易成本）对比，按天加总，给出汇总卡片和累计曲线，再给出按持仓大小十分位和年份的贡献表和柱状图；可用按钮切换净值、只看盈利或只看亏损，并给出亏损的“持仓·天”占比。然后逐日列出持有或被目标权重选中的每个标的，按代码显示（价格 store 旁有代码 sidecar 时用当天在用的代码，否则用标的 id），给出上一次调仓的目标权重、当天持仓、并列的条形图，以及持有期收益率（该标的在当天所属调仓持有期内的价格收益：从信号日收盘到下一次调仓成交前最后一个收盘，用账户估值所用的估值价格；每个 bar 都调仓时就是该 bar 的收益），以及当天的现金、持股数、前十大持仓占比、目标来自哪次调仓、相比上一次调仓新增的名字（本次目标超过 1e-4、上一次调仓未选中）。目标不超过 1e-4（`DUST_THRESHOLD`）的持仓合并为一行 "Other"。可以按按钮、按调仓、按日期、拖动滑块或用方向键逐日切换；可按任意列排序、按代码或公司名筛选，并把当天导出为 CSV。数据以 JSON 嵌入页面（十年日频、几百个标的约增加几 MB）。
 - **Attribution**，带模型的运行才有：超额拆成股票池、选股和成本三部分，策略、扣成本前的同一组权重、等权股票池和基准的累计对数增长，各分数分组的累计对数增长，以及各组的年化对数增长（见[超额归因](#超额归因)）。
 - **Factor attribution**，给了 `risk_model` 才有（见[把收益和风险归因到因子](#把收益和风险归因到因子)）：六个数字卡片（年化对数增长、来自因子的部分、无风险加交易、预测与实现波动率、覆盖率），然后收益与风险左右并排：各部分的年化对数增长画成从 0 轴起的柱，加起来等于合计，旁边是各部分对预测波动率的贡献、预测波动率和实现波动率；各部分的累计对数贡献（加起来等于对数净值），旁边是按月、按部分的预测波动率与 63 根 bar 的实现波动率；各风格的平均暴露与贡献，旁边是它们的预测与实现风险；贡献最好和最差的各 10 个行业，旁边是按预测风险排序的行业；最后是各风格每周暴露的热力图，以及各部分收益与实现风险的对比。行业和风格用风险模型的 `factor_labels()` 命名（`Use4RiskModel` 用 Fama-French 48 行业名）。
@@ -674,14 +681,15 @@ True
 |---|---|
 | `return_stats(returns, *, bar_interval, year_freq, ranges=None)` | `in_sample`、`out_of_sample` 和 `benchmark` 的收益块（`Total Return [%]` ... `Value at Risk`），与 vectorbt 的收益统计逐位相等 |
 | `relative_stats(returns, benchmark_returns, *, bar_interval, year_freq, ranges)` | `relative` |
-| `win_rates(returns, fill_timestamps, *, ranges, benchmark_returns=None)` | `Rebalance Win Rate [%]`、`Monthly Win Rate [%]`（及其 `vs Benchmark` 形式） |
-| `turnover(orders, value, init_cash)` 与 `turnover_stats(turnover, *, bar_interval, year_freq, rebalance_periods)` | `Turnover per Rebalance [%]`、`Total Turnover [%]`、`Annualized Turnover [%]` |
+| `win_rates(returns, rebalances, *, ranges, benchmark_returns=None)` | `Rebalance Win Rate [%]`、`Monthly Win Rate [%]`（及其 `vs Benchmark` 形式） |
+| `turnover(orders, value, init_cash, *, settlements=())` 与 `turnover_stats(turnover, rebalances, timestamps, *, ranges, bar_interval, year_freq)` | `Turnover per Rebalance [%]`、`Total Turnover [%]`、`Annualized Turnover [%]` |
+| `rebalance_fill_bars(rebalances, timestamps)` | 每次已决定调仓的成交 bar，即其后一根 bar，也是其持有期的起点 |
 | `year_freq(bar_interval, trading_days_per_year, session_minutes_per_day)` | 各行年化所用的一年长度（`MarketSpec.year_freq`） |
 | `round_trips(fills, close, *, cash_flows=None)` 与 `round_trip_stats(trips, *, bar_interval)` | `whole` 的交易各行（`Total Trades` ... `Expectancy`），在 vectorbt 自己的成交上与其持仓交易视图逐位相等 |
 | `exposure_stats(fills, close, cash)` | `whole` 的 `Max Gross Exposure [%]`，与 vectorbt 的值在舍入误差内相等 |
 | `drawdown_span(value)` 与 `bar_label(value)` | 报告标出的最深回撤，以及 `metrics.json` 为一根 bar 写的标签 |
 
-`ranges` 是闭区间的 bar 标签对，与 `metrics.json` 记录的形式相同（`in_sample_range`、`out_of_sample_ranges`）。策略自身的 `whole` 块是例外：其中换手率和胜率各行来自这些函数，而收益、比率、交易、敞口和费用各行来自引擎的组合统计；其中交易和敞口各行等于对其成交调用 `round_trip_stats` 和 `exposure_stats` 的结果。以上文 `WeightsVectorBt` 的运行结果 `held` 为例：
+`ranges` 是闭区间的 bar 标签对，与 `metrics.json` 记录的形式相同（`in_sample_range`、`out_of_sample_ranges`）。`rebalances` 是已决定调仓所在的 bar，即运行调仓记录里的 `decided` bar（`weights()["decided"]`）；`settlements` 是运行的 `settlements()`，`turnover` 会剔除其成交。策略自身的 `whole` 块是例外：其中换手率和胜率各行来自这些函数，而收益、比率、交易、敞口和费用各行来自引擎的组合统计；其中交易和敞口各行等于对其成交调用 `round_trip_stats` 和 `exposure_stats` 的结果。以上文 `WeightsVectorBt` 的运行结果 `held` 为例：
 
 ```python
 >>> from quantlab.runs.backtest_stats import return_stats, turnover, turnover_stats, year_freq
@@ -693,8 +701,14 @@ True
 >>> round(stats["Total Return [%]"], 4), stats["Period"]
 (18.1818, Timedelta('4 days 00:00:00'))
 >>> flows = turnover(held.simulation.orders, held.simulation.value, init_cash=1_000_000.0)
->>> turnover_stats(flows, bar_interval="1D", year_freq=year, rebalance_periods=1)
-{'Turnover per Rebalance [%]': 100.0, 'Total Turnover [%]': 100.0, 'Annualized Turnover [%]': 25200.0}
+>>> decided = held.weights["decided"]
+>>> rebalances = decided.timestamp.values[decided.values]
+>>> stats = turnover_stats(
+...     flows, rebalances, held.simulation.value.timestamp.values,
+...     ranges=[("2024-01-01", "2024-01-05")], bar_interval="1D", year_freq=year,
+... )
+>>> {key: round(value, 6) for key, value in stats.items()}
+{'Turnover per Rebalance [%]': 100.0, 'Total Turnover [%]': 100.0, 'Annualized Turnover [%]': 5040.0}
 ```
 
 一个往返交易（round trip）是某个标的从空仓到空仓的一段持仓：加仓或减仓不会结束它，穿过零的成交结束它并开出反向持仓，最后一根 bar 仍持有的仓位是未平仓的，按其最后的估值价标记。`round_trips` 接收成交（`timestamp`、`symbol`、带符号的 `size`、`price`、`fees`）和估值价格，后者给出计算往返长度所用的 bar 轴；`cash_flows`（`timestamp`、`symbol`、`amount`）把持仓期间收到的股息或分配计入该往返的盈亏和收益率；现金流的时间戳是持仓必须持有进入的那根 bar（股息的除息日 bar）。拆股不是输入：成交和价格须在同一复权口径上给出。以上文的运行为例，其订单的 `size` 不带符号，方向在 `side` 中：
@@ -774,15 +788,15 @@ True
 
 ## 扩展
 
-新的选股规则是 `VectorBtBacktester` 的子类，需要三个成员：`config_cls`、`MARKET` 和 `_generate_signals(predictions, prices, delisted)`。该方法返回一个数据集，其 `weight` 变量满足上面的契约。`predictions` 与 `prices` 共用同一套 `(timestamp, symbol)` 坐标轴，`delisted` 是窗口内的退市标记，也就是引擎结算所用的那一份。下面的规则让每个可交易标的的权重与其正分数成比例，没有正分数时空仓。它复用了 `rebalance_mask` 和 `US_EQUITY_MARKET` 的价格约定。保存为 `score_weighted.py`。
+新的选股规则是 `VectorBtBacktester` 的子类，需要三个成员：`config_cls`、`MARKET` 和 `_generate_signals(predictions, prices, delisted)`。该方法返回一个数据集，其 `weight` 变量满足上面的契约。`predictions` 与 `prices` 共用同一套 `(timestamp, symbol)` 坐标轴，`delisted` 是窗口内的退市标记，也就是引擎结算所用的那一份。数据集还要带调仓记录，即 `timestamp` 上的 `scheduled` 与 `decided`（见[目标权重契约](#目标权重契约)）；从不在排到的 bar 上保持不动的规则，排到的每根 bar 都已决定。下面的规则按自己的调仓时点，让每个可交易标的的权重与其正分数成比例，没有正分数时空仓，并沿用 `US_EQUITY_MARKET` 的价格约定。保存为 `score_weighted.py`。
 
 ```python
 """一条新的选股规则：多头权重与正分数成比例。"""
 
+import numpy as np
 import xarray as xr
 
 from quantlab.backtest.engine_vectorbt import VectorBtBacktester
-from quantlab.portfolio.decision_inputs import rebalance_mask
 from quantlab.backtest.predefined.us_equity import US_EQUITY_MARKET
 from quantlab.backtest.config import BacktestConfig
 
@@ -799,11 +813,14 @@ class ScoreWeightedBacktester(VectorBtBacktester):
         positive = scores.where(tradable).clip(min=0).fillna(0.0)
         total = positive.sum("symbol")
         weight = (positive / total.where(total > 0)).fillna(0.0)  # 没有正分数则空仓
+        # 从第一根起每 rebalance_periods 根一次；最后一根没有成交 bar，从不调仓。
+        bars = np.arange(prices.sizes["timestamp"])
         rebalance = xr.DataArray(
-            rebalance_mask(prices.sizes["timestamp"], self.config.rebalance_periods),
+            (bars % self.config.rebalance_periods == 0) & (bars < bars.size - 1),
             dims="timestamp", coords={"timestamp": prices.timestamp},
         )
-        return weight.where(rebalance).to_dataset(name="weight")  # 非调仓 bar 为 NaN
+        weights = weight.where(rebalance).to_dataset(name="weight")  # 非调仓 bar 为 NaN
+        return weights.assign(scheduled=rebalance, decided=rebalance)  # 排到的 bar 都已决定
 ```
 
 它的配置类是 `BacktestConfig`，所以不需要 `constructor`。

@@ -217,8 +217,10 @@ ValueError: USEquityCrossectionSelectStockVectorBt: labels[0] Forward ('open_ret
 The portfolio rebalances on the first bar of the window and every
 `rebalance_periods` bars after it; the other bars are hold rows. The last bar
 of the window never rebalances, because a signal formed there has no next bar
-inside the window to fill on. `quantlab.portfolio.decision_inputs.rebalance_mask`
-computes this schedule, and `DecisionInputs` follows it.
+inside the window to fill on. `DecisionInputs` (`quantlab.portfolio.decision_inputs`)
+holds this schedule, and records beside the weights which bars it scheduled
+(`scheduled`) and which of them the rule decided (`decided`); a scheduled bar
+the rule held is not decided.
 
 On each rebalance bar, the config's `constructor`, a portfolio construction
 rule, turns that bar's predictions into weights. `TopNConstructor` (config
@@ -412,11 +414,17 @@ never re-simulated, because that would reset the capital and change the path.
 A few metric definitions are worth knowing. Trade statistics use vectorbt's
 position view: one trade is one symbol's round trip from entry back to flat,
 so trimming a holding back to its target weight is not a closed trade.
-`Total Orders` is the number of fills. *Turnover* is the traded value on a
-fill bar divided by the portfolio value before it, reported in percent like
-every other `[%]` row; a full switch of a long-only book (sell everything,
-buy something else) is about 200%, which is why the example's
-`Turnover per Rebalance [%]` is around 140.
+`Total Orders` is the number of fills. *Turnover* is the traded value of a
+rebalance's fills divided by the portfolio value before them, reported in
+percent like every other `[%]` row; a full switch of a long-only book (sell
+everything, buy something else) is about 200%, which is why the example's
+`Turnover per Rebalance [%]` is around 140. The turnover rows count the
+rebalances the rule decided: `Total Turnover [%]` sums their fills (a
+delisting settlement is not counted), `Turnover per Rebalance [%]` is that
+total over the decided rebalances (one that placed no order counts as zero,
+a held bar not at all) and `Annualized Turnover [%]` is the total over the
+window's years. The rebalance win rate's holding periods run from one
+decided rebalance's fill to the next one's.
 
 ## Replaying cross-validation with `run_cv()`
 

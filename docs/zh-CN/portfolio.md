@@ -87,7 +87,8 @@ array([0.5, 0.5, 0. , 0. ])
 
 - 可交易性取自价格数据集的 `tradable_bars`；因子值是规则声明的因子在窗口上计算的结果，各带自己的预热期；风险暴露是规则声明的风险模型的 `exposures` 在窗口上的一次请求。这些都来自规则给出的一个值 `declared_inputs()`（`InputDeclaration`：`lookback_bars`、`history_bars`、`factors`、`risk_model`），只问一次。
 - 当前权重是之前各次调仓实际留下的持仓，由执行模块（`quantlab.execution.rules`）按模拟引擎完全相同的方式重放，包括被拒订单、退市结算、sizing basis、手续费和滑点。回测器传入自己 config 中的 `execution` 设置，以及交给引擎的同一份退市标记；不传设置时按成交价定仓位、不计成本。
-- 调仓 bar 是从锚点起每 `rebalance_periods` 根中的一根；最后一根 bar 从不调仓，因为在那里决定的订单没有下一根 bar 可以成交（同一模块中的 `rebalance_mask`）。
+- 调仓 bar 是从锚点起每 `rebalance_periods` 根中的一根；最后一根 bar 从不调仓，因为在那里决定的订单没有下一根 bar 可以成交。`rebalances(t)` 对单根 bar 问的是同一份调仓时点表。
+- 结果在 `weight` 旁记下调仓：`scheduled`（时点表排到的 bar）与 `decided`（其中规则做了决定的 bar），都是 `timestamp` 上的布尔值。规则在排到的 bar 上保持不动（抛出 `PortfolioConstructionError` 或返回全 NaN 的一行）的是*保持 bar*：排到了、没有决定。凡是读一次运行调仓的地方都从这份记录读（见[回测](backtest.md#目标权重契约)中的目标权重契约）。
 - 收益窗口用每个标的最后已知的价格计算，所以一次停牌表现为若干个零收益，然后在复牌当天出现整段涨跌。
 - 每根 bar 只读截至（含）它的最近 `history_bars` 个原始估值价格（默认 `lookback_bars + 1`；Ledoit-Wolf 为 `lookback_bars + 1 + max_stale_bars`；均值方差取其协方差估计器的值），所以决策与价格历史从哪里开始无关。回测的预热期包含第一根 bar 之前的 `history_bars - 1` 根 bar，所以第一根 bar 就有完整的窗口。
 

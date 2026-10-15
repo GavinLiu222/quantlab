@@ -671,14 +671,19 @@ class BacktestRun:
     # ------------------------------------------------------------ readers
 
     def weights(self) -> xr.Dataset:
-        """The simulated target weights, a ``weight`` panel on ``(timestamp, symbol)``.
+        """The simulated target weights, a ``weight`` panel on ``(timestamp, symbol)``, with the rebalance record.
 
-        A fold's are its ``run_cv`` run's, cut to the fold's window.
+        The record is ``scheduled`` (the bars the rebalance schedule named)
+        and ``decided`` (those the rule decided; a held bar is scheduled and
+        not decided), booleans on ``timestamp``. A fold's are its ``run_cv``
+        run's, cut to the fold's window.
 
         Examples
         --------
         >>> BacktestRun.open(run_dir).weights()["weight"].dims
         ('timestamp', 'symbol')
+        >>> sorted(BacktestRun.open(run_dir).weights().data_vars)
+        ['decided', 'scheduled', 'weight']
         """
         return self._panel(_WEIGHTS_FILE)
 

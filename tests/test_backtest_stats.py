@@ -9,7 +9,7 @@ the model layer, the dataset layer or vectorbt. What is locked here:
   (the ``in_sample``, ``out_of_sample`` and ``benchmark`` blocks), equal to
   the bit, on ordinary, flat, rising, short and gapped series;
 - a backtest's ``metrics.json`` rows are the functions' output on its
-  simulation;
+  simulation and the decided rebalances its run directory records;
 - ``drawdown_span`` picks the deepest of vectorbt's drawdown records of a
   value curve, as the vectorbt engine's report does (#115), and
   ``bar_label`` writes a bar as ``metrics.json`` does;
@@ -31,7 +31,6 @@ from quantlab.backtest.predefined.us_equity import USEquityCrossectionSelectStoc
 from quantlab.runs.backtest_stats import (
     bar_label,
     drawdown_span,
-    in_ranges,
     relative_stats,
     return_stats,
     turnover,
@@ -39,6 +38,7 @@ from quantlab.runs.backtest_stats import (
     win_rates,
     year_freq,
 )
+from quantlab.runs.backtest_run import BacktestRun
 from tests.test_backtest_run_weights import _bars, _config, _day, stores  # noqa: F401
 
 BAR = pd.Timedelta("1D")
@@ -106,8 +106,12 @@ def test_a_runs_metrics_rows_are_the_functions_output(stores):  # noqa: F811
         "in_sample": [tuple(metrics["in_sample_range"])],
         "out_of_sample": [tuple(r) for r in metrics["out_of_sample_ranges"]],
     }
-    fills = simulation.orders["timestamp"].values
-    flows = turnover(simulation.orders, simulation.value, init_cash=1_000_000.0)
+    record = BacktestRun.open(result.run_dir).weights()
+    decided = record.timestamp.values[record["decided"].values]
+    flows = turnover(
+        simulation.orders, simulation.value, init_cash=1_000_000.0,
+        settlements=simulation.settlements,
+    )
 
     def rows(block: dict, wanted: dict) -> dict:
         return {key: block[key] for key in wanted}
@@ -121,16 +125,15 @@ def test_a_runs_metrics_rows_are_the_functions_output(stores):  # noqa: F811
                 bar_interval=bar, year_freq=year, ranges=ranges,
             ),
             **win_rates(
-                simulation.returns, fills, ranges=ranges,
+                simulation.returns, decided, ranges=ranges,
                 benchmark_returns=benchmark.returns,
             ),
         }
         _assert_same_rows(metrics["relative"][name], relative)
         own = {
-            **win_rates(simulation.returns, fills, ranges=ranges),
+            **win_rates(simulation.returns, decided, ranges=ranges),
             **turnover_stats(
-                flows.isel(timestamp=in_ranges(flows.timestamp.values, ranges)),
-                bar_interval=bar, year_freq=year, rebalance_periods=5,
+                flows, decided, timestamps, ranges=ranges, bar_interval=bar, year_freq=year,
             ),
         }
         if name != "whole":

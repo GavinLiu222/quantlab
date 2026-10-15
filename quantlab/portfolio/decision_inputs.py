@@ -20,9 +20,15 @@ a longer price history starts.
 The weights held are not a decision input. ``weights`` replays them through
 the Execution module (``quantlab.execution.rules``) with the run's delisting
 marks; ``context`` takes them from the caller, an executor's own account.
-The rebalance schedule, ``rebalance_mask``, lives here as well: every
-``rebalance_periods`` bars from the *anchor* (the first bar of the
-prediction panel a run decided on), the last bar never.
+The rebalance schedule lives here as well, once: every
+``rebalance_periods`` bars of the dataset's calendar from the *anchor* (the
+first bar of the prediction panel a run decided on), before ``end``.
+``rebalances(t)`` asks it for one bar and ``weights`` for a panel, whose
+last bar it never decides. ``weights`` records, beside the weights, which
+bars were scheduled and which of them the rule decided (the *rebalance
+record*): a scheduled bar it did not decide is a *held bar*. Every reader of
+a run's rebalances (turnover, win rates, attribution, the report) takes them
+from that record.
 
 ``DecisionInputs.from_run`` rebuilds the inputs of a recorded backtest run,
 read through ``quantlab.runs.backtest_run.BacktestRun``.
@@ -62,46 +68,6 @@ from quantlab.utils.date_range import last_moment
 from quantlab.utils.returns import one_bar_returns
 
 _DIMS = ("timestamp", "symbol")
-
-
-def rebalance_mask(n_bars: int, rebalance_periods: int) -> np.ndarray:
-    """Return a boolean mask marking the bars on which the portfolio rebalances.
-
-    The first bar rebalances and so does every ``rebalance_periods``-th bar
-    after it. The last bar never rebalances: a signal formed there has no
-    following bar inside the window to fill on.
-
-    Parameters
-    ----------
-    n_bars : int
-        Number of bars in the window.
-    rebalance_periods : int
-        Rebalance every this many bars.
-
-    Returns
-    -------
-    np.ndarray
-        A boolean array of length ``n_bars``.
-
-    Raises
-    ------
-    ValueError
-        If ``rebalance_periods`` is smaller than 1.
-
-    Examples
-    --------
-    >>> rebalance_mask(7, 3)
-    array([ True, False, False,  True, False, False, False])
-    """
-    if rebalance_periods < 1:
-        raise ValueError(
-            f"rebalance_periods must be >= 1, got {rebalance_periods}"
-        )
-    mask = np.zeros(n_bars, dtype=bool)
-    mask[::rebalance_periods] = True
-    if n_bars > 0:
-        mask[-1] = False
-    return mask
 
 
 def _price_window(
@@ -413,13 +379,14 @@ class DecisionInputs:
         )
 
     def rebalances(self, t) -> bool:
-        """Return whether bar ``t`` is a rebalance bar.
+        """Return whether bar ``t`` is a scheduled rebalance bar.
 
         Every ``rebalance_periods``-th bar of the dataset's calendar from
-        the anchor rebalances, except ``end``. A bar before the anchor, after
-        ``end`` or off the calendar never does. The calendar's timestamps
-        (never its prices) are read once up to the dataset's last bar, and
-        again only for a bar past it.
+        the anchor rebalances, except ``end``. A bar before the anchor, at or
+        after ``end`` or off the calendar never does. The calendar's
+        timestamps (never its prices) are read once up to the dataset's last
+        bar, and again only for a bar past it. ``weights`` decides the bars
+        of its panel this schedule names, its last bar excepted.
 
         Parameters
         ----------
@@ -435,14 +402,7 @@ class DecisionInputs:
         >>> inputs.rebalances(ts[2]), inputs.rebalances(ts[3])
         (True, False)
         """
-        t = pd.Timestamp(t)
-        if t < self.anchor or (self.end is not None and t >= self.end):
-            return False
-        if not len(self._calendar) or t > self._calendar[-1]:
-            last = self.dataset.bar_after(t, np.iinfo(np.int64).max)
-            self._calendar = self.dataset.calendar(self.anchor, last)
-        position = int(self._calendar.get_indexer([t])[0])
-        return position >= 0 and position % self.rebalance_periods == 0
+        return bool(self._scheduled(pd.DatetimeIndex([pd.Timestamp(t)]))[0])
 
     def weights(self, predictions: xr.Dataset, *, delisted: xr.DataArray | None = None) -> xr.Dataset:
         """Decide every rebalance bar of a prediction panel and return the target weights.
@@ -474,6 +434,13 @@ class DecisionInputs:
         an event naming its symbols, ``{"bar", "count"}`` for one counting
         them. A bar that does not rebalance gets an all-NaN row.
 
+        The result records the rebalances: ``scheduled`` marks the bars the
+        schedule named (``rebalances``, the panel's last bar excepted) and
+        ``decided`` those of them the rule decided, so a held bar (a failure
+        or an all-NaN row) is scheduled and not decided. ``decided`` is
+        exactly the rows with a finite weight; readers take it from the
+        record rather than testing the rows.
+
         Parameters
         ----------
         predictions : xr.Dataset
@@ -489,9 +456,9 @@ class DecisionInputs:
         Returns
         -------
         xr.Dataset
-            One ``weight`` variable on the predictions' labels, with
-            ``attrs["failed_bars"]`` (ISO timestamps) and
-            ``attrs["events"]``.
+            ``weight`` on the predictions' labels, ``scheduled`` and
+            ``decided`` (booleans on ``timestamp``), ``attrs["failed_bars"]``
+            (ISO timestamps) and ``attrs["events"]``.
 
         Raises
         ------
@@ -506,6 +473,8 @@ class DecisionInputs:
         >>> out = inputs.weights(scores)
         >>> out.attrs["failed_bars"], out.attrs["events"]
         ([], {})
+        >>> out["scheduled"].values, out["decided"].values
+        (array([ True, False,  True, False]), array([ True, False,  True, False]))
         """
         predictions = predictions.transpose(*_DIMS)
         timestamps = predictions.timestamp.values
@@ -554,9 +523,13 @@ class DecisionInputs:
         history_bars = self.declared.history_bars
 
         weights = np.full((len(timestamps), len(symbols)), np.nan)
+        scheduled = self._scheduled(pd.DatetimeIndex(timestamps))
+        # The panel's last bar has no bar after it to fill on.
+        scheduled[-1] = False
+        decided = np.zeros(len(timestamps), dtype=bool)
         failed = []
         events: dict[str, list[dict]] = {}
-        for t in np.flatnonzero(self._schedule(timestamps)):
+        for t in np.flatnonzero(scheduled):
             position = int(positions[t])
             context = self._context(
                 pd.Timestamp(timestamps[t]),
@@ -583,9 +556,14 @@ class DecisionInputs:
             if np.isnan(row).all():
                 continue
             weights[t] = row
+            decided[t] = True
             book.queue(position, row)
         out = xr.Dataset(
-            {"weight": (_DIMS, weights)},
+            {
+                "weight": (_DIMS, weights),
+                "scheduled": ("timestamp", scheduled),
+                "decided": ("timestamp", decided),
+            },
             coords={"timestamp": timestamps, "symbol": symbols},
         )
         out.attrs["failed_bars"] = failed
@@ -802,21 +780,24 @@ class DecisionInputs:
             risk_exposures=risk_exposures,
         )
 
-    def _schedule(self, timestamps: np.ndarray) -> np.ndarray:
-        """Return the rebalance mask of a panel's bars: ``rebalances`` vectorised.
+    def _scheduled(self, timestamps: pd.DatetimeIndex) -> np.ndarray:
+        """Return which of ``timestamps`` the rebalance schedule names: the one schedule.
 
-        The panel's last bar never rebalances.
+        Every ``rebalance_periods``-th bar of the dataset's calendar from
+        the anchor, before ``end``; a bar before the anchor or off the
+        calendar is not. The calendar is read up to the dataset's last bar
+        when first needed and again only for a bar past it.
         """
-        if pd.Timestamp(timestamps[0]) == self.anchor:
-            mask = rebalance_mask(len(timestamps), self.rebalance_periods)
-        else:
-            calendar = self.dataset.calendar(self.anchor, timestamps[-1])
-            offsets = calendar.get_indexer(timestamps)
-            mask = (offsets >= 0) & (offsets % self.rebalance_periods == 0)
-            mask[-1] = False
+        on = np.asarray(timestamps >= self.anchor)
         if self.end is not None:
-            mask &= pd.DatetimeIndex(timestamps) < self.end
-        return mask
+            on &= np.asarray(timestamps < self.end)
+        if on.any():
+            latest = timestamps[on].max()
+            if not len(self._calendar) or latest > self._calendar[-1]:
+                last = self.dataset.bar_after(latest, np.iinfo(np.int64).max)
+                self._calendar = self.dataset.calendar(self.anchor, last)
+        offsets = self._calendar.get_indexer(timestamps)
+        return on & (offsets >= 0) & (offsets % self.rebalance_periods == 0)
 
     def _prices(self, first: pd.Timestamp, last: pd.Timestamp, symbols, *, warn: bool) -> xr.Dataset:
         """Return the raw fill and valuation prices from ``history_bars - 1`` bars before ``first`` to ``last``.

@@ -142,7 +142,7 @@ def test_the_chart_inputs_name_the_benchmark_from_the_block():
     assert "benchmark_value" not in report_chart_inputs({}, [], returns=value, init_cash=100.0)
 
 
-def test_the_portfolio_inputs_carry_turnover_and_a_years_bars():
+def test_the_portfolio_inputs_carry_turnover_the_rebalances_and_a_years_bars():
     value = xr.DataArray([1000.0] * 6, dims="timestamp", coords={"timestamp": BARS})
     orders = xr.Dataset({
         "timestamp": ("order", BARS[[1]].values), "size": ("order", [50.0]), "price": ("order", [10.0]),
@@ -150,12 +150,13 @@ def test_the_portfolio_inputs_carry_turnover_and_a_years_bars():
     weights = xr.DataArray(np.full((6, 1), 0.5), dims=("timestamp", "symbol"),
                            coords={"timestamp": BARS, "symbol": ["AAA"]})
     inputs = report_portfolio_inputs(
-        weights, orders, value, init_cash=1000.0, bar_interval="1D",
+        weights, orders, value, rebalances=BARS[[0]].values, init_cash=1000.0, bar_interval="1D",
         trading_days_per_year=252, session_minutes_per_day=390,
     )
     assert inputs["turnover"].values.tolist() == [0.5]
     assert inputs["bars_per_year"] == 252.0
     assert inputs["weights"] is weights
+    np.testing.assert_array_equal(inputs["rebalances"], BARS[[0]].values)
 
 
 def test_an_extra_table_is_drawn_after_the_metric_tables(tmp_path):

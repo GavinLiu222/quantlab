@@ -4,6 +4,8 @@
 answers ``tradable_bars`` with a given mask, so a test chooses which symbols are
 tradable at each bar independently of the prices. ``decide_panel`` runs a rule
 over a prediction panel through ``DecisionInputs.weights`` on such a dataset.
+``schedule`` writes out the bars such a panel rebalances on, the mask a test
+expects.
 """
 
 import numpy as np
@@ -11,9 +13,21 @@ import pandas as pd
 import xarray as xr
 
 from quantlab.dataset.memory import FrameDataset
-from quantlab.portfolio.decision_inputs import DecisionInputs, rebalance_mask
+from quantlab.portfolio.decision_inputs import DecisionInputs
 
 PRICE = 100.0
+
+
+def schedule(n_bars: int, periods: int) -> np.ndarray:
+    """The rebalance bars of a panel of ``n_bars`` anchored at its first bar, as a test expects them.
+
+    Every ``periods``-th bar from the first; the last never, since an order
+    decided there has no bar to fill on (``DecisionInputs.weights``'
+    ``scheduled``).
+    """
+    mask = np.arange(n_bars) % periods == 0
+    mask[-1] = False
+    return mask
 
 
 class MaskedDataset(FrameDataset):
@@ -38,7 +52,7 @@ def decide_panel(rule, predictions: xr.Dataset, tradable=None, rebalance=None) -
 
     ``tradable`` defaults to every symbol everywhere. ``rebalance`` is a mask
     of the bars to decide: all True (every bar, the last included: a padding
-    bar is appended and cut off again) or ``rebalance_mask(n, p)`` for some
+    bar is appended and cut off again) or ``schedule(n, p)`` for some
     ``p``; default all True.
     """
     predictions = predictions.transpose("timestamp", "symbol")
@@ -60,7 +74,7 @@ def decide_panel(rule, predictions: xr.Dataset, tradable=None, rebalance=None) -
         )
     else:
         periods = next(
-            (p for p in range(1, n_bars + 1) if np.array_equal(rebalance_mask(n_bars, p), rebalance)),
+            (p for p in range(1, n_bars + 1) if np.array_equal(schedule(n_bars, p), rebalance)),
             None,
         )
         if periods is None:

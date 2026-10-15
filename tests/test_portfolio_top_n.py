@@ -45,7 +45,6 @@ import pytest
 import xarray as xr
 from loguru import logger
 
-from quantlab.portfolio.decision_inputs import rebalance_mask
 from quantlab.backtest.config import CrossSectionBacktestConfig
 from quantlab.portfolio.config import TopNConfig
 from quantlab.portfolio.base import PortfolioConstructor, PortfolioContext
@@ -53,7 +52,7 @@ from quantlab.runs.prediction_panel import LabelSpec
 from quantlab.portfolio.predefined.top_n import TopNConstructor
 from quantlab.backtest.predefined.us_equity import USEquityCrossectionSelectStockVectorBt
 from quantlab.runs.backtest_run import BacktestRun
-from tests.decision_fixtures import decide_panel
+from tests.decision_fixtures import decide_panel, schedule
 from tests.backtest_fixtures import FirstFeatureHead, make_model, make_stock_dataset, write_price_store
 
 NAN = np.nan
@@ -405,7 +404,7 @@ def test_weights_contract_holds_on_random_panels():
         scores[rng.random(scores.shape) < 0.3] = NAN
         fill = rng.uniform(10.0, 100.0, size=scores.shape)
         fill[rng.random(fill.shape) < 0.2] = NAN
-        mask = rebalance_mask(n_bars, period)
+        mask = schedule(n_bars, period)
 
         weights = _select(
             direction,
@@ -461,7 +460,7 @@ def _random_case(seed: int):
         },
         coords={"timestamp": timestamps, "symbol": symbols},
     )
-    mask = rebalance_mask(n_bars, int(rng.integers(1, 4)))
+    mask = schedule(n_bars, int(rng.integers(1, 4)))
     return predictions, xr.DataArray(tradable, coords=predictions["fwd_ret_1"].coords), mask
 
 

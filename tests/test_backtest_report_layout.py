@@ -107,6 +107,11 @@ def _weights():
     return xr.DataArray(w, dims=("timestamp", "symbol"), coords={"timestamp": BARS, "symbol": SYMBOLS})
 
 
+def _rebalances():
+    """The decided rebalances of ``_weights``: every fifth bar but the last."""
+    return BARS[0 : N - 1 : 5].values
+
+
 def _turnover():
     """A turnover series on the fill bars (one bar after each rebalance)."""
     fills = BARS[1 : N : 5]
@@ -128,7 +133,7 @@ def _page(tmp_path, *, benchmark=True, in_sample=False, extra=None, portfolio=Tr
     if benchmark:
         kwargs.update(benchmark_value=_series(bvalue), benchmark_returns=_series(b), benchmark_name="QQQ")
     if portfolio:
-        kwargs.update(weights=_weights(), turnover=_turnover())
+        kwargs.update(weights=_weights(), turnover=_turnover(), rebalances=_rebalances())
     path = tmp_path / "report.html"
     write_backtest_report(_series(value), path, **kwargs)
     return path.read_text(encoding="utf-8"), (r, b, value, bvalue)
@@ -406,7 +411,7 @@ def test_a_symbol_left_nan_in_a_rebalance_row_counts_at_its_last_target(tmp_path
     weights = xr.DataArray(w, dims=("timestamp", "symbol"), coords={"timestamp": BARS, "symbol": SYMBOLS})
     path = tmp_path / "report.html"
     write_backtest_report(_series(value), path, in_sample_range=None, notes=[], title="t",
-                          weights=weights, turnover=_turnover())
+                          weights=weights, turnover=_turnover(), rebalances=_rebalances())
 
     traces, _ = _figure_with(path.read_text(encoding="utf-8"), "holdings")
     assert len(_y(traces["holdings"])) == len(rows)
@@ -422,7 +427,7 @@ def test_weights_below_a_tenth_of_a_percent_are_not_counted_as_holdings(tmp_path
     weights = xr.DataArray(w, dims=("timestamp", "symbol"), coords={"timestamp": BARS, "symbol": SYMBOLS})
     path = tmp_path / "report.html"
     write_backtest_report(_series(value), path, in_sample_range=None, notes=[], title="t",
-                          weights=weights, turnover=_turnover())
+                          weights=weights, turnover=_turnover(), rebalances=_rebalances())
 
     traces, _ = _figure_with(path.read_text(encoding="utf-8"), "holdings")
     assert set(_y(traces["holdings"])) == {2.0}

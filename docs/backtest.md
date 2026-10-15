@@ -4,7 +4,7 @@ English | [简体中文](zh-CN/backtest.md)
 
 A backtest takes a trained return model and a price dataset and shows how the model's predictions would have traded. The model predicts a score for every symbol on every bar, a selection rule turns the scores into target weights, and a simulation engine trades those weights and records an equity curve. Each run writes a run directory with the weights, the equity curve, metrics, an HTML report and the configuration needed to rebuild it.
 
-The main classes are `BaseBacktester` (`quantlab/backtest/base.py`), the vectorbt engine `VectorBtBacktester` (`quantlab/backtest/engine_vectorbt.py`), the decision inputs and rebalance schedule (`DecisionInputs` and `rebalance_mask` in `quantlab/portfolio/decision_inputs.py`), the portfolio construction rule that the config's `constructor` holds (a `PortfolioConstructor` from `quantlab/portfolio/base.py`: `TopNConstructor` here, or the mean-variance optimiser of [Portfolio construction](portfolio.md)) and the US-equity backtester `USEquityCrossectionSelectStockVectorBt` (`quantlab/backtest/predefined/us_equity.py`).
+The main classes are `BaseBacktester` (`quantlab/backtest/base.py`), the vectorbt engine `VectorBtBacktester` (`quantlab/backtest/engine_vectorbt.py`), the decision inputs and rebalance schedule (`DecisionInputs` in `quantlab/portfolio/decision_inputs.py`), the portfolio construction rule that the config's `constructor` holds (a `PortfolioConstructor` from `quantlab/portfolio/base.py`: `TopNConstructor` here, or the mean-variance optimiser of [Portfolio construction](portfolio.md)) and the US-equity backtester `USEquityCrossectionSelectStockVectorBt` (`quantlab/backtest/predefined/us_equity.py`).
 
 ## Prerequisites
 
@@ -186,6 +186,13 @@ timestamp
 
 The first bar of the window rebalances, and so does every `rebalance_periods`-th bar after it. The last bar never rebalances, because a signal formed there has no following bar to fill on. With `direction="long_short"` the top `top_n` symbols get `+0.5/top_n` each and the bottom `top_n` get `-0.5/top_n` each.
 
+Beside `weight`, the weights carry the *rebalance record*, two booleans on `timestamp`: `scheduled`, the bars the schedule named, and `decided`, those of them the rule decided. A scheduled bar the rule held (a construction failure, or a rule returning all NaN) is a *held bar*: scheduled, not decided, its row all NaN. `decided` marks exactly the rows with a finite target, and the backtester refuses weights whose record says otherwise. Turnover, the rebalance win rate, the attribution and the report take the rebalances from this record. Weights given to `run_weights()` are their caller's decisions, so their record is their rows with a target, scheduled and decided alike.
+
+```python
+>>> int(result.weights["scheduled"].sum()), int(result.weights["decided"].sum())
+(6, 6)
+```
+
 ### A signal at bar t fills at bar t+1
 
 A weight row formed at bar `t` executes at the fill price of bar `t + 1`. For US equities the fill price is the adjusted open (`adjOpen`) and the portfolio is valued at the adjusted close (`adjClose`). Below, the first orders are on 2024-02-13, the bar after the first rebalance. The buy price is that day's open plus the default slippage of 0.05 percent.
@@ -263,10 +270,10 @@ out_of_sample -5.61 -4.27 13
 >>> list(m["whole"])[:6]
 ['Start', 'End', 'Period', 'Start Value', 'End Value', 'Total Return [%]']
 >>> round(m["whole"]["Turnover per Rebalance [%]"])
-134
+125
 ```
 
-Turnover is the one-sided traded value of a bar divided by the portfolio value before the fills, in percent like every other `[%]` row, so a full buy-in from cash is about 100 and replacing the whole book about 200. The scores here are random-walk returns, so the negative results carry no meaning.
+Turnover is the one-sided traded value of a rebalance's fills divided by the portfolio value before them, in percent like every other `[%]` row, so a full buy-in from cash is about 100 and replacing the whole book about 200. The rows count the decided rebalances of the [rebalance record](#the-target-weight-contract): `Total Turnover [%]` sums the turnover of their fills (a delisting settlement is not a rebalance's trade and is left out; it stays in `settlements()`, `Total Orders` and the fees), `Turnover per Rebalance [%]` is that total over the decided rebalances whose fill bar is in the slice (a rebalance that placed no order counts as 0, a held bar not at all), and `Annualized Turnover [%]` is the total over the slice's years, its bars over the bars of a year. `rebalance_periods` enters none of them. The rebalance win rate's holding periods run from one decided rebalance's fill bar to the bar before the next one's, so a settlement does not start one. The scores here are random-walk returns, so the negative results carry no meaning.
 
 ### The run directory
 
@@ -284,7 +291,7 @@ A run directory is read through `BacktestRun` (`quantlab.runs.backtest_run`), or
 | `data_fingerprint` | What the run read, recorded where it was read: for each dataset or factor store, keyed by its component path (`price_dataset`, `model.factors.0.dataset`, `benchmark_dataset`), one digest and extent per distinct request, with a digest and dtype per variable that let a mismatch warning name what changed. It covers the price columns, the delisting check's look-ahead, the rule's price history before the window, each factor's inputs and a merge's inputs, and a factor risk model's stores (`risk_model.regression`, `risk_model.estimate`), one request each over the bars read by the factor attribution and a `FactorRiskStoreEstimator`. A `run_cv()` run's is the stitched pass; each fold holds its own. Training reads are the trained unit's (`trained_run().data_fingerprint`). |
 | `code` | The code the run used: the quantlab git commit and whether tracked files were changed, the SHA-256 of every module defining a class of the backtester's component tree (framework or component module, with the component paths using it), and the versions of numpy, pandas, xarray, polars, xgboost, torch, vectorbt, KunQuant and cvxpy. |
 | `trained_run()` | The trained unit the backtest used, as a `TrainedRun`: the unit trained in train mode, the checkpoint's unit in load mode, the walk-forward unit for `run_cv()`, the fold's own unit for a fold; `None` for `run_weights()`. |
-| `weights()`, `equity()` | The target weights on `(timestamp, symbol)`; the portfolio `value` and per-bar `returns` on `timestamp`, plus `benchmark_value` and `benchmark_returns` when a benchmark ran. |
+| `weights()`, `equity()` | The target weights on `(timestamp, symbol)`, with the rebalance record (`scheduled` and `decided` on `timestamp`); the portfolio `value` and per-bar `returns` on `timestamp`, plus `benchmark_value` and `benchmark_returns` when a benchmark ran. |
 | `holdings()` | The holdings the engine simulated (`holdings.zarr`), a `holding` panel on `(timestamp, symbol)`: each symbol's value at each bar's close over the book's value, cash included, on every bar of the window, negative for a short and 0 where nothing is held. A holding starts at the target weight when a rebalance fills (less costs) and drifts with prices until the next; rejected orders and settlements show in it too. A `run_cv()` fold's are its run's, cut to the fold's window. `None` for a run written without holdings (an engine that supplies none). |
 | `metrics()` | The same mapping as `result.metrics`, as JSON holds it: NaN and infinity become `None`, tuples lists. Every run records `execution` (rejected orders and the largest target deviation). A `run()` and the stitched `run_cv()` pass also record `portfolio_construction`: `failed_bar_count` and `failed_bars`, the rebalance bars the constructor could not decide (an optimisation that failed or was infeasible), which the backtest held instead, and any event the constructor reported, such as the mean-variance optimiser's `closed_without_risk` (held symbols closed because the covariance estimator had no estimate for them) or the top-n rule's `tie_at_cutoff` (tied symbols a book's cut left out, so the picks were decided by symbol order), with its `count` (symbols over all its bars) and its `bars`, one record per bar that names the symbols or, for `tie_at_cutoff`, counts them. |
 | `settlements()` | The delisting settlements. |
@@ -574,11 +581,11 @@ The run directory holds the per-bar attribution in `factor_attribution.zarr` (`f
 
 `report.html` is one page: a dark header naming the run, its window and its benchmark, a sidebar of sections, a row of headline numbers, and in each section cards holding a chart beside the tables that explain it. Hover a headline number, a metric's name, a factor-attribution tile or the ⓘ beside a chart's title for a plain-English explanation of what it shows.
 
-- **Headline numbers**: total return, excess return, information ratio, win rate, Sharpe ratio, max drawdown, beta and annualised turnover, each with the benchmark's value or a related figure beneath. Without a benchmark: total return, annualised return, win rate, Sharpe ratio, max drawdown, volatility and turnover. The win rate is the share of holding periods (from a bar with fills to the bar before the next) that beat the benchmark, with the share of calendar months beneath; without a benchmark, the share with a gain.
+- **Headline numbers**: total return, excess return, information ratio, win rate, Sharpe ratio, max drawdown, beta and annualised turnover, each with the benchmark's value or a related figure beneath. Without a benchmark: total return, annualised return, win rate, Sharpe ratio, max drawdown, volatility and turnover. The win rate is the share of holding periods (from one decided rebalance's fill bar to the bar before the next one's) that beat the benchmark, with the share of calendar months beneath; without a benchmark, the share with a gain.
 - **Overview**: "Windows", a timeline of the training and backtest windows (traded out-of-sample bars green, traded bars inside a training window red, training windows light blue), one row for `run()` and, for `run_cv()`, the backtest window above one row per fold, every window's dates in its tooltip; "In-sample vs out-of-sample" when the run has an in-sample part, with the in-sample and out-of-sample values, their difference and the whole window side by side; the *Performance* chart (NAV with the linear/log toggle, drawdown, monthly returns and the year-by-month heatmap) beside "Strategy vs *benchmark*", grouped into returns, risk and risk-adjusted ratios, with the benchmark and the difference (in percentage points for percents) beside the strategy. A metric the page does not know, from the strategy, the benchmark or the relative block, is listed under "Other".
 - **Excess**, with a benchmark: the cumulative excess return, switchable between log, `Σ log((1+r)/(1+b))`, whose exponential minus 1 is the geometric excess, and arithmetic, `Σ(r − b)`, read like a cumulative IC, and the excess drawdown under it; beside it "Relative to *benchmark*" (geometric and arithmetic excess, excess drawdown, tracking error, information ratio, beta, correlation, CAPM alpha).
 - **Rolling**: one-year excess return, information ratio and beta, or one-year return, volatility and Sharpe ratio without a benchmark.
-- **Portfolio**: turnover per fill bar, the number of holdings and the gross exposure of the target weights, and the net exposure when anything is short; beside it "Trading" (turnover, fees, orders, round trips, rejected orders, portfolio-construction failures and events).
+- **Portfolio**: turnover per rebalance fill, the number of holdings and the gross exposure of the decided rebalances' target weights, and the net exposure when anything is short; beside it "Trading" (turnover, fees, orders, round trips, rejected orders, portfolio-construction failures and events).
 - **Holdings**: first, which positions made the return: each day the names held at the previous close are ranked by the size of their holding and a name contributes its holding times its return over the day; the largest share of the names (any share, on a slider) against the rest and the residual (trading at the open and costs), summed over the days as tiles and cumulative lines, then a table and a bar chart of the contributions by size decile and year; each shows the net, only the gains or only the losses, by button, with the share of name-days that lost. Then, day by day, each symbol held or targeted, by ticker (the one in use that day where the price store has a ticker sidecar, the symbol id otherwise), with its target weight from the last rebalance before the day, its holding, a bar showing both and its period return (its price return over the holding period of the day's rebalance, from the signal day's close to the last close before the next rebalance fills, on the valuation prices the book is marked at; with a rebalance every bar, the bar's own return), plus the day's cash, the number of holdings, the top-ten holding, the rebalance the targets came from and the names new since the previous rebalance (targeted above 1e-4 now, not by the previous rebalance). Targets of at most 1e-4 (`DUST_THRESHOLD`) are folded into one "Other" line. Step through the days by button, by rebalance, by date, by slider or with the arrow keys; sort by any column, filter by ticker or company, and download the day as CSV. The data is embedded in the page as JSON (a ten-year daily run of a few hundred names adds a few megabytes).
 - **Attribution**, after a model run: the excess split into universe, selection and costs, the cumulative log growth of the strategy, the same weights without costs, the equal-weighted universe and the benchmark, each score group's cumulative log growth, and each group's annualised log growth (see [Attribute the excess](#attribute-the-excess)).
 - **Factor attribution**, with a `risk_model` (see [Attribute returns and risk to factors](#attribute-returns-and-risk-to-factors)): six tiles (annualised log growth, the part from the factors, risk-free plus trading, forecast and realized volatility, coverage), then return and risk side by side: each part's annualised log growth as bars from zero, adding up to the total, beside each part's contribution to the forecast volatility, the forecast and the realized volatility; the cumulative log contribution of each part (adding up to log NAV) beside the monthly forecast volatility by part against the realized 63-bar volatility; each style's mean exposure and contribution beside its forecast and realized risk; the best and worst 10 industries by contribution beside those by forecast risk; then the styles' weekly exposure as a heatmap and each part's return against its realized risk. Industries and styles are named by the risk model's `factor_labels()` (Fama-French 48 names for `Use4RiskModel`).
@@ -674,14 +681,15 @@ The returns-based rows and the turnover rows of `metrics.json` are public functi
 |---|---|
 | `return_stats(returns, *, bar_interval, year_freq, ranges=None)` | the return blocks of `in_sample`, `out_of_sample` and `benchmark` (`Total Return [%]` ... `Value at Risk`), equal to the bit to vectorbt's returns statistics |
 | `relative_stats(returns, benchmark_returns, *, bar_interval, year_freq, ranges)` | `relative` |
-| `win_rates(returns, fill_timestamps, *, ranges, benchmark_returns=None)` | `Rebalance Win Rate [%]`, `Monthly Win Rate [%]` (and their `vs Benchmark` forms) |
-| `turnover(orders, value, init_cash)` and `turnover_stats(turnover, *, bar_interval, year_freq, rebalance_periods)` | `Turnover per Rebalance [%]`, `Total Turnover [%]`, `Annualized Turnover [%]` |
+| `win_rates(returns, rebalances, *, ranges, benchmark_returns=None)` | `Rebalance Win Rate [%]`, `Monthly Win Rate [%]` (and their `vs Benchmark` forms) |
+| `turnover(orders, value, init_cash, *, settlements=())` and `turnover_stats(turnover, rebalances, timestamps, *, ranges, bar_interval, year_freq)` | `Turnover per Rebalance [%]`, `Total Turnover [%]`, `Annualized Turnover [%]` |
+| `rebalance_fill_bars(rebalances, timestamps)` | the fill bar of each decided rebalance, the bar after it, which starts its holding period |
 | `year_freq(bar_interval, trading_days_per_year, session_minutes_per_day)` | the year every row is annualized by (`MarketSpec.year_freq`) |
 | `round_trips(fills, close, *, cash_flows=None)` and `round_trip_stats(trips, *, bar_interval)` | the trade rows of `whole` (`Total Trades` ... `Expectancy`), equal to the bit to vectorbt's position trade view on its own fills |
 | `exposure_stats(fills, close, cash)` | `Max Gross Exposure [%]` of `whole`, equal to vectorbt's to rounding |
 | `drawdown_span(value)` and `bar_label(value)` | the deepest drawdown the report marks, and the label `metrics.json` writes for a bar |
 
-`ranges` are inclusive pairs of bar labels, as `metrics.json` records them (`in_sample_range`, `out_of_sample_ranges`). The strategy's own `whole` block is the exception: its turnover and win-rate rows come from these functions, but its return, ratio, trade, exposure and fee rows come from the engine's portfolio statistics; the trade and exposure rows equal `round_trip_stats` and `exposure_stats` of its fills. With `held` the `WeightsVectorBt` run above:
+`ranges` are inclusive pairs of bar labels, as `metrics.json` records them (`in_sample_range`, `out_of_sample_ranges`). `rebalances` are the bars of the decided rebalances, the `decided` bars of a run's rebalance record (`weights()["decided"]`), and `settlements` the run's `settlements()`, whose fills `turnover` leaves out. The strategy's own `whole` block is the exception: its turnover and win-rate rows come from these functions, but its return, ratio, trade, exposure and fee rows come from the engine's portfolio statistics; the trade and exposure rows equal `round_trip_stats` and `exposure_stats` of its fills. With `held` the `WeightsVectorBt` run above:
 
 ```python
 >>> from quantlab.runs.backtest_stats import return_stats, turnover, turnover_stats, year_freq
@@ -693,8 +701,14 @@ The returns-based rows and the turnover rows of `metrics.json` are public functi
 >>> round(stats["Total Return [%]"], 4), stats["Period"]
 (18.1818, Timedelta('4 days 00:00:00'))
 >>> flows = turnover(held.simulation.orders, held.simulation.value, init_cash=1_000_000.0)
->>> turnover_stats(flows, bar_interval="1D", year_freq=year, rebalance_periods=1)
-{'Turnover per Rebalance [%]': 100.0, 'Total Turnover [%]': 100.0, 'Annualized Turnover [%]': 25200.0}
+>>> decided = held.weights["decided"]
+>>> rebalances = decided.timestamp.values[decided.values]
+>>> stats = turnover_stats(
+...     flows, rebalances, held.simulation.value.timestamp.values,
+...     ranges=[("2024-01-01", "2024-01-05")], bar_interval="1D", year_freq=year,
+... )
+>>> {key: round(value, 6) for key, value in stats.items()}
+{'Turnover per Rebalance [%]': 100.0, 'Total Turnover [%]': 100.0, 'Annualized Turnover [%]': 5040.0}
 ```
 
 A round trip is a position from flat to flat in one symbol: adding to or trimming it does not end it, a fill that crosses zero ends it and opens the opposite one, and a position still held at the last bar is open, marked at its last valuation price. `round_trips` takes the fills (`timestamp`, `symbol`, signed `size`, `price`, `fees`) and the valuation prices, which give the bar axis that trip lengths are counted on; `cash_flows` (`timestamp`, `symbol`, `amount`) adds the dividends or distributions a position received while open to its PnL and return; a flow is timestamped with the bar the position had to be held into (a dividend's ex-date bar). Splits are not an input: give the fills and prices on one adjustment basis. On the run above, whose orders carry an unsigned `size` and a `side`:
@@ -774,15 +788,15 @@ True
 
 ## Extending
 
-A new selection rule is a subclass of `VectorBtBacktester` with three members: `config_cls`, `MARKET` and `_generate_signals(predictions, prices, delisted)`. The method returns a dataset whose `weight` variable satisfies the contract above. `predictions` and `prices` share the same `(timestamp, symbol)` axes, and `delisted` holds the window's delisting marks, the ones the engine settles. The rule below weights each tradable symbol in proportion to its positive score and stays flat when no score is positive. It reuses `rebalance_mask` and the `US_EQUITY_MARKET` price conventions. Save it as `score_weighted.py`.
+A new selection rule is a subclass of `VectorBtBacktester` with three members: `config_cls`, `MARKET` and `_generate_signals(predictions, prices, delisted)`. The method returns a dataset whose `weight` variable satisfies the contract above. `predictions` and `prices` share the same `(timestamp, symbol)` axes, and `delisted` holds the window's delisting marks, the ones the engine settles. The dataset also carries the rebalance record, `scheduled` and `decided` on `timestamp` (see [the target-weight contract](#the-target-weight-contract)); a rule that never holds a scheduled bar decides every bar it schedules. The rule below weights each tradable symbol in proportion to its positive score and stays flat when no score is positive, on its own schedule, and reuses the `US_EQUITY_MARKET` price conventions. Save it as `score_weighted.py`.
 
 ```python
 """A new selection rule: long-only weights proportional to positive scores."""
 
+import numpy as np
 import xarray as xr
 
 from quantlab.backtest.engine_vectorbt import VectorBtBacktester
-from quantlab.portfolio.decision_inputs import rebalance_mask
 from quantlab.backtest.predefined.us_equity import US_EQUITY_MARKET
 from quantlab.backtest.config import BacktestConfig
 
@@ -799,11 +813,14 @@ class ScoreWeightedBacktester(VectorBtBacktester):
         positive = scores.where(tradable).clip(min=0).fillna(0.0)
         total = positive.sum("symbol")
         weight = (positive / total.where(total > 0)).fillna(0.0)  # flat if no score
+        # Every rebalance_periods-th bar from the first; never the last, which has no fill bar.
+        bars = np.arange(prices.sizes["timestamp"])
         rebalance = xr.DataArray(
-            rebalance_mask(prices.sizes["timestamp"], self.config.rebalance_periods),
+            (bars % self.config.rebalance_periods == 0) & (bars < bars.size - 1),
             dims="timestamp", coords={"timestamp": prices.timestamp},
         )
-        return weight.where(rebalance).to_dataset(name="weight")  # NaN on hold bars
+        weights = weight.where(rebalance).to_dataset(name="weight")  # NaN on hold bars
+        return weights.assign(scheduled=rebalance, decided=rebalance)  # every scheduled bar decided
 ```
 
 Its config class is `BacktestConfig`, so no `constructor` is required.

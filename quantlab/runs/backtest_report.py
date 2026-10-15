@@ -188,6 +188,7 @@ def write_backtest_report(
     benchmark_name: str = "benchmark",
     weights: xr.DataArray | None = None,
     turnover: xr.DataArray | None = None,
+    rebalances=None,
     bars_per_year: float | None = None,
     windows: dict | None = None,
     extra_tables: dict[str, dict] | None = None,
@@ -276,11 +277,17 @@ def write_backtest_report(
     weights : xr.DataArray | None
         Target weights on ``(timestamp, symbol)``, an all-NaN row on a bar
         that holds; the Portfolio tab draws the holdings and exposure of
-        every other row, a NaN cell counted at that symbol's last target.
+        the rows of ``rebalances``, a NaN cell counted at that symbol's last
+        target.
     turnover : xr.DataArray | None
-        Turnover per fill bar on ``timestamp``: buys plus sells over the
-        previous bar's value, so replacing the whole book is about 2. Drawn
-        as bars on the Portfolio tab.
+        Turnover per rebalance fill bar on ``timestamp``: buys plus sells
+        over the previous bar's value, so replacing the whole book is about
+        2. Drawn as bars on the Portfolio tab.
+    rebalances : array_like of datetime64 | None
+        The bars of the decided rebalances, from the run's rebalance record
+        (``report_portfolio_inputs`` passes them on): the rows the Portfolio
+        tab draws and the rebalances whose targets the Holdings section
+        shows in force. Without them no rebalance is drawn.
     bars_per_year : float | None
         Bars in a year, the window of the Rolling tab; 252 when not given.
     windows : dict | None
@@ -395,7 +402,7 @@ def write_backtest_report(
     extra = [
         ("Excess", _excess_figure(equity, reference, name) if name else None),
         ("Rolling", _rolling_figure(equity, reference, bars_per_year, name)),
-        ("Portfolio", _portfolio_figure(weights, turnover)),
+        ("Portfolio", _portfolio_figure(weights, turnover, rebalances)),
     ]
     for label, extra_fig in extra:
         if extra_fig is not None:
@@ -403,7 +410,8 @@ def write_backtest_report(
             tabs.append((label, _figure_div(extra_fig)))
     if holdings is not None:
         tabs.append(("Holdings", _holdings_section(
-            holdings, weights, holding_names, holding_returns, holding_contributions, returns,
+            holdings, weights, rebalances, holding_names, holding_returns, holding_contributions,
+            returns,
         )))
     block = (metrics or {}).get("attribution")
     if attribution is not None and block:
@@ -688,6 +696,8 @@ def report_portfolio_inputs(
     orders: xr.Dataset,
     value: xr.DataArray,
     *,
+    rebalances,
+    settlements: Sequence[dict] = (),
     init_cash: float,
     bar_interval,
     trading_days_per_year: int,
@@ -704,6 +714,11 @@ def report_portfolio_inputs(
         The fills, as ``backtest_stats.turnover`` takes them.
     value : xarray.DataArray
         The run's value after each bar.
+    rebalances : array_like of datetime64
+        The bars of the decided rebalances, from the run's rebalance record.
+    settlements : sequence of dict, optional
+        The delisting settlements among ``orders``, left out of the
+        turnover (``backtest_stats.turnover``).
     init_cash : float
         The value before the first bar.
     bar_interval
@@ -714,9 +729,10 @@ def report_portfolio_inputs(
     Returns
     -------
     dict
-        ``weights``, ``turnover`` (``backtest_stats.turnover`` per fill bar,
-        whose mean is the ``Turnover per Rebalance [%]`` row) and
-        ``bars_per_year`` (the Rolling tab's window).
+        ``weights``, ``turnover`` (``backtest_stats.turnover`` per rebalance
+        fill bar, whose sum is the ``Total Turnover [%]`` row),
+        ``rebalances`` (as given) and ``bars_per_year`` (the Rolling tab's
+        window).
 
     Examples
     --------
@@ -726,7 +742,8 @@ def report_portfolio_inputs(
     ...                      "size": ("order", [50.0]), "price": ("order", [10.0])})
     >>> weights = xr.DataArray([[1.0], [0.5], [0.5]], dims=("timestamp", "symbol"),
     ...                        coords={"timestamp": bars, "symbol": ["AAA"]})
-    >>> inputs = report_portfolio_inputs(weights, orders, value, init_cash=1000.0, bar_interval="1D",
+    >>> inputs = report_portfolio_inputs(weights, orders, value, rebalances=bars[[0, 1, 2]].values,
+    ...                                  init_cash=1000.0, bar_interval="1D",
     ...                                  trading_days_per_year=252, session_minutes_per_day=390)
     >>> inputs["turnover"].values.tolist(), inputs["bars_per_year"]
     ([0.5], 252.0)
@@ -735,7 +752,8 @@ def report_portfolio_inputs(
     year = backtest_stats.year_freq(interval, trading_days_per_year, session_minutes_per_day)
     return {
         "weights": weights,
-        "turnover": backtest_stats.turnover(orders, value, init_cash),
+        "turnover": backtest_stats.turnover(orders, value, init_cash, settlements=settlements),
+        "rebalances": np.asarray(rebalances).astype("datetime64[ns]"),
         "bars_per_year": year / interval,
     }
 
@@ -744,6 +762,7 @@ def report_holdings_inputs(
     holdings: xr.DataArray,
     weights: xr.DataArray,
     *,
+    rebalances,
     label: Callable[[list, datetime.date], list[tuple[str, str | None]]] | None = None,
     prices: xr.DataArray | None = None,
 ) -> dict:
@@ -763,6 +782,9 @@ def report_holdings_inputs(
         The target weights on ``(timestamp, symbol)``, a row per signal bar
         (all-NaN on a bar that holds), as ``write_backtest_report`` takes
         them.
+    rebalances : array_like of datetime64
+        The bars of the decided rebalances, from the run's rebalance record:
+        the rows of ``weights`` whose targets come into force.
     label : callable, optional
         ``label(symbols, day)`` returns a ``(ticker, company)`` pair for
         each of ``symbols`` as of the date ``day``, the company ``None``
@@ -800,11 +822,11 @@ def report_holdings_inputs(
     >>> def label(symbols, day):
     ...     ticker = "FB" if str(day) < "2024-01-03" else "META"
     ...     return [(ticker, "Meta Platforms") for _ in symbols]
-    >>> report_holdings_inputs(holdings, weights, label=label)["holding_names"]
+    >>> report_holdings_inputs(holdings, weights, rebalances=bars[:1].values, label=label)["holding_names"]
     {'13407': [('2024-01-02', 'FB', 'Meta Platforms'), ('2024-01-03', 'META', 'Meta Platforms')]}
     >>> prices = xr.DataArray([[10.0], [11.0], [12.1]], dims=("timestamp", "symbol"),
     ...                       coords={"timestamp": bars, "symbol": [13407]})
-    >>> inputs = report_holdings_inputs(holdings, weights, prices=prices)
+    >>> inputs = report_holdings_inputs(holdings, weights, rebalances=bars[:1].values, prices=prices)
     >>> inputs["holding_returns"].values.round(2).ravel().tolist()
     [nan, 0.21, 0.21]
     >>> inputs["holding_contributions"].values.round(3).tolist()
@@ -814,7 +836,7 @@ def report_holdings_inputs(
     if label is not None:
         names = {}
         held = np.nan_to_num(holdings.transpose("timestamp", "symbol").values.astype(np.float64))
-        targets, _ = _targets_in_force(weights, holdings)
+        targets, _ = _targets_in_force(weights, holdings, rebalances)
         symbols = holdings.symbol.values
         for i, bar in enumerate(holdings.timestamp.values):
             shown = np.flatnonzero((held[i] != 0.0) | (targets[i] != 0.0))
@@ -826,7 +848,7 @@ def report_holdings_inputs(
                 spans = names.setdefault(str(symbols[j]), [])
                 if not spans or spans[-1][1:] != span:
                     spans.append((date_range.bar_label(bar), *span))
-    returns = None if prices is None else _holding_period_returns(weights, holdings, prices)
+    returns = None if prices is None else _holding_period_returns(weights, holdings, prices, rebalances)
     contributions = None if prices is None else _ranked_contributions(holdings, prices)
     return {
         "holdings": holdings,
@@ -1398,8 +1420,9 @@ _STRATEGY_METRICS: dict[str, tuple[str, str, str, str]] = {
                    "The size of the best 5% of bars against the worst 5% (95th percentile over the absolute 5th). Above 1, big up bars were larger than big down bars."),
     "Common Sense Ratio": ("Risk-adjusted", "Common sense ratio", "ratio", "The profit factor times the tail ratio; above 1 suggests the edge survives the bad days."),
     "Rebalance Win Rate [%]": ("Win rates", "Rebalances with a gain", "pct1",
-                               "The share of holding periods (from one rebalance to the next) that ended "
-                               "with a gain."),
+                               "The share of holding periods that ended with a gain. A period runs from the "
+                               "fill of one decided rebalance to the day before the next one's; a delisting "
+                               "settlement or a held rebalance does not start one."),
     "Monthly Win Rate [%]": ("Win rates", "Months with a gain", "pct1",
                              "The share of calendar months that ended with a gain."),
 }
@@ -1421,11 +1444,15 @@ _WITHOUT_BENCHMARK_ONLY = frozenset({"Rebalance Win Rate [%]", "Monthly Win Rate
 #: The strategy's trading rows, from the same slice as the strategy metrics.
 _TRADING_METRICS: dict[str, tuple[str, str, str]] = {
     "Annualized Turnover [%]": ("Annualised turnover", "pct0",
-                                "How much is bought and sold in a year, as a share of the portfolio value."),
+                                "How much the rebalances bought and sold in a year, as a share of the portfolio "
+                                "value: the total turnover over the window's length in years."),
     "Turnover per Rebalance [%]": ("Turnover per rebalance", "pct0",
-                                   "Buys plus sells at a typical fill, as a share of the portfolio: buying a full book "
-                                   "from cash is 100%, replacing the whole book about 200%."),
-    "Total Turnover [%]": ("Total turnover", "pct0", "Everything bought and sold over the window, as a share of the portfolio value."),
+                                   "Buys plus sells at the average decided rebalance, as a share of the portfolio: "
+                                   "buying a full book from cash is 100%, replacing the whole book about 200%. A "
+                                   "rebalance that kept its book counts as 0; a held rebalance is not counted."),
+    "Total Turnover [%]": ("Total turnover", "pct0",
+                           "Everything the rebalances bought and sold over the window, as a share of the portfolio "
+                           "value before each fill. Delisting settlements are not counted."),
     "Traded Notional": ("Traded notional", "money", "The total value of every fill over the window."),
     "Total Fees Paid": ("Fees paid", "money", "The fees and slippage the simulation charged, in money."),
     "Max Gross Exposure [%]": ("Max gross exposure", "pct0", "The largest total of long plus short positions held, as a share of the portfolio value."),
@@ -1466,8 +1493,8 @@ _RELATIVE_METRICS: dict[str, tuple[str, str, str]] = {
     "CAPM Alpha [%]": ("CAPM alpha", "spct", "The yearly return that moving with the benchmark does not explain: the annualised intercept of the beta regression."),
     "Win Rate vs Benchmark [%]": ("Bars beating the benchmark", "pct0", "The share of bars on which the portfolio did better than the benchmark."),
     "Rebalance Win Rate vs Benchmark [%]": ("Rebalances beating the benchmark", "pct1",
-                                            "The share of holding periods (from one rebalance to the next) in "
-                                            "which the portfolio did better than the benchmark."),
+                                            "The share of holding periods (from one decided rebalance's fill to "
+                                            "the next one's) in which the portfolio did better than the benchmark."),
     "Monthly Win Rate vs Benchmark [%]": ("Months beating the benchmark", "pct1",
                                           "The share of calendar months in which the portfolio did better than "
                                           "the benchmark."),
@@ -1813,8 +1840,8 @@ _KPI_TIPS = {
                      "benchmark value, minus 1. The note is the same per year.",
     "Information ratio": "Excess return per unit of tracking error: how consistently the portfolio beat the "
                          "benchmark. Above 0.5 is good; negative means it lagged.",
-    "Win rate": "The share of holding periods (rebalance to rebalance) that beat the benchmark, or made "
-                "money without one. The note is the same per calendar month.",
+    "Win rate": "The share of holding periods (from one decided rebalance's fill to the next one's) that "
+                "beat the benchmark, or made money without one. The note is the same per calendar month.",
     "Sharpe ratio": "Return per unit of risk: the annualised mean return over the annualised volatility. "
                     "Higher is better; about 1 is good.",
     "Max drawdown": "The worst fall from a previous high to a later low: what buying at the worst moment "
@@ -1822,8 +1849,8 @@ _KPI_TIPS = {
     "Beta": "How much the portfolio moves when the benchmark moves 1%. The note is how closely they move "
             "together (correlation, -1 to 1).",
     "Volatility": "How much the daily returns swing, scaled to a year.",
-    "Turnover / year": "How much is bought and sold in a year, as a share of the portfolio: 700% replaces "
-                       "the book about 3.5 times a year. The note is the fees and slippage paid.",
+    "Turnover / year": "How much the rebalances bought and sold in a year, as a share of the portfolio: 700% "
+                       "replaces the book about 3.5 times a year. The note is the fees and slippage paid.",
 }
 
 
@@ -2057,14 +2084,17 @@ def _rolling_figure(equity: pd.Series, reference: pd.Series | None, bars_per_yea
 HOLDING_THRESHOLD = 1e-3
 
 
-def _portfolio_figure(weights: xr.DataArray | None, turnover: xr.DataArray | None) -> go.Figure | None:
+def _portfolio_figure(
+    weights: xr.DataArray | None, turnover: xr.DataArray | None, rebalances=None
+) -> go.Figure | None:
     """Per rebalance: turnover, holdings and exposure.
 
     Turnover is the series given (buys plus sells over the previous bar's
     value), drawn as a filled step line with its trailing one-year mean,
     because a bar one day wide vanishes on a multi-year axis. Holdings count
-    the target weights of at least ``HOLDING_THRESHOLD`` in absolute value
-    (a symbol a row leaves NaN, to keep it, counts at its last target),
+    the target weights of the decided rebalances (``rebalances``) of at
+    least ``HOLDING_THRESHOLD`` in absolute value (a symbol a row leaves
+    NaN, to keep it, counts at its last target),
     beside the effective number ``(sum |w|)^2 / sum w^2``, which residues do
     not move. Exposure is the gross (and net, when anything is short)
     exposure on an axis that always spans 0 to 100%, so a fully invested
@@ -2076,7 +2106,7 @@ def _portfolio_figure(weights: xr.DataArray | None, turnover: xr.DataArray | Non
     if turnover is not None and turnover.size:
         series = turnover.to_pandas()
         mean = series.rolling("365D").mean()
-        rows.append(("turnover (buys + sells)", "per fill bar · line: trailing one-year mean", [
+        rows.append(("turnover (buys + sells)", "per rebalance fill · line: trailing one-year mean", [
             go.Scatter(x=series.index, y=series.values, name="turnover", mode="lines",
                        line={"color": EXCESS_COLOUR, "width": 1, "shape": "hv"}, fill="tozeroy",
                        hovertemplate="%{x}<br>turnover %{y:.1%}<extra></extra>"),
@@ -2085,11 +2115,10 @@ def _portfolio_figure(weights: xr.DataArray | None, turnover: xr.DataArray | Non
                        hovertemplate="%{x}<br>trailing 1y mean %{y:.1%}<extra></extra>"),
         ], {"tickformat": ".0%", "rangemode": "tozero"}))
     if weights is not None and weights.ndim == 2:
-        frame = weights.transpose("timestamp", ...).to_pandas()
+        weights = weights.transpose("timestamp", ...)
         # A NaN cell keeps that symbol's holding, so a rebalance row counts
-        # it at its last target; a row with no target at all is no rebalance.
-        rebalances = frame.notna().any(axis=1)
-        frame = frame.ffill().fillna(0.0)[rebalances]
+        # it at its last target.
+        frame = weights.to_pandas().ffill().fillna(0.0).iloc[_rebalance_rows(weights, rebalances)]
         if not frame.empty:
             absolute = frame.abs()
             holdings = (absolute >= HOLDING_THRESHOLD).sum(axis=1).astype(float)
@@ -2149,15 +2178,23 @@ def _portfolio_figure(weights: xr.DataArray | None, turnover: xr.DataArray | Non
 DUST_THRESHOLD = 1e-4
 
 
+def _rebalance_rows(weights: xr.DataArray, rebalances) -> np.ndarray:
+    """Return the positions in ``weights`` of the decided rebalances, in time order."""
+    stamps = pd.DatetimeIndex(weights.timestamp.values)
+    wanted = pd.DatetimeIndex(np.asarray([] if rebalances is None else rebalances).astype("datetime64[ns]"))
+    rows = stamps.get_indexer(wanted.unique().sort_values())
+    return rows[rows >= 0]
+
+
 def _targets_in_force(
-    weights: xr.DataArray | None, holdings: xr.DataArray
+    weights: xr.DataArray | None, holdings: xr.DataArray, rebalances
 ) -> tuple[np.ndarray, list[str | None]]:
     """Return the targets in force on each bar of ``holdings`` and the rebalance they came from.
 
-    A row of ``weights`` with a finite cell is a rebalance; a signal at bar
-    t fills at t + 1, so its targets are in force from the first bar after
-    it, a NaN cell keeping that symbol's previous target. Before the first
-    rebalance every target is 0 and the rebalance is ``None``.
+    ``rebalances`` are the decided rebalances, rows of ``weights``; a signal
+    at bar t fills at t + 1, so its targets are in force from the first bar
+    after it, a NaN cell keeping that symbol's previous target. Before the
+    first rebalance every target is 0 and the rebalance is ``None``.
     """
     bars = holdings.timestamp.values
     targets = np.zeros((bars.size, holdings.sizes["symbol"]))
@@ -2166,7 +2203,7 @@ def _targets_in_force(
         return targets, since
     weights = weights.transpose("timestamp", "symbol").reindex(symbol=holdings.symbol.values)
     rows = weights.values.astype(np.float64)
-    rebalances = np.flatnonzero(np.isfinite(rows).any(axis=1))
+    rebalances = _rebalance_rows(weights, rebalances)
     starts = np.searchsorted(bars, weights.timestamp.values[rebalances], side="right")
     current = np.zeros(rows.shape[1])
     for n, (k, start) in enumerate(zip(rebalances, starts)):
@@ -2178,11 +2215,12 @@ def _targets_in_force(
 
 
 def _holding_period_returns(
-    weights: xr.DataArray, holdings: xr.DataArray, prices: xr.DataArray
+    weights: xr.DataArray, holdings: xr.DataArray, prices: xr.DataArray, rebalances
 ) -> xr.DataArray:
     """Return, on each bar of ``holdings``, the price return of the holding period it falls in.
 
-    A period is the bars one rebalance's targets are in force; its return
+    A period is the bars one decided rebalance's targets are in force
+    (``rebalances``, rows of ``weights``); its return
     runs from the close of its signal bar to its last close on ``holdings``'
     bars, on ``prices`` carried forward. NaN before the first rebalance
     fills and where a symbol has no price.
@@ -2194,9 +2232,7 @@ def _holding_period_returns(
         .ffill("timestamp")
     )
     returns = np.full((bars.size, holdings.sizes["symbol"]), np.nan)
-    signals = weights.timestamp.values[
-        np.isfinite(weights.transpose("timestamp", "symbol").values).any(axis=1)
-    ]
+    signals = weights.timestamp.values[_rebalance_rows(weights, rebalances)]
     starts = np.searchsorted(bars, signals, side="right")
     for n, (signal, start) in enumerate(zip(signals, starts)):
         end = starts[n + 1] if n + 1 < len(starts) else bars.size
@@ -2244,6 +2280,7 @@ def _ranked_contributions(holdings: xr.DataArray, prices: xr.DataArray) -> xr.Da
 def _holdings_data(
     holdings: xr.DataArray,
     weights: xr.DataArray | None,
+    rebalances,
     names: Mapping[str, Sequence[tuple[str, str, str]]] | None,
     holding_returns: xr.DataArray | None,
     contributions: xr.DataArray | None,
@@ -2273,7 +2310,7 @@ def _holdings_data(
     contributions is trading at the open and costs.
     """
     held = np.nan_to_num(holdings.transpose("timestamp", "symbol").values.astype(np.float64))
-    targets, since = _targets_in_force(weights, holdings)
+    targets, since = _targets_in_force(weights, holdings, rebalances)
     targets = np.nan_to_num(targets)
     period = (
         np.full(held.shape, np.nan) if holding_returns is None
@@ -2351,6 +2388,7 @@ def _holdings_data(
 def _holdings_section(
     holdings: xr.DataArray,
     weights: xr.DataArray | None,
+    rebalances,
     names: Mapping[str, Sequence[tuple[str, str, str]]] | None,
     holding_returns: xr.DataArray | None,
     contributions: xr.DataArray | None,
@@ -2362,7 +2400,7 @@ def _holdings_section(
     no name can close the script element; the page's own small script draws
     the selected day from it.
     """
-    data = _holdings_data(holdings, weights, names, holding_returns, contributions, book_returns)
+    data = _holdings_data(holdings, weights, rebalances, names, holding_returns, contributions, book_returns)
     payload = json.dumps(data, separators=(",", ":"), allow_nan=False).replace("<", "\\u003c")
     tiles = "".join(
         f'<div class="tile"><div class="kl">{_escape(label)}</div><div class="kv">{_escape(value)}</div></div>'
@@ -3095,7 +3133,7 @@ _CHART_TIPS = {
     "Rolling": "One-year rolling statistics, to see whether the result was steady or came in bursts: excess "
                "return, information ratio and beta against the benchmark, or return, volatility and Sharpe "
                "ratio without one.",
-    "Portfolio": "Turnover at each fill, the number of holdings and the gross exposure on each rebalance.",
+    "Portfolio": "Turnover at each rebalance fill, the number of holdings and the gross exposure on each decided rebalance.",
     "Attribution": "Where the excess came from: the universe against the benchmark, the selection against "
                    "the universe, and the costs; and how each score group of the universe did.",
     "Holdings": "Which positions made the return: the largest positions against the rest, over time and by size "

@@ -38,7 +38,8 @@ from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceCon
 from quantlab.portfolio.base import InputDeclaration, PortfolioContext
 from quantlab.runs.prediction_panel import LabelSpec
 from quantlab.dataset.memory import FrameDataset
-from quantlab.portfolio.decision_inputs import DecisionInputs, rebalance_mask
+from quantlab.portfolio.decision_inputs import DecisionInputs
+from tests.decision_fixtures import schedule
 from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
 from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
 from quantlab.portfolio.predefined.top_n import TopNConstructor
@@ -181,7 +182,7 @@ def test_context_reproduces_every_rebalance_bar_of_weights(kind):
     panel = inputs.weights(predictions)
 
     looped = list(rule.seen)
-    assert len(looped) == rebalance_mask(BARS, PERIODS).sum()
+    assert len(looped) == schedule(BARS, PERIODS).sum()
     assert any((c.current_weights.values != 0).any() for c in looped)
     assert any(bool(c.locked.any()) for c in looped), "the replay must cover a locked position"
     for context in looped:
@@ -243,7 +244,7 @@ def test_rebalances_is_the_schedule_weights_follows():
 
     decided = np.isfinite(panel["weight"].values).all(axis=1)
     asked = np.array([inputs.rebalances(t) for t in TS[WARMUP:]])
-    np.testing.assert_array_equal(asked, rebalance_mask(BARS, PERIODS))
+    np.testing.assert_array_equal(asked, schedule(BARS, PERIODS))
     assert not (decided & ~asked).any()
     assert not inputs.rebalances(TS[WARMUP - 1])  # before the anchor
     assert not _inputs(rule, end=TS[WARMUP + 3]).rebalances(TS[WARMUP + 3])
@@ -264,7 +265,7 @@ def test_rebalances_reads_the_calendar_once_over_a_replay(monkeypatch):
     asked = [inputs.rebalances(t) for t in TS[WARMUP:]]
 
     assert len(reads) == 1
-    np.testing.assert_array_equal(asked[:-1], rebalance_mask(BARS, PERIODS)[:-1])
+    np.testing.assert_array_equal(asked[:-1], schedule(BARS, PERIODS)[:-1])
 
 
 def test_a_panel_starting_after_the_anchor_keeps_the_anchors_schedule():
@@ -334,7 +335,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 MODULE = "quantlab/portfolio/decision_inputs.py"
 CALLERS = ("quantlab/backtest/predefined/us_equity.py", "quantlab/backtest/base.py", "quantlab/api/_backtest.py")
 #: Names only the module may use to assemble decision inputs.
-ASSEMBLY = {"tradable_bars", "rebalance_mask", "bar_before", "declared_inputs", "history_bars", "lookback_bars", "ExecutionBook"}
+ASSEMBLY = {"tradable_bars", "_scheduled", "bar_before", "declared_inputs", "history_bars", "lookback_bars", "ExecutionBook"}
 
 
 def _names(path: Path) -> set[str]:

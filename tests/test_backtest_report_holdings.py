@@ -59,13 +59,18 @@ HOLDINGS = _panel([
 ])
 
 
+def _rebalances(weights: xr.DataArray) -> np.ndarray:
+    """The decided rebalances of a fixture panel: its rows with a target (the run's record says so)."""
+    return weights.timestamp.values[np.isfinite(weights.values).any(axis=1)]
+
+
 def _page(tmp_path, **kwargs) -> str:
     path = tmp_path / "report.html"
     write_backtest_report(
         _value(), path, in_sample_range=None, notes=[], title="run",
         metrics={"whole": {"Total Return [%]": 3.0, "Annualized Return [%]": 12.5,
                            "Max Drawdown [%]": 1.98}},
-        weights=WEIGHTS, **kwargs,
+        weights=WEIGHTS, rebalances=_rebalances(WEIGHTS), **kwargs,
     )
     return path.read_text(encoding="utf-8")
 
@@ -122,7 +127,7 @@ def test_a_renamed_symbol_shows_the_ticker_in_use_on_each_bar(tmp_path):
             for s in symbols
         ]
 
-    inputs = report_holdings_inputs(HOLDINGS, WEIGHTS, label=label)
+    inputs = report_holdings_inputs(HOLDINGS, WEIGHTS, rebalances=_rebalances(WEIGHTS), label=label)
     assert inputs["holding_names"]["10002"] == [
         ("2024-01-02", "T10002", ""), ("2024-01-03", "NEW", "New Co"),
     ]
@@ -136,7 +141,7 @@ def test_a_renamed_symbol_shows_the_ticker_in_use_on_each_bar(tmp_path):
 
 
 def test_report_holdings_inputs_without_a_label_names_nothing():
-    inputs = report_holdings_inputs(HOLDINGS, WEIGHTS)
+    inputs = report_holdings_inputs(HOLDINGS, WEIGHTS, rebalances=_rebalances(WEIGHTS))
     assert inputs["holding_names"] is None
     assert inputs["holdings"] is HOLDINGS
 
@@ -184,6 +189,7 @@ def test_names_new_since_the_previous_rebalance_are_listed_on_every_day_of_its_p
     write_backtest_report(
         _value(), path, in_sample_range=None, notes=[], title="run",
         metrics={"whole": {"Total Return [%]": 3.0}}, weights=weights, holdings=holdings,
+        rebalances=_rebalances(weights),
     )
     data = _data(path.read_text(encoding="utf-8"))
 
@@ -209,7 +215,7 @@ PRICES = _panel([
 
 
 def test_the_holding_period_return_runs_from_the_signal_close_to_the_period_end():
-    returns = report_holdings_inputs(HOLDINGS, WEIGHTS, prices=PRICES)["holding_returns"]
+    returns = report_holdings_inputs(HOLDINGS, WEIGHTS, rebalances=_rebalances(WEIGHTS), prices=PRICES)["holding_returns"]
     # Rebalance 2024-01-01 is in force on bars 1-2, rebalance 2024-01-03 on
     # bars 3-4; each bar shows the return of its whole period.
     expected = np.array([
@@ -225,17 +231,17 @@ def test_the_holding_period_return_runs_from_the_signal_close_to_the_period_end(
 
 def test_a_one_bar_period_shows_the_one_bar_return():
     daily = _panel([[0.5, 0.5, 0.0]] * 5)
-    returns = report_holdings_inputs(HOLDINGS, daily, prices=PRICES)["holding_returns"]
+    returns = report_holdings_inputs(HOLDINGS, daily, rebalances=_rebalances(daily), prices=PRICES)["holding_returns"]
     ffilled = PRICES.ffill("timestamp").values
     np.testing.assert_allclose(returns.values[1:], ffilled[1:] / ffilled[:-1] - 1)
 
 
 def test_report_holdings_inputs_without_prices_returns_no_holding_returns():
-    assert report_holdings_inputs(HOLDINGS, WEIGHTS)["holding_returns"] is None
+    assert report_holdings_inputs(HOLDINGS, WEIGHTS, rebalances=_rebalances(WEIGHTS))["holding_returns"] is None
 
 
 def test_each_row_carries_its_holding_period_return(tmp_path):
-    data = _data(_page(tmp_path, **report_holdings_inputs(HOLDINGS, WEIGHTS, prices=PRICES)))
+    data = _data(_page(tmp_path, **report_holdings_inputs(HOLDINGS, WEIGHTS, rebalances=_rebalances(WEIGHTS), prices=PRICES)))
 
     def returns(day):
         return {data["names"][row[0]][2]: row[3] for row in day["h"]}
@@ -257,7 +263,7 @@ def test_a_period_that_starts_on_the_first_bar_takes_its_signal_close_from_the_p
     )
     prices = xr.concat([_panel([[8.0, 16.0, 4.0]] * 5).isel(timestamp=[0]).assign_coords(timestamp=[early]),
                         PRICES], dim="timestamp")
-    returns = report_holdings_inputs(HOLDINGS, weights, prices=prices)["holding_returns"]
+    returns = report_holdings_inputs(HOLDINGS, weights, rebalances=_rebalances(weights), prices=prices)["holding_returns"]
     np.testing.assert_allclose(returns.values[0], [8.0 / 8.0 - 1, 22.0 / 16.0 - 1, 6.6 / 4.0 - 1])
 
 
@@ -277,7 +283,7 @@ def _rows(ranked: xr.DataArray) -> list[list[float]]:
 
 
 def test_each_bar_lists_its_contributions_by_the_size_of_the_previous_close():
-    ranked = report_holdings_inputs(HOLDINGS, WEIGHTS, prices=PRICES)["holding_contributions"]
+    ranked = report_holdings_inputs(HOLDINGS, WEIGHTS, rebalances=_rebalances(WEIGHTS), prices=PRICES)["holding_contributions"]
     assert ranked.dims == ("timestamp", "rank")
     expected = _ranked_by_hand(HOLDINGS, PRICES)
     for got, want in zip(_rows(ranked), expected):
@@ -292,7 +298,7 @@ def test_each_bar_lists_its_contributions_by_the_size_of_the_previous_close():
 def test_shorts_are_ranked_by_size_and_gain_when_the_price_falls():
     shorted = HOLDINGS.copy()
     shorted[1, 1] = -0.7
-    ranked = report_holdings_inputs(shorted, WEIGHTS, prices=PRICES)["holding_contributions"]
+    ranked = report_holdings_inputs(shorted, WEIGHTS, rebalances=_rebalances(WEIGHTS), prices=PRICES)["holding_contributions"]
     for got, want in zip(_rows(ranked), _ranked_by_hand(shorted, PRICES)):
         np.testing.assert_allclose(got, want, rtol=1e-12, atol=0)
     assert _rows(ranked)[2][0] == pytest.approx(-0.7 * (19.0 / 21.0 - 1))
@@ -300,12 +306,12 @@ def test_shorts_are_ranked_by_size_and_gain_when_the_price_falls():
 
 def test_the_page_embeds_each_bars_ranked_contributions_and_the_nav_returns(tmp_path):
     returns = xr.DataArray([0.0, 0.01, -0.0198, 0.0303, 0.0098], dims=("timestamp",), coords={"timestamp": BARS})
-    inputs = report_holdings_inputs(HOLDINGS, WEIGHTS, prices=PRICES)
+    inputs = report_holdings_inputs(HOLDINGS, WEIGHTS, rebalances=_rebalances(WEIGHTS), prices=PRICES)
     contribution = _data(_page(tmp_path, returns=returns, **inputs))["contribution"]
     assert contribution["ranked"] == _rows(inputs["holding_contributions"])
     assert contribution["nav"] == returns.values.tolist()
 
 
 def test_without_prices_the_page_has_no_contribution_analysis(tmp_path):
-    assert report_holdings_inputs(HOLDINGS, WEIGHTS)["holding_contributions"] is None
+    assert report_holdings_inputs(HOLDINGS, WEIGHTS, rebalances=_rebalances(WEIGHTS))["holding_contributions"] is None
     assert _data(_page(tmp_path, holdings=HOLDINGS))["contribution"] is None
