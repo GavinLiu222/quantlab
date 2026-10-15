@@ -296,6 +296,11 @@ class ApproximateBacktestConfig(FrozenConfig):
     #: Cost per unit of traded weight at each fill, standing for fees and
     #: slippage together (a backtest run's ``fees + slippage``).
     cost: float = 0.001
+    #: A market dataset holding exactly one symbol, bought and held on the
+    #: window's bars at the same cost, as a backtest run's
+    #: ``benchmark_dataset`` is; the account then reports its curve, its
+    #: return statistics and the excess over it. ``None`` for none.
+    benchmark_dataset: "MarketDataset | None" = component(default=None)
     #: Bars of the window swept to convergence together; a chunk's decision
     #: inputs are held in memory at once.
     chunk_bars: int = 252

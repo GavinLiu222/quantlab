@@ -257,3 +257,144 @@ def test_a_solved_row_mixing_finite_weights_and_nan_is_refused(case, store):
 
     with pytest.raises(ValueError, match="_MixedRow.solve returned a row mixing"):
         _approximate(store, rebalance_periods).run(predictions, _MixedRow(top_n_config))
+
+
+# --------------------------------------------------------------------------
+# The universe and benchmark curves and the excess blocks (#304)
+# --------------------------------------------------------------------------
+
+BENCHMARK_CASES = {
+    "long_only_r5": (TopNConfig(direction="long_only", top_n=4), 5),
+    "long_short_r1": (TopNConfig(direction="long_short", top_n=3), 1),
+}
+
+
+def _benchmark_dataset(store, symbols=("QQQ",)):
+    """A dataset over a benchmark store of ``symbols``, written once per module."""
+    root, _, _ = store
+    path = root / f"benchmark_{'_'.join(symbols)}"
+    config = _BENCHMARK_STORES.get(path)
+    if config is None:
+        config = _BENCHMARK_STORES[path] = write_price_store(
+            path, symbols=list(symbols), n_bars=N_BARS, seed=7
+        )
+    return make_stock_dataset(config)
+
+
+_BENCHMARK_STORES: dict = {}
+
+
+@pytest.fixture(scope="module", params=sorted(BENCHMARK_CASES))
+def benchmark_case(request, store):
+    root, dataset_config, bars = store
+    top_n_config, rebalance_periods = BENCHMARK_CASES[request.param]
+    tag = f"benchmark_{request.param}"
+    model = make_model(
+        root / f"model_{tag}",
+        dataset_config,
+        start_date=_day(bars[0]),
+        end_date=_day(bars[59]),
+        train_start=_day(bars[0]),
+        train_end=_day(bars[49]),
+        test_start=_day(bars[50]),
+        test_end=_day(bars[59]),
+    )
+    result = USEquityCrossectionSelectStockVectorBt(
+        CrossSectionBacktestConfig(
+            price_dataset=make_stock_dataset(dataset_config),
+            model=model,
+            model_mode="train",
+            start_date=_day(bars[WINDOW[0]]),
+            end_date=_day(bars[WINDOW[1]]),
+            output_dir=str(root / f"runs_{tag}"),
+            rebalance_periods=rebalance_periods,
+            constructor=TopNConstructor(top_n_config),
+            fees=FEES,
+            slippage=0.0,
+            benchmark_dataset=_benchmark_dataset(store),
+        )
+    ).run()
+    predictions = BacktestRun.open(result.run_dir).predictions()
+    account = _approximate(
+        store, rebalance_periods, benchmark_dataset=_benchmark_dataset(store)
+    ).run(predictions, TopNConstructor(top_n_config))
+    return result, predictions, account, top_n_config, rebalance_periods
+
+
+def test_the_universe_and_benchmark_curves_agree_with_the_runs(benchmark_case):
+    result, _, account, _, _ = benchmark_case
+    init_cash = result.simulation.value.values[0]
+    run_equity = BacktestRun.open(result.run_dir).equity()
+
+    np.testing.assert_allclose(
+        account.universe_value.values,
+        run_equity["universe_value"].values / init_cash,
+        rtol=VALUE_TOLERANCE,
+        atol=0,
+    )
+    np.testing.assert_allclose(
+        account.benchmark_value.values,
+        result.benchmark.value.values / init_cash,
+        rtol=VALUE_TOLERANCE,
+        atol=0,
+    )
+    assert account.universe_value.values[0] == account.benchmark_value.values[0] == 1.0
+
+
+def test_the_excess_blocks_agree_with_the_runs_metrics(benchmark_case):
+    result, _, account, _, _ = benchmark_case
+    metrics = BacktestRun.open(result.run_dir).metrics()
+    relative = metrics["relative"]["whole"]
+
+    for key in ("Excess Return [%]", "Total Return Difference [%]", "Benchmark Total Return [%]"):
+        assert account.metrics["relative"][key] == pytest.approx(relative[key], abs=VALUE_TOLERANCE * 100)
+    # Annualising the 68-bar window multiplies a value gap by about four.
+    assert account.metrics["relative"]["Annualized Excess Return [%]"] == pytest.approx(
+        relative["Annualized Excess Return [%]"], abs=VALUE_TOLERANCE * 100 * 4
+    )
+    assert account.metrics["relative"]["Information Ratio"] == pytest.approx(
+        relative["Information Ratio"], abs=0.02
+    )
+    assert account.metrics["benchmark"]["Total Return [%]"] == pytest.approx(
+        metrics["benchmark"]["whole"]["Total Return [%]"], abs=VALUE_TOLERANCE * 100
+    )
+    run_parts = metrics["attribution"]["decomposition"]
+    parts = account.metrics["attribution"]["decomposition"]
+    assert set(parts) == set(run_parts) == {"universe", "selection", "costs", "total"}
+    # Annualised log growth: a value gap of 1e-3 over 68 bars is about 4e-3 a year.
+    for key in run_parts:
+        assert parts[key] == pytest.approx(run_parts[key], abs=VALUE_TOLERANCE * 4)
+    assert parts["universe"] + parts["selection"] + parts["costs"] == pytest.approx(parts["total"])
+
+
+def test_the_selection_block_is_the_excess_over_the_universe(benchmark_case):
+    _, _, account, _, _ = benchmark_case
+    selection = account.metrics["selection"]
+
+    expected = account.value.values[-1] / account.universe_value.values[-1] - 1
+    assert selection["Excess Return [%]"] == pytest.approx(expected * 100)
+    assert np.isfinite(selection["Annualized Excess Return [%]"])
+    assert np.isfinite(selection["Information Ratio"])
+
+
+def test_without_a_benchmark_the_benchmark_blocks_are_absent(case):
+    result, _, account, _, _ = case
+    run_parts = BacktestRun.open(result.run_dir).metrics()["attribution"]["decomposition"]
+
+    assert account.benchmark_value is None
+    assert "relative" not in account.metrics and "benchmark" not in account.metrics
+    assert "Information Ratio" in account.metrics["selection"]
+    parts = account.metrics["attribution"]["decomposition"]
+    assert set(parts) == set(run_parts) == {"selection", "costs", "total"}
+    for key in run_parts:
+        assert parts[key] == pytest.approx(run_parts[key], abs=VALUE_TOLERANCE * 4)
+
+
+def test_a_benchmark_of_more_than_one_symbol_is_refused(case, store):
+    _, predictions, _, top_n_config, rebalance_periods = case
+    backtest = _approximate(
+        store, rebalance_periods, benchmark_dataset=_benchmark_dataset(store, ("QQQ", "SPY"))
+    )
+
+    with pytest.raises(ValueError, match="exactly one symbol"):
+        backtest.run(predictions, TopNConstructor(top_n_config))

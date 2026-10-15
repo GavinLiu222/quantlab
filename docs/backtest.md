@@ -512,6 +512,21 @@ ValueError: USEquityApproximateBacktest cannot run TopkDropoutConstructor: TopkD
 
 A rule whose decision reads the holdings couples the bars. The window is cut into chunks of `chunk_bars` bars; each chunk is swept (its holdings simulated from the last sweep's weights, the rule asked again) until no bar's weights move by more than `tolerance` (L1), or `max_sweeps` is reached, which logs a warning and sets `converged` to `False`. Top-n does not read the holdings and converges in one sweep.
 
+The account also holds `universe_value`, the equal-weighted universe of a run's attribution (every symbol with a finite score of the rule's score label and a fill price on the next bar, held between the decided rebalances without costs), and `metrics["selection"]`, the `relative_stats` of the account over it: what the scores and the rule add, with its annualised excess return and information ratio. `metrics["attribution"]` holds the `decomposition` and `annualized_log_return` of a run's `attribution` block. Set `benchmark_dataset` (one symbol, like a run's) and the benchmark is bought at the second bar's open at the same `cost` and held: the account gains `benchmark_value`, `metrics["benchmark"]` (its return statistics) and `metrics["relative"]` (a run's `relative` rows without the win rates), and the decomposition gains its `universe` part. On a synthetic store these agree with the run's `metrics.json` to the third digit:
+
+```python
+>>> backtest = USEquityApproximateBacktest(
+...     dataclasses.replace(backtest.config, benchmark_dataset=qqq)
+... )
+>>> account = backtest.run(predictions, TopNConstructor(TopNConfig(direction="long_only", top_n=4)))
+>>> round(account.metrics["relative"]["Information Ratio"], 2)  # the backtest run's: 3.47
+3.47
+>>> round(account.metrics["selection"]["Information Ratio"], 2)
+0.33
+>>> sorted(account.metrics["attribution"]["decomposition"])
+['costs', 'selection', 'total', 'universe']
+```
+
 ### Restrict the universe to an index's members
 
 An index's point-in-time membership is a universe: it says which securities the strategy may enter at bar t. It masks the predictions, never the prices. Keep `price_dataset` unmasked (for CRSP, a `CrspStockDataset` over the index store `wrds_crsp_<index>_1d.zarr`) and wrap the model in `MembershipMaskedPredictor` from `quantlab.model.predefined.membership_mask`, with the index's `IndexConstituentDataset`:

@@ -512,6 +512,21 @@ ValueError: USEquityApproximateBacktest cannot run TopkDropoutConstructor: TopkD
 
 决策要读持仓的规则会把各 bar 耦合起来。窗口按 `chunk_bars` 个 bar 分块；每块反复扫描（由上一轮的权重模拟出持仓，再问一次规则），直到没有哪个 bar 的权重变动超过 `tolerance`（L1），或达到 `max_sweeps`，此时记录警告并把 `converged` 设为 `False`。top-n 不读持仓，一轮即收敛。
 
+账户里还有 `universe_value`，即运行归因所用的等权全体（每次调仓时，规则评分标签有有限分数、且下一 bar 有成交价的全部标的，在两次已决调仓之间不计成本地持有），以及 `metrics["selection"]`：账户相对它的 `relative_stats`，也就是分数和规则带来的超额，含年化超额收益和信息比率。`metrics["attribution"]` 含运行 `attribution` 块中的 `decomposition` 和 `annualized_log_return`。设置 `benchmark_dataset`（只含一个标的，与运行的要求相同）后，基准在第二个 bar 开盘以同样的 `cost` 买入并持有：账户多出 `benchmark_value`、`metrics["benchmark"]`（它的收益统计）和 `metrics["relative"]`（运行的 `relative` 各行，不含胜率），分解中也多出 `universe` 部分。在合成数据上，这些数与运行的 `metrics.json` 在第三位小数上一致：
+
+```python
+>>> backtest = USEquityApproximateBacktest(
+...     dataclasses.replace(backtest.config, benchmark_dataset=qqq)
+... )
+>>> account = backtest.run(predictions, TopNConstructor(TopNConfig(direction="long_only", top_n=4)))
+>>> round(account.metrics["relative"]["Information Ratio"], 2)  # 回测运行的值：3.47
+3.47
+>>> round(account.metrics["selection"]["Information Ratio"], 2)
+0.33
+>>> sorted(account.metrics["attribution"]["decomposition"])
+['costs', 'selection', 'total', 'universe']
+```
+
 ### 限定为指数成分股
 
 指数的 point-in-time 成分是一个股票池：它规定策略在 bar t 可以买入哪些证券。它遮蔽的是预测，从不遮蔽价格。`price_dataset` 保持未遮蔽（CRSP 下即指数 store `wrds_crsp_<index>_1d.zarr` 上的 `CrspStockDataset`），并用 `quantlab.model.predefined.membership_mask` 中的 `MembershipMaskedPredictor` 配合该指数的 `IndexConstituentDataset` 包装模型：
