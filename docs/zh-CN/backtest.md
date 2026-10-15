@@ -478,56 +478,108 @@ ValueError: USEquityCrossectionSelectStockVectorBt: the weight bars must be exac
 
 ### 用近似回测做参数扫描
 
-回测运行逐 bar 决策并写运行目录，用来扫描规则参数或比较很多模型太慢。近似回测（`quantlab.backtest.approximate`，ADR 0041）一次决定预测面板上的全部调仓，并用数组运算模拟整个窗口。在一个价格数据集和窗口上构建一次，然后对任意多组（预测，规则）运行；窗口的价格只读一次，什么都不写。
+回测运行逐 bar 决策、按 Execution 规则重放持仓，并写运行目录，用来扫描规则参数或比较很多模型太慢。近似回测（`quantlab.backtest.approximate`，ADR 0041）一次决定预测面板上的全部调仓，并用数组运算模拟整个窗口。在一个价格数据集和窗口上构建一次，然后对任意多组（预测，规则）运行：窗口的价格只读一次，什么都不写。用它来做选择，再用 `run()` 确认选出的配置；`run()` 原样接受同一个规则配置。
+
+接着第一个会话，把运行记录的预测交给同一窗口上的近似回测（`cost` 代表运行的手续费加滑点）：
 
 ```python
 >>> from quantlab.backtest.config import ApproximateBacktestConfig
 >>> from quantlab.backtest.predefined.us_equity import USEquityApproximateBacktest
->>> backtest = USEquityApproximateBacktest(
-...     ApproximateBacktestConfig(
-...         price_dataset=prices, start_date="2024-03-25", end_date="2024-06-26",
-...         rebalance_periods=5, cost=0.0005,
-...     )
-... )
->>> predictions = BacktestRun.open(run_dir).predictions()  # 一次运行记录的预测
->>> for top_n in (2, 4, 6):
-...     account = backtest.run(predictions, TopNConstructor(TopNConfig(direction="long_only", top_n=top_n)))
-...     print(top_n, round(account.metrics["Sharpe Ratio"], 2))
-2 1.63
-4 2.46
-6 3.36
+>>> approximate = USEquityApproximateBacktest(ApproximateBacktestConfig(
+...     price_dataset=prices_of(cfg),
+...     start_date="2024-02-12",
+...     end_date="2024-03-22",
+...     rebalance_periods=5,
+...     cost=0.001,
+... ))
+>>> predictions = run.predictions()
+>>> account = approximate.run(predictions, TopNConstructor(TopNConfig(direction="long_only", top_n=2)))
+>>> round(account.metrics["Total Return [%]"], 2), round(run.metrics()["out_of_sample"]["Total Return [%]"], 2)
+(-5.92, -5.61)
+>>> (account.weights.values == result.weights["weight"].values[result.weights["decided"].values]).all()
+np.True_
+>>> for top_n in (1, 2, 3):
+...     swept = approximate.run(predictions, TopNConstructor(TopNConfig(direction="long_only", top_n=top_n)))
+...     print(top_n, round(swept.metrics["Sharpe Ratio"], 2), round(swept.metrics["Turnover per Rebalance [%]"], 1))
+1 -6.22 150.0
+2 -2.36 133.8
+3 -1.42 84.3
 ```
 
-规则用的就是回测运行所用的配置，所以扫描选出的配置可以原样交给 `run()` 确认。返回的 `ApproximateAccount` 有 `value`（窗口第一个 bar 为 1.0）、`returns`、`value_without_costs`、各决策 bar 的目标 `weights`、每次调仓的 `turnover`，以及 `metrics`：`backtest_stats.return_stats` 和 `backtest_stats.turnover_stats` 的各行，含义与运行的 `metrics.json` 中同名行一致，另有 `sweeps` 和 `converged`。
+权重与运行相同；总收益相差 0.3 个百分点来自 FFF：它在窗口内停止交易，运行把它清算成现金（见下文）。
 
-它保留了回测运行的：调仓日程（从窗口第一个 bar 起每 `rebalance_periods` 个 bar 一次，最后一个 bar 不调仓）、bar t 决定的权重在 t+1 开盘成交、持仓按前向填充的收盘价估值并在两次成交之间随价格漂移、可交易性在决策 bar 判断。它放弃了：被拒订单、锁定持仓、退市清算（退市的持仓停在最后估值，不转成现金）、买入的现金上限和 `min_trade`；手续费和滑点合成一个按成交权重计的 `cost`。成交 bar 缺成交价时退回前一 bar 的收盘价。在合成数据上，`TopNConstructor` 的权重与回测运行完全相同，净值相差在 2e-4 以内。
+#### 保留什么、放弃什么
 
-规则通过实现 `prepare` 和 `solve` 加入（见组合构建指南）；没有实现的规则（如 `TopkDropoutConstructor`）在读任何数据之前就被拒绝：
+它保留了回测运行的：调仓日程（从窗口第一个 bar 起每 `rebalance_periods` 个 bar 一次，最后一个 bar 不调仓）、bar t 决定的权重在 t+1 开盘成交、持仓按前向填充的收盘价估值并在两次成交之间随价格漂移、可交易性在决策 bar 判断，以及统计量：与运行的 `metrics.json` 各行用同一组函数计算。
+
+它放弃了以下各项，每一项都会造成与 `run()` 的差距：
+
+- **被拒订单。** 成交 bar 缺成交价时退回前一 bar 的收盘价成交；运行会拒绝这笔订单并保留原持仓。
+- **锁定持仓。** 不能交易的持仓不会被保留：下一次调仓以它停止交易时的价格卖出；运行则一直持有到它恢复交易。
+- **退市清算。** 退市的持仓停在最后估值，直到某次调仓以同样的价格卖出；运行在下一个 bar 把它转成现金。
+- **现金上限和 `min_trade`。** 运行会把一次成交最后几笔买单砍到手续费之后剩下的现金；近似回测不这样做，所以有手续费时持仓与运行相差约“费率 × 换手”。带换手惩罚的规则会把这点差带进权重。
+- **订单机制。** 手续费和滑点合成一个按成交权重计的 `cost`。
+
+在合成数据上的实测（`tests/test_backtest_approximate.py`）：没有上述事件时，`TopNConstructor` 的权重与运行完全相同，净值相差在 2e-4 以内；均值-方差的权重与高精度求解的运行相差在 2e-7（L1）以内，净值在 1e-4 以内；带换手惩罚和 5 bp 手续费时权重相差在 1.3e-3 以内（现金上限所致）。在一个有退市、新上市、停牌和缺成交价的 68 bar 窗口上，第一个事件之前净值与运行相差在 1e-3 以内，整个窗口在 2.3e-2 以内，折合几个百分点的年化收益；测试锁定 3e-2。在真实数据上，差距随持仓标的停牌、退市或缺成交价的频率增大。
+
+#### 规则与配置
+
+实现了 `prepare` 和 `solve` 的规则才能运行（见组合构建指南的[编写规则](portfolio.md#编写规则)）：
+
+- `TopNConstructor`，只做多和多空；
+- `MeanVarianceOptimizer`，只做多或多空、两种校准、有无换手惩罚、`candidate_top_k` 和 `volatility_label`，协方差估计器为 `LedoitWolfEstimator` 或 `FactorRiskStoreEstimator`（见[近似回测中的均值-方差](portfolio.md#近似回测中的均值-方差)）；
+- 不设跟踪误差上限的 `ActiveRiskOptimizer`。
+
+以下情况在读任何数据之前就被拒绝，消息会写明规则、字段或估计器：没有实现这对方法的规则（`TopkDropoutConstructor`、自定义规则）、跟踪误差上限、`exposure_bounds`、自定义的 `risk_constraints`、没有面板版本的 `reference_weights`，以及没有 `estimate_all` 的协方差估计器。`solver` 和 `min_trade` 不读。
 
 ```python
->>> backtest.run(predictions, TopkDropoutConstructor(TopkDropoutConfig(direction="long_only", topk=3, n_drop=1)))
+>>> from quantlab.portfolio.config import TopkDropoutConfig
+>>> from quantlab.portfolio.predefined.topk_dropout import TopkDropoutConstructor
+>>> approximate.run(predictions, TopkDropoutConstructor(TopkDropoutConfig(direction="long_only", topk=2, n_drop=1)))
 Traceback (most recent call last):
 ValueError: USEquityApproximateBacktest cannot run TopkDropoutConstructor: TopkDropoutConstructor has no panel decision (prepare and solve); backtest it with a backtest run
 ```
 
-决策要读持仓的规则会把各 bar 耦合起来。窗口按 `chunk_bars` 个 bar 分块；每块反复扫描（由上一轮的权重模拟出持仓，再问一次规则），直到没有哪个 bar 的权重变动超过 `tolerance`（L1），或达到 `max_sweeps`，此时记录警告并把 `converged` 设为 `False`。一个 bar 的持仓来自它之前的最后一次成交，分块第一个 bar 的持仓来自上一分块的最终账户。第 j 轮扫描在分块的前 j 次决策上是精确的，所以 n 次决策的分块最多 n + 1 轮就收敛，不论规则把它们耦合得多紧；默认的 `chunk_bars=21` 让这个数低于默认的 `max_sweeps=50`。top-n 不读持仓，一轮即收敛。
+在 1,000 只合成标的、137 次日度调仓上，只做多的均值-方差用时 1.0 秒，`run()` 用时 76 秒；`turnover_penalty=1e-3` 时 8 秒对 185 秒；多空加同样的惩罚 18 秒对 361 秒。
 
-账户里还有 `universe_value`，即运行归因所用的等权全体（每次调仓时，规则评分标签有有限分数、且下一 bar 有成交价的全部标的，在两次已决调仓之间不计成本地持有），以及 `metrics["selection"]`：账户相对它的 `relative_stats`，也就是分数和规则带来的超额，含年化超额收益和信息比率。`metrics["attribution"]` 含运行 `attribution` 块中的 `decomposition` 和 `annualized_log_return`。设置 `benchmark_dataset`（只含一个标的，与运行的要求相同）后，基准在第二个 bar 开盘以同样的 `cost` 买入并持有：账户多出 `benchmark_value`、`metrics["benchmark"]`（它的收益统计）和 `metrics["relative"]`（运行的 `relative` 各行，不含胜率），分解中也多出 `universe` 部分。在合成数据上，这些数与运行的 `metrics.json` 在第三位小数上一致：
+#### 扫描与分块
+
+决策要读持仓的规则（换手惩罚）会把各 bar 耦合起来。窗口按 `chunk_bars` 个 bar 分块（默认 21）；每块只准备一次问题，然后反复扫描：由上一轮的权重模拟出持仓（上一分块的最终账户带入本块的第一个 bar），再问一次规则，直到没有哪个 bar 的权重变动超过 `tolerance`（L1，默认 1e-6）。第 j 轮扫描在分块的前 j 次决策上是精确的，所以 n 次决策的分块最多 n + 1 轮就收敛；达到 `max_sweeps`（默认 50）时，会记录一条写明分块的警告，并把 `converged` 设为 `False`。top-n 不读持仓，一轮即收敛。接着会话：
 
 ```python
->>> backtest = USEquityApproximateBacktest(
-...     dataclasses.replace(backtest.config, benchmark_dataset=qqq)
-... )
->>> account = backtest.run(predictions, TopNConstructor(TopNConfig(direction="long_only", top_n=4)))
->>> round(account.metrics["relative"]["Information Ratio"], 2)  # 回测运行的值：3.47
-3.47
->>> round(account.metrics["selection"]["Information Ratio"], 2)
-0.33
->>> sorted(account.metrics["attribution"]["decomposition"])
-['costs', 'selection', 'total', 'universe']
+>>> from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig
+>>> from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
+>>> from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
+>>> for penalty in (0.0, 0.002):
+...     rule = MeanVarianceOptimizer(MeanVarianceConfig(
+...         expected_return_label="open_ret_1",
+...         covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=10)),
+...         ic=0.05, risk_aversion=5.0, weight_cap=0.5, turnover_penalty=penalty,
+...     ))
+...     swept = approximate.run(predictions, rule)
+...     print(penalty, round(swept.metrics["Turnover per Rebalance [%]"], 1), swept.metrics["sweeps"])
+0.0 117.9 [1, 1]
+0.002 34.7 [5, 2]
 ```
 
-`MeanVarianceOptimizer` 也能运行：只做多或多空、两种校准、有无换手惩罚、`candidate_top_k` 和 `volatility_label` 均可，协方差估计器要有批量估计（`LedoitWolfEstimator`、`FactorRiskStoreEstimator`）；见[近似回测中的均值-方差](portfolio.md#近似回测中的均值-方差)。在 1,000 只合成标的、137 次日度调仓上，它用时 1.0 秒，`run()` 用时 76 秒；`turnover_penalty=1e-3` 时用时 8 秒（每块 12 到 22 轮扫描），`run()` 在一台更忙的机器上用时 185 秒；多空加同样的惩罚用时 18 秒，`run()` 361 秒。
+#### 账户
+
+`run` 返回一个 `ApproximateAccount`：
+
+- `value`（窗口第一个 bar 为 1.0）、`returns`（该 bar 为 0.0）和 `value_without_costs`，都在窗口的 bar 上；
+- `weights`：各决策 bar 的目标权重；`turnover`：每次调仓的成交权重（从现金建仓时为 1.0）；
+- `universe_value`：运行归因所用的等权全体；`benchmark_value`（没有基准时为 `None`）；
+- `metrics`：窗口上 `backtest_stats.return_stats` 和 `backtest_stats.turnover_stats` 的各行，`selection`（账户相对等权全体的 `relative_stats`，也就是分数和规则带来的超额，含年化超额收益和信息比率），`attribution`（运行的 `decomposition` 和 `annualized_log_return`），`sweeps`（每块的扫描轮数）和 `converged`。
+
+设置 `benchmark_dataset`（只含一个标的，与运行的要求相同）后，基准在第二个 bar 开盘以同样的 `cost` 买入并持有，`metrics` 多出 `benchmark`（它的收益统计）和 `relative`（运行的 `relative` 各行，不含胜率），分解中也多出 `universe` 部分：
+
+```python
+approximate = USEquityApproximateBacktest(dataclasses.replace(approximate.config, benchmark_dataset=qqq))
+account = approximate.run(predictions, rule)
+account.metrics["relative"]["Information Ratio"]
+```
+
+在合成数据上，这些数与运行的 `metrics.json` 在第三位小数上一致（信息比率 3.4689 对 3.4712）。
 
 ### 限定为指数成分股
 

@@ -47,6 +47,21 @@ penalised one also with `candidate_top_k`, ranked by `|mu|`),
 (a model predicting `fwd_ret_1` and a positive `vol_1`) and
 `calibration="raw"`.
 
+What the approximation gives up (#310), as a specification: a store with
+delistings (S02 at bar 85, S05 at 104), a listing inside the window (S09 at
+75), a halt (S04, bars 90 to 94) and missing fill prices with the close kept
+(S06 at 70, 71 and 96, S11 at 80 and 110), run through `run()` and the
+approximate backtest, top-n long-only and long-short and long-only
+mean-variance. The run rejects the orders that find no fill price (the
+approximation fills them at the previous close), settles S02 into cash at
+its last valuation (the approximation keeps it at that valuation until a
+rebalance sells it at the same price) and keeps S04 locked through its halt
+(the approximation sells it at the price it halted at); those three rules
+account for the whole gap. Before the first event the value is within 1e-3
+and the weights within 1e-3 (L1); over the window the value is within 3e-2
+(measured 2.3e-2 at most on the 68-bar window, a few percentage points of
+annualised return).
+
 Everything is synthetic, CPU-only and offline.
 """
 
@@ -1108,3 +1123,111 @@ def test_a_long_short_book_is_dollar_neutral_within_a_gross_of_one(configuration
     np.testing.assert_allclose(account.weights.sum("symbol").values, 0.0, atol=1e-9)
     assert (np.abs(account.weights).sum("symbol").values <= 1.0 + 1e-9).all()
     assert (np.abs(account.weights).values <= 0.15 + 1e-12).all()
+
+
+# --------------------------------------------------------------------------
+# What the approximation gives up: halts, listings, delistings, missing fills (#310)
+# --------------------------------------------------------------------------
+
+#: The bound of the value gap on a store with execution events, over the 68-bar window.
+EVENT_VALUE_BOUND = 3e-2
+#: The window's row of the first bar whose fill price is missing (S06 at bar
+#: 70): no execution rule the approximation gives up acts before it.
+FIRST_EVENT_ROW = 70 - WINDOW[0]
+
+
+@pytest.fixture(scope="module")
+def event_store(tmp_path_factory):
+    root = tmp_path_factory.mktemp("approximate_events")
+    dataset_config = write_price_store(
+        root,
+        symbols=SYMBOLS,
+        n_bars=N_BARS,
+        seed=7,
+        delist_at={"S02": 85, "S05": 104},
+        list_at={"S09": 75},
+    )
+    _halted(dataset_config.zarr_file_path, "S04", list(range(90, 95)))
+    # The fill price is missing and the close is not, so the run rejects the order.
+    data = xr.open_zarr(dataset_config.zarr_file_path).load()
+    for symbol, rows in {"S06": [70, 71, 96], "S11": [80, 110]}.items():
+        j = list(data.symbol.values).index(symbol)
+        for name in ("adjOpen", "open"):
+            values = data[name].transpose("timestamp", "symbol").values.copy()
+            values[rows, j] = np.nan
+            data[name] = (("timestamp", "symbol"), values)
+    data.to_zarr(dataset_config.zarr_file_path, mode="w")
+    bars = pd.bdate_range("2024-01-01", periods=N_BARS)
+    return root, dataset_config, bars
+
+
+#: The rule (a top-n config, or None for long-only mean-variance) and rebalance_periods.
+EVENT_CASES = {
+    "top_n_long_only_r1": (TopNConfig(direction="long_only", top_n=4), 1),
+    "top_n_long_only_r5": (TopNConfig(direction="long_only", top_n=4), 5),
+    "top_n_long_short_r1": (TopNConfig(direction="long_short", top_n=3), 1),
+    "mean_variance_r1": (None, 1),
+    "mean_variance_r5": (None, 5),
+}
+
+
+@pytest.fixture(scope="module", params=sorted(EVENT_CASES))
+def event_case(request, event_store):
+    import cvxpy
+
+    top_n_config, rebalance_periods = EVENT_CASES[request.param]
+    tag = f"events_{request.param}"
+    if top_n_config is None:
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(cvxpy.Problem, "solve", _tightly_solved(cvxpy.Problem.solve))
+            result = _mvo_run(event_store, _mvo(), rebalance_periods, tag, 1)
+        rule = _mvo()
+    else:
+        result = _run(event_store, top_n_config, rebalance_periods, tag)
+        rule = TopNConstructor(top_n_config)
+    predictions = BacktestRun.open(result.run_dir).predictions()
+    account = _approximate(event_store, rebalance_periods).run(predictions, rule)
+    return request.param, result, account
+
+
+def _value_gap(result, account) -> np.ndarray:
+    run_value = result.simulation.value.values / result.simulation.value.values[0]
+    return np.abs(account.value.values / run_value - 1)
+
+
+def test_the_event_store_exercises_the_execution_rules_given_up(event_case, event_store):
+    name, result, _ = event_case
+    if name != "top_n_long_short_r1":
+        pytest.skip("the store's events are checked on one case")
+    _, dataset_config, _ = event_store
+    execution = BacktestRun.open(result.run_dir).metrics()["execution"]
+    weights = result.weights.transpose("timestamp", "symbol")["weight"]
+    fill = (
+        xr.open_zarr(dataset_config.zarr_file_path)["adjOpen"]
+        .sel(timestamp=weights.timestamp)
+        .transpose("timestamp", "symbol")
+        .reindex(symbol=weights.symbol)
+    )
+    locked = np.isfinite(weights.values) & (weights.values != 0) & ~np.isfinite(fill.values)
+
+    assert execution["rejected_order_count"] > 0
+    assert [record["symbol"] for record in result.simulation.settlements] == ["S02"]
+    assert locked.any()
+
+
+def test_before_the_first_event_the_gap_is_the_usual_one(event_case):
+    _, result, account = event_case
+    weights = result.weights.transpose("timestamp", "symbol")
+    decided = weights["decided"].values
+    early = weights.timestamp.values[decided] < weights.timestamp.values[FIRST_EVENT_ROW]
+
+    assert _value_gap(result, account)[:FIRST_EVENT_ROW].max() <= VALUE_TOLERANCE
+    np.testing.assert_array_equal(account.weights.timestamp.values, weights.timestamp.values[decided])
+    l1 = np.abs(account.weights.values - weights["weight"].values[decided]).sum(axis=1)
+    assert l1[early].max() <= WEIGHTS_L1
+
+
+def test_over_the_window_the_value_gap_stays_within_the_event_bound(event_case):
+    _, result, account = event_case
+
+    assert _value_gap(result, account).max() <= EVENT_VALUE_BOUND

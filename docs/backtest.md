@@ -478,56 +478,108 @@ With `output_dir=None` a run writes nothing: no run directory, no report. `resul
 
 ### Sweep with the approximate backtest
 
-A backtest run decides one bar at a time and writes a run directory, which is too slow to sweep a rule's parameters or compare many models. The approximate backtest (`quantlab.backtest.approximate`, ADR 0041) decides every rebalance of a prediction panel at once and simulates the window as array operations. Build it once over a price dataset and a window, then run it on as many (predictions, rule) pairs as you like; the window's prices are read once, and nothing is written.
+A backtest run decides one bar at a time, replays the holdings under the Execution rules and writes a run directory: too slow to sweep a rule's parameters or compare many models. The approximate backtest (`quantlab.backtest.approximate`, ADR 0041) decides every rebalance of a prediction panel at once and simulates the window as array operations. Build it once over a price dataset and a window, then run it on as many (predictions, rule) pairs as you like: the window's prices are read once, and nothing is written. Use it to choose; confirm the choice with `run()`, which takes the same rule config unchanged.
+
+Continuing the first session, the run's recorded predictions go to an approximate backtest over the same window (`cost` stands for the run's fees plus slippage):
 
 ```python
 >>> from quantlab.backtest.config import ApproximateBacktestConfig
 >>> from quantlab.backtest.predefined.us_equity import USEquityApproximateBacktest
->>> backtest = USEquityApproximateBacktest(
-...     ApproximateBacktestConfig(
-...         price_dataset=prices, start_date="2024-03-25", end_date="2024-06-26",
-...         rebalance_periods=5, cost=0.0005,
-...     )
-... )
->>> predictions = BacktestRun.open(run_dir).predictions()  # a run's recorded predictions
->>> for top_n in (2, 4, 6):
-...     account = backtest.run(predictions, TopNConstructor(TopNConfig(direction="long_only", top_n=top_n)))
-...     print(top_n, round(account.metrics["Sharpe Ratio"], 2))
-2 1.63
-4 2.46
-6 3.36
+>>> approximate = USEquityApproximateBacktest(ApproximateBacktestConfig(
+...     price_dataset=prices_of(cfg),
+...     start_date="2024-02-12",
+...     end_date="2024-03-22",
+...     rebalance_periods=5,
+...     cost=0.001,
+... ))
+>>> predictions = run.predictions()
+>>> account = approximate.run(predictions, TopNConstructor(TopNConfig(direction="long_only", top_n=2)))
+>>> round(account.metrics["Total Return [%]"], 2), round(run.metrics()["out_of_sample"]["Total Return [%]"], 2)
+(-5.92, -5.61)
+>>> (account.weights.values == result.weights["weight"].values[result.weights["decided"].values]).all()
+np.True_
+>>> for top_n in (1, 2, 3):
+...     swept = approximate.run(predictions, TopNConstructor(TopNConfig(direction="long_only", top_n=top_n)))
+...     print(top_n, round(swept.metrics["Sharpe Ratio"], 2), round(swept.metrics["Turnover per Rebalance [%]"], 1))
+1 -6.22 150.0
+2 -2.36 133.8
+3 -1.42 84.3
 ```
 
-The rule takes the config a backtest run takes, so a configuration chosen by a sweep goes to `run()` unchanged for confirmation. The returned `ApproximateAccount` holds `value` (1.0 at the window's first bar), `returns`, `value_without_costs`, the target `weights` at the decided bars, the `turnover` of each rebalance, and `metrics`: the rows of `backtest_stats.return_stats` and `backtest_stats.turnover_stats`, so they mean what the rows of a run's `metrics.json` mean, plus `sweeps` and `converged`.
+The weights are the run's; the 0.3-point gap in total return is FFF, which stops trading inside the window and which the run settles into cash (see below).
 
-What it keeps from a backtest run: the rebalance schedule (every `rebalance_periods`-th bar from the window's first bar, never its last), a weight decided at t filling at t+1's open, holdings marked at the forward-filled close and drifting with prices between fills, tradability judged at the decision bar. What it gives up: rejected orders, locked positions, delisting settlements (a delisted holding stays at its last valuation, never turned into cash), the cash cap on buys and `min_trade`; fees and slippage are one `cost` on traded weight. A fill price missing at a fill bar falls back to the previous bar's close. On synthetic stores, `TopNConstructor` gives the backtest run's weights exactly and its value within 2e-4.
+#### What it keeps and what it gives up
 
-A rule opts in through `prepare` and `solve` (see the portfolio guide); a rule without them, such as `TopkDropoutConstructor`, is refused before any data is read:
+Kept from a backtest run: the rebalance schedule (every `rebalance_periods`-th bar from the window's first bar, never its last), a weight decided at t filling at t+1's open, holdings marked at the forward-filled close and drifting with prices between fills, tradability judged at the decision bar, and the statistics, computed by the same functions as a run's `metrics.json` rows.
+
+Given up, each a source of gap from `run()`:
+
+- **Rejected orders.** A fill price missing at a fill bar falls back to the previous bar's close; the run rejects that order and keeps the holding.
+- **Locked positions.** A held symbol that cannot trade is not kept: the next rebalance sells it at the price it stopped at, where the run keeps it until it trades again.
+- **Delisting settlements.** A delisted holding stays at its last valuation until a rebalance sells it at that same price; the run turns it into cash on the next bar.
+- **The cash cap and `min_trade`.** The run cuts a fill's last buys to the cash the fees leave; the approximation does not, so with fees its holdings differ from the run's by about the cost times the turnover. A rule with a turnover penalty carries that into its weights.
+- **Order mechanics.** Fees and slippage are one `cost` on traded weight.
+
+Measured on synthetic stores (`tests/test_backtest_approximate.py`): with none of these events, `TopNConstructor` gives the run's weights exactly and its value within 2e-4, and mean-variance its weights within 2e-7 (L1) of a tightly solved run and its value within 1e-4; with a turnover penalty and 5 bp fees the weights are within 1.3e-3 (the cash cap). On a store with delistings, a listing, a halt and missing fill prices inside a 68-bar window, the value stays within 1e-3 of the run's until the first event and within 2.3e-2 over the window, a few percentage points of annualised return; the test locks 3e-2. On real data the gap grows with how often held names halt, delist or miss a fill price.
+
+#### Rules and configurations
+
+A rule runs when it implements `prepare` and `solve` (see the portfolio guide's [Writing a rule](portfolio.md#writing-a-rule)):
+
+- `TopNConstructor`, long-only and long-short;
+- `MeanVarianceOptimizer`, long-only or long-short, either calibration, with or without a turnover penalty, `candidate_top_k` and `volatility_label`, over `LedoitWolfEstimator` or `FactorRiskStoreEstimator` (see [Mean-variance in the approximate backtest](portfolio.md#mean-variance-in-the-approximate-backtest));
+- `ActiveRiskOptimizer` without a tracking-error cap.
+
+Refused before any data is read, the message naming the rule, field or estimator: a rule without the pair (`TopkDropoutConstructor`, a custom rule), a tracking-error cap, `exposure_bounds`, a custom `risk_constraints`, a `reference_weights` without its panel counterpart, and a covariance estimator without `estimate_all`. `solver` and `min_trade` are not read.
 
 ```python
->>> backtest.run(predictions, TopkDropoutConstructor(TopkDropoutConfig(direction="long_only", topk=3, n_drop=1)))
+>>> from quantlab.portfolio.config import TopkDropoutConfig
+>>> from quantlab.portfolio.predefined.topk_dropout import TopkDropoutConstructor
+>>> approximate.run(predictions, TopkDropoutConstructor(TopkDropoutConfig(direction="long_only", topk=2, n_drop=1)))
 Traceback (most recent call last):
 ValueError: USEquityApproximateBacktest cannot run TopkDropoutConstructor: TopkDropoutConstructor has no panel decision (prepare and solve); backtest it with a backtest run
 ```
 
-A rule whose decision reads the holdings couples the bars. The window is cut into chunks of `chunk_bars` bars; each chunk is swept (its holdings simulated from the last sweep's weights, the rule asked again) until no bar's weights move by more than `tolerance` (L1), or `max_sweeps` is reached, which logs a warning and sets `converged` to `False`. A bar's holdings come from the last fill before it, the previous chunk's final book for a chunk's first bar. Sweep j is exact on a chunk's first j decisions, so a chunk of n decisions converges within n + 1 sweeps however strongly the rule couples them; the default `chunk_bars=21` keeps that below the default `max_sweeps=50`. Top-n does not read the holdings and converges in one sweep.
+On 1,000 synthetic symbols and 137 daily rebalances, long-only mean-variance took 1.0 s against `run()`'s 76 s, with `turnover_penalty=1e-3` 8 s against 185 s, and long-short with that penalty 18 s against 361 s.
 
-The account also holds `universe_value`, the equal-weighted universe of a run's attribution (every symbol with a finite score of the rule's score label and a fill price on the next bar, held between the decided rebalances without costs), and `metrics["selection"]`, the `relative_stats` of the account over it: what the scores and the rule add, with its annualised excess return and information ratio. `metrics["attribution"]` holds the `decomposition` and `annualized_log_return` of a run's `attribution` block. Set `benchmark_dataset` (one symbol, like a run's) and the benchmark is bought at the second bar's open at the same `cost` and held: the account gains `benchmark_value`, `metrics["benchmark"]` (its return statistics) and `metrics["relative"]` (a run's `relative` rows without the win rates), and the decomposition gains its `universe` part. On a synthetic store these agree with the run's `metrics.json` to the third digit:
+#### Sweeps and chunks
+
+A rule whose decision reads the holdings (the turnover penalty) couples the bars. The window is cut into chunks of `chunk_bars` bars (default 21); each chunk is prepared once and swept: its holdings are simulated from the last sweep's weights, the previous chunk's final book carrying into its first bar, and the rule is asked again, until no bar's weights move by more than `tolerance` (L1, default 1e-6). Sweep j is exact on a chunk's first j decisions, so a chunk of n decisions converges within n + 1 sweeps; at `max_sweeps` (default 50) a warning names the chunk and `converged` is `False`. Top-n does not read the holdings and converges in one sweep. Continuing the session:
 
 ```python
->>> backtest = USEquityApproximateBacktest(
-...     dataclasses.replace(backtest.config, benchmark_dataset=qqq)
-... )
->>> account = backtest.run(predictions, TopNConstructor(TopNConfig(direction="long_only", top_n=4)))
->>> round(account.metrics["relative"]["Information Ratio"], 2)  # the backtest run's: 3.47
-3.47
->>> round(account.metrics["selection"]["Information Ratio"], 2)
-0.33
->>> sorted(account.metrics["attribution"]["decomposition"])
-['costs', 'selection', 'total', 'universe']
+>>> from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig
+>>> from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
+>>> from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
+>>> for penalty in (0.0, 0.002):
+...     rule = MeanVarianceOptimizer(MeanVarianceConfig(
+...         expected_return_label="open_ret_1",
+...         covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=10)),
+...         ic=0.05, risk_aversion=5.0, weight_cap=0.5, turnover_penalty=penalty,
+...     ))
+...     swept = approximate.run(predictions, rule)
+...     print(penalty, round(swept.metrics["Turnover per Rebalance [%]"], 1), swept.metrics["sweeps"])
+0.0 117.9 [1, 1]
+0.002 34.7 [5, 2]
 ```
 
-`MeanVarianceOptimizer` runs too, long-only or long-short, either calibration, with or without a turnover penalty, `candidate_top_k` or `volatility_label`, over a covariance estimator with a batched estimate (`LedoitWolfEstimator`, `FactorRiskStoreEstimator`); see [Mean-variance in the approximate backtest](portfolio.md#mean-variance-in-the-approximate-backtest). On 1,000 synthetic symbols and 137 daily rebalances it took 1.0 s against `run()`'s 76 s, and with `turnover_penalty=1e-3` 8 s (12 to 22 sweeps per chunk) against `run()`'s 185 s on a busier machine; long-short with that penalty took 18 s against 361 s.
+#### The account
+
+`run` returns an `ApproximateAccount`:
+
+- `value` (1.0 at the window's first bar), `returns` (0.0 there) and `value_without_costs`, on the window's bars;
+- `weights`, the target weights at the decided bars, and `turnover`, the traded weight of each rebalance (1.0 for the buy-in from cash);
+- `universe_value`, the equal-weighted universe of a run's attribution, and `benchmark_value` (`None` without a benchmark);
+- `metrics`: the rows of `backtest_stats.return_stats` and `backtest_stats.turnover_stats` over the window, `selection` (the `relative_stats` of the account over the universe: what the scores and the rule add, with its annualised excess return and information ratio), `attribution` (a run's `decomposition` and `annualized_log_return`), `sweeps` (per chunk) and `converged`.
+
+With `benchmark_dataset` (one symbol, as for a run) the benchmark is bought at the second bar's open at the same `cost` and held, and `metrics` gains `benchmark` (its return statistics) and `relative` (a run's `relative` rows without the win rates), the decomposition its `universe` part:
+
+```python
+approximate = USEquityApproximateBacktest(dataclasses.replace(approximate.config, benchmark_dataset=qqq))
+account = approximate.run(predictions, rule)
+account.metrics["relative"]["Information Ratio"]
+```
+
+On a synthetic store these agree with the run's `metrics.json` to the third digit (an information ratio of 3.4689 against 3.4712).
 
 ### Restrict the universe to an index's members
 
