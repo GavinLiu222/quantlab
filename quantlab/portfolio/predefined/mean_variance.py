@@ -17,10 +17,17 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-import cvxpy as cp
 import numpy as np
 import pandas as pd
 import xarray as xr
+
+try:
+    import cvxpy as cp
+except ImportError as exc:
+    raise ImportError(
+        "MeanVarianceOptimizer needs cvxpy, an optional extra of quantlab: install it "
+        "with `uv sync --extra optimize` or `pip install 'quantlab[optimize]'`."
+    ) from exc
 
 from quantlab.portfolio.config import MeanVarianceConfig
 from quantlab.portfolio.base import (

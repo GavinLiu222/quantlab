@@ -73,10 +73,30 @@ quantlab 需要 Python 3.13 或更高版本、[uv](https://docs.astral.sh/uv/) �
 （KunQuant 在运行时编译因子代码）。
 
 ```bash
+pip install quantlab            # 或：uv add quantlab
+pip install 'quantlab[all]'     # 连同全部可选 extra
+```
+
+部分组件需要可选 extra；没装时导入它会抛出 `ImportError`，并写明该装哪个 extra：
+
+| Extra | 安装 | 用于 |
+|---|---|---|
+| `optimize` | cvxpy | `MeanVarianceOptimizer` |
+| `tabkit` | pytabkit | `RealMLPRegressor`、`XGBTDRegressor` |
+| `wandb` | wandb | `WandbTracker` |
+| `mlflow` | mlflow-skinny | `MlflowTracker` |
+| `massive` | boto3 | Massive 平面文件下载 |
+| `all` | 以上全部 | |
+
+从源码安装（含全部 extra 和开发工具）：
+
+```bash
 git clone https://github.com/ZhaorongDai/quantlab.git
 cd quantlab
-uv sync
+uv sync --all-extras
 ```
+
+macOS 上 xgboost 需要 Homebrew 的 OpenMP 运行库（`brew install libomp`）。
 
 所有模型（神经网络和树模型）在有 CUDA GPU 时使用 GPU，否则使用 CPU。GPU 和 macOS 的注意事项见
 [安装指南](docs/getting-started/installation.md)。

@@ -6,7 +6,7 @@ The registry is the catalogue of every place quantlab can download market data f
 
 ## Prerequisites
 
-Install the project with `uv sync`. Browsing the catalogue and inspecting local files needs no credential. Downloading needs the variables below to be set in the environment of the process that calls `run()`.
+Install the project with `uv sync --all-extras`. Browsing the catalogue and inspecting local files needs no credential. Downloading needs the variables below to be set in the environment of the process that calls `run()`.
 
 | Vendor | Environment variables | Serves |
 |---|---|---|
@@ -91,7 +91,7 @@ result = run(source, config)                          # raw parquet on disk
 result.failures                                       # {symbol: reason} for this run
 ```
 
-Raw paths derive from the data root, which is `QUANTLAB_DATA_DIR` when set and the `data/` directory of the repository otherwise.
+Raw paths derive from the data root, which is `QUANTLAB_DATA_DIR` when set, otherwise the `data/` directory of the repository in a source checkout and `~/.quantlab/data` in an installed package.
 
 ### Progress and cancellation
 

@@ -302,7 +302,7 @@ uv run python scripts/wrds/nbbo.py --permnos 14593,10107 --start 2024-01-02 --en
 
 Tiingo、Alpaca 和 Binance 只有库接口：它们的采集类按本指南的方式通过 `quantlab.acquisition.registry.run` 和 `convert` 驱动。
 
-库的存储根目录取环境变量 `QUANTLAB_DATA_DIR`，否则用仓库下的 `data/` 目录。脚本不用它：原始文件的位置由 `--download-dir` 指定，Zarr store 所在的数据根目录由 `--data-dir` 指定，两者都默认为当前目录。每个 store 放在自己的文件夹 `<data-dir>/<category>/<group>/<stem>/<stem>.zarr` 里（WRDS 的 bar 在 `market/wrds/` 下，成分面板在 `universe/wrds/` 下），旁边是它的边车文件和一个简短的 `README.md`（文件夹里没有时由脚本写入）。
+库的存储根目录取环境变量 `QUANTLAB_DATA_DIR`，否则源码检出时用仓库下的 `data/` 目录，安装的包用 `~/.quantlab/data`。脚本不用它：原始文件的位置由 `--download-dir` 指定，Zarr store 所在的数据根目录由 `--data-dir` 指定，两者都默认为当前目录。每个 store 放在自己的文件夹 `<data-dir>/<category>/<group>/<stem>/<stem>.zarr` 里（WRDS 的 bar 在 `market/wrds/` 下，成分面板在 `universe/wrds/` 下），旁边是它的边车文件和一个简短的 `README.md`（文件夹里没有时由脚本写入）。
 
 ### 下载无风险利率（FRED）
 

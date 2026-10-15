@@ -17,7 +17,14 @@ per label.
 
 import numpy as np
 from loguru import logger
-from pytabkit import XGB_TD_Regressor
+
+try:
+    from pytabkit import XGB_TD_Regressor
+except ImportError as exc:
+    raise ImportError(
+        "XGBTDRegressor needs pytabkit, an optional extra of quantlab: install it "
+        "with `uv sync --extra tabkit` or `pip install 'quantlab[tabkit]'`."
+    ) from exc
 
 from quantlab.model.library_model import Rows
 from quantlab.model.predefined._support.devices import resolve_device, xgboost_default_device

@@ -305,7 +305,7 @@ uv run python scripts/wrds/nbbo.py --permnos 14593,10107 --start 2024-01-02 --en
 Tiingo, Alpaca and Binance have library interfaces only: their acquisition classes are driven
 through `quantlab.acquisition.registry.run` and `convert` as in this guide.
 
-The library's storage root is the environment variable `QUANTLAB_DATA_DIR`, else the repository's `data/` directory. The scripts do not use it: they take `--download-dir` for the raw files and `--data-dir` for the data root the stores go under, both defaulting to the current directory. Each store sits in its own folder `<data-dir>/<category>/<group>/<stem>/<stem>.zarr` (WRDS bars under `market/wrds/`, membership panels under `universe/wrds/`) beside its sidecars and a short `README.md` the script writes when the folder has none.
+The library's storage root is the environment variable `QUANTLAB_DATA_DIR`, else the repository's `data/` directory in a source checkout and `~/.quantlab/data` in an installed package. The scripts do not use it: they take `--download-dir` for the raw files and `--data-dir` for the data root the stores go under, both defaulting to the current directory. Each store sits in its own folder `<data-dir>/<category>/<group>/<stem>/<stem>.zarr` (WRDS bars under `market/wrds/`, membership panels under `universe/wrds/`) beside its sidecars and a short `README.md` the script writes when the folder has none.
 
 ### Download the risk-free rate (FRED)
 

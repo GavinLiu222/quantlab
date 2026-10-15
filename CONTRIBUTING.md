@@ -17,7 +17,7 @@ issue.
 ```bash
 git clone https://github.com/ZhaorongDai/quantlab.git
 cd quantlab
-uv sync
+uv sync --all-extras
 uv run pytest
 ```
 
@@ -58,3 +58,21 @@ Write for a reader who knows Python and basic finance but not this project. Expl
 domain term the first time a module uses it, prefer plain sentences to long bullet lists,
 and describe what the code does now rather than how it got there. Comments should explain
 why the code does something, not repeat what it does.
+
+## Releasing
+
+A release is built and published by `.github/workflows/release.yml`, never from a working
+tree: a local build packages whatever sits on disk, untracked files included. To release,
+set `version` in `pyproject.toml`, commit, then tag and push:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The workflow checks that the tag matches the version, builds from the tag's checkout,
+runs `twine check`, imports every module from the installed wheel, and publishes through
+PyPI trusted publishing. Trusted publishing must be set up once on PyPI for the
+`ZhaorongDai/quantlab` repository, workflow `release.yml` and environment `pypi`. A
+version on PyPI cannot be replaced, so a manual run (`workflow_dispatch`) builds and checks
+without publishing.

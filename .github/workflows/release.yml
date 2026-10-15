@@ -1,0 +1,65 @@
+name: Release
+
+# Builds the distributions from the pushed tag's own checkout, so nothing outside the
+# tagged commit (untracked files, a stale egg-info) can reach the package, checks them,
+# imports every module from the installed wheel outside the repository, and publishes
+# to PyPI through trusted publishing (no API token is stored anywhere).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+
+      - name: The tag names the package version
+        if: github.ref_type == 'tag'
+        run: |
+          version=$(uv run --no-project python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          test "v${version}" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} != version ${version}"; exit 1; }
+
+      - name: Build
+        run: uv build --out-dir dist
+
+      - name: Check metadata
+        run: uvx twine check --strict dist/*
+
+      - name: Import every module from the installed wheel
+        run: |
+          uv venv --python 3.13 /tmp/wheel-env
+          uv pip install --python /tmp/wheel-env/bin/python "$(ls dist/*.whl)[all]"
+          cd /tmp
+          /tmp/wheel-env/bin/python -c "
+          import importlib, pkgutil, quantlab
+          names = [m.name for m in pkgutil.walk_packages(quantlab.__path__, 'quantlab.')]
+          for name in names:
+              importlib.import_module(name)
+          print(len(names), 'modules imported from', quantlab.__file__)
+          "
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1

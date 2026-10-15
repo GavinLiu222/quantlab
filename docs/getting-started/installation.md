@@ -20,6 +20,28 @@ quantlab is a Python library and a set of command-line scripts. It needs:
 You do not need to install Python 3.13 yourself: if uv cannot find a suitable interpreter
 it downloads one. Linux and macOS are supported. A GPU is optional (see below).
 
+## Install from PyPI
+
+```bash
+pip install quantlab            # or: uv add quantlab
+pip install 'quantlab[all]'     # with every optional extra
+```
+
+Some components need an optional extra; importing one without it raises an `ImportError` that
+names the extra:
+
+| Extra | Installs | Needed by |
+|---|---|---|
+| `optimize` | cvxpy | `MeanVarianceOptimizer` |
+| `tabkit` | pytabkit | `RealMLPRegressor`, `XGBTDRegressor` |
+| `wandb` | wandb | `WandbTracker` |
+| `mlflow` | mlflow-skinny | `MlflowTracker` |
+| `massive` | boto3 | Massive flat-file downloads |
+| `all` | every extra above | |
+
+An installed package keeps its data under `~/.quantlab/data` unless `QUANTLAB_DATA_DIR` is set
+(see Environment variables below).
+
 ## Install from source
 
 Clone the repository and let uv build the environment:
@@ -27,17 +49,18 @@ Clone the repository and let uv build the environment:
 ```bash
 git clone https://github.com/ZhaorongDai/quantlab.git
 cd quantlab
-uv sync
+uv sync --all-extras
 ```
 
-`uv sync` creates a `.venv/` directory in the repository, installs every runtime dependency
-listed in `pyproject.toml` at the versions recorded in `uv.lock`, installs the `dev`
+`uv sync --all-extras` creates a `.venv/` directory in the repository, installs every runtime dependency
+listed in `pyproject.toml` and every optional extra at the versions recorded in `uv.lock`
+(the test suite covers the optional components too), installs the `dev`
 dependency group (which holds `pytest`), and installs quantlab itself in editable mode, so
 changes you make to the source are picked up without reinstalling.
 
 The dependency set is large. Besides the numerical stack (NumPy, pandas, Polars, xarray,
-Zarr) it includes PyTorch, XGBoost, KunQuant, vectorbt, NautilusTrader, Weights & Biases and
-the WRDS client (MLflow is an optional extra, see Experiment tracking), so the first `uv sync` downloads a few gigabytes and takes several minutes.
+Zarr) it includes PyTorch, XGBoost, KunQuant and vectorbt, so the first `uv sync` downloads a few
+gigabytes and takes several minutes.
 
 Run every command through `uv run`, which executes it inside the project environment without
 you having to activate `.venv/`:
@@ -150,7 +173,8 @@ the two libraries.
 Nothing is tracked unless a model or backtest config names a tracker in its `tracker` field;
 the default sends nothing anywhere, which is what the test suite and the examples rely on.
 
-- **Weights & Biases** is installed with the rest of the dependencies. Log in once with
+- **Weights & Biases** is the optional extra `wandb` (`uv sync --extra wandb`, or
+  `pip install 'quantlab[wandb]'`). Log in once with
   `uv run wandb login`, or set `WANDB_API_KEY`, then use
   `quantlab.tracking.wandb.WandbTracker`. Its `mode="offline"` keeps runs under `./wandb` for
   a later `wandb sync`, and `mode="disabled"` records nothing.
@@ -222,7 +246,8 @@ wrds {'WRDS_USERNAME': False}
 
 Two more variables control where data lives. `QUANTLAB_DATA_DIR` sets the root directory the
 library's config factories derive raw-download and Zarr paths from; without it the `data/`
-directory at the repository root is used. The WRDS download scripts do not read it: they write
+directory at the repository root is used in a source checkout, and `~/.quantlab/data` in an
+installed package. The WRDS download scripts do not read it: they write
 raw files under `--download-dir` and Zarr stores under the data root `--data-dir`, both
 defaulting to the current directory. `QUANTLAB_DATA_ROOT` is read only by the CRSP measurement test mentioned above.
 

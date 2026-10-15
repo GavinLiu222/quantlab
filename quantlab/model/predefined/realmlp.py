@@ -19,8 +19,15 @@ import math
 
 import numpy as np
 from loguru import logger
-from pytabkit import RealMLP_TD_Regressor
-from pytabkit.models.training.lightning_callbacks import Callback
+
+try:
+    from pytabkit import RealMLP_TD_Regressor
+    from pytabkit.models.training.lightning_callbacks import Callback
+except ImportError as exc:
+    raise ImportError(
+        "RealMLPRegressor needs pytabkit, an optional extra of quantlab: install it "
+        "with `uv sync --extra tabkit` or `pip install 'quantlab[tabkit]'`."
+    ) from exc
 
 from quantlab.tracking.base import TrackingRun
 from quantlab.model.library_model import Rows

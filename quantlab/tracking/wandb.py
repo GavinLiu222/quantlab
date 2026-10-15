@@ -11,7 +11,13 @@ read by wandb from its environment variables, never from the config.
 from dataclasses import dataclass
 from typing import Literal, get_args
 
-import wandb
+try:
+    import wandb
+except ImportError as exc:
+    raise ImportError(
+        "WandbTracker needs wandb, an optional extra of quantlab: install it "
+        "with `uv sync --extra wandb` or `pip install 'quantlab[wandb]'`."
+    ) from exc
 
 from quantlab.tracking.base import Tracker, TrackingRun
 

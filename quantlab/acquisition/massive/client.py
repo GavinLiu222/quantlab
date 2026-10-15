@@ -240,8 +240,14 @@ class S3ObjectStore:
         if client is not None:
             self._client = client
             return
-        import boto3
-        from botocore.config import Config
+        try:
+            import boto3
+            from botocore.config import Config
+        except ImportError as exc:
+            raise ImportError(
+                "S3ObjectStore needs boto3, an optional extra of quantlab: install it "
+                "with `uv sync --extra massive` or `pip install 'quantlab[massive]'`."
+            ) from exc
 
         self._client = boto3.session.Session().client(
             "s3",

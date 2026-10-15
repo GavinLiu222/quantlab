@@ -96,7 +96,8 @@ wrongly.
 
 You rarely write paths by hand. The factories in `quantlab.config` derive
 every path from one data root, which is the `QUANTLAB_DATA_DIR` environment
-variable, else a `data/` directory beside the repository (the WRDS scripts
+variable, else a `data/` directory beside the repository in a source checkout
+and `~/.quantlab/data` in an installed package (the WRDS scripts
 take their own `--download-dir` and `--data-dir` instead):
 
 ```python

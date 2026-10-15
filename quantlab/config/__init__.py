@@ -5,8 +5,9 @@ single data root. (The acquisition factory, ``stock_acquisition_config``, lives
 beside ``AcquisitionConfig`` in ``quantlab.acquisition.config``.) ``get_data_root`` resolves
 that root from, in order, the process-level override set through
 ``set_data_root``, the ``QUANTLAB_DATA_DIR`` environment variable, and
-finally a ``data/`` directory beside the repository, so a fresh clone works
-with no configuration. Beneath the root, raw downloads live under
+finally a default: the ``data/`` directory beside the repository in a source
+checkout, so a fresh clone works with no configuration, and
+``~/.quantlab/data`` in an installed package. Beneath the root, raw downloads live under
 ``downloads/{market}/{frequency}/``, Zarr stores under
 ``data/{market}/{frequency}/`` and reference tables under ``data/reference/``.
 
@@ -48,7 +49,7 @@ def set_data_root(path: "str | os.PathLike | None") -> Path | None:
     ----------
     path : str | os.PathLike | None
         The new root. ``None`` clears the override so that
-        ``QUANTLAB_DATA_DIR`` or the repository default applies again.
+        ``QUANTLAB_DATA_DIR`` or the default root applies again.
 
     Returns
     -------
@@ -77,7 +78,7 @@ def set_data_root(path: "str | os.PathLike | None") -> Path | None:
         raise ValueError(
             "data root must be a non-empty path; got an empty/whitespace "
             "value. Omit the setting entirely to fall back to "
-            "QUANTLAB_DATA_DIR or the repo-root data/ directory."
+            "QUANTLAB_DATA_DIR or the default root."
         )
     _DATA_ROOT_OVERRIDE = Path(path).expanduser()
     return _DATA_ROOT_OVERRIDE
@@ -87,8 +88,9 @@ def get_data_root() -> Path:
     """Return the storage root every config factory derives its paths from.
 
     Resolution order: the override set by ``set_data_root``, then the
-    ``QUANTLAB_DATA_DIR`` environment
-    variable, then the ``data/`` directory beside the repository root.
+    ``QUANTLAB_DATA_DIR`` environment variable, then the ``data/`` directory
+    beside the repository root in a source checkout (the package's parent
+    holds ``pyproject.toml``), else ``~/.quantlab/data``.
 
     Examples
     --------
@@ -103,8 +105,11 @@ def get_data_root() -> Path:
     if env_value:
         return Path(env_value)
     # This file is quantlab/config/__init__.py, so the repository root is
-    # three parents up.
-    return Path(__file__).resolve().parent.parent.parent / "data"
+    # three parents up; an installed package has site-packages there instead.
+    checkout = Path(__file__).resolve().parent.parent.parent
+    if (checkout / "pyproject.toml").is_file():
+        return checkout / "data"
+    return Path.home() / ".quantlab" / "data"
 
 
 def _market_data_root(market: str, frequency: str) -> Path:

@@ -91,9 +91,8 @@ def parse_csv(text: str, series: str) -> pl.DataFrame:
     """
     if not text.strip():
         return pl.DataFrame(schema={"timestamp": pl.Datetime("us"), "value": pl.Float64})
-    frame = pl.read_csv(
-        io.StringIO(text), infer_schema=False, missing_utf8_is_empty_string=True
-    )
+    # An empty field reads as null, which the value expression keeps as null.
+    frame = pl.read_csv(io.StringIO(text), infer_schema=False)
     if len(frame.columns) != 2 or frame.columns[1] != series:
         raise ValueError(
             f"FRED answered columns {frame.columns} for series {series!r}; "

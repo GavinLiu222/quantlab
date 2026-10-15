@@ -1,18 +1,18 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
-    <img src="docs/assets/logo.svg" alt="quantlab" width="480">
+    <img src="https://raw.githubusercontent.com/ZhaorongDai/quantlab/main/docs/assets/logo.svg" alt="quantlab" width="480">
   </picture>
 </p>
 
 <p align="center">
   <a href="https://www.python.org/downloads/"><img alt="Python 3.13+" src="https://img.shields.io/badge/python-3.13%2B-3776ab?logo=python&logoColor=white"></a>
-  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-green"></a>
+  <a href="https://github.com/ZhaorongDai/quantlab/blob/main/LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-green"></a>
   <a href="https://github.com/Menooker/KunQuant"><img alt="Factors: KunQuant" src="https://img.shields.io/badge/factors-KunQuant-0ea5e9"></a>
   <a href="https://vectorbt.dev/"><img alt="Backtest: vectorbt" src="https://img.shields.io/badge/backtest-vectorbt-0ea5e9"></a>
 </p>
 
-<p align="center">English | <a href="README.zh-CN.md">简体中文</a></p>
+<p align="center">English | <a href="https://github.com/ZhaorongDai/quantlab/blob/main/README.zh-CN.md">简体中文</a></p>
 
 quantlab is a Python backend for quantitative equity research. It takes you from raw market
 data to a backtested portfolio in one pipeline: load prices into a clean panel, compute
@@ -20,17 +20,17 @@ factors and labels, train a model that predicts future returns, turn the predict
 target weights, and backtest them. Every stage is driven by a small configuration object, so
 any run can be saved, rebuilt and repeated exactly.
 
-- **Documentation:** [docs/README.md](docs/README.md)
-- **Using your own DataFrames:** [docs/api.md](docs/api.md)
-- **Examples:** [examples/](examples/README.md)
+- **Documentation:** [docs/README.md](https://github.com/ZhaorongDai/quantlab/blob/main/docs/README.md)
+- **Using your own DataFrames:** [docs/api.md](https://github.com/ZhaorongDai/quantlab/blob/main/docs/api.md)
+- **Examples:** [examples/](https://github.com/ZhaorongDai/quantlab/blob/main/examples/README.md)
 - **Source code:** https://github.com/ZhaorongDai/quantlab
 - **Bug reports:** https://github.com/ZhaorongDai/quantlab/issues
-- **Contributing:** [CONTRIBUTING.md](CONTRIBUTING.md)
+- **Contributing:** [CONTRIBUTING.md](https://github.com/ZhaorongDai/quantlab/blob/main/CONTRIBUTING.md)
 
 ## The research workflow
 
 <p align="center">
-  <img src="docs/assets/workflow.svg" alt="The quantlab research workflow: data sources, dataset, factors and labels, return model, portfolio and backtest, with a research loop feeding evaluation back into the factor stage" width="100%">
+  <img src="https://raw.githubusercontent.com/ZhaorongDai/quantlab/main/docs/assets/workflow.svg" alt="The quantlab research workflow: data sources, dataset, factors and labels, return model, portfolio and backtest, with a research loop feeding evaluation back into the factor stage" width="100%">
 </p>
 
 A study in quantlab runs through six stages. Each stage is a root class in its own layer
@@ -83,18 +83,39 @@ quantlab needs Python 3.13 or newer, [uv](https://docs.astral.sh/uv/) and a C++ 
 (KunQuant compiles factor code at run time).
 
 ```bash
-git clone https://github.com/ZhaorongDai/quantlab.git
-cd quantlab
-uv sync
+pip install quantlab            # or: uv add quantlab
+pip install 'quantlab[all]'     # with every optional extra
 ```
 
+Some components need an optional extra; importing one without it raises an `ImportError` that
+names the extra:
+
+| Extra | Installs | Needed by |
+|---|---|---|
+| `optimize` | cvxpy | `MeanVarianceOptimizer` |
+| `tabkit` | pytabkit | `RealMLPRegressor`, `XGBTDRegressor` |
+| `wandb` | wandb | `WandbTracker` |
+| `mlflow` | mlflow-skinny | `MlflowTracker` |
+| `massive` | boto3 | Massive flat-file downloads |
+| `all` | every extra above | |
+
+From source, with every extra and the development tools:
+
+```bash
+git clone https://github.com/ZhaorongDai/quantlab.git
+cd quantlab
+uv sync --all-extras
+```
+
+On macOS, xgboost needs Homebrew's OpenMP runtime (`brew install libomp`).
+
 All model heads, neural-network and tree models alike, use a CUDA GPU when one is available
-and the CPU otherwise. See the [installation guide](docs/getting-started/installation.md) for
+and the CPU otherwise. See the [installation guide](https://github.com/ZhaorongDai/quantlab/blob/main/docs/getting-started/installation.md) for
 GPU and macOS notes.
 
 ## A pipeline on Yahoo Finance data
 
-[`examples/yahoo_us_equity.py`](examples/yahoo_us_equity.py) runs the whole pipeline on free
+[`examples/yahoo_us_equity.py`](https://github.com/ZhaorongDai/quantlab/blob/main/examples/yahoo_us_equity.py) runs the whole pipeline on free
 data, with no account and no credentials, in about twenty seconds on a laptop. It downloads
 ten years of daily bars for the 30 Dow Jones stocks and SPY with
 [yfinance](https://github.com/ranaroussi/yfinance), which is not a quantlab dependency:
@@ -175,7 +196,7 @@ Rebuilt from its run directory, same equity curve: True
 and writes the backtest report, shown here in part:
 
 <p align="center">
-  <img src="docs/assets/yahoo_backtest_report.png" alt="Backtest report of a top-10 Dow 30 strategy against buy-and-hold SPY, 2023 to 2024" width="820">
+  <img src="https://raw.githubusercontent.com/ZhaorongDai/quantlab/main/docs/assets/yahoo_backtest_report.png" alt="Backtest report of a top-10 Dow 30 strategy against buy-and-hold SPY, 2023 to 2024" width="820">
 </p>
 
 The strategy trails SPY over this window; the example is here to show the pipeline, not a
@@ -187,17 +208,17 @@ and reads it on later runs.
 
 ## More examples
 
-The offline [quick start](docs/getting-started/quickstart.md) builds a synthetic price panel
+The offline [quick start](https://github.com/ZhaorongDai/quantlab/blob/main/docs/getting-started/quickstart.md) builds a synthetic price panel
 and runs the same pipeline with no network access, in about half a minute:
 
 ```bash
 uv run python examples/quickstart.py
 ```
 
-[examples/](examples/README.md) has one runnable script per topic (building panels, training
+[examples/](https://github.com/ZhaorongDai/quantlab/blob/main/examples/README.md) has one runnable script per topic (building panels, training
 models, backtesting, data sources) and, for point-in-time research,
-[`wrds_us_equity/`](examples/wrds_us_equity/README.md) (CRSP via WRDS) and
-[`sharadar_us_equity/`](examples/sharadar_us_equity/README.md) (Sharadar). The two figures
+[`wrds_us_equity/`](https://github.com/ZhaorongDai/quantlab/blob/main/examples/wrds_us_equity/README.md) (CRSP via WRDS) and
+[`sharadar_us_equity/`](https://github.com/ZhaorongDai/quantlab/blob/main/examples/sharadar_us_equity/README.md) (Sharadar). The two figures
 below come from the WRDS examples.
 
 ### Factor report
@@ -212,7 +233,7 @@ clusters them by their mean rank correlation. This is `MIN5` from the Alpha158 s
 common stock in CRSP, about 7,200 symbols including the delisted ones, 2012 to 2024.
 
 <p align="center">
-  <img src="docs/assets/factor_report.png" alt="Factor report for MIN5 against the 5-day forward return on the full US market" width="820">
+  <img src="https://raw.githubusercontent.com/ZhaorongDai/quantlab/main/docs/assets/factor_report.png" alt="Factor report for MIN5 against the 5-day forward return on the full US market" width="820">
 </p>
 
 ### Backtest report
@@ -223,7 +244,7 @@ sample on 2020 to 2024 against buy-and-hold SPY. Over this window the strategy t
 the figure is here to show the report, not a result to copy.
 
 <p align="center">
-  <img src="docs/assets/backtest_report.png" alt="Backtest report of a top-50 S&P 500 strategy against buy-and-hold SPY, 2020 to 2024" width="820">
+  <img src="https://raw.githubusercontent.com/ZhaorongDai/quantlab/main/docs/assets/backtest_report.png" alt="Backtest report of a top-50 S&P 500 strategy against buy-and-hold SPY, 2020 to 2024" width="820">
 </p>
 
 ## Credentials
@@ -244,12 +265,12 @@ command line and never written to a configuration file or a log.
 The download scripts live in `scripts/wrds/` and `scripts/sharadar/`, and each prints its
 options with `--help`, for example `uv run python scripts/wrds/index.py --help`. Tiingo,
 Alpaca and Binance have library interfaces only. The
-[data sources guide](docs/user-guide/data-sources.md) explains where files are written and
+[data sources guide](https://github.com/ZhaorongDai/quantlab/blob/main/docs/user-guide/data-sources.md) explains where files are written and
 how to resume an interrupted download.
 
 ## Documentation
 
-The [documentation](docs/README.md) is organised in three parts. *Getting started* covers
+The [documentation](https://github.com/ZhaorongDai/quantlab/blob/main/docs/README.md) is organised in three parts. *Getting started* covers
 installation and the quick start. The *user guide* has one page per pipeline stage: data
 sources, WRDS, datasets, universes, factors, models, portfolio construction and backtesting.
 The *developer guide* shows how to add your own data source, dataset, storage backend,
@@ -258,7 +279,7 @@ interrupt.
 
 If you already hold your data in pandas or polars DataFrames and want one capability, such
 as factors, forward returns, a factor report or a backtest, without the project's stores
-and configurations, start with the [frame API guide](docs/api.md) (`quantlab.api`).
+and configurations, start with the [frame API guide](https://github.com/ZhaorongDai/quantlab/blob/main/docs/api.md) (`quantlab.api`).
 
 Every public class and function also has a docstring in the
 [numpydoc](https://numpydoc.readthedocs.io/en/latest/format.html) format, readable with
@@ -286,8 +307,8 @@ implemented.
 ## Contributing
 
 Bug reports, questions and pull requests are welcome. Please read
-[CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+[CONTRIBUTING.md](https://github.com/ZhaorongDai/quantlab/blob/main/CONTRIBUTING.md) before opening a pull request.
 
 ## License
 
-quantlab is released under the [MIT License](LICENSE).
+quantlab is released under the [MIT License](https://github.com/ZhaorongDai/quantlab/blob/main/LICENSE).

@@ -178,6 +178,23 @@ def test_env_var_and_repo_default_answer_when_the_override_is_cleared(
     )
 
 
+def test_an_installed_package_defaults_to_the_users_home_directory(
+    monkeypatch, tmp_path
+) -> None:
+    """A wheel installed into site-packages has no repository beside it, so
+    the default root is `~/.quantlab/data`, never a `data/` directory inside
+    site-packages."""
+    site_packages = tmp_path / "venv" / "lib" / "python3.13" / "site-packages"
+    monkeypatch.setattr(
+        config, "__file__", str(site_packages / "quantlab" / "config" / "__init__.py")
+    )
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("QUANTLAB_DATA_DIR", raising=False)
+    set_data_root(None)
+
+    assert get_data_root() == tmp_path / "home" / ".quantlab" / "data"
+
+
 def test_the_override_reaches_every_path_field_the_flag_promises(
     monkeypatch, tmp_path
 ) -> None:
