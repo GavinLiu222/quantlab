@@ -182,6 +182,28 @@ def test_a_security_renamed_without_an_actions_row_keeps_its_old_tickers_rows(tm
     assert resolver.unresolved == {}
 
 
+def test_a_tickers_last_sighting_outlasts_the_actions_effective_date(tmp_path):
+    # ACTIONS dates 644's change BBR -> XLB 08-28 (the effective date), but
+    # TICKERS showed BBR until 10-12: the vendor renames rows when it
+    # publishes the change. 555 used BBR until its own change on 09-15. A
+    # file pulled 10-05 names 644 BBR, not 555.
+    root = tmp_path / "sharadar"
+    _write(root, "sep", [sep_row("BBR", "2026-09-08", 10.0)], _at("2026-10-05"))  # SYNTHETIC
+    tickers = [tickers_row("SEP", 555, "CCC", firstpricedate="2010-01-04")]  # SYNTHETIC
+    _tickers(root, [*tickers, tickers_row("SEP", 644, "BBR", firstpricedate="2025-07-31")], "2026-10-08")  # SYNTHETIC
+    _tickers(root, [*tickers, tickers_row("SEP", 644, "XLB", firstpricedate="2025-07-31")], "2026-10-13")  # SYNTHETIC
+    _write(  # SYNTHETIC
+        root, "actions",
+        [_change("2025-08-20", "BBR", "BBRU"), _change("2026-08-28", "XLB", "BBR"), _change("2026-09-15", "CCC", "BBR")],
+        _at("2026-10-13"),
+    )
+    _fold(root)
+
+    frame, resolver = _mapped(root)
+    assert frame["permaticker"].to_list() == [644]
+    assert resolver.unresolved == {}
+
+
 def test_a_market_universe_keeps_a_security_whose_row_vanished(tmp_path):
     from quantlab.dataset.config import SharadarDatasetConfig
     from quantlab.dataset.sharadar.universe import normalize_universe, universe

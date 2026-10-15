@@ -515,7 +515,10 @@ class PermatickerResolver:
 
         A span's start is the security's change into the ticker (ACTIONS),
         else the sidecar's start, else its first price date (TICKERS); its
-        end the change away (ACTIONS), else none for its current ticker,
+        end the change away (ACTIONS, an effective date: kept to the TICKERS
+        history's last sighting of the pair when that is later, as the vendor
+        renames rows only when it publishes the change), else none for its
+        current ticker,
         else the day before the TICKERS history first shows it renamed or
         the ticker reused (``_history_spans``), else the sidecar's next
         span, else the day after its last price for a ``relatedtickers``
@@ -564,7 +567,7 @@ class PermatickerResolver:
             sidecar.setdefault((ticker, permaticker), (start, end))
         related = related_spans(self.vendor_root, self.code)
         seen = {
-            (ticker, permaticker): span.end
+            (ticker, permaticker): span
             for permaticker, tickers in self._history_spans().items()
             for ticker, span in tickers.items()
         }
@@ -576,12 +579,17 @@ class PermatickerResolver:
             side_start, side_end = sidecar.get((ticker, permaticker), (None, None))
             rel_start, rel_end = related.get((ticker, permaticker), (None, None))
             start = chain_start or side_start or rel_start or first_price.get(permaticker)
+            span = seen.get((ticker, permaticker))
             if (ticker, permaticker) in chain:
                 end = chain_end
+                # ACTIONS dates a change when it takes effect; the vendor renames
+                # rows when it publishes it, which TICKERS shows, often weeks later.
+                if end is not None and span is not None:
+                    end = max(end, span.end or span.last.date())
             elif ticker in self._current_pairs() and permaticker in self._current_pairs()[ticker]:
                 end = None
-            elif (ticker, permaticker) in seen:
-                end = seen[(ticker, permaticker)]
+            elif span is not None:
+                end = span.end
             elif (ticker, permaticker) in sidecar:
                 end = side_end
             else:

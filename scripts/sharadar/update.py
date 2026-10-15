@@ -3,9 +3,12 @@
 Run every morning after ``download.py`` has built the stores. One run:
 
 1. pulls TICKERS whole (new listings and ticker changes), INDICATORS whole
-   (units and the 8-K event codes), and SP500 and SF3A whole (they are
-   small; SF3A's newest quarter fills in place);
-2. pulls a trailing date window of SEP, SFP, ACTIONS, EVENTS and SF2 over REST: from the
+   (units and the 8-K event codes), SP500 and SF3A whole (they are
+   small; SF3A's newest quarter fills in place), and ACTIONS whole: the
+   vendor records an action under its effective date, which can be weeks
+   before it publishes it (BCAR to XLAB, effective 2026-08-28, appeared
+   after 2026-10-13), so a date window would never see it;
+2. pulls a trailing date window of SEP, SFP, EVENTS and SF2 over REST: from the
    ``--trading-days``-th most recent raw date before each table's watermark
    through today (US/Eastern), so a late vendor correction to a recent day is
    seen; and every SF1 row the vendor changed since SF1's watermark (by
@@ -124,9 +127,9 @@ def store_path(folder: Path, stem: str) -> Path:
 
 
 #: Pulled whole every run: reference and membership tables are small.
-WHOLE_TABLES = ("tickers", "indicators", "sp500", "sf3a")
+WHOLE_TABLES = ("tickers", "indicators", "sp500", "sf3a", "actions")
 #: Pulled as a trailing date window.
-WINDOW_TABLES = ("sep", "sfp", "actions", "events", "sf2")
+WINDOW_TABLES = ("sep", "sfp", "events", "sf2")
 #: Pulled as the rows changed since the watermark (``lastupdated``).
 UPDATED_TABLES = ("sf1", "daily")
 
