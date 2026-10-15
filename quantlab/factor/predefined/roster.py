@@ -74,23 +74,6 @@ class RosterFactor(Factor):
             self, dataclasses.replace(config, dataset=config.factor.config.dataset)
         )
 
-    def copy(self) -> Self:
-        """Return a copy with its own wrapped factor and roster dataset.
-
-        Examples
-        --------
-        >>> other = factor.copy()
-        >>> other == factor, other.config.factor is factor.config.factor
-        (True, False)
-        """
-        other = super().copy()
-        other.config = dataclasses.replace(
-            other.config,
-            factor=self.config.factor.copy(),
-            roster=self.config.roster.copy(),
-        )
-        return other
-
     def _get_factor_names(self) -> tuple[str, ...]:
         """Return the wrapped factor's output names."""
         return tuple(self.config.factor.get_factor_names())

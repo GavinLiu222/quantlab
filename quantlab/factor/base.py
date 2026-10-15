@@ -37,7 +37,7 @@ import pandas as pd
 import xarray as xr
 
 from quantlab.analysis.factor_report import FactorAnalyzer
-from quantlab.core.component import Component
+from quantlab.core.component import Component, component_fields
 from quantlab.factor.config import BaseFactorConfig
 from quantlab.backend.zarr import XrBackend
 from quantlab.dataset.base import InsufficientHistoryError
@@ -68,6 +68,17 @@ def _as_one_dataset(dataset):
     if isinstance(dataset, (list, tuple)):
         return MergedDataset(dataset)
     return dataset
+
+
+def _copy_components(value, many: bool):
+    """Return ``value``, a component field's value, with each component copied by its ``copy()``."""
+    if value is None:
+        return None
+    if not many:
+        return value.copy()
+    if isinstance(value, dict):
+        return {key: item.copy() for key, item in value.items()}
+    return type(value)(item.copy() for item in value)
 
 
 def _on_panel_axes(data: xr.Dataset) -> xr.Dataset:
@@ -831,24 +842,30 @@ class Factor(Component, ABC):
         )
 
     def copy(self) -> Self:
-        """Return a copy with its own config, dataset and empty backend.
+        """Return a copy with its own config, components and empty backend.
 
-        The config is deep-copied with its ``dataset`` replaced by
-        ``dataset.copy()``, so the copy shares no mutable state with this
-        factor, not even a ``kwargs`` dict.
+        Every component the config holds (its ``dataset``, a wrapped
+        ``factor``, a roster, a benchmark, each dataset of a many-field) is
+        copied with its own ``copy()``, and the rest of the config is
+        deep-copied, so the copy shares no mutable state with this factor,
+        not even a ``kwargs`` dict.
 
         Examples
         --------
         >>> other = factor.copy()
-        >>> other.config.dataset is factor.config.dataset
-        False
+        >>> other == factor, other.config.dataset is factor.config.dataset
+        (True, False)
         """
         other = copy.copy(self)
         other.data_backend = XrBackend()
-        config = copy.deepcopy(dataclasses.replace(self.config, dataset=None))
-        other.config = dataclasses.replace(
-            config, dataset=self.config.dataset.copy()
+        fields = component_fields(self.config)
+        config = copy.deepcopy(
+            dataclasses.replace(self.config, **dict.fromkeys(fields))
         )
+        other.config = dataclasses.replace(config, **{
+            name: _copy_components(getattr(self.config, name), many)
+            for name, many in fields.items()
+        })
         return other
 
     def resample(

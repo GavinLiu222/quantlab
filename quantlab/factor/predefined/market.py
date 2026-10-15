@@ -17,9 +17,6 @@ the store has its own column). This is the list of
 ``docs/research/qlib-gats-master.md`` section 2.1.
 """
 
-import dataclasses
-from typing import Self
-
 import numpy as np
 import xarray as xr
 
@@ -122,25 +119,6 @@ class MarketFeatures(Factor):
     def __init__(self, config: MarketFeatureConfig):
         """Initialize the factor; see the class docstring for parameters."""
         super().__init__(config)
-
-    def copy(self) -> Self:
-        """Return a copy with its own target and series datasets.
-
-        See ``Factor.copy``; every series dataset is copied with its own
-        ``copy()`` as well.
-
-        Examples
-        --------
-        >>> other = factor.copy()
-        >>> other == factor, other.config.series["spy"] is factor.config.series["spy"]
-        (True, False)
-        """
-        other = super().copy()
-        other.config = dataclasses.replace(
-            other.config,
-            series={name: d.copy() for name, d in self.config.series.items()},
-        )
-        return other
 
     @property
     def options(self) -> dict:

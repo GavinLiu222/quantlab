@@ -15,9 +15,6 @@ wrapper reads its outputs with ``compute`` and the exposures (market cap and
 industry) from its own ``dataset`` on the same bars, never earlier ones.
 """
 
-import dataclasses
-from typing import Self
-
 import numpy as np
 import xarray as xr
 from KunQuant.Driver import KunCompilerConfig
@@ -98,22 +95,6 @@ class NeutralizedFactor(Factor):
 
     # Narrower type annotation for readers and type checkers only.
     config: NeutralizedConfig
-
-    def copy(self) -> Self:
-        """Return a copy with its own wrapped factor and exposures dataset.
-
-        See ``Factor.copy``; the wrapped factor is copied with its own
-        ``copy()``.
-
-        Examples
-        --------
-        >>> other = neutral.copy()
-        >>> other == neutral, other.config.factor is neutral.config.factor
-        (True, False)
-        """
-        other = super().copy()
-        other.config = dataclasses.replace(other.config, factor=self.config.factor.copy())
-        return other
 
     def _get_factor_names(self) -> tuple[str, ...]:
         """Return the wrapped factor's output names."""

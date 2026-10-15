@@ -144,19 +144,6 @@ class ChunkedFactor(Factor):
             self, dataclasses.replace(config, dataset=config.factor.config.dataset)
         )
 
-    def copy(self) -> Self:
-        """Return a copy with its own wrapped factor.
-
-        Examples
-        --------
-        >>> other = chunked.copy()
-        >>> other == chunked, other.config.factor is chunked.config.factor
-        (True, False)
-        """
-        other = super().copy()
-        other.config = dataclasses.replace(other.config, factor=self.config.factor.copy())
-        return other
-
     def _get_factor_names(self) -> tuple[str, ...]:
         """Return the wrapped factor's output names."""
         return tuple(self.config.factor.get_factor_names())

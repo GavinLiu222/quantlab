@@ -79,7 +79,6 @@ from __future__ import annotations
 import dataclasses
 import math
 from dataclasses import dataclass, fields
-from typing import Self
 
 import numpy as np
 import pandas as pd
@@ -580,19 +579,6 @@ class IntradayAverage(Factor):
     def config(self, config: IntradayAverageConfig):
         """Install ``config`` with ``dataset`` set to the wrapped factor's dataset."""
         Factor.config.fset(self, dataclasses.replace(config, dataset=config.factor.config.dataset))
-
-    def copy(self) -> Self:
-        """Return a copy with its own wrapped factor.
-
-        Examples
-        --------
-        >>> other = monthly.copy()
-        >>> other == monthly, other.config.factor is monthly.config.factor
-        (True, False)
-        """
-        other = super().copy()
-        other.config = dataclasses.replace(other.config, factor=self.config.factor.copy())
-        return other
 
     def _validate_config(self) -> None:
         """Refuse a warm-up, resampling and bad window parameters."""
