@@ -209,3 +209,35 @@ class MeanVarianceConfig(FrozenConfig):
                 )
             bounds[str(name)] = (float(pair[0]), float(pair[1]))
         object.__setattr__(self, "exposure_bounds", bounds)
+
+
+@dataclass(frozen=True, kw_only=True)
+class ActiveRiskConfig(MeanVarianceConfig):
+    """Config of ``ActiveRiskOptimizer``: ``MeanVarianceConfig`` and the benchmark risk is measured against.
+
+    The optimiser prices the active risk ``(w - b) @ Sigma @ (w - b)``, ``b``
+    the benchmark's weights at the bar, and caps it with
+    ``tracking_error`` when that is set.
+
+    Examples
+    --------
+    With ``index_weight`` a factor whose output ``benchmark_weight`` holds
+    an index's weights (``MembershipCapWeight``, say):
+
+    >>> cfg = ActiveRiskConfig(
+    ...     expected_return_label="ret_5",
+    ...     covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=252)),
+    ...     ic=0.05, risk_aversion=10.0, weight_cap=0.05,
+    ...     benchmark=index_weight, tracking_error=0.02,
+    ... )
+    >>> cfg.benchmark_weight, cfg.tracking_error
+    ('benchmark_weight', 0.02)
+    """
+
+    #: The factor giving the benchmark's weights.
+    benchmark: "Factor" = component(default=None)
+    #: The benchmark factor's output holding the weights.
+    benchmark_weight: str = "benchmark_weight"
+    #: Cap on the forecast active volatility over the expected-return label's
+    #: span; ``None`` for none.
+    tracking_error: float | None = None

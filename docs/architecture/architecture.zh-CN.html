@@ -556,7 +556,7 @@ label.lookahead_bars()   <span class="c"># 6 = delay + span：t 时刻的标签�
 <figcaption>图 5-4　输入声明的合并：规则和估计器各自声明需要什么，DecisionInputs 只读合并后的一个值，据此组装每根 bar 的上下文。</figcaption>
 </figure>
 
-<p>均值-方差优化器（一种在预期收益和风险之间做权衡的经典组合方法）还留了两个扩展点：<code>reference_weights</code>（相对一个参考组合来衡量风险）和 <code>risk_constraints</code>（对风险项加约束）。基类本身不使用它们；<code>scripts/active_risk.py</code> 里的 <code>ActiveRiskOptimizer</code> 就是基于这两个扩展点写的，有测试保证它能正常工作。</p>
+<p>均值-方差优化器（一种在预期收益和风险之间做权衡的经典组合方法）还留了两个扩展点：<code>reference_weights</code>（相对一个参考组合来衡量风险）和 <code>risk_constraints</code>（对风险项加约束）。基类本身不使用它们；<code>quantlab/portfolio/predefined/active_risk.py</code> 里的 <code>ActiveRiskOptimizer</code> 就是基于这两个扩展点写的，有测试保证它能正常工作。</p>
 
 <!-- ============ 6 ============ -->
 <h1 class="chapter"><span class="num">6</span>基类还是协议</h1>

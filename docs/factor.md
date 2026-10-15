@@ -587,6 +587,15 @@ beta = BenchmarkBeta(BenchmarkBetaConfig(
 ))
 ```
 
+`MembershipCapWeight` (`quantlab.factor.predefined.membership_cap_weight`) gives an index's capitalization weights: at each bar a member's market cap over the members' summed cap, and 0 for a symbol that is not a member, has no cap or a non-positive one, so each bar's weights sum to 1. Its config is `MembershipCapWeightConfig`: `dataset` holds the caps in `cap_column` (default `"marketcap"`, Sharadar DAILY's), `membership` the point-in-time membership (`is_member_at`); `warmup_bars` is 0. Its one output is `benchmark_weight`, the book `ActiveRiskOptimizer` prices active risk against (see [portfolio.md](portfolio.md)).
+
+```python
+from quantlab.factor.config import MembershipCapWeightConfig
+from quantlab.factor.predefined.membership_cap_weight import MembershipCapWeight
+
+index_weight = MembershipCapWeight(MembershipCapWeightConfig(dataset=daily, membership=us3000))
+```
+
 ### High-frequency factors from minute bars
 
 `IntradayStats` (`quantlab.factor.predefined.intraday`) computes daily statistics of each session's one-minute bars, the Massive Trade bars on permatickers (`MappedTradeBarDataset` or `PermatickerTradeBarDataset`, see [massive.md](massive.md)): realized volatility, skewness and kurtosis, signed jump variation, the jump share of bipower variation, minute-return autocorrelation, intraday, overnight, first- and last-30-minute returns, close against VWAP, tick-rule order imbalance, return-volume and price-volume correlation, the dispersion and last-30-minute share of volume, the closing-auction and off-exchange shares, a minute Amihud ratio and trade size; the module docstring gives each formula and its source. At every bar each output is the statistic of the session so far, so resampled to `"1d"` with `"last"` it is one value per stock and session. `data_columns` must be `INTRADAY_COLUMNS` and `warmup_bars` at least one session (`session_bars`, 390); `kwargs` takes `session_bars`, `edge_bars` (30) and `min_returns` (60 bars with a trade, fewer gives NaN). Batch mode only.

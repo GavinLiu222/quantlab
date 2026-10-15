@@ -179,6 +179,32 @@ class BenchmarkBetaConfig(BaseFactorConfig):
 
 
 @dataclass(kw_only=True, frozen=True)
+class MembershipCapWeightConfig(BaseFactorConfig):
+    """Config of ``quantlab.factor.predefined.membership_cap_weight.MembershipCapWeight``.
+
+    ``dataset`` holds each symbol's market cap in ``cap_column`` (Sharadar
+    DAILY's ``marketcap``) and ``membership`` the index whose members the
+    weights are spread over; both are component fields. No bar before the
+    requested start is read.
+
+    Examples
+    --------
+    With ``daily`` a dataset of market caps and ``us3000`` a membership:
+
+    >>> cfg = MembershipCapWeightConfig(dataset=daily, membership=us3000)
+    >>> cfg.warmup_bars, cfg.cap_column
+    (0, 'marketcap')
+    """
+
+    #: Bars read before the requested start: none, the weights are of the bar.
+    warmup_bars: int = 0
+    #: The point-in-time membership the weights are spread over.
+    membership: "IndexConstituentDataset" = component()
+    #: The market-cap variable of ``dataset``.
+    cap_column: str = "marketcap"
+
+
+@dataclass(kw_only=True, frozen=True)
 class NeutralizedConfig(BaseFactorConfig):
     """Config of ``quantlab.factor.predefined.neutralized.NeutralizedFactor``.
 

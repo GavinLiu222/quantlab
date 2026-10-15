@@ -483,7 +483,23 @@ array([0.4, 0.4, 0. , 0.2])
 2. 实现 `construct`。
 3. 规则读取收益窗口、因子面板或因子风险模型的暴露时，重写 `declared_inputs`：它返回一个 `InputDeclaration`（`lookback_bars`；需要多于 `lookback_bars + 1` 个原始价格时给 `history_bars`；`factors`；`risk_model`），持有部件的规则用 `InputDeclaration.merged` 合并部件的声明。需要检查标签规格时重写 `bind`。
 
-`MeanVarianceOptimizer` 为基于它的规则留了两个扩展点。`reference_weights(context)` 返回风险项所对照的组合，于是优化器计价的是主动风险 `(w - b)' Sigma (w - b)`，而不是 `w' Sigma w`；协方差估计器未覆盖的基准标的会被剔除，并记在 `reference_without_risk` 事件里。`risk_constraints(risk)` 返回对这个风险项的约束，`risk` 是预期收益标签跨度上的 cvxpy 表达式，例如 `[risk <= cap**2]`。两者默认都不启用，这时优化问题保持不变。`scripts/active_risk.py` 用它们实现了 `ActiveRiskOptimizer`：相对基准的均值方差规则，基准权重来自一个声明的因子，可选跟踪误差上限。
+`MeanVarianceOptimizer` 为基于它的规则留了两个扩展点。`reference_weights(context)` 返回风险项所对照的组合，于是优化器计价的是主动风险 `(w - b)' Sigma (w - b)`，而不是 `w' Sigma w`；协方差估计器未覆盖的基准标的会被剔除，并记在 `reference_without_risk` 事件里。`risk_constraints(risk)` 返回对这个风险项的约束，`risk` 是预期收益标签跨度上的 cvxpy 表达式，例如 `[risk <= cap**2]`。两者默认都不启用，这时优化问题保持不变。`ActiveRiskOptimizer`（`quantlab.portfolio.predefined.active_risk`）就是在它们之上实现的：相对基准的均值方差规则，基准权重来自一个声明的因子，可选跟踪误差上限。配置类 `ActiveRiskConfig` 在 `MeanVarianceConfig` 之上加了 `benchmark`（基准因子）、`benchmark_weight`（存权重的输出名，默认 `"benchmark_weight"`）和 `tracking_error`（预期收益标签跨度上预测主动波动率的上限，`None` 表示不限）。它在优化器的约束下最大化 `w @ mu - risk_aversion / 2 * (w - b)' Sigma (w - b) - turnover_penalty * |w - w_current|_1`，设了 `tracking_error` 时再加上 `(w - b)' Sigma (w - b) <= tracking_error**2`。`MembershipCapWeight`（见 [factor.md](factor.md)）给出指数的市值权重，可作这样的基准。
+
+```python
+from quantlab.factor.config import MembershipCapWeightConfig
+from quantlab.factor.predefined.membership_cap_weight import MembershipCapWeight
+from quantlab.portfolio.config import ActiveRiskConfig, FactorRiskStoreEstimatorConfig
+from quantlab.portfolio.predefined.active_risk import ActiveRiskOptimizer
+from quantlab.portfolio.predefined.factor_risk import FactorRiskStoreEstimator
+
+rule = ActiveRiskOptimizer(ActiveRiskConfig(
+    expected_return_label="ret_1",
+    covariance=FactorRiskStoreEstimator(FactorRiskStoreEstimatorConfig(risk_model=use4)),
+    ic=0.0122, risk_aversion=20.0, turnover_penalty=0.002, weight_cap=0.05,
+    benchmark=MembershipCapWeight(MembershipCapWeightConfig(dataset=daily, membership=us3000)),
+    tracking_error=0.06 / 252**0.5,
+))
+```
 
 不要重写 `decide`：它是回测与执行器共用的唯一决策路径。规则不含组装代码，它的 context 由 `DecisionInputs` 构造。
 

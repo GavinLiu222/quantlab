@@ -587,6 +587,15 @@ beta = BenchmarkBeta(BenchmarkBetaConfig(
 ))
 ```
 
+`MembershipCapWeight`（`quantlab.factor.predefined.membership_cap_weight`）给出指数的市值权重：每根 bar 上成员的市值除以全部成员市值之和，非成员、没有市值或市值不为正的标的为 0，所以每根 bar 的权重之和为 1。配置类是 `MembershipCapWeightConfig`：`dataset` 的 `cap_column`（默认 `"marketcap"`，即 Sharadar DAILY 的市值）是市值，`membership` 是点时成分（`is_member_at`）；`warmup_bars` 为 0。唯一的输出是 `benchmark_weight`，即 `ActiveRiskOptimizer` 计价主动风险所对照的组合（见 [portfolio.md](portfolio.md)）。
+
+```python
+from quantlab.factor.config import MembershipCapWeightConfig
+from quantlab.factor.predefined.membership_cap_weight import MembershipCapWeight
+
+index_weight = MembershipCapWeight(MembershipCapWeightConfig(dataset=daily, membership=us3000))
+```
+
 ### 分钟 bar 的高频因子
 
 `IntradayStats`（`quantlab.factor.predefined.intraday`）计算每个交易日一分钟 bar 的日内统计量，输入是 permaticker 轴上的 Massive Trade bars（`MappedTradeBarDataset` 或 `PermatickerTradeBarDataset`，见 [massive.md](../massive.md)）。输出包括：已实现波动率、偏度、峰度，signed jump，跳跃在 bipower variation 中的占比，分钟收益自相关；日内、隔夜、开盘和收盘前 30 分钟收益，收盘价相对 VWAP；tick-rule 买卖不平衡，收益-成交量和价格-成交量相关；成交量离散度和尾盘 30 分钟成交占比，收盘竞价占比，场外成交占比，分钟 Amihud 和笔均成交量。每个公式及其文献出处见模块 docstring。在每根 bar 上，各输出是“当日截至此刻”的统计量，所以用 `"last"` 重采样到 `"1d"` 后就是每只股票每天一个值。`data_columns` 必须是 `INTRADAY_COLUMNS`，`warmup_bars` 至少覆盖一个交易日（`session_bars`，390）。`kwargs` 接受 `session_bars`、`edge_bars`（30）和 `min_returns`（有成交的 bar 不少于 60，否则为 NaN）。只支持 batch 模式。

@@ -319,8 +319,9 @@ class MeanVarianceOptimizer(PortfolioConstructor):
     means: ``reference_weights`` (the risk term prices ``w - b`` against a
     reference book, a benchmark say) and ``risk_constraints`` (constraints
     on the risk term, a tracking-error cap say). Both are unused by default,
-    and the problem is then exactly the one above. ``scripts/active_risk.py``
-    builds a benchmark-relative rule on them.
+    and the problem is then exactly the one above. ``ActiveRiskOptimizer``
+    (``quantlab.portfolio.predefined.active_risk``) builds a
+    benchmark-relative rule on them.
 
     ``declared_inputs()`` is the covariance estimator's declaration (its
     return window, its factor risk model) merged with the
