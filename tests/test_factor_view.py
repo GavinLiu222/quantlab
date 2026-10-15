@@ -1,7 +1,7 @@
 """Factor views: wrappers that read the store of the factor they wrap.
 
-A view (``RosterFactor``, ``MembershipMaskedFactor``, ``ChunkedFactor``)
-has no store of its own. Every store query a factor answers
+A view (``RosterFactor``, ``MembershipMaskedFactor``) has no store of its
+own and writes none. Every store query a factor answers
 (``store_uses``, ``store_range``, ``owns_store``, ``stored_symbols``,
 ``output_symbols``, ``read``) is answered by the same rules on every view,
 so views nest. A view's ``store_path`` is ``None``: it keeps no store of its
@@ -20,18 +20,17 @@ import numpy as np
 import pytest
 import xarray as xr
 
-import quantlab.factor.predefined.chunked as chunked_module
+import quantlab.factor.chunking as chunking_module
 import quantlab.factor.view as view_module
 
 from quantlab.core.component import walk_components
 from quantlab.dataset.memory import FrameDataset
 from quantlab.factor.config import (
-    ChunkedConfig,
     FactorConfig,
     MembershipMaskedFactorConfig,
     RosterConfig,
 )
-from quantlab.factor.predefined.chunked import ChunkedFactor
+from quantlab.factor.chunking import ChunkedBuilder
 from quantlab.factor.predefined.membership_mask import MembershipMaskedFactor
 from quantlab.factor.predefined.roster import RosterFactor
 from tests.test_membership_mask import COVERAGE_START, _membership
@@ -175,50 +174,59 @@ def owner_path(view) -> str:
     return use.path
 
 
-def _chunked(factor):
-    return ChunkedFactor(ChunkedConfig(factor=factor, granularity="month"))
+class _WritingRoster(RosterFactor):
+    """A roster view whose ``owns_store`` claims the wrapped store."""
+
+    def owns_store(self):
+        return True
+
+
+WRITES = {
+    "build": lambda view, rows: view.build(_START, _END),
+    "extend": lambda view, rows: view.extend("2024-03-01"),
+    "write_rows": lambda view, rows: view.write_rows(rows, _START, _END),
+    "append_rows": lambda view, rows: view.append_rows(rows, "2024-03-01"),
+    "extendable_range": lambda view, rows: view.extendable_range("2024-03-01"),
+    "refuse_unless_owner": lambda view, rows: view.refuse_unless_owner("build"),
+}
+
+
+@pytest.mark.parametrize("write", WRITES)
+@pytest.mark.parametrize("name", VIEWS)
+def test_every_write_of_a_view_is_refused(setup, name, write):
+    owner = setup[0]
+    view = VIEWS[name](*setup)
+    before = owner.store_range()
+
+    with pytest.raises(ValueError, match="a view has no store of its own"):
+        WRITES[write](view, owner.compute(_START, _END))
+    assert owner.store_range() == before
+
+
+@pytest.mark.parametrize("write", WRITES)
+def test_a_view_writes_nothing_even_when_it_claims_the_store(setup, write):
+    owner, roster, _ = setup
+    view = _WritingRoster(RosterConfig(factor=owner, roster=roster))
+
+    with pytest.raises(ValueError, match=r"_WritingRoster\.\w+\(\): a view has no store of its own"):
+        WRITES[write](view, owner.compute(_START, _END))
+    assert [use.relation for use in view.store_uses()] == ["reads"]
 
 
 @pytest.mark.parametrize("name", VIEWS)
-def test_a_chunked_view_answers_the_views_store_queries(setup, name):
-    view = VIEWS[name](*setup)
-    chunked = _chunked(view)
-
-    assert chunked.store_path is None
-    assert [(use.path, use.relation) for use in chunked.store_uses()] == [(owner_path(view), "reads")]
-    assert chunked.store_range() == view.store_range()
-    assert chunked.owns_store() is False
-    assert chunked.stored_symbols() == view.stored_symbols()
-    assert chunked.output_symbols() == view.output_symbols()
-    assert chunked.cell_bytes() == view.cell_bytes()
-    assert chunked.read(_START, _END)["symbol"].values.tolist() == KEPT[name]
+def test_a_chunked_build_refuses_a_view(setup, name):
     with pytest.raises(ValueError, match="a view has no store of its own"):
-        chunked.build(_START, _END)
+        ChunkedBuilder(VIEWS[name](*setup), granularity="month")
 
 
-def test_a_chunked_owner_writes_the_store_through_its_owner(setup):
-    owner = setup[0]
-    chunked = _chunked(owner)
-
-    assert chunked.owns_store() is True
-    assert chunked.store_path is None
-    assert [(use.path, use.relation, use.handle) for use in chunked.store_uses()] == [
-        (owner.store_path, "owns", chunked)]
-    assert chunked.cell_bytes() == owner.cell_bytes()
-    chunked.build(_START, "2024-01-31")
-    assert owner.store_range() == (_START, "2024-01-31")
-    chunked.extend(_END)
-    assert owner.store_range() == (_START, _END)
-    assert chunked.stored_symbols() == ["1", "2", "3", "4", "5"]
-
-
-def test_a_view_over_a_chunked_factor_is_a_view_of_its_store(setup):
+def test_a_chunked_build_of_the_owner_is_read_through_its_views(setup):
     owner, roster, _ = setup
+    ChunkedBuilder(owner, granularity="month").build(_START, "2024-01-31")
+    ChunkedBuilder(owner, granularity="month").extend(_END)
 
-    view = _roster(_chunked(owner), roster)
+    view = _roster(owner, roster)
 
-    assert view.store_path is None and view.owns_store() is False
-    assert [use.path for use in view.store_uses()] == [owner.store_path]
+    assert owner.store_range() == (_START, _END)
     assert view.read(_START, _END)["symbol"].values.tolist() == ["2", "3", "4"]
 
 
@@ -265,22 +273,9 @@ def test_the_public_entry_refuses_a_factor_that_does_not_own_the_store(setup):
     owner.refuse_unless_owner("build")  # the owner passes
 
 
-@pytest.mark.parametrize("name", VIEWS)
-def test_a_view_refuses_the_public_entry(setup, name):
-    view = VIEWS[name](*setup)
-
-    with pytest.raises(ValueError, match="a view has no store of its own"):
-        view.refuse_unless_owner("build")
-    with pytest.raises(ValueError, match="a view has no store of its own"):
-        view.write_rows(setup[0].compute(_START, _END), _START, _END)
-
-
-def test_a_chunked_owner_passes_its_owners_guard(setup):
-    owner = setup[0]
-
-    _chunked(owner).refuse_unless_owner("build")
-    with pytest.raises(ValueError, match="ChunkedFactor.build\\(\\): a view has no store of its own"):
-        _chunked(_pinned(owner)).refuse_unless_owner("build")
+def test_a_chunked_build_refuses_a_pinned_factor(setup):
+    with pytest.raises(ValueError, match=r"CloseAndMean\.build\(\): the store at .* only the factor whose outputs"):
+        ChunkedBuilder(_pinned(setup[0]), granularity="month")
 
 
 def _private_members_read_off_the_wrapped_factor(path) -> list[str]:
@@ -306,17 +301,19 @@ def _private_members_read_off_the_wrapped_factor(path) -> list[str]:
 
 
 def _is_wrapped_factor(node, aliases) -> bool:
-    """Whether ``node`` is ``<...>.config.factor`` or a name bound to it."""
+    """Whether ``node`` is ``<...>.config.factor``, the builder's ``self.factor`` or a name bound to either."""
     if isinstance(node, ast.Name):
         return node.id in aliases
     return (
         isinstance(node, ast.Attribute)
         and node.attr == "factor"
-        and isinstance(node.value, ast.Attribute)
-        and node.value.attr == "config"
+        and (
+            (isinstance(node.value, ast.Attribute) and node.value.attr == "config")
+            or (isinstance(node.value, ast.Name) and node.value.id == "self")
+        )
     )
 
 
-@pytest.mark.parametrize("module", [view_module, chunked_module])
-def test_views_read_no_private_member_of_the_wrapped_factor(module):
+@pytest.mark.parametrize("module", [view_module, chunking_module])
+def test_views_and_the_chunked_build_read_no_private_member_of_the_wrapped_factor(module):
     assert _private_members_read_off_the_wrapped_factor(module.__file__) == []

@@ -16,8 +16,8 @@ What is locked here, and what turns it red:
   the ranged stores in the same extension order with the same component
   paths.
 - A factor view keeps no store of its own (``store_path`` is ``None``) and
-  declares the wrapped store it reads; a ``ChunkedFactor`` over the owner
-  owns it with itself as the handle.
+  declares the wrapped store it reads, never owns it; a chunked build of
+  the owner declares nothing, the owner owning its store as before.
 - A ``MappedTradeBarDataset`` reads its own store; the stores under the view
   it is built from are sources, not read on a day.
 - ``StoreUse`` refuses an unknown relation and an owned store without a
@@ -47,8 +47,8 @@ from quantlab.core.store_uses import (
 )
 from quantlab.dataset.config import MappedTradeBarsConfig
 from quantlab.dataset.massive.mapped_bars import MappedTradeBarDataset
-from quantlab.factor.config import ChunkedConfig, PolarsFactorConfig
-from quantlab.factor.predefined.chunked import ChunkedFactor
+from quantlab.factor.chunking import ChunkedBuilder
+from quantlab.factor.config import PolarsFactorConfig
 from quantlab.runs.backtest_run import BacktestRun
 from tests.backtest_fixtures import PastReturnFactor
 from tests.test_live_prediction import Fixture
@@ -182,7 +182,7 @@ def test_a_factor_view_has_no_store_path_and_declares_the_store_it_reads(fixture
     assert [(u.relation, u.handle) for u in pinned.store_uses()] == [(READS, pinned)]  # pinned: not the owner
 
 
-def test_a_chunked_factor_owns_the_wrapped_store_with_itself_as_handle(tmp_path):
+def test_a_chunked_build_leaves_the_owner_owning_its_store(tmp_path):
     from tests.backtest_fixtures import write_price_store
     from quantlab.dataset.stock import StockDataset
 
@@ -190,13 +190,12 @@ def test_a_chunked_factor_owns_the_wrapped_store_with_itself_as_handle(tmp_path)
         warmup_bars=5, dataset=StockDataset(write_price_store(tmp_path / "p", n_bars=20)),
         kwargs={"n": 3}, file_path=str(tmp_path / "past_ret.zarr"),
     ))
-    chunked = ChunkedFactor(ChunkedConfig(factor=owner))
+    builder = ChunkedBuilder(owner)
 
-    assert chunked.store_path is None
-    (use,) = chunked.store_uses()
-    assert (use.path, use.relation, use.handle) == (owner.store_path, OWNS, chunked)
-    assert [(u.where, u.relation) for u in walk_store_uses(chunked)] == [
-        ("factor.dataset", READS), ("factor", OWNS)]  # the store once: its deepest declarer
+    assert not hasattr(builder, "store_uses")  # a build tool, not a component
+    (use,) = owner.store_uses()
+    assert (use.path, use.relation, use.handle) == (owner.store_path, OWNS, owner)
+    assert [(u.where, u.relation) for u in walk_store_uses(owner)] == [("dataset", READS), ("", OWNS)]
 
 
 def test_a_mapped_store_reads_its_own_store_and_is_built_from_its_source(built, tmp_path):  # noqa: F811

@@ -189,9 +189,11 @@ range, and holds the refusal texts. `Factor` and `RiskStore` each make one
 and supply only what differs: the compute function, the name in messages,
 and for a factor the owner rule (ADR 0029) and the fill values of widened
 cells. A resampled factor without its own store checks its source's range
-through one on `config.file_path` (ADR 0002). `ChunkedFactor` writes a chunk
-computed in a worker process through the wrapped factor's ranged store
-(`write`, `append`).
+through one on `config.file_path` (ADR 0002). A chunked build
+(`quantlab.factor.chunking.ChunkedBuilder`) writes a chunk computed in a
+worker process through the factor's public chunk-write entry
+(`write_rows`, `append_rows`), which runs the ranged store's `write` and
+`append`; it is a build tool, not a factor or a view (ADR 0043).
 
 Which stores a component uses is one declaration, `Component.store_uses()`
 (`()` by default): each component lists only its own direct uses, a

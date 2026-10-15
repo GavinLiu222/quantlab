@@ -95,11 +95,11 @@ from quantlab.dataset.sharadar.industry import SharadarIndustryDataset
 from quantlab.dataset.sharadar.share_class import SharadarShareClassDataset
 from quantlab.dataset.sharadar.stock import SharadarStockDataset
 from quantlab.enums.constant import Date
-from quantlab.factor.config import ChunkedConfig, FactorConfig, NeutralizedConfig, RosterConfig
+from quantlab.factor.chunking import ChunkedBuilder
+from quantlab.factor.config import FactorConfig, NeutralizedConfig, RosterConfig
 from quantlab.factor.predefined.alpha101 import Alpha101Stock
 from quantlab.factor.predefined.alpha158 import Alpha158Stock
 from quantlab.factor.predefined.barra import BarraStyle, BarraStyleParameters
-from quantlab.factor.predefined.chunked import ChunkedFactor
 from quantlab.factor.predefined.neutralized import NeutralizedFactor
 from quantlab.factor.predefined.roster import RosterFactor
 from quantlab.label.predefined.fret import Return
@@ -331,14 +331,14 @@ def build_stores() -> None:
     """Build the membership, the alphas, their neutral versions and the label to SEP's last bar.
 
     The membership first (the roster of everything else); each alpha a chunk
-    of time at a time (``ChunkedFactor``), so a store that would not fit in
+    of time at a time (``ChunkedBuilder``), so a store that would not fit in
     memory is written year by year.
     """
     membership().update()
     last = sep().calendar(START, Date.END_DATE)[-1].date().isoformat()
     neutral = [f for f in features() if isinstance(f, NeutralizedFactor)]
     for factor in [*(n.config.factor for n in neutral), *neutral]:
-        ChunkedFactor(ChunkedConfig(factor=factor)).build(START, last)
+        ChunkedBuilder(factor).build(START, last)
         logger.info(f"{type(factor).__name__} -> {factor.config.file_path}")
     ret = label().label
     ret.build(START, last)

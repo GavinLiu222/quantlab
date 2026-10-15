@@ -381,11 +381,10 @@ def test_a_merged_dataset_stores_the_union_of_its_inputs_symbols(symbol_halves):
 
 
 def test_a_factor_on_a_merged_dataset_is_planned_in_chunks(symbol_halves, tmp_path):
-    from quantlab.factor.config import ChunkedConfig
-    from quantlab.factor.predefined.chunked import ChunkedFactor
+    from quantlab.factor.chunking import ChunkedBuilder
 
     factor = _ma_dev(MergedDataset([*symbol_halves]), tmp_path)
 
-    granularity, chunks = ChunkedFactor(ChunkedConfig(factor=factor)).plan("2024-01-10", "2024-02-29")
+    granularity, chunks = ChunkedBuilder(factor).plan("2024-01-10", "2024-02-29")
 
     assert chunks

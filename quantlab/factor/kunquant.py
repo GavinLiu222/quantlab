@@ -96,7 +96,7 @@ def _release_executors() -> None:
 #: rewrites a windowed sum into a running total (``sum += new - old``) carried
 #: from the first bar computed, so its rounding residue never leaves the
 #: window: a computation started on a later bar, as ``extend`` and
-#: ``quantlab.factor.predefined.chunked`` start one, then differs, by O(1)
+#: ``quantlab.factor.chunking`` start one, then differs, by O(1)
 #: where a correlation or z-score divides by a variance that is truly 0.
 #: Without it every output depends only on its window, at about the same
 #: speed (measured on us3000 Alpha101/Alpha158, 2026-10-09).

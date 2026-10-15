@@ -115,7 +115,7 @@ ValueError: Momentum.read(): the store at data/factors/momentum.zarr covers 2024
 (60, '2024-03-20')
 ```
 
-不是由 `build` 写出的存储，`store_range()` 返回 `None`，`read` 和 `extend` 都会拒绝这样的存储。KunQuant 因子只在 batch 模式下应答这些调用。区间、`build` 与 `extend` 的步骤顺序和它们的拒绝信息由 `quantlab.backend.ranged.RangedStore` 维护，因子风险模型的存储也通过这个模块写出（见存储后端指南）；因子只提供它的 `compute`、拥有者规则和加宽单元格的填充值。没有 `file_path` 的因子调用 `build`、`extend` 和 `read` 会抛出 `ValueError: Momentum.build(): the store has no path in the config.` 有存储的因子用 `store_uses()` 声明它（一个 `StoreUse`：拥有存储时为 `owns`，handle 是因子自己；只钉住部分变量时为 `reads`；视图声明被包装的存储），实盘日和每日数据更新扩充的就是这些声明。在别处算好的行（例如工作进程算出的一块）通过因子公开的分块写入接口按同样的规则写入：`write_rows(rows, start, end)` 和 `append_rows(rows, end)` 分别是 `build` 和 `extend` 的写入一半，`extendable_range(end)` 在计算任何东西之前返回已记录的区间或抛出 `extend` 的拒绝信息，`refuse_unless_owner(method)` 是每次写入都会运行的拥有者检查（视图覆盖它，以 `a view has no store of its own` 拒绝）。
+不是由 `build` 写出的存储，`store_range()` 返回 `None`，`read` 和 `extend` 都会拒绝这样的存储。KunQuant 因子只在 batch 模式下应答这些调用。区间、`build` 与 `extend` 的步骤顺序和它们的拒绝信息由 `quantlab.backend.ranged.RangedStore` 维护，因子风险模型的存储也通过这个模块写出（见存储后端指南）；因子只提供它的 `compute`、拥有者规则和加宽单元格的填充值。没有 `file_path` 的因子调用 `build`、`extend` 和 `read` 会抛出 `ValueError: Momentum.build(): the store has no path in the config.` 有存储的因子用 `store_uses()` 声明它（一个 `StoreUse`：拥有存储时为 `owns`，handle 是因子自己；只钉住部分变量时为 `reads`；视图声明被包装的存储），实盘日和每日数据更新扩充的就是这些声明。在别处算好的行（例如工作进程算出的一块）通过因子公开的分块写入接口按同样的规则写入：`write_rows(rows, start, end)` 和 `append_rows(rows, end)` 分别是 `build` 和 `extend` 的写入一半，`extendable_range(end)` 在计算任何东西之前返回已记录的区间或抛出 `extend` 的拒绝信息，`refuse_unless_owner(method)` 是每次写入都会运行的拥有者检查（视图对其中每一个都以 `a view has no store of its own` 拒绝）。放不进内存的存储由分块构建通过这些接口写入，见[构建放不进内存的存储](#构建放不进内存的存储)。
 
 `read` 和 `compute` 只返回因子自己的输出 `get_factor_names()`，不管存储或计算图里还有什么；存储缺少某个输出时，`read` 抛出 `ValueError` 并列出缺少的名字。`read(start, end, symbols=[...])` 只保留这些标的，按给定顺序，标签类型须与存储一致；存储缺少某个标的时抛出异常。在 `DataRecorder` 内，symbols 是记录请求的一部分，指纹只覆盖切出的面板。存储只由它的拥有者写入，即输出恰好是存储全部变量的因子（`owns_store()`）：用 `factor_names` 钉住共享存储部分输出的因子只能读它，它的 `build` 和 `extend` 会抛出 `ValueError`，以免用子集替换存储，或在其余变量没跟上时推进记录的区间。
 
@@ -506,17 +506,17 @@ alpha158_neutral = NeutralizedFactor(NeutralizedConfig(
 
 ### 因子视图
 
-因子视图（`quantlab.factor.view.FactorView`）包装另一个因子，读取那个因子的存储：`RosterFactor`、`MembershipMaskedFactor` 和 `ChunkedFactor` 都是视图。它的配置（`FactorViewConfig`）持有被包装的 `factor`；`dataset` 填为被包装因子的数据集，`warmup_bars` 为 0，设置 `file_path`、重采样，或 `factor_names` 与被包装因子不同，都会被拒绝。每个视图按同一套规则回答存储查询，所以视图可以嵌套：套在成员屏蔽因子外面的名单视图，在名单上读取屏蔽后的存储。
+因子视图（`quantlab.factor.view.FactorView`）包装另一个因子，读取那个因子的存储：`RosterFactor` 和 `MembershipMaskedFactor` 都是视图，视图不写任何存储。它的配置（`FactorViewConfig`）持有被包装的 `factor`；`dataset` 填为被包装因子的数据集，`warmup_bars` 为 0，设置 `file_path`、重采样，或 `factor_names` 与被包装因子不同，都会被拒绝。每个视图按同一套规则回答存储查询，所以视图可以嵌套：套在成员屏蔽因子外面的名单视图，在名单上读取屏蔽后的存储。
 
 | 查询 | 视图的回答 |
 |---|---|
 | `store_path` | `None`：视图没有自己的存储 |
-| `store_uses()` | 被包装因子的存储，`reads`（包装拥有者的 `ChunkedFactor` 为 `owns`），handle 是视图自己 |
+| `store_uses()` | 被包装因子的存储，`reads`，handle 是视图自己 |
 | `store_range()` | 被包装因子的，即 `read` 读取的存储 |
 | `owns_store()` | `False`：只有拥有者写存储（ADR 0029） |
 | `stored_symbols()`、`output_symbols()` | 被包装因子的标的中视图保留的那些 |
 | `read`、`compute` | 被包装因子在保留标的上的结果，再经视图变换 |
-| `build`、`extend` | 拒绝 |
+| `build`、`extend`、`write_rows`、`append_rows`、`extendable_range`、`refuse_unless_owner` | 拒绝：`a view has no store of its own` |
 
 视图只写它改变的部分：保留哪些标的（`_kept_symbols`），以及对面板做什么（`_view_panel`）。`NeutralizedFactor` 和 `IntradayAverage` 不是视图：它们计算新的输出，写进自己的存储。
 
@@ -554,22 +554,22 @@ features = MembershipMaskedFactor(MembershipMaskedFactorConfig(
 
 ### 构建放不进内存的存储
 
-`ChunkedFactor`（`quantlab.factor.predefined.chunked`）把另一个因子按时间一块一块地计算，用于整段一次算不下的区间。它的配置是 `ChunkedConfig`：`factor` 是被包装的因子，`granularity` 为 `None` 或一个 `TimeChunkPlanner` 周期（`"year"`、`"quarter"`、`"month"`、`"day"`、`"hour"`）。为 `None` 时，若整段的峰值（含 warm-up）放得进可用内存的一半（`memory_budget()`），就整段计算；否则按最大一块放得下的最粗周期切分，连一小时都放不下时抛出 `MemoryError`。每个 bar、每个标的的峰值取被包装因子的 `cell_bytes()`，已在 us3000 上校准（`PEAK_COPIES`：KunQuant 为 1，Polars 为 16，其余为 4），再乘以被包装因子输出的标的数 `output_symbols()`：默认是其数据集的标的，`NeutralizedFactor` 取它包装的因子的标的（而不是暴露数据的），`RosterFactor` 取保留下来的名单。`build` 对第一块调用被包装因子的 `build`，之后每块调用它的 `extend`，每块都用被包装因子的 `warmup_bars` 预热，所以内存里只有一块，也只有存储的拥有者写存储；中途失败的构建会保留已完成的块，再调用 `extend(end)` 即可续跑。`compute` 返回一整块面板，所以只是计算放不下时，它逐块填入；输出本身就放不下时抛出 `MemoryError`。只沿时间切分，被包装因子的图对所有块只编译一次（`Factor.keep_compiled`）。重采样过的因子在其源 bar 上分块，块不会比重采样后的 bar 更细（`"1d"` 因子拒绝 `granularity="hour"`，自动选择时也会跳过它），所以分钟因子的日线存储可以按月构建；包装器本身不能被重采样。`workers`（默认 1）在工作进程里同时计算这么多块，每个进程从配置重建被包装因子，并用它自己的 `njobs` 个线程；本进程按时间顺序通过被包装因子的 `write_rows` 和 `append_rows` 写入，写法与它的 `build` 和 `extend` 写入一块计算结果相同，经过同一个拥有者检查，所以存储仍只由拥有者写入。`workers` 大于 1 且未设 `granularity` 时，计划选“切出至少 `workers` 块、且最大一块的 `workers` 倍放得进 `memory_budget()`”的最粗粒度，让每个工作进程都有块可算（找不到时与单进程的计划相同）；为 1 时计划不变。工作进程数不超过块数，也不超过能在 `memory_budget()` 里同时放下的块数（`parallel_workers(chunks)`，被削减时写日志）。它适合单块耗时主要不在被包装因子自身线程里的情况（读取、解压、映射分钟 bar）；耗时主要在 KunQuant 图里的因子靠 `njobs` 已经用满核心，多开工作进程只会成倍增加内存。被包装因子不能从配置重建成相等的因子时（例如数据集在内存里），多于一个工作进程会被拒绝。工作进程是一个 `joblib.Parallel` 扇出（loky 后端），与仓库里其他扇出相同。各块拼起来与整段一次算出的结果在浮点容差内相同（float32 为 `rtol=1e-5, atol=1e-6`），这依赖于所有 KunQuant 批量图都用 `quantlab.factor.kunquant.BATCH_OPTIONS` 编译。它是一个通过拥有者写被包装存储的因子视图：`store_range()`、标的和 `read` 都是被包装因子的，所以模型读哪个都一样，`owns_store()` 也是被包装因子的，`store_path` 为 `None`，`store_uses()` 在被包装因子拥有存储时声明 `owns`，handle 是 `ChunkedFactor` 自己；包装另一个视图（例如 `RosterFactor`）时，`build` 和 `extend` 与那个视图一样被拒绝。
+分块构建（`quantlab.factor.chunking` 中的 `ChunkedBuilder`）把一个因子自己的存储按时间一块一块地构建和扩充，用于整段一次算不下的区间。它是构建工具，不是因子：没有配置也没有存储，只通过因子的公开接口写入，也没有人通过它读取；模型读的是因子本身。`ChunkedBuilder(factor, granularity=None, workers=1)` 接收要构建存储的因子，这个因子必须拥有它的存储：交给它一个视图（`RosterFactor`、`MembershipMaskedFactor`）或只钉住存储部分输出的因子时，在计算任何东西之前就以该因子自己的 `refuse_unless_owner` 信息拒绝。`granularity` 为 `None` 或一个 `TimeChunkPlanner` 周期（`"year"`、`"quarter"`、`"month"`、`"day"`、`"hour"`）。`plan(start, end)` 返回一个区间的粒度和各块：为 `None` 时，若整段的峰值（含 warm-up）放得进可用内存的一半（`memory_budget()`），就整段计算；否则按最大一块放得下的最粗周期切分，连一小时都放不下时抛出 `MemoryError`。每个 bar、每个标的的峰值取因子的 `cell_bytes()`，已在 us3000 上校准（`PEAK_COPIES`：KunQuant 为 1，Polars 为 16，其余为 4），再乘以因子输出的标的数 `output_symbols()`：默认是其数据集的标的，`NeutralizedFactor` 取它包装的因子的标的（而不是暴露数据的）。`build(start, end)` 对第一块调用因子的 `build`，之后每块调用它的 `extend`，每块都用因子的 `warmup_bars` 预热，所以内存里只有一块，也只有存储的拥有者写存储；中途失败的构建会保留已完成的块，再调用 `extend(end)` 即可续跑。两者都返回因子本身，调用方可以接着调 `.store_range()` 或 `.read(...)`。`compute(start, end)` 返回一整块面板、不写存储，只是计算放不下时逐块填入；输出本身就放不下时抛出 `MemoryError`。只沿时间切分，因子的图对所有块只编译一次（`Factor.keep_compiled`）。重采样过的因子在其源 bar 上分块，块不会比重采样后的 bar 更细（`"1d"` 因子拒绝 `granularity="hour"`，自动选择时也会跳过它），所以分钟因子的日线存储可以按月构建。`workers`（默认 1）在工作进程里同时计算这么多块，每个进程从配置重建因子，并用它自己的 `njobs` 个线程；本进程按时间顺序通过因子的 `write_rows` 和 `append_rows` 写入，写法与它的 `build` 和 `extend` 写入一块计算结果相同，经过同一个拥有者检查，所以存储仍只由拥有者写入。`workers` 大于 1 且未设 `granularity` 时，计划选“切出至少 `workers` 块、且最大一块的 `workers` 倍放得进 `memory_budget()`”的最粗粒度，让每个工作进程都有块可算（找不到时与单进程的计划相同）；为 1 时计划不变。工作进程数不超过块数，也不超过能在 `memory_budget()` 里同时放下的块数（`parallel_workers(chunks)`，被削减时写日志）。它适合单块耗时主要不在因子自身线程里的情况（读取、解压、映射分钟 bar）；耗时主要在 KunQuant 图里的因子靠 `njobs` 已经用满核心，多开工作进程只会成倍增加内存。因子不能从配置重建成相等的因子时（例如数据集在内存里），多于一个工作进程会被拒绝。工作进程是一个 `joblib.Parallel` 扇出（loky 后端），与仓库里其他扇出相同。各块拼起来与整段一次算出的结果在浮点容差内相同（float32 为 `rtol=1e-5, atol=1e-6`），这依赖于所有 KunQuant 批量图都用 `quantlab.factor.kunquant.BATCH_OPTIONS` 编译。
 
 在 us3000 上（3103 个 bar x 7625 个标的，按年分块），Alpha158 构建的峰值为 3.0 GB，整段构建为 13.8 GB。
 
 ```python
-from quantlab.factor.config import ChunkedConfig, FactorConfig
+from quantlab.factor.chunking import ChunkedBuilder
+from quantlab.factor.config import FactorConfig
 from quantlab.factor.predefined.alpha158 import Alpha158Stock
-from quantlab.factor.predefined.chunked import ChunkedFactor
 
 alpha158 = Alpha158Stock(FactorConfig(
     warmup_bars=400, dataset=RosterDataset(sep, membership), mode="batch",
     data_columns=("adjOpen", "adjHigh", "adjLow", "adjClose", "adjVolume"),
     file_path="factors/alpha158.zarr", njobs=32,
 ))
-ChunkedFactor(ChunkedConfig(factor=alpha158)).build("2016-01-01", "2026-10-02")
-features = alpha158.read("2026-01-02", "2026-10-02")   # 同一个存储
+ChunkedBuilder(alpha158).build("2016-01-01", "2026-10-02")
+features = alpha158.read("2026-01-02", "2026-10-02")
 ```
 
 ### 基准 beta
@@ -604,19 +604,18 @@ index_weight = MembershipCapWeight(MembershipCapWeightConfig(dataset=daily, memb
 
 KunQuant 不认交易日，所以因子在图运行之前，先由 bar 时间戳算出几个附加输入：bar 在当日的位置和距收盘的 bar 数、当日内最新成交价、计算该 bar 收益的参考价、当日首笔成交价、前一交易日的官方收盘价。日内求和是在 390 根 bar 的窗口上跑一遍循环，只累加当前交易日的 bar，所以半日市只累加自己的 210 根。分钟收益是最新成交价的 `log(p_t / p_{t-1})`（没有成交的 bar 收益为 0），第一根有成交的 bar 从它的开盘价算起。计算用的是 `log1p` 的级数展开，因为 KunQuant 的 float32 `Log` 有约 1e-6 的绝对误差，和平静时一分钟的收益同一量级。
 
-`IntradayAverage` 对一个已存储因子的每个输出取最近 `window` 根 bar 的均值（`IntradayAverageConfig`：`factor`、`window` 20、`min_count` 10）。它读取被包装因子的 store，所以这个 store 必须先在相应区间上建好。十年分钟数据的日线 store 由 `ChunkedFactor` 按月构建，多个月并行计算：
+`IntradayAverage` 对一个已存储因子的每个输出取最近 `window` 根 bar 的均值（`IntradayAverageConfig`：`factor`、`window` 20、`min_count` 10）。它读取被包装因子的 store，所以这个 store 必须先在相应区间上建好。十年分钟数据的日线 store 由分块构建（`ChunkedBuilder`）按月构建，多个月并行计算：
 
 ```python
+from quantlab.factor.chunking import ChunkedBuilder
 from quantlab.factor.config import FactorConfig, IntradayAverageConfig
-from quantlab.factor.config import ChunkedConfig
-from quantlab.factor.predefined.chunked import ChunkedFactor
 from quantlab.factor.predefined.intraday import INTRADAY_COLUMNS, IntradayAverage, IntradayStats
 
 daily = IntradayStats(FactorConfig(
     warmup_bars=390, dataset=minute_bars, mode="batch", data_columns=INTRADAY_COLUMNS,
     file_path=str(store_path(FACTORS, "intraday_stats")), njobs=4,
 )).resample("1d", "last")
-ChunkedFactor(ChunkedConfig(factor=daily, granularity="month", workers=24)).build("2016-10-11", "2026-10-13")
+ChunkedBuilder(daily, granularity="month", workers=24).build("2016-10-11", "2026-10-13")
 monthly = IntradayAverage(IntradayAverageConfig(
     factor=daily, window=20, file_path=str(store_path(FACTORS, "intraday_stats_20d")),
 ))

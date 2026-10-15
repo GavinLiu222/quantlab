@@ -443,7 +443,7 @@ def test_build_then_extend_matches_one_build_position_for_position(
 def test_widen_and_append_creates_a_store_with_a_sorted_symbol_axis(
     tmp_path: Path, symbol_encoding: str
 ) -> None:
-    """The first chunk `ChunkedFactor` writes lands sorted too.
+    """The first chunk a `ChunkedBuilder` writes lands sorted too.
 
     RED under: `widen_and_append` delegating a missing store straight to
     `append` with the panel's own order.

@@ -20,7 +20,7 @@ from typing import Self
 import pandas as pd
 import xarray as xr
 
-from quantlab.core.store_uses import OWNS, READS, SOURCE, StoreUse
+from quantlab.core.store_uses import READS, SOURCE, StoreUse
 from quantlab.factor.base import Factor
 from quantlab.factor.config import FactorViewConfig
 
@@ -38,18 +38,18 @@ class FactorView(Factor):
     ``stored_symbols()``   the wrapped factor's, cut by ``_kept_symbols``
     ``output_symbols()``   the wrapped factor's, cut by ``_kept_symbols``
     ``read``, ``compute``  the wrapped factor's, cut, then ``_view_panel``
-    ``build``, ``extend``  refused
+    writes                 refused: ``build``, ``extend``, ``write_rows``,
+                           ``append_rows``, ``extendable_range``; the
+                           guard ``refuse_unless_owner`` always raises
     =====================  ==================================================
 
     The outputs are the wrapped factor's names, ``dataset`` is the wrapped
     factor's, and ``cell_bytes`` and ``keep_compiled`` are the wrapped
     factor's, since a view computes nothing of its own beside it. A subclass
     overrides ``_kept_symbols`` to keep some symbols only and
-    ``_view_panel`` to change the panel. A view has no store of its own; a
-    view that writes (``ChunkedFactor``) writes through its owner's public
-    chunk-write entry (``Factor.write_rows``, ``append_rows``,
-    ``extendable_range``) and overrides ``owns_store``, ``build`` and
-    ``extend``.
+    ``_view_panel`` to change the panel. A view has no store of its own and
+    writes none: the store is built and extended with its owner, chunk by
+    chunk when it would not fit in memory (``quantlab.factor.chunking``).
 
     Parameters
     ----------
@@ -150,22 +150,20 @@ class FactorView(Factor):
         return None
 
     def store_uses(self) -> tuple:
-        """Return the wrapped factor's store, with this view as its handle.
+        """Return the wrapped factor's store, read with this view as its handle.
 
         A view reads the store its wrapped factor declares (``"reads"``,
-        with the view's ``store_range()``), or, when it writes through the
-        store's owner (``ChunkedFactor``, see ``owns_store``), owns it, so
-        ``extend`` on the view extends the store. The wrapped factor
-        declares the store itself as well; see ``Component.store_uses``.
+        with the view's ``store_range()``); it never owns it. The wrapped
+        factor declares the store itself as well; see
+        ``Component.store_uses``.
 
         Examples
         --------
         >>> [(use.path == owner.store_path, use.relation) for use in view.store_uses()]
         [(True, 'reads')]
         """
-        relation = OWNS if self.owns_store() else READS
         return tuple(
-            StoreUse(use.path, relation, self)
+            StoreUse(use.path, READS, self)
             for use in self.config.factor.store_uses()
             if isinstance(use, StoreUse) and use.relation != SOURCE
         )
@@ -288,7 +286,6 @@ class FactorView(Factor):
         Traceback (most recent call last):
         ValueError: RosterFactor.build(): a view has no store of its own; ...
         """
-        self.refuse_unless_owner("build")
         raise self._no_store("build")
 
     def extend(self, end) -> Self:
@@ -300,15 +297,10 @@ class FactorView(Factor):
         Traceback (most recent call last):
         ValueError: RosterFactor.extend(): a view has no store of its own; ...
         """
-        self.refuse_unless_owner("extend")
         raise self._no_store("extend")
 
     def write_rows(self, rows: xr.Dataset, start, end) -> Self:
-        """Write ``rows`` through the wrapped factor's ``write_rows``, once the view may write.
-
-        A view has no store of its own (``store_path`` is ``None``); one
-        that writes through the store's owner (``ChunkedFactor``) writes
-        the owner's store, any other is refused (``refuse_unless_owner``).
+        """Refused: a view has no store; write the rows with the store's owner.
 
         Examples
         --------
@@ -316,12 +308,10 @@ class FactorView(Factor):
         Traceback (most recent call last):
         ValueError: RosterFactor.build(): a view has no store of its own; ...
         """
-        self.refuse_unless_owner("build")
-        self.config.factor.write_rows(rows, start, end)
-        return self
+        raise self._no_store("build")
 
     def append_rows(self, rows: xr.Dataset, end) -> Self:
-        """Append ``rows`` through the wrapped factor's ``append_rows``, once the view may write.
+        """Refused: a view has no store; append the rows with the store's owner.
 
         Examples
         --------
@@ -329,12 +319,10 @@ class FactorView(Factor):
         Traceback (most recent call last):
         ValueError: RosterFactor.extend(): a view has no store of its own; ...
         """
-        self.refuse_unless_owner("extend")
-        self.config.factor.append_rows(rows, end)
-        return self
+        raise self._no_store("extend")
 
     def extendable_range(self, end) -> tuple[str, str]:
-        """Return the wrapped factor's ``extendable_range(end)``, once the view may write.
+        """Refused: a view has no store to extend; ask the store's owner.
 
         Examples
         --------
@@ -342,16 +330,14 @@ class FactorView(Factor):
         Traceback (most recent call last):
         ValueError: RosterFactor.extend(): a view has no store of its own; ...
         """
-        self.refuse_unless_owner("extend")
-        return self.config.factor.extendable_range(end)
+        raise self._no_store("extend")
 
     def refuse_unless_owner(self, method: str) -> None:
-        """Raise unless the view writes through the wrapped store's owner (see ``owns_store``).
+        """Raise: a view never owns a store, so every write is refused (ADR 0029).
 
-        A view that does not own the store is refused with the view's own
-        message; one that does (a ``ChunkedFactor`` over the owner) runs
-        the wrapped factor's ``refuse_unless_owner``. A ``ChunkedFactor``
-        over a view asks this before it writes a chunk.
+        A chunked build (``quantlab.factor.chunking.ChunkedBuilder``) asks
+        this when it is handed a factor, so a view is refused before
+        anything is computed.
 
         Parameters
         ----------
@@ -361,7 +347,7 @@ class FactorView(Factor):
         Raises
         ------
         ValueError
-            If the view does not write through the store's owner.
+            Always.
 
         Examples
         --------
@@ -369,9 +355,7 @@ class FactorView(Factor):
         Traceback (most recent call last):
         ValueError: RosterFactor.build(): a view has no store of its own; ...
         """
-        if not self.owns_store():
-            raise self._no_store(method)
-        self.config.factor.refuse_unless_owner(method)
+        raise self._no_store(method)
 
     def _no_store(self, method: str) -> ValueError:
         """Return the error refusing ``method``, a write, on a view."""

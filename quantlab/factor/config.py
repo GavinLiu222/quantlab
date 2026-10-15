@@ -320,34 +320,6 @@ class MembershipMaskedFactorConfig(FactorViewConfig):
 
 
 @dataclass(kw_only=True, frozen=True)
-class ChunkedConfig(FactorViewConfig):
-    """Config of ``quantlab.factor.predefined.chunked.ChunkedFactor``.
-
-    ``factor`` is the factor computed one chunk at a time; it keeps its own
-    config, warm-up and store, and may be resampled. ``granularity`` forces
-    the chunks to one calendar period each (a ``TimeChunkPlanner``
-    granularity); ``None`` lets the wrapper choose from the memory
-    available. ``workers`` processes compute chunks at once. ``dataset`` is
-    filled with the wrapped factor's dataset.
-
-    Examples
-    --------
-    With ``alpha`` a factor whose store would not fit in memory at once:
-
-    >>> cfg = ChunkedConfig(factor=alpha, granularity="month", workers=8)
-    >>> cfg.warmup_bars, cfg.file_path, cfg.workers
-    (0, None, 8)
-    """
-
-    #: One ``TimeChunkPlanner`` granularity for every chunk; ``None`` chooses
-    #: the coarsest one whose chunks fit in memory.
-    granularity: str | None = None
-    #: Worker processes computing chunks at once; the wrapped factor's own
-    #: threads (``njobs``) run in each. 1 computes them one after another here.
-    workers: int = 1
-
-
-@dataclass(kw_only=True, frozen=True)
 class IntradayAverageConfig(BaseFactorConfig):
     """Config of ``quantlab.factor.predefined.intraday.IntradayAverage``.
 

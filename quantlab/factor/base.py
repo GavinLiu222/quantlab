@@ -259,8 +259,8 @@ class Factor(Component, ABC):
         The output is 8 bytes per factor output. The peak counts every
         input variable the factor reads (``_input_variables``; as many as
         the outputs when it reads all of them) and every output at 8 bytes,
-        ``PEAK_COPIES`` times over. ``quantlab.factor.predefined.chunked``
-        sizes its chunks with it.
+        ``PEAK_COPIES`` times over. A chunked build
+        (``quantlab.factor.chunking``) sizes its chunks with it.
 
         Returns
         -------
@@ -283,7 +283,7 @@ class Factor(Component, ABC):
 
         Does nothing here; ``FactorKunQuant`` keeps its compiled graph, which
         it otherwise compiles again on every call. A computation split into
-        many calls (``quantlab.factor.predefined.chunked``) runs inside it.
+        many calls (``quantlab.factor.chunking``) runs inside it.
 
         Examples
         --------
@@ -684,7 +684,7 @@ class Factor(Component, ABC):
         """Replace the store with ``rows``, computed over ``start`` to ``end``, and record the range.
 
         The write half of ``build``, for rows computed elsewhere: a chunk
-        computed in a worker process (``ChunkedFactor``). The rows are
+        computed in a worker process (``ChunkedBuilder``). The rows are
         written as ``build`` writes ``compute(start, end)``, through the
         same ``quantlab.backend.ranged.RangedStore`` and the same owner
         guard (``refuse_unless_owner``), so ``write_rows`` then
@@ -888,7 +888,7 @@ class Factor(Component, ABC):
         The symbol axis of ``config.dataset``'s store here. A factor whose
         dataset is not where its symbols come from (a wrapper reading its
         exposures, or keeping a roster) overrides it.
-        ``quantlab.factor.predefined.chunked`` sizes its chunks on it.
+        ``quantlab.factor.chunking`` sizes its chunks on it.
 
         Examples
         --------

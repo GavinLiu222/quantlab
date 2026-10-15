@@ -1343,7 +1343,7 @@ def test_no_task_isolation_was_added() -> None:
     batches, `FactorAnalysis._render_to`'s loky call that draws a factor
     report's figures, `dataset_fingerprint`'s threading call over a
     request's variables, and `SharadarClient._download_zip`'s threading call
-    over a bulk zip's byte ranges, ``ChunkedFactor._pieces``'s loky call over
+    over a bulk zip's byte ranges, ``ChunkedBuilder._pieces``'s loky call over
     a factor's chunks and ``MappedTradeBarDataset.update``'s loky call over
     batches of days; none isolates a long task from a caller.
 

@@ -1,16 +1,16 @@
 """Every shipped factor built in monthly chunks equals the same factor built whole.
 
-``ChunkedFactor`` computes a factor one calendar period at a time, each
-chunk warmed up with the wrapped factor's own ``warmup_bars``. That only
+A chunked build (``ChunkedBuilder``) computes a factor one calendar period
+at a time, each chunk warmed up with the factor's own ``warmup_bars``. That only
 reproduces the whole build when every operator of the factor looks back at
 most ``warmup_bars`` bars: an operator with unbounded memory (a running
 total, an exponential average, an expanding statistic) gives a different
 value after a chunk boundary. Here every factor class under
-``quantlab/factor/predefined/`` (except ``RosterFactor``, which has no
-store, and ``ChunkedFactor`` itself) is built twice on two store paths,
-once whole and once through ``ChunkedFactor(granularity="month")``, with
+``quantlab/factor/predefined/`` (except the views, which have no
+store) is built twice on two store paths, once whole and once through
+``ChunkedBuilder(factor, granularity="month")``, with
 ALL its outputs and the warm-up its docstring asks for, and the two stores
-are compared under the dtype tolerance of ``tests/test_chunked_factor.py``.
+are compared under the dtype tolerance of ``tests/test_chunked_builder.py``.
 
 Each panel has several months after the warm-up, so the chunked build is
 at least three chunks; the panels carry a late listing, a delisting and a
@@ -33,7 +33,6 @@ from quantlab.dataset.stock import StockDataset
 from quantlab.factor.base import Factor
 from quantlab.factor.config import (
     BenchmarkBetaConfig,
-    ChunkedConfig,
     FactorConfig,
     MarketFeatureConfig,
     NeutralizedConfig,
@@ -43,7 +42,7 @@ from quantlab.factor.predefined.alpha101 import Alpha101SpotKline, Alpha101Stock
 from quantlab.factor.predefined.alpha158 import Alpha158SpotKline, Alpha158Stock
 from quantlab.factor.predefined.barra import BarraStyle, BarraStyleParameters
 from quantlab.factor.predefined.benchmark_beta import BenchmarkBeta
-from quantlab.factor.predefined.chunked import ChunkedFactor
+from quantlab.factor.chunking import ChunkedBuilder
 from quantlab.factor.predefined.literature_alpha import (
     LiteratureAlpha,
     LiteratureAlphaParameters,
@@ -63,7 +62,7 @@ _SPOT_COLUMNS = ["open", "high", "low", "close", "volume", "amount"]
 _STOCK_COLUMNS = ["adjOpen", "adjHigh", "adjLow", "adjClose", "adjVolume"]
 _NJOBS = 2
 
-# --- comparison, copied from tests/test_chunked_factor.py --------------------
+# --- comparison, copied from tests/test_chunked_builder.py --------------------
 
 # A rolling sum is kept as a running total from the first bar computed, so a
 # chunk that starts later differs in the last bits of its dtype: about one
@@ -410,7 +409,7 @@ def test_a_monthly_chunked_build_equals_the_whole_build(case, request, root):
     build, extend = inner.build, inner.extend
     inner.build = lambda s, e: calls.append("build") or build(s, e)
     inner.extend = lambda e: calls.append("extend") or extend(e)
-    ChunkedFactor(ChunkedConfig(factor=inner, granularity="month")).build(start, end)
+    ChunkedBuilder(inner, granularity="month").build(start, end)
 
     assert calls[0] == "build" and len(calls) >= 3, calls
     assert inner.store_range() == whole.store_range()
