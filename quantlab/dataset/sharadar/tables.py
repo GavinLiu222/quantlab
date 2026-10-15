@@ -36,7 +36,7 @@ from zoneinfo import ZoneInfo
 
 import polars as pl
 
-from quantlab.utils.atomic import write_json_atomically
+from quantlab.utils.atomic import write_json_atomically, write_parquet_atomically
 
 #: Directory under ``--download-dir`` holding every Sharadar raw table.
 VENDOR_DIR = "sharadar"
@@ -668,16 +668,18 @@ def pull_time(path: str | Path) -> datetime:
 #: Name of the TICKERS history, beside ``tickers.parquet`` (``fold_tickers_history``).
 TICKERS_HISTORY_FILE = "_history.parquet"
 
-#: The columns the TICKERS history adds to TICKERS': when a row was first and
-#: last seen, as the pull times of the snapshots holding it (UTC).
-HISTORY_SEEN = ("first_seen", "last_seen")
-
 #: What one row of the TICKERS history is: a security under one ticker in one table.
 _HISTORY_KEY = ["table", "permaticker", "ticker"]
 
 
 def tickers_history_file(vendor_root: str | Path) -> Path:
-    """Return the path of the TICKERS history (``TICKERS_HISTORY_FILE``)."""
+    """Return the path of the TICKERS history (``TICKERS_HISTORY_FILE``).
+
+    Examples
+    --------
+    >>> tickers_history_file("/d/sharadar")
+    PosixPath('/d/sharadar/tickers/_history.parquet')
+    """
     return raw_table_dir(vendor_root, "tickers") / TICKERS_HISTORY_FILE
 
 
@@ -686,15 +688,28 @@ def fold_tickers_history(vendor_root: str | Path) -> Path | None:
 
     The history holds one row per table, permaticker and ticker ever seen in
     a snapshot: TICKERS' columns as of the latest snapshot holding it, plus
-    ``first_seen`` and ``last_seen`` (``HISTORY_SEEN``), the pull times of
-    the first and last. Folding is idempotent and keeps what earlier folds
-    saw, so a snapshot pruned after it is folded (``prune_tickers_snapshots``)
-    loses nothing. Nothing is written without a snapshot or a history.
+    ``first_seen`` and ``last_seen``, the pull times (UTC) of the first and
+    last. Folding is idempotent and keeps what earlier folds saw, so a
+    snapshot pruned after it is folded (``prune_tickers_snapshots``) loses
+    nothing. Every bulk pull folds before it prunes.
+
+    Parameters
+    ----------
+    vendor_root : str or Path
+        ``<download-dir>/sharadar``.
+
+    Returns
+    -------
+    Path or None
+        The history (``tickers_history_file``), or ``None`` when there is
+        no snapshot and no history, and nothing was written.
 
     Examples
     --------
-    >>> fold_tickers_history("/data/downloads/sharadar").name
-    '_history.parquet'
+    Needs the Sharadar raw tier::
+
+        fold_tickers_history("/data/downloads/sharadar")
+        # PosixPath('/data/downloads/sharadar/tickers/_history.parquet')
     """
     path = tickers_history_file(vendor_root)
     schema = TABLES["tickers"].schema
@@ -704,9 +719,7 @@ def fold_tickers_history(vendor_root: str | Path) -> Path | None:
         frames.append(
             pl.read_parquet(snapshot)
             .select([pl.col(name).cast(dtype) for name, dtype in schema.items()])
-            .with_columns(
-                pl.lit(seen).alias(HISTORY_SEEN[0]), pl.lit(seen).alias(HISTORY_SEEN[1])
-            )
+            .with_columns(pl.lit(seen).alias("first_seen"), pl.lit(seen).alias("last_seen"))
         )
     if not frames:
         return None
@@ -719,22 +732,33 @@ def fold_tickers_history(vendor_root: str | Path) -> Path | None:
             pl.col("first_seen").min(),
             pl.col("last_seen").max(),
         )
-        .select(*schema, *HISTORY_SEEN)
+        .select(*schema, "first_seen", "last_seen")
         .sort(_HISTORY_KEY)
     )
-    partial = path.with_name(f".{path.name}.partial")
-    folded.write_parquet(partial)
-    partial.replace(path)
+    write_parquet_atomically(path, folded)
     return path
 
 
 def tickers_history(vendor_root: str | Path) -> pl.DataFrame | None:
     """Return the TICKERS history (``fold_tickers_history``), or ``None`` without one.
 
+    Parameters
+    ----------
+    vendor_root : str or Path
+        ``<download-dir>/sharadar``.
+
+    Returns
+    -------
+    pl.DataFrame or None
+        TICKERS' columns, then ``first_seen`` and ``last_seen``; ``None``
+        when nothing has been folded.
+
     Examples
     --------
-    >>> tickers_history("/data/downloads/sharadar").columns[-2:]
-    ['first_seen', 'last_seen']
+    Needs the Sharadar raw tier::
+
+        tickers_history("/data/downloads/sharadar").columns[-2:]
+        # ['first_seen', 'last_seen']
     """
     path = tickers_history_file(vendor_root)
     return pl.read_parquet(path) if path.exists() else None
@@ -796,11 +820,10 @@ def prune_tickers_snapshots(vendor_root: str | Path) -> list[Path]:
     The newest snapshot is always kept (the next pulls of its run map with
     it); an older one is kept while a raw file of any table pairs with it
     (``snapshot_for``). A bulk pull deletes its table's windows, so the
-    snapshots only they used go too. Every snapshot is first folded into
-    the TICKERS history (``fold_tickers_history``), so a deleted one loses
-    nothing.
+    snapshots only they used go too. Fold the snapshots into the TICKERS
+    history first (``fold_tickers_history``), as a bulk pull does, so a
+    deleted one loses nothing.
     """
-    fold_tickers_history(vendor_root)
     snapshots = tickers_snapshots(vendor_root)
     if len(snapshots) < 2:
         return []

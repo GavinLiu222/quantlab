@@ -66,6 +66,7 @@ from quantlab.dataset.sharadar.tables import (
     VENDOR_DIR,
     WINDOW_PREFIX,
     SharadarTable,
+    fold_tickers_history,
     prune_tickers_snapshots,
     raw_table_dir,
     read_watermark,
@@ -78,6 +79,7 @@ from quantlab.dataset.sharadar.tables import (
     write_bulk_pull,
     write_watermark,
 )
+from quantlab.utils.atomic import write_parquet_atomically
 
 #: The environment variable holding the API key; the only place it is read from.
 API_KEY_ENV = "SHARADAR_API_KEY"
@@ -314,6 +316,8 @@ class SharadarClient:
             partial = snapshot.with_name(f".{snapshot.name}.partial")
             shutil.copyfile(target, partial)
             os.replace(partial, snapshot)
+        # A snapshot about to be pruned is kept in the TICKERS history (#263).
+        fold_tickers_history(vendor_root)
         prune_tickers_snapshots(vendor_root)
         if "date" in spec.schema:
             write_watermark(vendor_root, code, vendor_today())
@@ -396,9 +400,7 @@ class SharadarClient:
             day += timedelta(days=1)
         rows = pl.concat(frames) if frames else pl.DataFrame(schema=spec.schema)
         target = window_file(vendor_root, code, datetime.now(UTC), start, end)
-        partial = target.with_name(f".{target.name}.partial")
-        rows.write_parquet(partial)
-        os.replace(partial, target)
+        write_parquet_atomically(target, rows)
         write_watermark(vendor_root, code, end)
         logger.info(
             f"Sharadar {code}: {rows.height} row(s) over {start}..{end} written to {target}"
@@ -485,9 +487,7 @@ class SharadarClient:
         started = vendor_today()
         rows = self._pull_updated(spec, key, since, page_rows)
         target = updated_file(vendor_root, code, datetime.now(UTC), since)
-        partial = target.with_name(f".{target.name}.partial")
-        rows.write_parquet(partial)
-        os.replace(partial, target)
+        write_parquet_atomically(target, rows)
         write_watermark(vendor_root, code, started)
         logger.info(
             f"Sharadar {code}: {rows.height} row(s) updated since {since} written to {target}"

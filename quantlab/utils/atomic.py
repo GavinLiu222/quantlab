@@ -1,7 +1,9 @@
-"""Atomic JSON file writes.
+"""Atomic JSON and parquet file writes.
 
 Every JSON sidecar quantlab persists (resume ledgers, acquisition watermarks,
-failure manifests) goes through ``write_json_atomically``. The payload is
+failure manifests) goes through ``write_json_atomically``, and every parquet
+file written whole (raw vendor pulls, the Ticker map's days) through
+``write_parquet_atomically``. The payload is
 written to a temporary file in the destination's own directory and then
 renamed over the destination, so an interrupted write leaves either the
 previous complete file or the new one, never a truncated file that a resumed
@@ -17,7 +19,7 @@ import os
 import tempfile
 from pathlib import Path
 
-__all__ = ["write_json_atomically"]
+__all__ = ["write_json_atomically", "write_parquet_atomically"]
 
 
 def write_json_atomically(path: str | Path, payload: object, **json_kwargs) -> None:
@@ -67,6 +69,42 @@ def write_json_atomically(path: str | Path, payload: object, **json_kwargs) -> N
             # cache, and a power loss after the rename could otherwise publish
             # an empty file over a good one.
             os.fsync(handle.fileno())
+        os.replace(handle.name, destination)
+    except BaseException:
+        Path(handle.name).unlink(missing_ok=True)
+        raise
+
+
+def write_parquet_atomically(path: str | Path, frame) -> None:
+    """Write ``frame`` as parquet to ``path`` with an atomic replace.
+
+    The frame is written to a temporary file in the destination's directory
+    (created if missing) and renamed over it, so an interrupted write leaves
+    either the previous complete file or the new one. On any exception the
+    temporary file is removed and the exception propagates.
+
+    Parameters
+    ----------
+    path : str | Path
+        Destination file.
+    frame : polars.DataFrame
+        Anything with a ``write_parquet(path)`` method; this module imports
+        only the standard library.
+
+    Examples
+    --------
+    >>> import polars as pl
+    >>> write_parquet_atomically("raw/tickers.parquet", pl.DataFrame({"ticker": ["AAPL"]}))  # doctest: +SKIP
+    """
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    # Same directory as the destination, so the rename stays on one filesystem.
+    handle = tempfile.NamedTemporaryFile(
+        dir=str(destination.parent), prefix=destination.name + ".", suffix=".tmp", delete=False
+    )
+    handle.close()
+    try:
+        frame.write_parquet(handle.name)
         os.replace(handle.name, destination)
     except BaseException:
         Path(handle.name).unlink(missing_ok=True)

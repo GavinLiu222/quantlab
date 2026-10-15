@@ -72,6 +72,7 @@ from quantlab.dataset.config import TickerMapConfig
 from quantlab.dataset.massive.raw import raw_days, raw_file, read_aggregates
 from quantlab.dataset.sharadar.permatickers import HolderSpan, PermatickerResolver
 from quantlab.dataset.sharadar.tables import scan_raw_table
+from quantlab.utils.atomic import write_parquet_atomically
 
 __all__ = [
     "EVIDENCE",
@@ -432,11 +433,7 @@ class TickerMap(Component):
     @staticmethod
     def _write_day(root: Path, day: date, rows: pl.DataFrame) -> None:
         """Write one day's rows under ``root``, atomically."""
-        target = TickerMap.day_file(root, day)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        partial = target.with_suffix(".parquet.tmp")
-        rows.select(list(ROW_SCHEMA)).sort("ticker").write_parquet(partial)
-        os.replace(partial, target)
+        write_parquet_atomically(TickerMap.day_file(root, day), rows.select(list(ROW_SCHEMA)).sort("ticker"))
 
     @staticmethod
     def _log(day: date, rows: pl.DataFrame) -> None:

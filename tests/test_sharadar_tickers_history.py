@@ -81,15 +81,18 @@ def test_folding_keeps_every_snapshot_and_survives_their_deletion(tmp_path):
     assert tickers_history(root).height == 2
 
 
-def test_pruning_folds_the_snapshots_it_deletes(tmp_path):
-    from quantlab.dataset.sharadar.tables import prune_tickers_snapshots, tickers_history
+def test_a_bulk_pull_folds_the_snapshots_before_pruning_them(tmp_path, monkeypatch):
+    from quantlab.acquisition.sharadar.client import SharadarClient
+    from quantlab.dataset.sharadar.tables import tickers_history, tickers_snapshots
+    from tests.sharadar_fixtures import TICKERS_COLUMNS, FakeTransport, bulk_routes, csv_text
 
+    monkeypatch.setenv("SHARADAR_API_KEY", "synthetic-key")  # SYNTHETIC
     root = tmp_path / "sharadar"
-    _tickers(root, [AMD], "2026-10-08")
-    _tickers(root, [OTHER], "2026-10-09")
-    removed = prune_tickers_snapshots(root)  # no raw file pairs with 10-08's
+    _tickers(root, [AMD], "2026-10-08")  # no raw file pairs with it: pruned
+    transport = FakeTransport(bulk_routes({"tickers": csv_text(TICKERS_COLUMNS, [OTHER])}))
+    SharadarClient(transport=transport, sleep=lambda seconds: None).bulk_table("tickers", tmp_path)
 
-    assert [p.name for p in removed] == ["snapshot_20261008T200000000000.parquet"]
+    assert len(tickers_snapshots(root)) == 1
     assert set(tickers_history(root)["permaticker"]) == {101, 202}
 
 

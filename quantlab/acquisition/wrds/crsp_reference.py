@@ -34,8 +34,6 @@ twice.
 from __future__ import annotations
 
 import io
-import os
-import tempfile
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -49,7 +47,7 @@ from quantlab.dataset.crsp.reference import (
     REFERENCE_TABLES_BY_NAME,
     ReferenceTableSpec,
 )
-from quantlab.utils.atomic import write_json_atomically
+from quantlab.utils.atomic import write_json_atomically, write_parquet_atomically
 
 
 class CrspReferenceTables:
@@ -316,7 +314,7 @@ class CrspReferenceTables:
                 gvkeys = self._gvkeys_on_disk()
             where, described = self._where_for(spec, gvkeys)
             frame = self._pull_table(spec, where)
-            self._write_parquet_atomically(frame, self.path_for(spec.name))
+            write_parquet_atomically(self.path_for(spec.name), frame)
             entries[spec.name] = {
                 "schema": spec.schema,
                 "table": spec.table,
@@ -400,30 +398,6 @@ class CrspReferenceTables:
                 f"for gvkeyx '{self.NDX_GVKEYX}'"
             )
         return None, None
-
-    def _write_parquet_atomically(self, frame: pl.DataFrame, path: Path) -> None:
-        """Write ``frame`` to ``path`` through a temporary file beside it.
-
-        The temporary file must be on the same filesystem as the destination
-        so that ``os.replace`` is an atomic rename rather than a copy that
-        can be interrupted. On any failure the temporary file is removed, so
-        a crashed download leaves neither a half-written table nor a
-        ``.tmp`` file.
-        """
-        path.parent.mkdir(parents=True, exist_ok=True)
-        handle = tempfile.NamedTemporaryFile(
-            dir=str(path.parent),
-            prefix=path.name + ".",
-            suffix=".tmp",
-            delete=False,
-        )
-        handle.close()
-        try:
-            frame.write_parquet(handle.name)
-            os.replace(handle.name, path)
-        except BaseException:
-            Path(handle.name).unlink(missing_ok=True)
-            raise
 
     # -- Nasdaq-100 ---------------------------------------------------------
 

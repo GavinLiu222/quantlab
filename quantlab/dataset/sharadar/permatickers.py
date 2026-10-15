@@ -95,6 +95,7 @@ __all__ = [
     "UNMAPPED_SUFFIX",
     "HolderSpan",
     "PermatickerResolver",
+    "SeenSpan",
     "map_raw_table",
     "related_spans",
     "ticker_changes",
@@ -265,6 +266,21 @@ class HolderSpan:
         return (self.start is None or self.start < day) and (self.end is None or day <= self.end)
 
 
+@dataclass(frozen=True)
+class SeenSpan:
+    """One security under one ticker in the TICKERS history (``tables.fold_tickers_history``).
+
+    ``first`` and ``last`` are the pull times (UTC) of the first and last
+    snapshots holding the pair; ``end`` is the day before a snapshot after
+    ``last`` first shows the security under another ticker or the ticker
+    under another security (``None``: none has).
+    """
+
+    first: datetime
+    last: datetime
+    end: date | None
+
+
 def _day(value) -> date | None:
     """Return a ``YYYY-MM-DD`` text, a date or ``None`` as a date or ``None``."""
     if value is None or value == "":
@@ -314,8 +330,7 @@ class PermatickerResolver:
         self._snapshots: dict[Path, dict[str, set[int]]] = {}
         self._snapshots_all: dict[Path, dict[str, set[int]]] = {}
         self._since: dict[str, dict[int, date | None]] | None = None
-        self._seen: dict[tuple[str, int], tuple[datetime, datetime, date | None]] | None = None
-        self._tickers_of: dict[int, list[tuple[str, datetime, datetime]]] | None = None
+        self._seen: dict[int, dict[str, SeenSpan]] | None = None
         #: Per raw file, the tickers it names that were not mapped, and why.
         self.unresolved: dict[Path, dict[str, str]] = {}
         #: ``{ticker: permatickers}`` mapped as the security's own ticker of a
@@ -405,37 +420,43 @@ class PermatickerResolver:
             self._current = self._pairs(scan_raw_table(self.vendor_root, "tickers"))
         return self._current
 
-    def _history_spans(self) -> dict[tuple[str, int], tuple[datetime, datetime, date | None]]:
-        """Return ``{(ticker, permaticker): (first seen, last seen, end)}`` of the TICKERS history, read once.
+    def _history_spans(self) -> dict[int, dict[str, SeenSpan]]:
+        """Return ``{permaticker: {ticker: SeenSpan}}`` of the TICKERS history, read once.
 
         Over this table's TICKERS rows of every snapshot folded
-        (``tables.fold_tickers_history``). ``end`` is the day before the
-        security was first seen under another ticker, or the ticker under
-        another security, after the pair was first seen (``None``: neither).
+        (``tables.fold_tickers_history``). A span ends only on a pair seen
+        after its last sighting: a pair merely first seen late (the vendor
+        dropped its row from earlier snapshots) overlaps it and ends nothing.
         """
         if self._seen is None:
             history = tickers_history(self.vendor_root)
-            seen: dict[tuple[str, int], tuple[datetime, datetime, date | None]] = {}
-            tickers_of: dict[int, list[tuple[str, datetime, datetime]]] = {}
+            pairs: list[tuple[str, int, datetime, datetime]] = []
             if history is not None and history.height:
-                rows = (
-                    history.filter(pl.col("table").is_in(table(self.code).mapping_labels))
+                pairs = [
+                    (str(t), int(p), first, last)
+                    for t, p, first, last in history.filter(
+                        pl.col("table").is_in(table(self.code).mapping_labels)
+                    )
                     .group_by("ticker", "permaticker")
                     .agg(pl.col("first_seen").min(), pl.col("last_seen").max())
-                )
-                by_ticker: dict[str, list[datetime]] = {}
-                for ticker, permaticker, first, last in rows.iter_rows():
-                    by_ticker.setdefault(str(ticker), []).append(first)
-                    tickers_of.setdefault(int(permaticker), []).append((str(ticker), first, last))
-                for ticker, permaticker, first, last in rows.iter_rows():
-                    ticker, permaticker = str(ticker), int(permaticker)
-                    # Another pair sharing the ticker or the security, first seen later.
-                    later = [t for t in by_ticker[ticker] if t > first]
-                    later += [f for _, f, _ in tickers_of[permaticker] if f > first]
-                    end = min(later).date() - timedelta(days=1) if later else None
-                    seen[(ticker, permaticker)] = (first, last, end)
+                    .iter_rows()
+                ]
+            firsts_of_ticker: dict[str, list[datetime]] = {}
+            firsts_of_permaticker: dict[int, list[datetime]] = {}
+            for ticker, permaticker, first, _ in pairs:
+                firsts_of_ticker.setdefault(ticker, []).append(first)
+                firsts_of_permaticker.setdefault(permaticker, []).append(first)
+            seen: dict[int, dict[str, SeenSpan]] = {}
+            for ticker, permaticker, first, last in pairs:
+                # The pair's own first sighting is not after its last one.
+                after = [
+                    f
+                    for f in firsts_of_ticker[ticker] + firsts_of_permaticker[permaticker]
+                    if f > last
+                ]
+                end = min(after).date() - timedelta(days=1) if after else None
+                seen.setdefault(permaticker, {})[ticker] = SeenSpan(first, last, end)
             self._seen = seen
-            self._tickers_of = tickers_of
         return self._seen
 
     def _taken_after(self, ticker: str, permaticker: int, day: date) -> bool:
@@ -448,13 +469,13 @@ class PermatickerResolver:
         it). A pair merely first seen late (the vendor dropped the row from
         earlier snapshots) is not evidence.
         """
-        pair = self._history_spans().get((ticker, permaticker))
-        if pair is None:
+        tickers = self._history_spans().get(permaticker, {})
+        span = tickers.get(ticker)
+        if span is None:
             return False
-        first = pair[0]
         return any(
-            other != ticker and last.date() >= day and last < first
-            for other, _, last in self._tickers_of.get(permaticker, ())
+            other != ticker and seen.last.date() >= day and seen.last < span.first
+            for other, seen in tickers.items()
         )
 
     def _sidecar_spans(self) -> list[tuple[str, int, date | None, date | None]]:
@@ -542,7 +563,11 @@ class PermatickerResolver:
         for ticker, permaticker, start, end in self._sidecar_spans():
             sidecar.setdefault((ticker, permaticker), (start, end))
         related = related_spans(self.vendor_root, self.code)
-        seen = self._history_spans()
+        seen = {
+            (ticker, permaticker): span.end
+            for permaticker, tickers in self._history_spans().items()
+            for ticker, span in tickers.items()
+        }
         keys = set(chain) | set(sidecar) | set(related) | set(seen)
         keys |= {(t, p) for t, perms in self._current_pairs().items() for p in perms}
         holders: dict[str, list[HolderSpan]] = {}
@@ -556,7 +581,7 @@ class PermatickerResolver:
             elif ticker in self._current_pairs() and permaticker in self._current_pairs()[ticker]:
                 end = None
             elif (ticker, permaticker) in seen:
-                end = seen[(ticker, permaticker)][2]
+                end = seen[(ticker, permaticker)]
             elif (ticker, permaticker) in sidecar:
                 end = side_end
             else:
