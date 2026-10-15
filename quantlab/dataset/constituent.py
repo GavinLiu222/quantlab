@@ -8,7 +8,7 @@ indexed by ``timestamp`` and ``symbol`` whose ``is_member`` variable is True
 on the days a symbol was a member.
 
 Each class here plugs one membership source into the shared panel builder
-``quantlab.dataset.base.IndexConstituentDataset`` by implementing its two
+``quantlab.dataset.raw.IndexConstituentDataset`` by implementing its two
 hooks, ``_pit_coverage_start`` and ``_build_intervals``. Two sources cover the
 S&P 500 and the Nasdaq-100:
 
