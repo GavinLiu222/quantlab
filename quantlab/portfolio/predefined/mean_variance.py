@@ -12,8 +12,9 @@ comes from a covariance estimator, its volatilities optionally from a volatility
 label's prediction, and all are on the span of the expected-return label.
 This is the only quantlab module that imports cvxpy. For the approximate
 backtest the optimiser also decides a panel of bars at once (``prepare`` and
-``solve``), long-only without a turnover penalty, by accelerated projected
-gradient in numpy rather than cvxpy.
+``solve``), long-only, by accelerated proximal gradient in numpy rather
+than cvxpy, the turnover penalty entering the projection as a pull toward
+each bar's holdings.
 """
 
 from collections.abc import Sequence
@@ -197,6 +198,60 @@ def _project_capped_simplex_rows(values: np.ndarray, cap: np.ndarray, total: flo
     return np.clip(values - high[:, None], 0.0, cap)
 
 
+def _project_penalised_rows(
+    values: np.ndarray,
+    cap: np.ndarray,
+    anchor: np.ndarray,
+    threshold: np.ndarray,
+    total: float = 1.0,
+    shift: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Row by row, the prox of ``threshold * |w - anchor|_1`` over the capped simplex, and each row's shift.
+
+    The nearest point to ``values`` plus the L1 pull toward ``anchor``: for
+    a shift ``tau`` each entry is ``values - tau`` soft-thresholded toward
+    its anchor by the row's ``threshold``, then clipped to ``[0, cap]``.
+    The sum is piecewise linear and falls as ``tau`` grows, its slope minus
+    the count of entries strictly between their bounds and outside the
+    band, so ``tau`` is found by Newton steps from ``shift`` (the last
+    call's, which a proximal-gradient iteration barely moves), each kept
+    inside a bracket that bisection narrows when a step leaves it; a step
+    on the root's linear piece lands on the root. ``anchor`` must be
+    non-negative (long-only holdings); an entry capped at 0 stays at 0
+    whatever its anchor.
+    """
+    threshold = threshold[:, None]
+
+    def at(tau: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        shifted = values - tau[:, None]
+        gap = shifted - anchor
+        free = np.abs(gap) > threshold
+        pulled = np.where(free, shifted - threshold * np.sign(gap), anchor)
+        clipped = np.clip(pulled, 0.0, cap)
+        return clipped, (free & (pulled > 0.0) & (pulled < cap)).sum(axis=1)
+
+    # Every entry at its cap below low, every entry at 0 above high.
+    low = (values - np.maximum(cap, anchor) - threshold).min(axis=1)
+    high = (values + threshold).max(axis=1)
+    tau = (low + high) / 2 if shift is None else np.clip(shift, low, high)
+    exact = 4 * np.finfo(np.float64).eps * max(total, 1.0)
+    for _ in range(200):
+        weights, slope = at(tau)
+        excess = weights.sum(axis=1) - total
+        done = np.abs(excess) <= exact
+        if done.all():
+            return weights, tau
+        low = np.where(~done & (excess > 0), tau, low)
+        high = np.where(~done & (excess < 0), tau, high)
+        newton = tau + excess / np.where(slope > 0, slope, 1)
+        inside = (slope > 0) & (low < newton) & (newton < high)
+        stalled = (low >= high) | ((low + high) / 2 == low) | ((low + high) / 2 == high)
+        tau = np.where(done | stalled, tau, np.where(inside, newton, (low + high) / 2))
+        if (done | stalled).all():
+            break
+    return at(tau)[0], tau
+
+
 def _maximise_rows(
     expected: np.ndarray,
     cap: np.ndarray,
@@ -204,25 +259,42 @@ def _maximise_rows(
     risk_aversion: float,
     start: np.ndarray,
     *,
+    penalty: float = 0.0,
+    anchor: np.ndarray | None = None,
     tolerance: float = 1e-10,
     iterations: int = 50_000,
 ) -> np.ndarray:
-    """Maximise ``mu' w - risk_aversion / 2 * w' Sigma w`` over each row's capped simplex, all rows at once.
+    """Maximise ``mu' w - risk_aversion / 2 * w' Sigma w - penalty * |w - anchor|_1`` over each row's capped simplex.
 
-    Accelerated projected gradient (FISTA) with adaptive restart: the step
-    is one over ``risk_aversion`` times each row's largest eigenvalue (an
-    upper bound), the projection ``_project_capped_simplex_rows``. It stops
-    when no row's weights move by more than ``tolerance`` (L1) in one step.
+    All rows at once, by accelerated proximal gradient (FISTA) with
+    adaptive restart: the step is one over ``risk_aversion`` times each
+    row's largest eigenvalue (an upper bound), the prox
+    ``_project_capped_simplex_rows``, or ``_project_penalised_rows`` with
+    a penalty and an anchor (the holdings). It stops when no row's weights
+    move by more than ``tolerance`` (L1) in one step.
     """
     curvature = risk_aversion * low_rank.largest_eigenvalue()
     scale = np.abs(expected).max(axis=1, initial=0.0)
     # Without curvature the problem is linear: a long step lands on its vertex.
     step = np.where(curvature > 0, 1.0 / np.where(curvature > 0, curvature, 1.0), 1e12 / np.maximum(scale, 1e-300))
+    if penalty and anchor is not None:
+        threshold = penalty * step
+        shift = None
+
+        def project(values: np.ndarray) -> np.ndarray:
+            nonlocal shift
+            weights, shift = _project_penalised_rows(values, cap, anchor, threshold, shift=shift)
+            return weights
+    else:
+
+        def project(values: np.ndarray) -> np.ndarray:
+            return _project_capped_simplex_rows(values, cap)
+
     w = _project_capped_simplex_rows(start, cap)
     y, t = w, np.ones(len(w))
     for _ in range(iterations):
         gradient = expected - risk_aversion * low_rank.times(y)
-        following = _project_capped_simplex_rows(y + step[:, None] * gradient, cap)
+        following = project(y + step[:, None] * gradient)
         move = np.abs(following - w).sum(axis=1)
         restart = ((y - following) * (following - w)).sum(axis=1) > 0
         t_next = (1.0 + np.sqrt(1.0 + 4.0 * t * t)) / 2.0
@@ -903,11 +975,11 @@ class MeanVarianceOptimizer(PortfolioConstructor):
     def panel_refusal(self) -> str | None:
         """Return why the optimiser cannot decide a panel at once, or ``None`` when it can.
 
-        The panel decision handles the long-only Grinold problem without a
-        turnover penalty, with a covariance estimator that has a batched
-        estimate. Refused, the message naming the field: a tracking-error
-        cap, exposure bounds, a long-short book, ``candidate_top_k``,
-        ``volatility_label``, ``calibration="raw"`` and a turnover penalty;
+        The panel decision handles the long-only Grinold problem, with or
+        without a turnover penalty, with a covariance estimator that has a
+        batched estimate. Refused, the message naming the field: a
+        tracking-error cap, exposure bounds, a long-short book,
+        ``candidate_top_k``, ``volatility_label`` and ``calibration="raw"``;
         a rule overriding ``reference_weights`` without
         ``panel_reference_weights``, or whose ``risk_constraints`` returns
         any constraint; an estimator without ``estimate_all``.
@@ -929,7 +1001,6 @@ class MeanVarianceOptimizer(PortfolioConstructor):
             "candidate_top_k": config.candidate_top_k is not None,
             "volatility_label": config.volatility_label is not None,
             "calibration": config.calibration != "grinold",
-            "turnover_penalty": config.turnover_penalty != 0,
         }
         for field_name, refused in unsupported.items():
             if refused:
@@ -1020,16 +1091,21 @@ class MeanVarianceOptimizer(PortfolioConstructor):
         ``holdings``, the selectable symbols held (at ``mu = 0``), as the
         per-bar rule takes them. A bar with no candidate, or too few to hold
         the book under ``weight_cap``, holds (an all-NaN row), as a backtest
-        run holds it. The rest are solved together by accelerated projected
+        run holds it. The rest are solved together by accelerated proximal
         gradient (``_maximise_rows``), from ``warm_start`` where it is
-        finite.
+        finite. With ``holdings`` and a ``turnover_penalty`` the objective
+        loses ``turnover_penalty * |w - holdings|_1``, the per-bar rule's
+        term, which enters the projection as soft-thresholding toward the
+        holdings; without ``holdings`` the penalty is left out (the
+        approximate backtest's first, unpenalised solve).
 
         Parameters
         ----------
         problem : object
             What ``prepare`` returned.
         holdings : np.ndarray or None
-            ``[bars, symbols]`` weights held at each bar, or ``None``.
+            ``[bars, symbols]`` weights held at each bar, cash excluded,
+            or ``None``.
         warm_start : np.ndarray, optional
             ``[bars, symbols]`` weights to start from.
 
@@ -1043,6 +1119,17 @@ class MeanVarianceOptimizer(PortfolioConstructor):
         >>> optimizer.solve(problem, None).round(3)
         array([[0.654, 0.346, 0.   ],
                [0.651, 0.349, 0.   ]])
+
+        With ``penalised`` an optimiser with ``turnover_penalty=0.002`` and
+        ``problem`` its prepared problem over two bars of three covered
+        symbols, whose unpenalised weights are ``[0.369, 0.392, 0.239]``
+        and ``[0.33, 0.456, 0.214]``, holdings of ``[0.2, 0.4, 0.4]`` pull
+        each bar toward them, and BBB, inside the band the penalty leaves
+        untraded, stays at its holding:
+
+        >>> penalised.solve(problem, np.array([[0.2, 0.4, 0.4], [0.2, 0.4, 0.4]])).round(3)
+        array([[0.258, 0.4  , 0.342],
+               [0.24 , 0.4  , 0.36 ]])
         """
         config = self.config
         candidate = problem.predicted.copy()
@@ -1064,12 +1151,15 @@ class MeanVarianceOptimizer(PortfolioConstructor):
         if warm_start is not None:
             given = warm_start[solvable]
             start = np.where(np.isfinite(given).all(axis=1)[:, None], np.nan_to_num(given), cap)
+        penalised = holdings is not None and config.turnover_penalty != 0
         weights[solvable] = _maximise_rows(
             expected,
             cap,
             low_rank,
             config.risk_aversion,
             start,
+            penalty=config.turnover_penalty if penalised else 0.0,
+            anchor=np.clip(holdings[solvable], 0.0, None) if penalised else None,
         )
         return weights
 

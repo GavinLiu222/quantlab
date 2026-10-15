@@ -351,11 +351,18 @@ class ApproximateBacktest(Component):
             )
             weights = constructor.solve(problem, None)
             self._check_rows(constructor, weights)
+            # A bar's holdings read only the last fill before it, so each sweep
+            # simulates from the chunk's last earlier fill (the previous chunk's
+            # final book) to its last fill, on those rows alone.
+            earlier = np.flatnonzero(np.isfinite(targets[: members[0]]).all(axis=1))
+            first = earlier[-1] if len(earlier) else members[0]
+            rows = slice(decisions[first], decisions[known - 1] + 2)
             for sweep in range(1, config.max_sweeps + 1):
                 targets[members] = weights
                 holdings = _simulate(
-                    targets[:known], decisions[:known], fill, close, config.cost
-                ).holdings[members]
+                    targets[first:known], decisions[first:known] - decisions[first],
+                    fill[rows], close[rows], config.cost,
+                ).holdings[members - first]
                 moved = constructor.solve(problem, holdings, warm_start=weights)
                 self._check_rows(constructor, moved)
                 change = np.nan_to_num(np.abs(moved - weights), nan=0.0).sum(axis=1)

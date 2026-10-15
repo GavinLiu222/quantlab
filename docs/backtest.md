@@ -510,7 +510,7 @@ Traceback (most recent call last):
 ValueError: USEquityApproximateBacktest cannot run TopkDropoutConstructor: TopkDropoutConstructor has no panel decision (prepare and solve); backtest it with a backtest run
 ```
 
-A rule whose decision reads the holdings couples the bars. The window is cut into chunks of `chunk_bars` bars; each chunk is swept (its holdings simulated from the last sweep's weights, the rule asked again) until no bar's weights move by more than `tolerance` (L1), or `max_sweeps` is reached, which logs a warning and sets `converged` to `False`. Top-n does not read the holdings and converges in one sweep.
+A rule whose decision reads the holdings couples the bars. The window is cut into chunks of `chunk_bars` bars; each chunk is swept (its holdings simulated from the last sweep's weights, the rule asked again) until no bar's weights move by more than `tolerance` (L1), or `max_sweeps` is reached, which logs a warning and sets `converged` to `False`. A bar's holdings come from the last fill before it, the previous chunk's final book for a chunk's first bar. Sweep j is exact on a chunk's first j decisions, so a chunk of n decisions converges within n + 1 sweeps however strongly the rule couples them; the default `chunk_bars=21` keeps that below the default `max_sweeps=50`. Top-n does not read the holdings and converges in one sweep.
 
 The account also holds `universe_value`, the equal-weighted universe of a run's attribution (every symbol with a finite score of the rule's score label and a fill price on the next bar, held between the decided rebalances without costs), and `metrics["selection"]`, the `relative_stats` of the account over it: what the scores and the rule add, with its annualised excess return and information ratio. `metrics["attribution"]` holds the `decomposition` and `annualized_log_return` of a run's `attribution` block. Set `benchmark_dataset` (one symbol, like a run's) and the benchmark is bought at the second bar's open at the same `cost` and held: the account gains `benchmark_value`, `metrics["benchmark"]` (its return statistics) and `metrics["relative"]` (a run's `relative` rows without the win rates), and the decomposition gains its `universe` part. On a synthetic store these agree with the run's `metrics.json` to the third digit:
 
@@ -527,7 +527,7 @@ The account also holds `universe_value`, the equal-weighted universe of a run's 
 ['costs', 'selection', 'total', 'universe']
 ```
 
-`MeanVarianceOptimizer` runs too, long-only with the Grinold calibration and no turnover penalty, over a covariance estimator with a batched estimate (`LedoitWolfEstimator`); see [Mean-variance in the approximate backtest](portfolio.md#mean-variance-in-the-approximate-backtest). On 1,000 synthetic symbols and 137 daily rebalances it took 1.0 s against `run()`'s 76 s.
+`MeanVarianceOptimizer` runs too, long-only with the Grinold calibration, with or without a turnover penalty, over a covariance estimator with a batched estimate (`LedoitWolfEstimator`); see [Mean-variance in the approximate backtest](portfolio.md#mean-variance-in-the-approximate-backtest). On 1,000 synthetic symbols and 137 daily rebalances it took 1.0 s against `run()`'s 76 s, and with `turnover_penalty=1e-3` 8 s (12 to 22 sweeps per chunk) against `run()`'s 185 s on a busier machine.
 
 ### Restrict the universe to an index's members
 

@@ -510,7 +510,7 @@ Traceback (most recent call last):
 ValueError: USEquityApproximateBacktest cannot run TopkDropoutConstructor: TopkDropoutConstructor has no panel decision (prepare and solve); backtest it with a backtest run
 ```
 
-决策要读持仓的规则会把各 bar 耦合起来。窗口按 `chunk_bars` 个 bar 分块；每块反复扫描（由上一轮的权重模拟出持仓，再问一次规则），直到没有哪个 bar 的权重变动超过 `tolerance`（L1），或达到 `max_sweeps`，此时记录警告并把 `converged` 设为 `False`。top-n 不读持仓，一轮即收敛。
+决策要读持仓的规则会把各 bar 耦合起来。窗口按 `chunk_bars` 个 bar 分块；每块反复扫描（由上一轮的权重模拟出持仓，再问一次规则），直到没有哪个 bar 的权重变动超过 `tolerance`（L1），或达到 `max_sweeps`，此时记录警告并把 `converged` 设为 `False`。一个 bar 的持仓来自它之前的最后一次成交，分块第一个 bar 的持仓来自上一分块的最终账户。第 j 轮扫描在分块的前 j 次决策上是精确的，所以 n 次决策的分块最多 n + 1 轮就收敛，不论规则把它们耦合得多紧；默认的 `chunk_bars=21` 让这个数低于默认的 `max_sweeps=50`。top-n 不读持仓，一轮即收敛。
 
 账户里还有 `universe_value`，即运行归因所用的等权全体（每次调仓时，规则评分标签有有限分数、且下一 bar 有成交价的全部标的，在两次已决调仓之间不计成本地持有），以及 `metrics["selection"]`：账户相对它的 `relative_stats`，也就是分数和规则带来的超额，含年化超额收益和信息比率。`metrics["attribution"]` 含运行 `attribution` 块中的 `decomposition` 和 `annualized_log_return`。设置 `benchmark_dataset`（只含一个标的，与运行的要求相同）后，基准在第二个 bar 开盘以同样的 `cost` 买入并持有：账户多出 `benchmark_value`、`metrics["benchmark"]`（它的收益统计）和 `metrics["relative"]`（运行的 `relative` 各行，不含胜率），分解中也多出 `universe` 部分。在合成数据上，这些数与运行的 `metrics.json` 在第三位小数上一致：
 
@@ -527,7 +527,7 @@ ValueError: USEquityApproximateBacktest cannot run TopkDropoutConstructor: TopkD
 ['costs', 'selection', 'total', 'universe']
 ```
 
-`MeanVarianceOptimizer` 也能运行：只做多、Grinold 校准、无换手惩罚，协方差估计器要有批量估计（`LedoitWolfEstimator`）；见[近似回测中的均值-方差](portfolio.md#近似回测中的均值-方差)。在 1,000 只合成标的、137 次日度调仓上，它用时 1.0 秒，`run()` 用时 76 秒。
+`MeanVarianceOptimizer` 也能运行：只做多、Grinold 校准、有无换手惩罚均可，协方差估计器要有批量估计（`LedoitWolfEstimator`）；见[近似回测中的均值-方差](portfolio.md#近似回测中的均值-方差)。在 1,000 只合成标的、137 次日度调仓上，它用时 1.0 秒，`run()` 用时 76 秒；`turnover_penalty=1e-3` 时用时 8 秒（每块 12 到 22 轮扫描），`run()` 在一台更忙的机器上用时 185 秒。
 
 ### 限定为指数成分股
 

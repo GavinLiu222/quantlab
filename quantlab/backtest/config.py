@@ -282,7 +282,7 @@ class ApproximateBacktestConfig(FrozenConfig):
     ...     rebalance_periods=5,
     ... )
     >>> cfg.cost, cfg.chunk_bars, cfg.max_sweeps, cfg.tolerance
-    (0.001, 252, 50, 1e-06)
+    (0.001, 21, 50, 1e-06)
     """
 
     #: The dataset whose prices the simulation trades on.
@@ -302,8 +302,11 @@ class ApproximateBacktestConfig(FrozenConfig):
     #: return statistics and the excess over it. ``None`` for none.
     benchmark_dataset: "MarketDataset | None" = component(default=None)
     #: Bars of the window swept to convergence together; a chunk's decision
-    #: inputs are held in memory at once.
-    chunk_bars: int = 252
+    #: inputs are held in memory at once. Sweep j is exact on a chunk's first
+    #: j decisions, so a chunk of n decisions converges within n + 1 sweeps
+    #: whatever couples them; keep it below ``max_sweeps`` for a rule whose
+    #: decision reads the holdings (a turnover penalty).
+    chunk_bars: int = 21
     #: Most sweeps per chunk before it is reported as not converged.
     max_sweeps: int = 50
     #: A chunk has converged when no bar's weights move by more than this (L1) between sweeps.

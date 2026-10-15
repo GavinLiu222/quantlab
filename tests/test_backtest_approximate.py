@@ -24,13 +24,21 @@ before any data is read, each message naming the field or the estimator.
 Active risk against a benchmark factor (#309), Ledoit-Wolf without a
 tracking-error cap, against `run()` with the same `ActiveRiskConfig`: the
 same bounds, and the benchmark pulling the books toward it; a turnover
-penalty case turns on with #306; a rule constraining its risk term, or
+penalty case runs since #306 (without fees to the same bounds, with fees to
+the cash cap's looser weights bound); a rule constraining its risk term, or
 pricing a reference book per bar without a panel counterpart, is refused
 before any data is read.
 
 Mean-variance on a factor risk model (#308), with a `FactorRiskStoreEstimator`:
 the same bounds against `run()`, and the risk stores read once over the window
 whatever the chunks.
+
+With a turnover penalty (#306), the bars coupled through the holdings and
+swept to a fixed point: without fees (where the run's cash cap, which the
+approximate backtest gives up, does not move its holdings) weights within
+1e-3 (L1) and the value within 1e-3 of the run's, a smaller chunk giving the
+weights of one chunk, a sweep limit of one warning and reporting not
+converged; with fees the gap stays within the cash cap's bound.
 
 Everything is synthetic, CPU-only and offline.
 """
@@ -41,6 +49,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+from loguru import logger
 
 from quantlab.backtest.config import ApproximateBacktestConfig, CrossSectionBacktestConfig
 from quantlab.backtest.predefined.us_equity import (
@@ -476,7 +485,7 @@ def _mvo(**overrides):
     return MeanVarianceOptimizer(MeanVarianceConfig(**params))
 
 
-def _mvo_run(store, constructor, rebalance_periods, tag, n_forward_periods):
+def _mvo_run(store, constructor, rebalance_periods, tag, n_forward_periods, fees=FEES):
     root, dataset_config, bars = store
     model = make_model(
         root / f"model_{tag}",
@@ -499,7 +508,7 @@ def _mvo_run(store, constructor, rebalance_periods, tag, n_forward_periods):
             output_dir=str(root / f"runs_{tag}"),
             rebalance_periods=rebalance_periods,
             constructor=constructor,
-            fees=FEES,
+            fees=fees,
             slippage=0.0,
         )
     ).run()
@@ -648,11 +657,12 @@ def _active(bars, **overrides):
     return ActiveRiskOptimizer(ActiveRiskConfig(**params))
 
 
-#: Rule overrides and rebalance_periods; the label spans one bar.
+#: Rule overrides, rebalance_periods and the fee rate; the label spans one bar.
 ACTIVE_CASES = {
-    "penalty0_r1": (dict(), 1),
-    "penalty0_r5_averse": (dict(risk_aversion=50.0), 5),
-    "penalty1e-3_r1": (dict(turnover_penalty=1e-3), 1),
+    "penalty0_r1": (dict(), 1, FEES),
+    "penalty0_r5_averse": (dict(risk_aversion=50.0), 5, FEES),
+    "penalty1e-3_r1": (dict(turnover_penalty=1e-3), 1, 0.0),
+    "penalty1e-3_r1_fees": (dict(turnover_penalty=1e-3), 1, FEES),
 }
 
 
@@ -661,34 +671,32 @@ def active_case(request, mvo_store):
     import cvxpy
 
     _, _, bars = mvo_store
-    overrides, rebalance_periods = ACTIVE_CASES[request.param]
+    overrides, rebalance_periods, fees = ACTIVE_CASES[request.param]
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(cvxpy.Problem, "solve", _tightly_solved(cvxpy.Problem.solve))
         result = _mvo_run(
-            mvo_store, _active(bars, **overrides), rebalance_periods, f"active_{request.param}", 1
+            mvo_store, _active(bars, **overrides), rebalance_periods, f"active_{request.param}", 1, fees=fees
         )
     predictions = BacktestRun.open(result.run_dir).predictions()
-    rule = _active(bars, **overrides)
-    if overrides.get("turnover_penalty") and rule.panel_refusal() is not None:
-        # The turnover penalty in a panel decision is #306; this case turns on with it.
-        pytest.xfail(rule.panel_refusal())
-    account = _approximate(mvo_store, rebalance_periods).run(predictions, rule)
-    return result, account
+    account = _approximate(mvo_store, rebalance_periods, cost=fees).run(predictions, _active(bars, **overrides))
+    # With a penalty and fees the run's cash cap moves its holdings, and the penalty its weights (#306).
+    bound = FEE_GAP_L1 if overrides.get("turnover_penalty") and fees else WEIGHTS_L1
+    return result, account, bound
 
 
 def test_active_risk_weights_are_within_the_bound_of_the_runs(active_case):
-    result, account = active_case
+    result, account, bound = active_case
     weights = result.weights.transpose("timestamp", "symbol")
     decided = weights["decided"].values
 
     assert result.metrics["portfolio_construction"]["failed_bar_count"] == 0
     np.testing.assert_array_equal(account.weights.timestamp.values, weights.timestamp.values[decided])
     gap = np.abs(account.weights.values - weights["weight"].values[decided]).sum(axis=1)
-    assert gap.max() <= WEIGHTS_L1
+    assert gap.max() <= bound
 
 
 def test_active_risk_value_is_within_the_tolerance_of_the_runs(active_case):
-    result, account = active_case
+    result, account, _ = active_case
     run_value = result.simulation.value.values / result.simulation.value.values[0]
 
     np.testing.assert_allclose(account.value.values, run_value, rtol=VALUE_TOLERANCE, atol=0)
@@ -804,3 +812,125 @@ def test_the_risk_stores_are_read_once_over_the_window(factor_risk_case):
     for key in ("risk_model.estimate", "exposures"):
         entry, = records[key]
         assert (entry["request"]["start"], entry["request"]["end"]) == window
+
+
+# Mean-variance with a turnover penalty (#306): the penalty couples the bars
+# through the holdings, which the approximate backtest resolves by sweeping
+# each chunk to a fixed point; the oracle is the same tightly solved run().
+#
+# The penalty keeps a weight at its holding inside the no-trade band, so the
+# holdings a rule is handed enter its weights directly. With fees, a backtest
+# run cuts the last buys of a fill to the cash the fees leave (the cash cap,
+# which the approximate backtest gives up), so its holdings differ from the
+# approximate ones by up to the cost times the turnover. The bounds of the
+# ticket are therefore locked without fees, where the two books agree, and
+# the gap fees open is locked separately.
+
+PENALTY = 1e-3
+#: One chunk over the whole window, swept until it converges.
+ONE_CHUNK = dict(chunk_bars=N_BARS, max_sweeps=N_BARS + 1)
+#: The weights gap a fee rate opens through the run's cash cap: about cost x turnover per fill.
+FEE_GAP_L1 = 3e-3
+
+#: Rule overrides, rebalance_periods and the expected-return label's span.
+PENALTY_CASES = {
+    "penalty_span1_r1": (dict(turnover_penalty=PENALTY), 1, 1),
+    "penalty_span5_r5": (
+        dict(expected_return_label="fwd_ret_5", weight_cap=0.15, risk_aversion=2.0, turnover_penalty=PENALTY),
+        5,
+        5,
+    ),
+}
+
+
+def _tight_mvo_run(store, overrides, rebalance_periods, tag, span, fees):
+    import cvxpy
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(cvxpy.Problem, "solve", _tightly_solved(cvxpy.Problem.solve))
+        return _mvo_run(store, _mvo(**overrides), rebalance_periods, tag, span, fees=fees)
+
+
+@pytest.fixture(scope="module", params=sorted(PENALTY_CASES))
+def penalty_case(request, mvo_store):
+    overrides, rebalance_periods, span = PENALTY_CASES[request.param]
+    result = _tight_mvo_run(mvo_store, overrides, rebalance_periods, request.param, span, fees=0.0)
+    predictions = BacktestRun.open(result.run_dir).predictions()
+    account = _approximate(mvo_store, rebalance_periods, cost=0.0).run(predictions, _mvo(**overrides))
+    return result, predictions, account, overrides, rebalance_periods
+
+
+def _weights_gap(result, account) -> np.ndarray:
+    weights = result.weights.transpose("timestamp", "symbol")
+    decided = weights["decided"].values
+    assert result.metrics["portfolio_construction"]["failed_bar_count"] == 0
+    np.testing.assert_array_equal(account.weights.timestamp.values, weights.timestamp.values[decided])
+    return np.abs(account.weights.values - weights["weight"].values[decided]).sum(axis=1)
+
+
+def test_penalised_weights_are_within_the_bound_of_the_runs(penalty_case):
+    result, _, account, _, _ = penalty_case
+
+    assert _weights_gap(result, account).max() <= WEIGHTS_L1
+    assert account.metrics["converged"] is True
+    # The penalty couples the bars, so it takes more than the one sweep top-n takes.
+    assert max(account.metrics["sweeps"]) > 1
+
+
+def test_penalised_value_is_within_the_tolerance_of_the_runs(penalty_case):
+    result, _, account, _, _ = penalty_case
+    run_value = result.simulation.value.values / result.simulation.value.values[0]
+
+    np.testing.assert_allclose(account.value.values, run_value, rtol=VALUE_TOLERANCE, atol=0)
+
+
+def test_the_penalty_lowers_the_turnover(penalty_case, mvo_store):
+    _, predictions, account, overrides, rebalance_periods = penalty_case
+    free = _approximate(mvo_store, rebalance_periods, cost=0.0).run(
+        predictions, _mvo(**{**overrides, "turnover_penalty": 0.0})
+    )
+
+    assert account.turnover.values[1:].mean() < free.turnover.values[1:].mean()
+
+
+def test_a_smaller_chunk_gives_the_penalised_weights_of_one_chunk(penalty_case, mvo_store):
+    _, predictions, _, overrides, rebalance_periods = penalty_case
+    whole = _approximate(mvo_store, rebalance_periods, cost=0.0, **ONE_CHUNK).run(
+        predictions, _mvo(**overrides)
+    )
+    chunked = _approximate(mvo_store, rebalance_periods, cost=0.0, chunk_bars=10).run(
+        predictions, _mvo(**overrides)
+    )
+
+    assert len(whole.metrics["sweeps"]) == 1 and whole.metrics["converged"] is True
+    assert len(chunked.metrics["sweeps"]) > 1 and chunked.metrics["converged"] is True
+    gap = np.abs(chunked.weights.values - whole.weights.values).sum(axis=1)
+    assert gap.max() <= 1e-5
+
+
+def test_a_sweep_limit_of_one_with_a_penalty_warns_and_is_not_converged(penalty_case, mvo_store):
+    _, predictions, _, overrides, rebalance_periods = penalty_case
+    messages = []
+    sink = logger.add(messages.append, level="WARNING", format="{message}")
+    try:
+        account = _approximate(mvo_store, rebalance_periods, cost=0.0, max_sweeps=1, chunk_bars=N_BARS).run(
+            predictions, _mvo(**overrides)
+        )
+    finally:
+        logger.remove(sink)
+
+    assert account.metrics["converged"] is False
+    assert account.metrics["sweeps"] == [1]
+    assert any("did not converge in 1 sweeps" in str(message) for message in messages)
+
+
+def test_with_fees_the_penalised_gap_is_the_runs_cash_cap(mvo_store):
+    overrides, rebalance_periods, span = PENALTY_CASES["penalty_span1_r1"]
+    result = _tight_mvo_run(mvo_store, overrides, rebalance_periods, "penalty_fees", span, fees=FEES)
+    predictions = BacktestRun.open(result.run_dir).predictions()
+    account = _approximate(mvo_store, rebalance_periods, cost=FEES).run(predictions, _mvo(**overrides))
+    run_value = result.simulation.value.values / result.simulation.value.values[0]
+
+    assert account.metrics["converged"] is True
+    assert _weights_gap(result, account).max() <= FEE_GAP_L1
+    np.testing.assert_allclose(account.value.values, run_value, rtol=VALUE_TOLERANCE, atol=0)
