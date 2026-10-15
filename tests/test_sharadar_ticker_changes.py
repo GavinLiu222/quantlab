@@ -18,7 +18,8 @@ only the current ones. What is locked here:
   ticker of another shape (a SPAC's unit) maps nothing;
 - a ticker the file's own snapshot gives to another security (a fund that
   took over a dead stock's ticker) is not mapped to the stock through its
-  holders;
+  holders, unless that security's first price is after every row of the
+  ticker in the file (it cannot own any of them);
 - two tickers of one security on one key (SF3A keeps a quarter under the
   current ticker and a stale one) settle on the security's own ticker, else
   the ticker it used on the row's date, else one of identical rows; what is
@@ -317,6 +318,28 @@ def test_a_ticker_its_files_snapshot_gives_another_security_is_not_mapped(tmp_pa
     (entry,) = report["unmapped"]
     assert entry["ticker"] == "OLD"
     assert "909" in entry["reason"]
+
+
+def test_a_ticker_taken_by_a_later_listing_still_maps_the_older_rows(tmp_path):
+    # 707 traded as OLD until 2025 and is OLD1 now (relatedtickers OLD); a
+    # fund (SFP 909) listed as OLD on 2026-10-14, after every row of the file:
+    # the rows, all dated before the fund's first price, are 707's (MGOL, #263).
+    root = tmp_path / "sharadar"
+    _sf3a(
+        root,
+        [sf3a_row("2023-03-31", "OLD", 7, 30.0), sf3a_row("2024-12-31", "OLD", 8, 31.0)],  # SYNTHETIC
+        [
+            tickers_row(  # SYNTHETIC
+                "SEP", 707, "OLD1", relatedtickers="OLD", firstpricedate="2023-01-13",
+                lastpricedate="2025-02-19", isdelisted="Y",
+            ),
+            tickers_row("SFP", 909, "OLD", firstpricedate="2026-10-14", category="ETF"),  # SYNTHETIC
+        ],
+    )
+
+    frame, report = _sf3a_mapped(root, tmp_path)
+    assert frame.select("ticker", "permaticker").rows() == [("OLD", 707), ("OLD", 707)]
+    assert report is None
 
 
 def test_two_tickers_of_one_security_on_one_quarter_keep_its_own_ticker(tmp_path):
