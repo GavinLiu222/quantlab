@@ -560,6 +560,8 @@ from quantlab.model.predefined.smoothed import SmoothedPredictor
 model = SmoothedPredictor(RecordedPredictor(model, whole.run_dir, history=True), halflife_bars=20)
 ```
 
+`MembershipMaskedPredictor`, `RecordedPredictor` and `SmoothedPredictor` are predictor views: they subclass `quantlab.model.view.PredictorView`, which forwards every member of the `Predictor` protocol to the wrapped `predictor` (the field name in each wrapper's config) and passes `predict_window`'s result through a `_view_predictions(predictions)` hook. A view overrides only what it changes: the mask overrides the hook, the record `predict_window`, `load` and `train`, the smoothing `predict_window` and `label_scales`. Views stack, as above; a view of your own subclasses `PredictorView` with a config class subclassing `quantlab.model.config.PredictorViewConfig`, and its `get_config` / `from_config` need no code.
+
 ### Compare against a benchmark
 
 Set `benchmark_dataset` to a market dataset that holds exactly one symbol, for example the QQQ store written by `scripts/wrds/etf.py --etf qqq` (`CrspDatasetConfig.qqq_benchmark`). It is a `(timestamp, symbol)` panel like the price dataset, in a store of its own, with the same `adjOpen` / `adjClose` columns. Pass the dataset object itself:

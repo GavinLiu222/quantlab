@@ -560,6 +560,8 @@ from quantlab.model.predefined.smoothed import SmoothedPredictor
 model = SmoothedPredictor(RecordedPredictor(model, whole.run_dir, history=True), halflife_bars=20)
 ```
 
+`MembershipMaskedPredictor`、`RecordedPredictor` 和 `SmoothedPredictor` 都是预测器视图：它们继承 `quantlab.model.view.PredictorView`，由它把 `Predictor` 协议的每个成员转发给被包装的 `predictor`（各包装器 config 中的字段名），并让 `predict_window` 的结果经过 `_view_predictions(predictions)` 钩子。视图只覆盖它改变的部分：遮蔽覆盖该钩子，记录覆盖 `predict_window`、`load` 和 `train`，平滑覆盖 `predict_window` 和 `label_scales`。视图可以像上面那样叠加；自定义视图继承 `PredictorView`，其 config 类继承 `quantlab.model.config.PredictorViewConfig`，`get_config` / `from_config` 无需另写代码。
+
 ### 与基准对比
 
 把 `benchmark_dataset` 设为只含一个标的的市场数据集，例如 `scripts/wrds/etf.py --etf qqq` 写出的 QQQ store（`CrspDatasetConfig.qqq_benchmark`）。它和价格数据集一样是 `(timestamp, symbol)` 面板，放在单独的 store 里，带有相同的 `adjOpen` / `adjClose` 列。直接传入数据集对象：

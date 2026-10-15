@@ -23,18 +23,15 @@ smoothing its own past predictions would hold.
 
 import dataclasses
 import math
-from typing import TYPE_CHECKING, Self
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 from loguru import logger
 
-from quantlab.core.component import Component, component
+from quantlab.model.config import PredictorViewConfig
+from quantlab.model.view import PredictorView
 from quantlab.utils.cross_section import cross_sectional_zscore
-
-if TYPE_CHECKING:  # type hints only
-    from pathlib import Path
 
 #: Calendar days first requested per warm-up bar (about 1.45 on an exchange calendar), plus a margin.
 _DAYS_PER_BAR = 1.5
@@ -44,7 +41,7 @@ _MAX_WIDENINGS = 8
 
 
 @dataclasses.dataclass(frozen=True)
-class SmoothedPredictorConfig:
+class SmoothedPredictorConfig(PredictorViewConfig):
     """What a ``SmoothedPredictor`` is rebuilt from.
 
     Examples
@@ -53,8 +50,6 @@ class SmoothedPredictorConfig:
     ['halflife_bars', 'predictor', 'standardize', 'warmup_bars']
     """
 
-    #: The predictor whose predictions are smoothed.
-    predictor: object = component()
     #: The halflife of the exponential weights, in bars.
     halflife_bars: float = 1.0
     #: Bars before the window the mean also reads; ``None`` means ten halflives.
@@ -63,7 +58,7 @@ class SmoothedPredictorConfig:
     standardize: bool = True
 
 
-class SmoothedPredictor(Component):
+class SmoothedPredictor(PredictorView):
     """A ``Predictor`` whose predictions are a causal exponential mean of the wrapped ones.
 
     ``predict_window(start, end)`` asks the wrapped predictor for the window
@@ -92,7 +87,7 @@ class SmoothedPredictor(Component):
     smoothed values, and is refused. A ``RecordedPredictor`` with
     ``history=True`` serves each earlier bar as the checkpoint live then
     predicted it, so it is not checked. Every other
-    protocol member forwards to the wrapped predictor; ``label_scales`` is
+    protocol member forwards to the wrapped predictor (``PredictorView``); ``label_scales`` is
     ``"standardized"`` for every label when standardising.
 
     Parameters
@@ -160,7 +155,7 @@ class SmoothedPredictor(Component):
                 f"{type(self).__name__}: warmup_bars must be a non-negative integer, "
                 f"got {warmup_bars!r}"
             )
-        self.predictor = predictor
+        super().__init__(predictor)
         self.halflife_bars = halflife_bars
         self.warmup_bars = int(warmup_bars)
         self.standardize = bool(standardize)
@@ -278,31 +273,6 @@ class SmoothedPredictor(Component):
             )
 
     @property
-    def labels(self) -> list:
-        """The wrapped predictor's labels."""
-        return self.predictor.labels
-
-    @property
-    def train_bounds(self) -> tuple:
-        """The wrapped predictor's ``(start, end)`` training window."""
-        return self.predictor.train_bounds
-
-    @property
-    def test_bounds(self) -> tuple:
-        """The wrapped predictor's ``(start, end)`` test window."""
-        return self.predictor.test_bounds
-
-    @property
-    def fitted_train_bounds(self) -> tuple:
-        """The wrapped predictor's fitted ``(start, end)`` training window."""
-        return self.predictor.fitted_train_bounds
-
-    @property
-    def label_delays(self) -> tuple[int, ...]:
-        """The wrapped predictor's label delays; smoothing moves no bar."""
-        return self.predictor.label_delays
-
-    @property
     def label_scales(self) -> dict[str, str]:
         """``"standardized"`` for every label when standardising, else the wrapped predictor's.
 
@@ -315,36 +285,3 @@ class SmoothedPredictor(Component):
         if self.standardize:
             return {name: "standardized" for name in scales}
         return scales
-
-    def collect(self) -> Self:
-        """Collect the wrapped predictor's training data; returns the wrapper."""
-        self.predictor.collect()
-        return self
-
-    def train(self) -> "Path":
-        """Train the wrapped predictor; returns its checkpoint."""
-        return self.predictor.train()
-
-    def load(self, path) -> Self:
-        """Load ``path`` into the wrapped predictor; returns the wrapper."""
-        self.predictor.load(path)
-        return self
-
-    def check_checkpoint(self, path) -> None:
-        """Validate ``path`` with the wrapped predictor, without loading it."""
-        self.predictor.check_checkpoint(path)
-
-    @property
-    def config(self) -> SmoothedPredictorConfig:
-        """The wrapped predictor and the smoothing; ``get_config()`` serialises it."""
-        return SmoothedPredictorConfig(
-            predictor=self.predictor,
-            halflife_bars=self.halflife_bars,
-            warmup_bars=self.warmup_bars,
-            standardize=self.standardize,
-        )
-
-    @classmethod
-    def from_config(cls, config: dict, run_dir=None) -> Self:
-        """Rebuild the wrapper and its predictor from ``get_config()``."""
-        return cls(**cls._rebuilt_fields(config, run_dir))

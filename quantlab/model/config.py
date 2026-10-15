@@ -118,3 +118,20 @@ class ModelConfig(FrozenConfig):
 
     #: Dotted import path of the model class; filled by the config setter.
     name: str | None = None
+
+
+@dataclass(frozen=True)
+class PredictorViewConfig:
+    """Fields every ``quantlab.model.view.PredictorView`` shares.
+
+    ``predictor`` is the wrapped predictor, a model, an ensemble or another
+    view; a view's own config class subclasses this one and adds its fields.
+
+    Examples
+    --------
+    >>> sorted(PredictorViewConfig(predictor=None).__dataclass_fields__)
+    ['predictor']
+    """
+
+    #: The wrapped predictor, to which the view forwards the protocol.
+    predictor: object = component()

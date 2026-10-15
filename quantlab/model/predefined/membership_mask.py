@@ -15,20 +15,20 @@ masked panel.
 """
 
 import dataclasses
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING
 
 import xarray as xr
 
-from quantlab.core.component import Component, component
+from quantlab.core.component import component
+from quantlab.model.config import PredictorViewConfig
+from quantlab.model.view import PredictorView
 
 if TYPE_CHECKING:  # type hints only
-    from pathlib import Path
-
     from quantlab.dataset.raw import IndexConstituentDataset
 
 
 @dataclasses.dataclass(frozen=True)
-class MembershipMaskConfig:
+class MembershipMaskConfig(PredictorViewConfig):
     """What a ``MembershipMaskedPredictor`` is rebuilt from.
 
     Examples
@@ -37,19 +37,17 @@ class MembershipMaskConfig:
     ['membership', 'predictor']
     """
 
-    #: The wrapped predictor.
-    predictor: object = component()
     #: The index-membership dataset the predictions are masked with.
     membership: "IndexConstituentDataset" = component()
 
 
-class MembershipMaskedPredictor(Component):
+class MembershipMaskedPredictor(PredictorView):
     """A ``Predictor`` whose predictions are NaN where the symbol is not an index member.
 
     ``predict_window`` asks the wrapped predictor for its predictions and
     keeps a cell only when the membership panel's ``is_member`` is true on
     that bar's date for that symbol; every other protocol member forwards to
-    the wrapped predictor unchanged. The mask at bar t reads the membership
+    the wrapped predictor unchanged (``PredictorView``). The mask at bar t reads the membership
     of t's date and nothing later, so it is information at t. Prices,
     tradability and delistings are untouched: a security that leaves the
     index keeps its prices, its prediction turns NaN, and the portfolio rule
@@ -100,7 +98,7 @@ class MembershipMaskedPredictor(Component):
         self, predictor, membership: "IndexConstituentDataset"
     ) -> None:
         """Initialize the wrapper; see the class docstring for parameters."""
-        self.predictor = predictor
+        super().__init__(predictor)
         self.membership = membership
 
     # -- the mask --------------------------------------------------------
@@ -156,149 +154,6 @@ class MembershipMaskedPredictor(Component):
         )
         return predictions.where(member)
 
-    # -- Predictor protocol ----------------------------------------------
-    # Everything but ``predict_window`` forwards to the wrapped predictor
-    # unchanged.
-
-    @property
-    def labels(self) -> list:
-        """The wrapped predictor's labels.
-
-        Examples
-        --------
-        >>> masked.labels is model.labels
-        True
-        """
-        return self.predictor.labels
-
-    @property
-    def train_bounds(self) -> tuple:
-        """The wrapped predictor's ``(start, end)`` training window.
-
-        Examples
-        --------
-        >>> masked.train_bounds == model.train_bounds
-        True
-        """
-        return self.predictor.train_bounds
-
-    @property
-    def test_bounds(self) -> tuple:
-        """The wrapped predictor's ``(start, end)`` test window.
-
-        Examples
-        --------
-        >>> masked.test_bounds == model.test_bounds
-        True
-        """
-        return self.predictor.test_bounds
-
-    @property
-    def fitted_train_bounds(self) -> tuple:
-        """The wrapped predictor's fitted ``(start, end)`` training window.
-
-        Examples
-        --------
-        >>> masked.fitted_train_bounds == model.fitted_train_bounds
-        True
-        """
-        return self.predictor.fitted_train_bounds
-
-    @property
-    def label_delays(self) -> tuple[int, ...]:
-        """The wrapped predictor's label delays; masking moves no bar.
-
-        Examples
-        --------
-        >>> masked.label_delays == model.label_delays
-        True
-        """
-        return self.predictor.label_delays
-
-    @property
-    def label_scales(self) -> dict[str, str]:
-        """The wrapped predictor's label scales; masking rescales nothing.
-
-        Examples
-        --------
-        >>> masked.label_scales == model.label_scales
-        True
-        """
-        return self.predictor.label_scales
-
-    def predict_window(self, start, end) -> xr.Dataset:
-        """The wrapped predictor's predictions over the window, masked; see ``mask``.
-
-        Examples
-        --------
-        >>> out = masked.predict_window("2024-02-12", "2024-03-11")
-        >>> bool(out.equals(masked.mask(model.predict_window("2024-02-12", "2024-03-11"))))
-        True
-        """
-        return self.mask(self.predictor.predict_window(start, end))
-
-    def collect(self) -> Self:
-        """Collect the wrapped predictor's training data; returns the wrapper.
-
-        Examples
-        --------
-        >>> masked.collect() is masked
-        True
-        """
-        self.predictor.collect()
-        return self
-
-    def train(self) -> "Path":
-        """Train the wrapped predictor on unmasked data; returns its checkpoint.
-
-        Examples
-        --------
-        >>> checkpoint = masked.collect().train()  # what model.train() returns
-        """
-        return self.predictor.train()
-
-    def load(self, path) -> Self:
-        """Load ``path`` into the wrapped predictor; returns the wrapper.
-
-        Examples
-        --------
-        >>> masked.load(checkpoint) is masked
-        True
-        """
-        self.predictor.load(path)
-        return self
-
-    def check_checkpoint(self, path) -> None:
-        """Validate ``path`` with the wrapped predictor, without loading it.
-
-        Examples
-        --------
-        >>> masked.check_checkpoint(checkpoint)  # raises if it does not fit
-        """
-        self.predictor.check_checkpoint(path)
-
-    @property
-    def config(self) -> MembershipMaskConfig:
-        """The wrapped predictor and the membership dataset; ``get_config()`` serialises it.
-
-        Examples
-        --------
-        >>> sorted(masked.get_config())
-        ['membership', 'name', 'predictor']
-        """
-        return MembershipMaskConfig(predictor=self.predictor, membership=self.membership)
-
-    @classmethod
-    def from_config(cls, config: dict, run_dir=None) -> Self:
-        """Rebuild the wrapper, its predictor and its membership dataset from ``get_config()``.
-
-        Both are rebuilt by the component rule, with ``run_dir`` passed down.
-
-        Examples
-        --------
-        >>> rebuilt = MembershipMaskedPredictor.from_config(masked.get_config())
-        >>> type(rebuilt.membership) is type(masked.membership)
-        True
-        """
-        fields = cls._rebuilt_fields(config, run_dir)
-        return cls(fields["predictor"], fields["membership"])
+    def _view_predictions(self, predictions: xr.Dataset) -> xr.Dataset:
+        """Return the wrapped predictor's predictions masked; see ``mask``."""
+        return self.mask(predictions)

@@ -27,13 +27,14 @@ from typing import Self
 import pandas as pd
 import xarray as xr
 
-from quantlab.core.component import Component, component
+from quantlab.model.config import PredictorViewConfig
+from quantlab.model.view import PredictorView
 from quantlab.runs.record import record_read
 from quantlab.runs.backtest_run import BacktestRun
 
 
 @dataclasses.dataclass(frozen=True)
-class RecordedPredictorConfig:
+class RecordedPredictorConfig(PredictorViewConfig):
     """What a ``RecordedPredictor`` is rebuilt from.
 
     Examples
@@ -42,15 +43,13 @@ class RecordedPredictorConfig:
     ['history', 'predictor', 'run_dir']
     """
 
-    #: The predictor that made the recorded predictions.
-    predictor: object = component()
     #: The recorded backtest run (``run`` or ``run_cv``) whose predictions are served.
     run_dir: str = ""
     #: Also serve the record's bars before the loaded checkpoint's window.
     history: bool = False
 
 
-class RecordedPredictor(Component):
+class RecordedPredictor(PredictorView):
     """A ``Predictor`` that serves a recorded backtest run's predictions.
 
     ``predict_window(start, end)`` returns the recorded run's prediction
@@ -65,8 +64,9 @@ class RecordedPredictor(Component):
     ``run_cv`` record's earlier folds), and the record's first bar is the
     first one served; the window still may not end after the checkpoint's
     window, so no prediction is served before it was made. The recorded
-    label names and scales must be the wrapped predictor's. Every other protocol member forwards to the wrapped
-    predictor; ``train`` is refused.
+    label names and scales must be the wrapped predictor's. Every other
+    protocol member forwards to the wrapped predictor (``PredictorView``);
+    ``train`` is refused.
 
     Parameters
     ----------
@@ -102,7 +102,7 @@ class RecordedPredictor(Component):
 
     def __init__(self, predictor, run_dir, history: bool = False) -> None:
         """Initialize the wrapper; see the class docstring for parameters."""
-        self.predictor = predictor
+        super().__init__(predictor)
         self.run_dir = str(run_dir)
         self.history = bool(history)
         self._checkpoint: Path | None = None
@@ -186,43 +186,8 @@ class RecordedPredictor(Component):
         return served
 
     # -- Predictor protocol ----------------------------------------------
-    # Everything but ``predict_window``, ``load`` and ``train`` forwards to
-    # the wrapped predictor unchanged.
-
-    @property
-    def labels(self) -> list:
-        """The wrapped predictor's labels."""
-        return self.predictor.labels
-
-    @property
-    def train_bounds(self) -> tuple:
-        """The wrapped predictor's ``(start, end)`` training window."""
-        return self.predictor.train_bounds
-
-    @property
-    def test_bounds(self) -> tuple:
-        """The wrapped predictor's ``(start, end)`` test window."""
-        return self.predictor.test_bounds
-
-    @property
-    def fitted_train_bounds(self) -> tuple:
-        """The wrapped predictor's fitted ``(start, end)`` training window."""
-        return self.predictor.fitted_train_bounds
-
-    @property
-    def label_delays(self) -> tuple[int, ...]:
-        """The wrapped predictor's label delays."""
-        return self.predictor.label_delays
-
-    @property
-    def label_scales(self) -> dict[str, str]:
-        """The wrapped predictor's label scales."""
-        return self.predictor.label_scales
-
-    def collect(self) -> Self:
-        """Collect the wrapped predictor's training data; returns the wrapper."""
-        self.predictor.collect()
-        return self
+    # ``predict_window`` above, ``train`` and ``load``; ``PredictorView``
+    # forwards the rest to the wrapped predictor.
 
     def train(self):
         """Refused: a recorded predictor predicts nothing new.
@@ -242,20 +207,3 @@ class RecordedPredictor(Component):
         self.predictor.load(path)
         self._checkpoint = Path(path).resolve()
         return self
-
-    def check_checkpoint(self, path) -> None:
-        """Validate ``path`` with the wrapped predictor, without loading it."""
-        self.predictor.check_checkpoint(path)
-
-    @property
-    def config(self) -> RecordedPredictorConfig:
-        """The wrapped predictor and the recorded run; ``get_config()`` serialises it."""
-        return RecordedPredictorConfig(
-            predictor=self.predictor, run_dir=self.run_dir, history=self.history
-        )
-
-    @classmethod
-    def from_config(cls, config: dict, run_dir=None) -> Self:
-        """Rebuild the wrapper and its predictor from ``get_config()``."""
-        fields = cls._rebuilt_fields(config, run_dir)
-        return cls(**fields)
