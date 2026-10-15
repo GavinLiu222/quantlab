@@ -152,6 +152,25 @@ def test_a_security_missing_from_a_newer_quarter_is_no_longer_shown(tmp_path, to
     assert np.isnan(_value_on(panel, "holders", "2024-05-15", 202))
 
 
+def test_of_the_quarters_available_before_the_calendar_the_latest_is_shown_on_its_first_day(
+    tmp_path, today
+):
+    # Every quarter of 2022 and 2023 is due before SEP's first day
+    # (2024-03-25), so all are available on it; the day shows the latest,
+    # December 2023, until March's is due on 2024-05-15. The shown quarter
+    # once depended on the order of a hash join, varying run to run.
+    quarters = pd.date_range("2022-03-31", "2023-12-31", freq="QE").strftime("%Y-%m-%d")
+    sf3a = [
+        sf3a_row(quarter, "AAA", 10 + index, 100.0)  # SYNTHETIC
+        for index, quarter in enumerate(quarters)
+    ]
+    panel = _panel(tmp_path, _bulk(_vendor(sf3a), tmp_path / "dl"))
+
+    first_days = panel["quarter_end"].sel(symbol=101, timestamp=slice(DAYS[0], "2024-05-14"))
+    assert set(pd.DatetimeIndex(first_days.values)) == {pd.Timestamp("2023-12-31")}
+    assert _value_on(panel, "holders", DAYS[0]) == 10 + len(quarters) - 1
+
+
 def test_a_ticker_with_no_stock_permaticker_is_left_out(tmp_path, today):
     sf3a = [
         sf3a_row("2024-03-31", "AAA", 60, 1500.0),  # SYNTHETIC

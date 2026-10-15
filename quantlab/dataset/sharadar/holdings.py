@@ -14,7 +14,8 @@ therefore shows a quarter from its *available date*, the first SEP trading
 day on or after quarter end + 45 days (``AVAILABILITY_LAG``), until the
 next quarter's available date. So a partial quarter is never shown, and a
 security with no row in the shown quarter shows nothing (NaN) rather than
-an older quarter's count. Variables:
+an older quarter's count. Quarters due before SEP's first trading day are
+all available on it, and the latest of them is the one shown. Variables:
 
 - ``holders``: institutions holding the stock;
 - ``shares_held``: the shares they hold (``shrunits`` times 1,000);
@@ -278,8 +279,9 @@ class SharadarHoldingsDataset(RawDataset):
             symbols = sort_symbol_axis(quarters.get_column("symbol").unique().to_list())
         symbols = [int(s) for s in symbols]
         # One quarter per day, the same for every security: the latest available.
+        # Quarters due before the calendar's first day share it; the latest wins.
         current = days.to_frame().join_asof(
-            quarters.select("available", "quarter_end").unique().sort("available"),
+            quarters.group_by("available").agg(pl.col("quarter_end").max()).sort("available"),
             left_on="timestamp",
             right_on="available",
             strategy="backward",
