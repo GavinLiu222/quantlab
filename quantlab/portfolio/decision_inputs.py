@@ -456,7 +456,9 @@ class DecisionInputs:
         The panel counterpart of ``context``: each bar's predictions, its
         tradability (``tradable_bars``, judged from nothing later than the
         bar) and the raw valuation prices its return window and staleness
-        are read from (the rule's ``history_bars`` up to the bar), as the
+        are read from (the rule's ``history_bars`` up to the bar), and the
+        values of the rule's declared factors (one ``Factor.compute`` each
+        from the first to the last bar, with its own warm-up), as the
         per-bar context reads them; ``DecisionPanel.return_windows`` and
         ``DecisionPanel.staleness`` give each bar's window and staleness as
         its context holds them. No holdings: a rule's ``solve`` is handed
@@ -518,6 +520,9 @@ class DecisionInputs:
             .reindex(symbol=symbols, fill_value=False)
         )
         valuation = prices[self.valuation_column].transpose(*_DIMS).reindex(symbol=symbols)
+        factors = self._factor_panels(first, last, symbols)
+        if factors is not None:
+            factors = factors.reindex(timestamp=timestamps).load()
         return DecisionPanel(
             timestamps=timestamps,
             symbols=symbols,
@@ -526,6 +531,7 @@ class DecisionInputs:
             valuation_prices=np.asarray(valuation.values, dtype=np.float64),
             rows=rows,
             history_bars=self.declared.history_bars,
+            factors=factors,
         )
 
     def history_prices(self, first, last) -> xr.Dataset:

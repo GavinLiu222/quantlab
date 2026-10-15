@@ -96,7 +96,9 @@ def test_the_rule_is_a_mean_variance_optimizer_on_its_extension_points():
         name for name, value in vars(ActiveRiskOptimizer).items()
         if callable(value) and name != "config_cls"
     }
-    assert overridden == {"__init__", "declared_inputs", "reference_weights", "risk_constraints"}
+    assert overridden == {
+        "__init__", "declared_inputs", "reference_weights", "risk_constraints", "panel_reference_weights"
+    }
     with pytest.raises(ValueError, match="benchmark factor"):
         _hand_rule(benchmark=None)
     with pytest.raises(ValueError, match="tracking_error"):

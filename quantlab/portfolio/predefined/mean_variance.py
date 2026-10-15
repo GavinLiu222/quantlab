@@ -247,6 +247,9 @@ class _PanelProblem:
     selectable: np.ndarray
     #: ``[bars, symbols]``: selectable with a finite prediction, a candidate whatever is held.
     predicted: np.ndarray
+    #: ``[bars, symbols]``: the reference book ``b`` the risk term prices ``w - b`` against
+    #: (``panel_reference_weights``, NaN as 0), or ``None`` for total risk.
+    reference: np.ndarray | None = None
 
 
 def _clean_long_short(
@@ -594,6 +597,34 @@ class MeanVarianceOptimizer(PortfolioConstructor):
         """
         return []
 
+    def panel_reference_weights(self, panel: DecisionPanel) -> np.ndarray | None:
+        """Every bar's reference book of a decision panel, or ``None`` for total risk: ``reference_weights`` for ``prepare``.
+
+        The panel counterpart of the ``reference_weights`` extension point,
+        read by the approximate backtest's ``solve`` to price ``(w - b)'
+        Sigma (w - b)`` at every bar, ``b`` on the bar's covered symbols (a
+        symbol the estimate does not cover drops out, as in the per-bar
+        rule; no event is recorded). A rule overriding
+        ``reference_weights`` overrides this too, or the panel decision is
+        refused. ``None`` by default.
+
+        Parameters
+        ----------
+        panel : DecisionPanel
+            The bars' decision inputs.
+
+        Returns
+        -------
+        np.ndarray or None
+            ``[bars, symbols]`` weights, NaN counting as 0.
+
+        Examples
+        --------
+        >>> optimizer.panel_reference_weights(panel) is None
+        True
+        """
+        return None
+
     @property
     def span(self) -> int | None:
         """The expected-return label's span in bars, once ``bind`` has read it.
@@ -877,8 +908,9 @@ class MeanVarianceOptimizer(PortfolioConstructor):
         estimate. Refused, the message naming the field: a tracking-error
         cap, exposure bounds, a long-short book, ``candidate_top_k``,
         ``volatility_label``, ``calibration="raw"`` and a turnover penalty;
-        a rule overriding the ``reference_weights`` or ``risk_constraints``
-        extension points; an estimator without ``estimate_all``.
+        a rule overriding ``reference_weights`` without
+        ``panel_reference_weights``, or whose ``risk_constraints`` returns
+        any constraint; an estimator without ``estimate_all``.
         ``min_trade`` and ``solver`` are not read.
 
         Examples
@@ -906,13 +938,16 @@ class MeanVarianceOptimizer(PortfolioConstructor):
                     f"panel decision yet"
                 )
         base = MeanVarianceOptimizer
-        if type(self).reference_weights is not base.reference_weights or (
-            type(self).risk_constraints is not base.risk_constraints
+        if (
+            type(self).reference_weights is not base.reference_weights
+            and type(self).panel_reference_weights is base.panel_reference_weights
         ):
             return (
-                f"{name} prices risk against a reference book or constrains it "
-                f"(reference_weights, risk_constraints), not handled in a panel decision yet"
+                f"{name} prices risk against a reference book per bar (reference_weights) "
+                f"without its panel counterpart (panel_reference_weights)"
             )
+        if self.risk_constraints(cp.Variable(nonneg=True)):
+            return f"{name} constrains its risk term (risk_constraints), not handled in a panel decision"
         refusal = config.covariance.panel_refusal()
         if refusal is not None:
             return f"its covariance estimator: {refusal}"
@@ -971,7 +1006,10 @@ class MeanVarianceOptimizer(PortfolioConstructor):
         predicted = selectable & np.isfinite(prediction)
         z = np.nan_to_num(cross_sectional_zscore(np.where(predicted, prediction, np.nan)), nan=0.0)
         expected = np.where(predicted, config.ic * np.sqrt(low_rank.variance) * z, 0.0)
-        return _PanelProblem(low_rank, expected, selectable, predicted)
+        reference = self.panel_reference_weights(panel)
+        if reference is not None:
+            reference = np.nan_to_num(np.asarray(reference, dtype=np.float64))
+        return _PanelProblem(low_rank, expected, selectable, predicted, reference)
 
     def solve(
         self, problem: _PanelProblem, holdings: np.ndarray | None, warm_start: np.ndarray | None = None
@@ -1016,14 +1054,20 @@ class MeanVarianceOptimizer(PortfolioConstructor):
         if not solvable.any():
             return weights
         cap = np.where(candidate[solvable], config.weight_cap, 0.0)
+        low_rank = problem.low_rank.take(solvable)
+        expected = problem.expected_return[solvable]
+        if problem.reference is not None:
+            # The risk of w - b: its gradient is that of w's risk plus risk_aversion * Sigma b,
+            # Sigma zero off a bar's covered symbols, so b's uncovered weight drops out.
+            expected = expected + config.risk_aversion * low_rank.times(problem.reference[solvable])
         start = cap
         if warm_start is not None:
             given = warm_start[solvable]
             start = np.where(np.isfinite(given).all(axis=1)[:, None], np.nan_to_num(given), cap)
         weights[solvable] = _maximise_rows(
-            problem.expected_return[solvable],
+            expected,
             cap,
-            problem.low_rank.take(solvable),
+            low_rank,
             config.risk_aversion,
             start,
         )

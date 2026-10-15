@@ -19,12 +19,15 @@ estimator's, over the expected-return label's span. With a factor risk
 model (``FactorRiskStoreEstimator``) the active risk is priced in factor
 form; any covariance estimator works. ``risk_aversion`` 0 with a
 ``tracking_error`` maximises the expected return inside the cap.
+
+The approximate backtest decides it too (``panel_reference_weights``),
+without a ``tracking_error``.
 """
 
 import numpy as np
 import xarray as xr
 
-from quantlab.portfolio.base import InputDeclaration, PortfolioContext
+from quantlab.portfolio.base import DecisionPanel, InputDeclaration, PortfolioContext
 from quantlab.portfolio.config import ActiveRiskConfig
 from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
 
@@ -96,6 +99,20 @@ class ActiveRiskOptimizer(MeanVarianceOptimizer):
         'benchmark_weight'
         """
         return context.factors[self.config.benchmark_weight]
+
+    def panel_reference_weights(self, panel: DecisionPanel) -> np.ndarray:
+        """The benchmark's weights at every bar of a decision panel, for the approximate backtest.
+
+        The panel's declared factor values (``DecisionPanel.factors``), on
+        its bars and symbols, as ``reference_weights`` reads each bar's.
+
+        Examples
+        --------
+        >>> rule.panel_reference_weights(panel).shape  # doctest: +SKIP
+        (2, 3)
+        """
+        weights = panel.factors[self.config.benchmark_weight].transpose("timestamp", "symbol")
+        return np.asarray(weights.sel(symbol=panel.symbols).values, dtype=np.float64)
 
     def risk_constraints(self, risk) -> list:
         """The tracking-error cap on the active variance, if any.

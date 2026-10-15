@@ -229,6 +229,12 @@ class DecisionPanel:
     history_bars : int
         Raw prices up to and including a bar that its window reads, as
         ``InputDeclaration.history_bars``.
+    factors : xr.Dataset or None
+        The values at the bars of the ``Factor`` panels the rule declares
+        (``InputDeclaration.factors``): one variable per factor name on
+        ``(timestamp, symbol)``, NaN where a symbol has none, as each bar's
+        ``PortfolioContext.factors`` holds them. ``None`` when the rule
+        declares none.
 
     Examples
     --------
@@ -255,6 +261,7 @@ class DecisionPanel:
     valuation_prices: np.ndarray | None = None
     rows: np.ndarray | None = None
     history_bars: int = 1
+    factors: xr.Dataset | None = None
 
     def _last_priced(self) -> np.ndarray:
         """``[rows, symbols]``: the row of each symbol's last real price at or before each row, -1 for none."""

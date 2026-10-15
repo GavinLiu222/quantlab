@@ -21,6 +21,13 @@ window keeping a symbol out of the first estimates in both; a tracking-error
 cap, exposure bounds and an estimator without a batched estimate are refused
 before any data is read, each message naming the field or the estimator.
 
+Active risk against a benchmark factor (#309), Ledoit-Wolf without a
+tracking-error cap, against `run()` with the same `ActiveRiskConfig`: the
+same bounds, and the benchmark pulling the books toward it; a turnover
+penalty case turns on with #306; a rule constraining its risk term, or
+pricing a reference book per bar without a panel counterpart, is refused
+before any data is read.
+
 Everything is synthetic, CPU-only and offline.
 """
 
@@ -602,3 +609,129 @@ def test_an_unsupported_mean_variance_setup_is_refused_before_any_read(mvo_store
     monkeypatch.setattr(type(backtest.config.price_dataset), "panel", refuse)
     with pytest.raises(ValueError, match=named):
         backtest.run(None, rule)
+
+
+# Active risk against a benchmark factor, Ledoit-Wolf, no tracking-error cap (#309).
+#
+# The benchmark weights move from bar to bar and give S03 a weight while the
+# long halt leaves it out of the first estimates, so the benchmark's
+# uncovered weight is dropped from the risk term in both backtests. A
+# tracking-error cap is refused above (test_an_unsupported_mean_variance_setup...).
+
+
+def _benchmark_weights(bars):
+    rng = np.random.default_rng(11)
+    raw = rng.uniform(0.5, 1.5, size=(len(bars), len(SYMBOLS)))
+    raw[:, -4:] = 0.0  # four symbols outside the benchmark
+    raw *= 1.0 + 0.2 * np.sin(np.arange(len(bars)))[:, None]
+    return xr.DataArray(
+        raw / raw.sum(axis=1, keepdims=True),
+        dims=("timestamp", "symbol"),
+        coords={"timestamp": bars, "symbol": SYMBOLS},
+    )
+
+
+def _active(bars, **overrides):
+    params = dict(
+        expected_return_label="fwd_ret_1",
+        covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=MVO_LOOKBACK)),
+        ic=0.05,
+        risk_aversion=5.0,
+        weight_cap=0.2,
+        benchmark=_benchmark(_benchmark_weights(bars)),
+    )
+    params.update(overrides)
+    return ActiveRiskOptimizer(ActiveRiskConfig(**params))
+
+
+#: Rule overrides and rebalance_periods; the label spans one bar.
+ACTIVE_CASES = {
+    "penalty0_r1": (dict(), 1),
+    "penalty0_r5_averse": (dict(risk_aversion=50.0), 5),
+    "penalty1e-3_r1": (dict(turnover_penalty=1e-3), 1),
+}
+
+
+@pytest.fixture(scope="module", params=sorted(ACTIVE_CASES))
+def active_case(request, mvo_store):
+    import cvxpy
+
+    _, _, bars = mvo_store
+    overrides, rebalance_periods = ACTIVE_CASES[request.param]
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(cvxpy.Problem, "solve", _tightly_solved(cvxpy.Problem.solve))
+        result = _mvo_run(
+            mvo_store, _active(bars, **overrides), rebalance_periods, f"active_{request.param}", 1
+        )
+    predictions = BacktestRun.open(result.run_dir).predictions()
+    rule = _active(bars, **overrides)
+    if overrides.get("turnover_penalty") and rule.panel_refusal() is not None:
+        # The turnover penalty in a panel decision is #306; this case turns on with it.
+        pytest.xfail(rule.panel_refusal())
+    account = _approximate(mvo_store, rebalance_periods).run(predictions, rule)
+    return result, account
+
+
+def test_active_risk_weights_are_within_the_bound_of_the_runs(active_case):
+    result, account = active_case
+    weights = result.weights.transpose("timestamp", "symbol")
+    decided = weights["decided"].values
+
+    assert result.metrics["portfolio_construction"]["failed_bar_count"] == 0
+    np.testing.assert_array_equal(account.weights.timestamp.values, weights.timestamp.values[decided])
+    gap = np.abs(account.weights.values - weights["weight"].values[decided]).sum(axis=1)
+    assert gap.max() <= WEIGHTS_L1
+
+
+def test_active_risk_value_is_within_the_tolerance_of_the_runs(active_case):
+    result, account = active_case
+    run_value = result.simulation.value.values / result.simulation.value.values[0]
+
+    np.testing.assert_allclose(account.value.values, run_value, rtol=VALUE_TOLERANCE, atol=0)
+    assert account.metrics["converged"] is True
+
+
+def test_the_benchmark_pulls_the_active_risk_weights_toward_it(mvo_store):
+    _, _, bars = mvo_store
+    result = _mvo_run(mvo_store, _mvo(), 1, "active_baseline", 1)
+    predictions = BacktestRun.open(result.run_dir).predictions()
+    backtest = _approximate(mvo_store, 1)
+    total = backtest.run(predictions, _mvo(risk_aversion=50.0))
+    active = backtest.run(predictions, _active(bars, risk_aversion=50.0))
+    benchmark = _benchmark_weights(bars).sel(timestamp=active.weights.timestamp)
+
+    def distance(weights):
+        return float(np.abs(weights.values - benchmark.values).sum(axis=1).mean())
+
+    assert distance(active.weights) < distance(total.weights)
+
+
+class _CappedRisk(MeanVarianceOptimizer):
+    """Mean-variance whose risk term is capped through the extension point."""
+
+    def risk_constraints(self, risk):
+        return [risk <= 1e-4]
+
+
+class _ReferenceOnlyPerBar(MeanVarianceOptimizer):
+    """Mean-variance with a reference book per bar but none for a panel."""
+
+    def reference_weights(self, context):
+        return context.current_weights
+
+
+@pytest.mark.parametrize(
+    "rule, named",
+    [(_CappedRisk, "risk_constraints"), (_ReferenceOnlyPerBar, "panel_reference_weights")],
+)
+def test_a_risk_extension_without_a_panel_counterpart_is_refused_before_any_read(
+    mvo_store, monkeypatch, rule, named
+):
+    backtest = _approximate(mvo_store, 5)
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("the price dataset was read")
+
+    monkeypatch.setattr(type(backtest.config.price_dataset), "panel", refuse)
+    with pytest.raises(ValueError, match=named):
+        backtest.run(None, rule(_mvo().config))
