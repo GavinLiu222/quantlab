@@ -1,7 +1,8 @@
 """The configs of the backtest layer.
 
 A backtester is constructed from a ``BacktestConfig`` subclass and exposes it as
-``self.config``. Unlike the dataset, factor and model configs these are not frozen.
+``self.config``. Unlike the dataset, factor and model configs these are not frozen;
+``ApproximateBacktestConfig``, which configures no backtester run, is.
 The price dataset, the model, the portfolio construction rule, the benchmark and
 the tracker are declared with ``component()``, so ``to_dict()`` writes each as its
 own config and the backtester can be rebuilt from the run's ``config.json`` (see
@@ -16,6 +17,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from quantlab.core.component import component, config_to_dict
+from quantlab.core.config import FrozenConfig
 from quantlab.tracking.base import NullTracker, Tracker
 from quantlab.execution.rules import ExecutionSettings
 
@@ -258,3 +260,55 @@ class WeightsBacktestConfig(BacktestConfig):
     direction: Literal["long_only", "long_short"] | None = None
     #: The names per side the weights were built with, or ``None``. A record only.
     top_n: int | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class ApproximateBacktestConfig(FrozenConfig):
+    """Config of an approximate backtest: every rebalance decided at once, the window simulated as arrays.
+
+    Built once over a price dataset and run on many (predictions, rule)
+    pairs (``quantlab.backtest.approximate.ApproximateBacktest``). The rule is
+    not here: it comes to ``run`` with its own unchanged config, so a rule
+    chosen by a sweep goes to a backtest run as it is. Execution is reduced
+    to one cost on traded weight; the rest of what is kept and given up is
+    in ``docs/backtest.md``.
+
+    Examples
+    --------
+    >>> cfg = ApproximateBacktestConfig(
+    ...     price_dataset=price_dataset,
+    ...     start_date="2023-01-01",
+    ...     end_date="2023-12-31",
+    ...     rebalance_periods=5,
+    ... )
+    >>> cfg.cost, cfg.chunk_bars, cfg.max_sweeps, cfg.tolerance
+    (0.001, 252, 50, 1e-06)
+    """
+
+    #: The dataset whose prices the simulation trades on.
+    price_dataset: "MarketDataset" = component()
+    #: First date of the window, inclusive.
+    start_date: str
+    #: Last date of the window, inclusive.
+    end_date: str
+    #: Rebalance every this many bars from the window's first bar, as a backtest run does.
+    rebalance_periods: int
+    #: Cost per unit of traded weight at each fill, standing for fees and
+    #: slippage together (a backtest run's ``fees + slippage``).
+    cost: float = 0.001
+    #: Bars of the window swept to convergence together; a chunk's decision
+    #: inputs are held in memory at once.
+    chunk_bars: int = 252
+    #: Most sweeps per chunk before it is reported as not converged.
+    max_sweeps: int = 50
+    #: A chunk has converged when no bar's weights move by more than this (L1) between sweeps.
+    tolerance: float = 1e-6
+
+    def __post_init__(self):
+        """Check the counts and the cost."""
+        super().__post_init__()
+        for name in ("rebalance_periods", "chunk_bars", "max_sweeps"):
+            if getattr(self, name) < 1:
+                raise ValueError(f"{name} must be >= 1, got {getattr(self, name)}")
+        if self.cost < 0:
+            raise ValueError(f"cost must be >= 0, got {self.cost}")

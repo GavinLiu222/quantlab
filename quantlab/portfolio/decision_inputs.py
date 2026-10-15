@@ -30,6 +30,11 @@ record*): a scheduled bar it did not decide is a *held bar*. Every reader of
 a run's rebalances (turnover, win rates, attribution, the report) takes them
 from that record.
 
+``panel`` gives a block of decision bars' inputs at once (a
+``DecisionPanel``: their predictions and tradability, read as the per-bar
+context reads them) for a rule's ``prepare``, the approximate backtest's
+path; ``scheduled`` names the scheduled bars of many timestamps at once.
+
 ``DecisionInputs.from_run`` rebuilds the inputs of a recorded backtest run,
 read through ``quantlab.runs.backtest_run.BacktestRun``.
 
@@ -63,7 +68,7 @@ import pandas as pd
 import xarray as xr
 
 from quantlab.dataset.base import InsufficientHistoryError, MarketDataset
-from quantlab.portfolio.base import PortfolioConstructor, PortfolioContext
+from quantlab.portfolio.base import DecisionPanel, PortfolioConstructor, PortfolioContext
 from quantlab.risk.base import ESTIMATE_VARIABLES
 from quantlab.runs.backtest_run import BacktestRun
 from quantlab.execution.rules import ExecutionBook, ExecutionSettings
@@ -423,7 +428,87 @@ class DecisionInputs:
         >>> inputs.rebalances(ts[2]), inputs.rebalances(ts[3])
         (True, False)
         """
-        return bool(self._scheduled(pd.DatetimeIndex([pd.Timestamp(t)]))[0])
+        return bool(self.scheduled([t])[0])
+
+    def scheduled(self, timestamps) -> np.ndarray:
+        """Return which of ``timestamps`` are scheduled rebalance bars: ``rebalances`` for many bars.
+
+        Parameters
+        ----------
+        timestamps : array_like of datetime-like
+            The bars.
+
+        Returns
+        -------
+        np.ndarray
+            One boolean per bar.
+
+        Examples
+        --------
+        >>> inputs.scheduled(ts)
+        array([ True, False,  True, False])
+        """
+        return self._scheduled(pd.DatetimeIndex(timestamps))
+
+    def panel(self, predictions: xr.Dataset, *, prices: xr.Dataset | None = None) -> DecisionPanel:
+        """Return the decision inputs of a block of decision bars at once, for ``PortfolioConstructor.prepare``.
+
+        The panel counterpart of ``context``: each bar's predictions and its
+        tradability (``tradable_bars``, judged from nothing later than the
+        bar), as the per-bar context reads them. No holdings: a rule's
+        ``solve`` is handed those.
+
+        Parameters
+        ----------
+        predictions : xr.Dataset
+            One variable per label on ``(timestamp, symbol)``, at the
+            decision bars (bars of the dataset's calendar, in time order).
+        prices : xr.Dataset, optional
+            The fill and valuation prices on ``(timestamp, symbol)``
+            covering the bars, already read (an approximate backtest reads
+            its window once); read from the dataset over the bars when
+            omitted.
+
+        Returns
+        -------
+        DecisionPanel
+
+        Raises
+        ------
+        ValueError
+            If a bar is not a bar of the prices.
+
+        Examples
+        --------
+        >>> block = inputs.panel(scores.isel(timestamp=[0, 2]))
+        >>> block.tradable
+        array([[ True,  True,  True],
+               [ True, False,  True]])
+        """
+        predictions = predictions.transpose(*_DIMS)
+        timestamps = pd.DatetimeIndex(predictions.timestamp.values)
+        symbols = predictions.symbol.values
+        if prices is None:
+            prices = self.dataset.panel(
+                timestamps[0], timestamps[-1], variables=[self.fill_column, self.valuation_column]
+            )
+        window = prices.sel(timestamp=slice(timestamps[0], timestamps[-1]))
+        missing = timestamps[pd.Index(window.timestamp.values).get_indexer(timestamps) < 0]
+        if len(missing):
+            raise ValueError(
+                f"every decision bar must be a bar of the prices; missing {[str(t) for t in missing[:5]]}"
+            )
+        tradable = (
+            self.dataset.tradable_bars(window.sel(timestamp=timestamps), self.fill_column)
+            .transpose(*_DIMS)
+            .reindex(symbol=symbols, fill_value=False)
+        )
+        return DecisionPanel(
+            timestamps=timestamps,
+            symbols=symbols,
+            predictions=predictions,
+            tradable=np.asarray(tradable.values, dtype=bool),
+        )
 
     def weights(self, predictions: xr.Dataset, *, delisted: xr.DataArray | None = None) -> xr.Dataset:
         """Decide every rebalance bar of a prediction panel and return the target weights.

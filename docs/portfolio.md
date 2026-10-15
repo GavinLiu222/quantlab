@@ -504,6 +504,8 @@ rule = ActiveRiskOptimizer(ActiveRiskConfig(
 
 Do not override `decide`: it is the one decision path a backtest and an executor share. A rule holds no assembly code; `DecisionInputs` builds its contexts.
 
+To run in the approximate backtest (see [Sweep with the approximate backtest](backtest.md#sweep-with-the-approximate-backtest)), a rule also implements the panel pair and makes `panel_refusal()` return `None`. `prepare(panel)` turns a `DecisionPanel` (the decision bars, the symbols, the predictions on `(timestamp, symbol)` and the tradability as a `[bars, symbols]` array, from `DecisionInputs.panel`) into a problem once; `solve(problem, holdings, warm_start=None)` returns every bar's weights as a `[bars, symbols]` array given the holdings at each bar (`None` to ignore them). Both are pure, and `solve` is called again on each sweep, so the work that does not depend on the holdings belongs in `prepare`. `TopNConstructor` does all its work in `prepare` and returns the books from `solve`, reproducing `construct` exactly when nothing is locked.
+
 `get_config` and `from_config` serialise the rule as its config's fields plus the class's import path. A field holding another component, such as a covariance estimator, is nested, so no extra code is needed to rebuild a run.
 
 A new covariance estimator subclasses `CovarianceEstimator` in the same way and implements `estimate`. See [Extending quantlab](developer-guide/extending.md).

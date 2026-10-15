@@ -504,6 +504,8 @@ rule = ActiveRiskOptimizer(ActiveRiskConfig(
 
 不要重写 `decide`：它是回测与执行器共用的唯一决策路径。规则不含组装代码，它的 context 由 `DecisionInputs` 构造。
 
+要在近似回测中运行（见[用近似回测做参数扫描](backtest.md#用近似回测做参数扫描)），规则还要实现面板方法对，并让 `panel_refusal()` 返回 `None`。`prepare(panel)` 把一个 `DecisionPanel`（决策 bar、标的、`(timestamp, symbol)` 上的预测，以及 `[bars, symbols]` 数组形式的可交易性，由 `DecisionInputs.panel` 给出）一次转换成问题；`solve(problem, holdings, warm_start=None)` 在给定各 bar 持仓（`None` 表示不考虑持仓）时返回每个 bar 的权重，形状 `[bars, symbols]`。两者都是纯函数，且每轮扫描都会再调用 `solve`，所以与持仓无关的工作应放在 `prepare` 里。`TopNConstructor` 的全部工作都在 `prepare` 中完成，`solve` 只返回结果，在没有锁定持仓时与 `construct` 完全一致。
+
 `get_config` 和 `from_config` 把规则序列化为配置的各字段加上类的导入路径。字段里如果是另一个组件（例如协方差估计器），会嵌套序列化，所以重建一次运行不需要额外代码。
 
 新的协方差估计器同样继承 `CovarianceEstimator` 并实现 `estimate`。见[扩展 quantlab](../developer-guide/extending.md)。

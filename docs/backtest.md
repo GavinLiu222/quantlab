@@ -476,6 +476,42 @@ With `output_dir=None` a run writes nothing: no run directory, no report. `resul
 'Figure'
 ```
 
+### Sweep with the approximate backtest
+
+A backtest run decides one bar at a time and writes a run directory, which is too slow to sweep a rule's parameters or compare many models. The approximate backtest (`quantlab.backtest.approximate`, ADR 0041) decides every rebalance of a prediction panel at once and simulates the window as array operations. Build it once over a price dataset and a window, then run it on as many (predictions, rule) pairs as you like; the window's prices are read once, and nothing is written.
+
+```python
+>>> from quantlab.backtest.config import ApproximateBacktestConfig
+>>> from quantlab.backtest.predefined.us_equity import USEquityApproximateBacktest
+>>> backtest = USEquityApproximateBacktest(
+...     ApproximateBacktestConfig(
+...         price_dataset=prices, start_date="2024-03-25", end_date="2024-06-26",
+...         rebalance_periods=5, cost=0.0005,
+...     )
+... )
+>>> predictions = BacktestRun.open(run_dir).predictions()  # a run's recorded predictions
+>>> for top_n in (2, 4, 6):
+...     account = backtest.run(predictions, TopNConstructor(TopNConfig(direction="long_only", top_n=top_n)))
+...     print(top_n, round(account.metrics["Sharpe Ratio"], 2))
+2 1.63
+4 2.46
+6 3.36
+```
+
+The rule takes the config a backtest run takes, so a configuration chosen by a sweep goes to `run()` unchanged for confirmation. The returned `ApproximateAccount` holds `value` (1.0 at the window's first bar), `returns`, `value_without_costs`, the target `weights` at the decided bars, the `turnover` of each rebalance, and `metrics`: the rows of `backtest_stats.return_stats` and `backtest_stats.turnover_stats`, so they mean what the rows of a run's `metrics.json` mean, plus `sweeps` and `converged`.
+
+What it keeps from a backtest run: the rebalance schedule (every `rebalance_periods`-th bar from the window's first bar, never its last), a weight decided at t filling at t+1's open, holdings marked at the forward-filled close and drifting with prices between fills, tradability judged at the decision bar. What it gives up: rejected orders, locked positions, delisting settlements (a delisted holding stays at its last valuation, never turned into cash), the cash cap on buys and `min_trade`; fees and slippage are one `cost` on traded weight. A fill price missing at a fill bar falls back to the previous bar's close. On synthetic stores, `TopNConstructor` gives the backtest run's weights exactly and its value within 2e-4.
+
+A rule opts in through `prepare` and `solve` (see the portfolio guide); a rule without them, such as `TopkDropoutConstructor`, is refused before any data is read:
+
+```python
+>>> backtest.run(predictions, TopkDropoutConstructor(TopkDropoutConfig(direction="long_only", topk=3, n_drop=1)))
+Traceback (most recent call last):
+ValueError: USEquityApproximateBacktest cannot run TopkDropoutConstructor: TopkDropoutConstructor has no panel decision (prepare and solve); backtest it with a backtest run
+```
+
+A rule whose decision reads the holdings couples the bars. The window is cut into chunks of `chunk_bars` bars; each chunk is swept (its holdings simulated from the last sweep's weights, the rule asked again) until no bar's weights move by more than `tolerance` (L1), or `max_sweeps` is reached, which logs a warning and sets `converged` to `False`. Top-n does not read the holdings and converges in one sweep.
+
 ### Restrict the universe to an index's members
 
 An index's point-in-time membership is a universe: it says which securities the strategy may enter at bar t. It masks the predictions, never the prices. Keep `price_dataset` unmasked (for CRSP, a `CrspStockDataset` over the index store `wrds_crsp_<index>_1d.zarr`) and wrap the model in `MembershipMaskedPredictor` from `quantlab.model.predefined.membership_mask`, with the index's `IndexConstituentDataset`:

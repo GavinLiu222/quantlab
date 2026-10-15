@@ -476,6 +476,42 @@ ValueError: USEquityCrossectionSelectStockVectorBt: the weight bars must be exac
 'Figure'
 ```
 
+### 用近似回测做参数扫描
+
+回测运行逐 bar 决策并写运行目录，用来扫描规则参数或比较很多模型太慢。近似回测（`quantlab.backtest.approximate`，ADR 0041）一次决定预测面板上的全部调仓，并用数组运算模拟整个窗口。在一个价格数据集和窗口上构建一次，然后对任意多组（预测，规则）运行；窗口的价格只读一次，什么都不写。
+
+```python
+>>> from quantlab.backtest.config import ApproximateBacktestConfig
+>>> from quantlab.backtest.predefined.us_equity import USEquityApproximateBacktest
+>>> backtest = USEquityApproximateBacktest(
+...     ApproximateBacktestConfig(
+...         price_dataset=prices, start_date="2024-03-25", end_date="2024-06-26",
+...         rebalance_periods=5, cost=0.0005,
+...     )
+... )
+>>> predictions = BacktestRun.open(run_dir).predictions()  # 一次运行记录的预测
+>>> for top_n in (2, 4, 6):
+...     account = backtest.run(predictions, TopNConstructor(TopNConfig(direction="long_only", top_n=top_n)))
+...     print(top_n, round(account.metrics["Sharpe Ratio"], 2))
+2 1.63
+4 2.46
+6 3.36
+```
+
+规则用的就是回测运行所用的配置，所以扫描选出的配置可以原样交给 `run()` 确认。返回的 `ApproximateAccount` 有 `value`（窗口第一个 bar 为 1.0）、`returns`、`value_without_costs`、各决策 bar 的目标 `weights`、每次调仓的 `turnover`，以及 `metrics`：`backtest_stats.return_stats` 和 `backtest_stats.turnover_stats` 的各行，含义与运行的 `metrics.json` 中同名行一致，另有 `sweeps` 和 `converged`。
+
+它保留了回测运行的：调仓日程（从窗口第一个 bar 起每 `rebalance_periods` 个 bar 一次，最后一个 bar 不调仓）、bar t 决定的权重在 t+1 开盘成交、持仓按前向填充的收盘价估值并在两次成交之间随价格漂移、可交易性在决策 bar 判断。它放弃了：被拒订单、锁定持仓、退市清算（退市的持仓停在最后估值，不转成现金）、买入的现金上限和 `min_trade`；手续费和滑点合成一个按成交权重计的 `cost`。成交 bar 缺成交价时退回前一 bar 的收盘价。在合成数据上，`TopNConstructor` 的权重与回测运行完全相同，净值相差在 2e-4 以内。
+
+规则通过实现 `prepare` 和 `solve` 加入（见组合构建指南）；没有实现的规则（如 `TopkDropoutConstructor`）在读任何数据之前就被拒绝：
+
+```python
+>>> backtest.run(predictions, TopkDropoutConstructor(TopkDropoutConfig(direction="long_only", topk=3, n_drop=1)))
+Traceback (most recent call last):
+ValueError: USEquityApproximateBacktest cannot run TopkDropoutConstructor: TopkDropoutConstructor has no panel decision (prepare and solve); backtest it with a backtest run
+```
+
+决策要读持仓的规则会把各 bar 耦合起来。窗口按 `chunk_bars` 个 bar 分块；每块反复扫描（由上一轮的权重模拟出持仓，再问一次规则），直到没有哪个 bar 的权重变动超过 `tolerance`（L1），或达到 `max_sweeps`，此时记录警告并把 `converged` 设为 `False`。top-n 不读持仓，一轮即收敛。
+
 ### 限定为指数成分股
 
 指数的 point-in-time 成分是一个股票池：它规定策略在 bar t 可以买入哪些证券。它遮蔽的是预测，从不遮蔽价格。`price_dataset` 保持未遮蔽（CRSP 下即指数 store `wrds_crsp_<index>_1d.zarr` 上的 `CrspStockDataset`），并用 `quantlab.model.predefined.membership_mask` 中的 `MembershipMaskedPredictor` 配合该指数的 `IndexConstituentDataset` 包装模型：

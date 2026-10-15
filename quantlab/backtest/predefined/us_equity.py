@@ -6,10 +6,13 @@ conventions, the portfolio construction rule of its config that turns
 predictions into target weights, and the vectorbt simulation engine
 inherited from ``VectorBtBacktester``. A saved run rebuilds it through
 ``quantlab.runs.backtest_run.BacktestRun.rebuild_backtester``.
+``USEquityApproximateBacktest`` is the approximate backtest on the same
+conventions.
 """
 
 import xarray as xr
 
+from quantlab.backtest.approximate import ApproximateBacktest
 from quantlab.backtest.engine_vectorbt import VectorBtBacktester
 from quantlab.backtest.base import MarketSpec, label_specs
 from quantlab.backtest.config import CrossSectionBacktestConfig
@@ -146,3 +149,26 @@ class USEquityCrossectionSelectStockVectorBt(VectorBtBacktester):
                 "bars": list(records),
             }
         return {"portfolio_construction": block}
+
+
+class USEquityApproximateBacktest(ApproximateBacktest):
+    """The approximate backtest of daily US equities: ``ApproximateBacktest`` on ``US_EQUITY_MARKET``.
+
+    Fills at the adjusted open, values at the adjusted close, as
+    ``USEquityCrossectionSelectStockVectorBt`` does, so the same rule and
+    predictions can be confirmed with a backtest run.
+
+    Examples
+    --------
+    >>> from quantlab.backtest.config import ApproximateBacktestConfig
+    >>> backtest = USEquityApproximateBacktest(
+    ...     ApproximateBacktestConfig(
+    ...         price_dataset=prices, start_date="2024-03-25", end_date="2024-06-26",
+    ...         rebalance_periods=5,
+    ...     )
+    ... )
+    >>> backtest.MARKET.fill_price_column
+    'adjOpen'
+    """
+
+    MARKET = US_EQUITY_MARKET

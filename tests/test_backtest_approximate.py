@@ -1,0 +1,259 @@
+"""The approximate backtest against a backtest run, for top-n (#312).
+
+The approximate backtest decides every rebalance of a prediction panel at
+once and simulates the window as array operations; the backtest run
+(`BaseBacktester.run()`) is the oracle. Each case writes one synthetic price
+store, runs `run()` with a `TopNConfig`, then the approximate backtest with
+the same config on the run's recorded predictions:
+
+- the weights at the decided bars are identical, and the value is within
+  1e-3 relative of the run's, long-only and long-short, rebalancing every
+  bar and every fifth bar;
+- the value without costs equals a zero-cost approximate run;
+- the return statistics agree with the run's `metrics.json`;
+- a rule without a panel decision (`TopkDropoutConstructor`) is refused
+  before any data is read, the message naming the rule.
+
+Everything is synthetic, CPU-only and offline.
+"""
+
+import dataclasses
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from quantlab.backtest.config import ApproximateBacktestConfig, CrossSectionBacktestConfig
+from quantlab.backtest.predefined.us_equity import (
+    USEquityApproximateBacktest,
+    USEquityCrossectionSelectStockVectorBt,
+)
+from quantlab.core.component import rebuild
+from quantlab.portfolio.config import TopkDropoutConfig, TopNConfig
+from quantlab.portfolio.predefined.top_n import TopNConstructor
+from quantlab.portfolio.predefined.topk_dropout import TopkDropoutConstructor
+from quantlab.runs.backtest_run import BacktestRun
+from tests.backtest_fixtures import make_model, make_stock_dataset, write_price_store
+
+N_BARS = 130
+SYMBOLS = [f"S{i:02d}" for i in range(14)]
+WINDOW = (60, 127)
+FEES = 0.0005
+VALUE_TOLERANCE = 1e-3
+
+
+def _day(ts) -> str:
+    return pd.Timestamp(ts).strftime("%Y-%m-%d")
+
+
+@pytest.fixture(scope="module")
+def store(tmp_path_factory):
+    root = tmp_path_factory.mktemp("approximate")
+    dataset_config = write_price_store(root, symbols=SYMBOLS, n_bars=N_BARS, seed=3)
+    bars = pd.bdate_range("2024-01-01", periods=N_BARS)
+    return root, dataset_config, bars
+
+
+def _run(store, top_n_config: TopNConfig, rebalance_periods: int, tag: str):
+    """`run()` with the rule; returns the result and its run directory."""
+    root, dataset_config, bars = store
+    model = make_model(
+        root / f"model_{tag}",
+        dataset_config,
+        start_date=_day(bars[0]),
+        end_date=_day(bars[59]),
+        train_start=_day(bars[0]),
+        train_end=_day(bars[49]),
+        test_start=_day(bars[50]),
+        test_end=_day(bars[59]),
+    )
+    result = USEquityCrossectionSelectStockVectorBt(
+        CrossSectionBacktestConfig(
+            price_dataset=make_stock_dataset(dataset_config),
+            model=model,
+            model_mode="train",
+            start_date=_day(bars[WINDOW[0]]),
+            end_date=_day(bars[WINDOW[1]]),
+            output_dir=str(root / f"runs_{tag}"),
+            rebalance_periods=rebalance_periods,
+            constructor=TopNConstructor(top_n_config),
+            fees=FEES,
+            slippage=0.0,
+        )
+    ).run()
+    return result
+
+
+def _approximate(store, rebalance_periods: int, cost: float = FEES, **overrides):
+    _, dataset_config, bars = store
+    return USEquityApproximateBacktest(
+        ApproximateBacktestConfig(
+            price_dataset=make_stock_dataset(dataset_config),
+            start_date=_day(bars[WINDOW[0]]),
+            end_date=_day(bars[WINDOW[1]]),
+            rebalance_periods=rebalance_periods,
+            cost=cost,
+            **overrides,
+        )
+    )
+
+
+CASES = {
+    "long_only_r1": (TopNConfig(direction="long_only", top_n=4), 1),
+    "long_only_r5": (TopNConfig(direction="long_only", top_n=4), 5),
+    "long_short_r1": (TopNConfig(direction="long_short", top_n=3), 1),
+    "long_short_r5": (TopNConfig(direction="long_short", top_n=3), 5),
+}
+
+
+@pytest.fixture(scope="module", params=sorted(CASES))
+def case(request, store):
+    top_n_config, rebalance_periods = CASES[request.param]
+    result = _run(store, top_n_config, rebalance_periods, request.param)
+    predictions = BacktestRun.open(result.run_dir).predictions()
+    account = _approximate(store, rebalance_periods).run(
+        predictions, TopNConstructor(top_n_config)
+    )
+    return result, predictions, account, top_n_config, rebalance_periods
+
+
+def test_top_n_weights_at_the_decided_bars_equal_the_runs(case):
+    result, _, account, _, _ = case
+    weights = result.weights.transpose("timestamp", "symbol")
+    decided = weights["decided"].values
+
+    np.testing.assert_array_equal(
+        account.weights.timestamp.values, weights.timestamp.values[decided]
+    )
+    np.testing.assert_array_equal(account.weights.symbol.values, weights.symbol.values)
+    np.testing.assert_array_equal(account.weights.values, weights["weight"].values[decided])
+
+
+def test_the_value_is_within_the_tolerance_of_the_runs(case):
+    result, _, account, _, _ = case
+    run_value = result.simulation.value.values / result.simulation.value.values[0]
+
+    np.testing.assert_array_equal(
+        account.value.timestamp.values, result.simulation.value.timestamp.values
+    )
+    assert account.value.values[0] == 1.0
+    np.testing.assert_allclose(account.value.values, run_value, rtol=VALUE_TOLERANCE, atol=0)
+    np.testing.assert_allclose(
+        account.returns.values[1:], account.value.values[1:] / account.value.values[:-1] - 1
+    )
+    assert account.returns.values[0] == 0.0
+
+
+def test_the_value_without_costs_equals_a_zero_cost_run(case, store):
+    _, predictions, account, top_n_config, rebalance_periods = case
+    free = _approximate(store, rebalance_periods, cost=0.0).run(
+        predictions, TopNConstructor(top_n_config)
+    )
+
+    np.testing.assert_array_equal(account.value_without_costs.values, free.value.values)
+    assert account.value_without_costs.values[-1] > account.value.values[-1]
+
+
+def test_the_return_stats_agree_with_the_runs_metrics(case):
+    result, _, account, _, _ = case
+    # The model trained before the window, so the whole window is out of sample.
+    run_stats = BacktestRun.open(result.run_dir).metrics()["out_of_sample"]
+
+    # A value gap of 1e-3 is 0.1 percentage points of total return; annualising
+    # the 68-bar window multiplies it by about four.
+    assert account.metrics["Total Return [%]"] == pytest.approx(
+        run_stats["Total Return [%]"], abs=VALUE_TOLERANCE * 100
+    )
+    assert account.metrics["Annualized Return [%]"] == pytest.approx(
+        run_stats["Annualized Return [%]"], abs=VALUE_TOLERANCE * 100 * 4
+    )
+    for key in ("Annualized Volatility [%]", "Max Drawdown [%]"):
+        assert account.metrics[key] == pytest.approx(run_stats[key], abs=VALUE_TOLERANCE * 100)
+    assert account.metrics["Sharpe Ratio"] == pytest.approx(run_stats["Sharpe Ratio"], abs=0.02)
+    # The run's turnover is notional over the previous close's value, this one weight at the open.
+    assert account.metrics["Turnover per Rebalance [%]"] == pytest.approx(
+        run_stats["Turnover per Rebalance [%]"], rel=0.01
+    )
+
+
+def test_the_turnover_is_recorded_per_rebalance(case):
+    result, _, account, _, _ = case
+    decided = result.weights["decided"].values
+
+    np.testing.assert_array_equal(
+        account.turnover.timestamp.values, result.weights.timestamp.values[decided]
+    )
+    # The first rebalance buys in from cash.
+    assert account.turnover.values[0] == pytest.approx(1.0)
+    assert account.metrics["Turnover per Rebalance [%]"] == pytest.approx(
+        account.turnover.values.mean() * 100
+    )
+
+
+def test_top_n_converges_in_one_sweep(case):
+    _, _, account, _, _ = case
+
+    assert account.metrics["converged"] is True
+    assert set(account.metrics["sweeps"]) == {1}
+
+
+def test_a_smaller_chunk_gives_the_same_account(case, store):
+    _, predictions, account, top_n_config, rebalance_periods = case
+    chunked = _approximate(store, rebalance_periods, chunk_bars=7).run(
+        predictions, TopNConstructor(top_n_config)
+    )
+
+    np.testing.assert_array_equal(chunked.weights.values, account.weights.values)
+    np.testing.assert_allclose(chunked.value.values, account.value.values, rtol=1e-12)
+    assert len(chunked.metrics["sweeps"]) > 1
+
+
+def test_the_approximate_backtest_is_built_once_and_run_many_times(case, store):
+    _, predictions, account, top_n_config, rebalance_periods = case
+    backtest = _approximate(store, rebalance_periods)
+    first = backtest.run(predictions, TopNConstructor(top_n_config))
+    other = backtest.run(predictions, TopNConstructor(dataclasses.replace(top_n_config, top_n=2)))
+    again = backtest.run(predictions, TopNConstructor(top_n_config))
+
+    np.testing.assert_array_equal(first.value.values, account.value.values)
+    np.testing.assert_array_equal(again.value.values, account.value.values)
+    assert not np.array_equal(other.weights.values, account.weights.values)
+
+
+def test_the_config_is_frozen_and_rebuildable(store):
+    backtest = _approximate(store, 5, chunk_bars=20, max_sweeps=8, tolerance=1e-7)
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        backtest.config.cost = 0.0
+    rebuilt = rebuild(backtest.get_config())
+    assert type(rebuilt) is USEquityApproximateBacktest
+    assert rebuilt.config.to_dict() == backtest.config.to_dict()
+
+
+def test_a_rule_without_a_panel_decision_is_refused_before_any_read(store, monkeypatch):
+    backtest = _approximate(store, 5)
+    dataset = backtest.config.price_dataset
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("the price dataset was read")
+
+    monkeypatch.setattr(type(dataset), "panel", refuse)
+    rule = TopkDropoutConstructor(TopkDropoutConfig(direction="long_only", topk=3, n_drop=1))
+    with pytest.raises(ValueError, match="TopkDropoutConstructor"):
+        backtest.run(None, rule)
+
+
+class _MixedRow(TopNConstructor):
+    """Top-n whose first solved row mixes finite weights and NaN."""
+
+    def solve(self, problem, holdings, warm_start=None):
+        weights = super().solve(problem, holdings, warm_start)
+        weights[0, 0] = np.nan
+        return weights
+
+
+def test_a_solved_row_mixing_finite_weights_and_nan_is_refused(case, store):
+    _, predictions, _, top_n_config, rebalance_periods = case
+
+    with pytest.raises(ValueError, match="_MixedRow.solve returned a row mixing"):
+        _approximate(store, rebalance_periods).run(predictions, _MixedRow(top_n_config))

@@ -20,6 +20,12 @@ the loop checks both. A rule holds no state between bars. A bar the rule
 cannot solve raises ``PortfolioConstructionError``, and the loop holds it
 instead.
 
+A rule may also decide a block of bars at once, for the approximate
+backtest (ADR 0041): ``prepare`` turns a ``DecisionPanel`` into a problem
+once and ``solve`` answers it for the holdings at every bar. The base class
+refuses (``panel_refusal`` names the rule); a rule opts in by implementing
+the pair.
+
 A *covariance estimator* (``CovarianceEstimator``) estimates the covariance
 of one-bar returns at a bar, as a ``quantlab.risk.base.ReturnCovariance``
 (the dense ``CovarianceEstimate`` here, for example); a rule that prices
@@ -188,6 +194,50 @@ class PortfolioContext:
         """
         held = self.current_weights.sel(symbol=self.symbols) != 0
         return held & ~self.tradable.astype(bool)
+
+
+@dataclass(frozen=True)
+class DecisionPanel:
+    """What a rule may read at a block of decision bars at once: the panel counterpart of a context.
+
+    ``DecisionInputs.panel`` assembles it for the approximate backtest, from
+    the same reads as the per-bar context, and a rule turns it into a
+    problem with ``PortfolioConstructor.prepare``. It holds no holdings:
+    those are handed to ``solve``.
+
+    Attributes
+    ----------
+    timestamps : pd.DatetimeIndex
+        The decision bars, in time order.
+    symbols : np.ndarray
+        The symbols, the second axis of every array here and of the weights
+        ``solve`` returns.
+    predictions : xr.Dataset
+        Every label's prediction at the bars: one variable per label name
+        on ``(timestamp, symbol)``.
+    tradable : np.ndarray
+        Booleans ``[bars, symbols]``: whether the symbol can be traded at
+        the bar, as ``PortfolioContext.tradable`` judges it.
+
+    Examples
+    --------
+    >>> panel = DecisionPanel(
+    ...     timestamps=pd.DatetimeIndex(["2024-01-02", "2024-01-03"]),
+    ...     symbols=np.array(["AAA", "BBB"]),
+    ...     predictions=xr.Dataset(
+    ...         {"ret": (("timestamp", "symbol"), [[0.1, 0.2], [0.3, np.nan]])},
+    ...         coords={"timestamp": pd.DatetimeIndex(["2024-01-02", "2024-01-03"]), "symbol": ["AAA", "BBB"]},
+    ...     ),
+    ...     tradable=np.array([[True, True], [True, False]]),
+    ... )
+    >>> panel.tradable.shape
+    (2, 2)
+    """
+
+    timestamps: pd.DatetimeIndex
+    symbols: np.ndarray
+    predictions: xr.Dataset
+    tradable: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -663,6 +713,104 @@ class PortfolioConstructor(_Configured, ABC):
         >>> rule.construct(context).values  # CCC is locked at 0.6
         array([0.2, 0.2, 0.6])
         """
+
+    def panel_refusal(self) -> str | None:
+        """Return why the rule cannot decide a panel at once, or ``None`` when it can.
+
+        Asked by the approximate backtest before it reads any data. A rule
+        that implements ``prepare`` and ``solve`` returns ``None`` (or the
+        reason a config field it does not handle in a panel is refused);
+        the default names the rule.
+
+        Examples
+        --------
+        >>> from quantlab.portfolio.config import TopkDropoutConfig
+        >>> from quantlab.portfolio.predefined.topk_dropout import TopkDropoutConstructor
+        >>> TopkDropoutConstructor(
+        ...     TopkDropoutConfig(direction="long_only", topk=3, n_drop=1)
+        ... ).panel_refusal()
+        'TopkDropoutConstructor has no panel decision (prepare and solve)'
+        With ``rule`` the top-2 rule of the class example:
+
+        >>> rule.panel_refusal() is None
+        True
+        """
+        return f"{type(self).__name__} has no panel decision (prepare and solve)"
+
+    def prepare(self, panel: DecisionPanel) -> Any:
+        """Turn a block of decision bars' inputs into a problem, once.
+
+        The panel counterpart of ``construct``, for the approximate backtest:
+        everything the rule's decisions read except the holdings goes into
+        the returned problem, which ``solve`` then answers for any holdings.
+        The problem is opaque to the caller. The default refuses.
+
+        Parameters
+        ----------
+        panel : DecisionPanel
+            The bars' predictions and tradability.
+
+        Returns
+        -------
+        object
+            The rule's problem over the bars.
+
+        Raises
+        ------
+        NotImplementedError
+            When the rule has no panel decision (``panel_refusal``).
+
+        Examples
+        --------
+        With ``panel`` the ``DecisionPanel`` example, the top-2 rule's
+        problem is its books (see ``solve``):
+
+        >>> problem = rule.prepare(panel)
+        >>> problem.shape
+        (2, 2)
+        """
+        raise NotImplementedError(self.panel_refusal())
+
+    def solve(self, problem: Any, holdings: np.ndarray | None, warm_start: np.ndarray | None = None) -> np.ndarray:
+        """Return every bar's weights of a prepared problem, given the holdings at each bar.
+
+        Pure in the holdings: the same problem and holdings give the same
+        weights. A rule whose decision does not read the holdings ignores
+        them. Each row follows the weights contract with nothing locked
+        (finite, gross at most one), or is all NaN to hold. The default
+        refuses.
+
+        Parameters
+        ----------
+        problem : object
+            What ``prepare`` returned.
+        holdings : np.ndarray or None
+            ``[bars, symbols]``: the weights held at each bar's close before
+            it decides, cash excluded; ``None`` to decide as if the holdings
+            did not matter (no turnover term).
+        warm_start : np.ndarray, optional
+            ``[bars, symbols]``: weights to start an iterative solver from.
+
+        Returns
+        -------
+        np.ndarray
+            ``[bars, symbols]`` weights, in the panel's order.
+
+        Raises
+        ------
+        NotImplementedError
+            When the rule has no panel decision (``panel_refusal``).
+
+        Examples
+        --------
+        With ``rule`` top-2 and ``panel`` the ``DecisionPanel`` example (BBB
+        has no score at the second bar, so only AAA is picked there):
+
+        >>> rule.solve(problem, None)
+        array([[0.5, 0.5],
+               [1. , 0. ]])
+        """
+        raise NotImplementedError(self.panel_refusal())
 
     def decide(self, context: PortfolioContext) -> Decision:
         """Decide one bar: run ``construct``, check its row and hold a bar it cannot solve.

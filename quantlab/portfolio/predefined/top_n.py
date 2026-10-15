@@ -13,7 +13,7 @@ import xarray as xr
 from loguru import logger
 
 from quantlab.portfolio.config import TopNConfig
-from quantlab.portfolio.base import PortfolioConstructor, PortfolioContext
+from quantlab.portfolio.base import DecisionPanel, PortfolioConstructor, PortfolioContext
 from quantlab.runs.prediction_panel import LabelSpec
 
 
@@ -209,3 +209,93 @@ class TopNConstructor(PortfolioConstructor):
         if tied:
             weights.attrs["events"] = {"tie_at_cutoff": tied}
         return weights
+
+    def panel_refusal(self) -> str | None:
+        """Return ``None``: top-n decides a panel at once.
+
+        Examples
+        --------
+        >>> TopNConstructor(TopNConfig(direction="long_only", top_n=2)).panel_refusal() is None
+        True
+        """
+        return None
+
+    def prepare(self, panel: DecisionPanel) -> np.ndarray:
+        """Decide every bar of the panel at once; the books do not read the holdings.
+
+        Each row is the book ``construct`` gives the bar with nothing
+        locked: the same picks (a stable sort, ties resolved by symbol
+        order), ``top_n`` reduced where fewer symbols can be picked (one
+        warning names those bars), and ``1 / k`` (``0.5 / k`` per side
+        long-short) on each pick. The tie events are not counted.
+
+        Parameters
+        ----------
+        panel : DecisionPanel
+            The bars' predictions and tradability.
+
+        Returns
+        -------
+        np.ndarray
+            ``[bars, symbols]`` weights, the problem ``solve`` returns.
+
+        Examples
+        --------
+        >>> import numpy as np, pandas as pd, xarray as xr
+        >>> from quantlab.portfolio.base import DecisionPanel
+        >>> bars = pd.DatetimeIndex(["2024-01-02", "2024-01-03"])
+        >>> panel = DecisionPanel(
+        ...     timestamps=bars,
+        ...     symbols=np.array(symbols),
+        ...     predictions=xr.Dataset(
+        ...         {"ret": (("timestamp", "symbol"), [[0.3, 0.1, np.nan, 0.2], [0.1, 0.1, 0.4, 0.1]])},
+        ...         coords={"timestamp": bars, "symbol": symbols},
+        ...     ),
+        ...     tradable=np.ones((2, 4), dtype=bool),
+        ... )
+        >>> rule.prepare(panel)
+        array([[0.5, 0. , 0. , 0.5],
+               [0.5, 0. , 0.5, 0. ]])
+        """
+        scores = np.asarray(
+            panel.predictions[self._score_label(panel.predictions)]
+            .transpose("timestamp", "symbol")
+            .sel(symbol=panel.symbols)
+            .values,
+            dtype=np.float64,
+        )
+        candidate = np.asarray(panel.tradable, dtype=bool) & np.isfinite(scores)
+        # Candidates first, highest score first, ties in symbol order: the per-bar stable sort.
+        order = np.argsort(np.where(candidate, -scores, np.inf), axis=1, kind="stable")
+        count = candidate.sum(axis=1)
+        top_n = self.config.top_n
+        long_only = self.config.direction == "long_only"
+        k = np.minimum(top_n, count if long_only else count // 2)
+        if (k < top_n).any():
+            bars = [str(t) for t in panel.timestamps[k < top_n][:5]]
+            logger.warning(
+                f"{int((k < top_n).sum())} bar(s) have fewer than top_n={top_n} symbols "
+                f"to pick per book, the first {bars}"
+            )
+        rank = np.arange(scores.shape[1])[None, :]
+        weights = np.zeros_like(scores)
+        size = np.where(k > 0, k, 1)[:, None]
+        if long_only:
+            np.put_along_axis(weights, order, np.where(rank < k[:, None], 1.0 / size, 0.0), axis=1)
+        else:
+            picked = np.where(rank < k[:, None], 0.5 / size, 0.0)
+            # The bottom k of the candidates sit just before the non-candidates.
+            bottom = (rank >= (count - k)[:, None]) & (rank < count[:, None])
+            picked = np.where(bottom, -0.5 / size, picked)
+            np.put_along_axis(weights, order, picked, axis=1)
+        return weights
+
+    def solve(self, problem: np.ndarray, holdings: np.ndarray | None, warm_start: np.ndarray | None = None) -> np.ndarray:
+        """Return the prepared books; top-n reads neither the holdings nor a warm start.
+
+        Examples
+        --------
+        >>> rule.solve(rule.prepare(panel), None)[1]
+        array([0.5, 0. , 0.5, 0. ])
+        """
+        return problem.copy()
