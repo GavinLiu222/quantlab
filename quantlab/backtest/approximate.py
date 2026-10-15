@@ -336,6 +336,8 @@ class ApproximateBacktest(Component):
         fill = np.asarray(prices[market.fill_price_column].values, dtype=np.float64)
         close = _ffill(np.asarray(prices[market.valuation_price_column].values, dtype=np.float64))
 
+        # A declared risk model's exposures and estimate rows, one request each over the decision bars.
+        risk = inputs.risk_inputs(timestamps[decisions[0]], timestamps[decisions[-1]]) if len(decisions) else None
         targets = np.full((len(decisions), len(symbols)), np.nan)
         sweeps: list[int] = []
         converged = True
@@ -343,7 +345,9 @@ class ApproximateBacktest(Component):
             members = np.flatnonzero(decisions // config.chunk_bars == chunk)
             known = members[-1] + 1
             problem = constructor.prepare(
-                inputs.panel(panel.isel(timestamp=decisions[members]), prices=self._history_prices(inputs))
+                inputs.panel(
+                    panel.isel(timestamp=decisions[members]), prices=self._history_prices(inputs), risk=risk
+                )
             )
             weights = constructor.solve(problem, None)
             self._check_rows(constructor, weights)

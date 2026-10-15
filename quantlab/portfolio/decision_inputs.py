@@ -31,8 +31,9 @@ a run's rebalances (turnover, win rates, attribution, the report) takes them
 from that record.
 
 ``panel`` gives a block of decision bars' inputs at once (a
-``DecisionPanel``: their predictions and tradability, read as the per-bar
-context reads them) for a rule's ``prepare``, the approximate backtest's
+``DecisionPanel``: their predictions and tradability, and a declared risk
+model's exposures and estimate rows, read as the per-bar context reads
+them, the latter once over many blocks with ``risk_inputs``) for a rule's ``prepare``, the approximate backtest's
 path; ``scheduled`` names the scheduled bars of many timestamps at once.
 
 ``DecisionInputs.from_run`` rebuilds the inputs of a recorded backtest run,
@@ -450,7 +451,13 @@ class DecisionInputs:
         """
         return self._scheduled(pd.DatetimeIndex(timestamps))
 
-    def panel(self, predictions: xr.Dataset, *, prices: xr.Dataset | None = None) -> DecisionPanel:
+    def panel(
+        self,
+        predictions: xr.Dataset,
+        *,
+        prices: xr.Dataset | None = None,
+        risk: tuple[xr.Dataset | None, xr.Dataset | None] | None = None,
+    ) -> DecisionPanel:
         """Return the decision inputs of a block of decision bars at once, for ``PortfolioConstructor.prepare``.
 
         The panel counterpart of ``context``: each bar's predictions, its
@@ -461,8 +468,10 @@ class DecisionInputs:
         from the first to the last bar, with its own warm-up), as the
         per-bar context reads them; ``DecisionPanel.return_windows`` and
         ``DecisionPanel.staleness`` give each bar's window and staleness as
-        its context holds them. No holdings: a rule's ``solve`` is handed
-        those.
+        its context holds them. With a declared factor risk model, its
+        exposures at the bars and its estimate store's rows there, as
+        ``risk_inputs`` reads them. No holdings: a rule's ``solve`` is
+        handed those.
 
         Parameters
         ----------
@@ -474,6 +483,11 @@ class DecisionInputs:
             the first bar's warm-up (``history_prices``) to the last bar or
             beyond, already read (an approximate backtest reads its window
             once); read from the dataset when omitted.
+        risk : tuple of (xr.Dataset or None, xr.Dataset or None), optional
+            The risk model's exposures and estimate rows covering the bars,
+            already read (``risk_inputs`` over a longer span, read once);
+            read over the bars when omitted. Ignored without a declared risk
+            model.
 
         Returns
         -------
@@ -523,6 +537,13 @@ class DecisionInputs:
         factors = self._factor_panels(first, last, symbols)
         if factors is not None:
             factors = factors.reindex(timestamp=timestamps).load()
+        exposures = estimates = None
+        if self.declared.risk_model is not None:
+            exposures, estimates = self.risk_inputs(first, last) if risk is None else risk
+            exposures = exposures.reindex(timestamp=timestamps, symbol=symbols)
+            if estimates is not None:
+                at_bars = np.isin(estimates.timestamp.values, timestamps.values)
+                estimates = estimates.isel(timestamp=at_bars) if at_bars.any() else None
         return DecisionPanel(
             timestamps=timestamps,
             symbols=symbols,
@@ -532,7 +553,47 @@ class DecisionInputs:
             rows=rows,
             history_bars=self.declared.history_bars,
             factors=factors,
+            risk_exposures=exposures,
+            risk_estimates=estimates,
         )
+
+    def risk_inputs(self, first, last) -> tuple[xr.Dataset | None, xr.Dataset | None]:
+        """Return the declared factor risk model's exposures and estimate rows from ``first`` to ``last``.
+
+        Each in one request, as ``weights`` reads them over its panel: the
+        exposures from the model (``FactorRiskModel.exposures``, read or
+        computed per its ``exposure_data_strategy``), on every symbol, and
+        the estimate store's rows over the part of the range it covers;
+        what ``panel`` takes as ``risk`` for any block of those bars.
+        ``(None, None)`` without a declared risk model.
+
+        Parameters
+        ----------
+        first, last : pd.Timestamp or datetime-like
+            The first and last bar.
+
+        Returns
+        -------
+        tuple of (xr.Dataset or None, xr.Dataset or None)
+            The exposures on ``(timestamp, symbol)`` and the estimate rows
+            (``None`` when the store has none in the range).
+
+        Raises
+        ------
+        ValueError
+            If the exposures store does not cover the range (under
+            ``"read"``).
+
+        Examples
+        --------
+        >>> inputs.risk_inputs(ts[1], ts[3])  # top-n declares no risk model
+        (None, None)
+        """
+        first, last = pd.Timestamp(first), pd.Timestamp(last)
+        exposures = self._risk_exposures(first, last, None)
+        if exposures is None:
+            return None, None
+        return exposures.load(), self._risk_estimates(first, last, None)
 
     def history_prices(self, first, last) -> xr.Dataset:
         """Return the fill and valuation prices the bars from ``first`` to ``last`` read, warm-up included.

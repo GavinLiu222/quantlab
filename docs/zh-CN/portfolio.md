@@ -373,9 +373,11 @@ array([ 0.4  , -0.212, -0.261,  0.073])
 
 近似回测（见[用近似回测做参数扫描](backtest.md#用近似回测做参数扫描)）通过 `prepare` 和 `solve` 一次决定一个分块里的所有 bar。`prepare` 向协方差估计器要每个 bar 的低秩形式估计（`estimate_all`，一个 `LowRankCovariance`：每个 bar 为 `B F B' + diag(D)`），按预期收益标签的 span 缩放，并像逐 bar 规则一样计算 `mu`：可交易且被估计覆盖的标的为可选，有预测的可选标的上 `mu = ic * sigma * z`。`solve` 再把持有的可选标的以 `mu = 0` 加入候选，在预算和上限约束下，对所有 bar 同时最大化 `w @ mu - risk_aversion / 2 * w @ Sigma @ w`，方法是加速投影梯度（带自适应重启的 FISTA，步长取自每个 bar 的最大特征值，向带上限单纯形做精确投影），直到没有哪个 bar 的权重变动超过 1e-10。候选太少的 bar 保持仓位，与回测运行相同。在合成数据上，权重与以严格容差求解的回测运行相差在 2e-7（L1，14 只标的）和 6e-6（1,000 只）以内；在 CLARABEL 默认容差下，回测运行自己的解在目标几乎平坦的 bar 上可能离最优约 2e-3，两种回测在那里可能相差这么多。
 
-目前支持：只做多、`calibration="grinold"`、无换手惩罚、不设 `candidate_top_k` 和 `volatility_label`，以及 `LedoitWolfEstimator`。其他设置都在读任何数据之前被拒绝，消息会指明原因：跟踪误差上限（`tracking_error`）、`exposure_bounds`、其他字段、重写了 `reference_weights` 却没有 `panel_reference_weights` 的规则、`risk_constraints` 返回了任何约束的规则、没有 `estimate_all` 的估计器。`solver` 和 `min_trade` 不读取。
+目前支持：只做多、`calibration="grinold"`、无换手惩罚、不设 `candidate_top_k` 和 `volatility_label`，以及 `LedoitWolfEstimator` 或 `FactorRiskStoreEstimator`。其他设置都在读任何数据之前被拒绝，消息会指明原因：跟踪误差上限（`tracking_error`）、`exposure_bounds`、其他字段、重写了 `reference_weights` 却没有 `panel_reference_weights` 的规则、`risk_constraints` 返回了任何约束的规则、没有 `estimate_all` 的估计器。`solver` 和 `min_trade` 不读取。
 
 主动风险规则也能运行，但不能设 `tracking_error`。`DecisionInputs.panel` 带上规则声明的因子在各 bar 的值（`DecisionPanel.factors`），`ActiveRiskOptimizer.panel_reference_weights` 是 `reference_weights` 的面板对应物，从中读取基准权重。`solve` 于是在每个 bar 上计价 `(w - b)' Sigma (w - b)`，`b` 只取该 bar 被覆盖的标的：估计未覆盖的基准标的被剔除，与逐 bar 规则相同，但不记录事件。在合成数据上，它的权重与以严格容差求解的回测运行相差在 6e-7（L1）以内，净值相差在 1.5e-4 以内。
+
+使用 `FactorRiskStoreEstimator` 时，`DecisionInputs.panel` 带上因子风险模型在这些 bar 上的暴露和估计 store 在那里的行（`DecisionPanel.risk_exposures`、`risk_estimates`），读法与回测运行相同（ADR 0037）：近似回测在其决策 bar 上各读一次（`DecisionInputs.risk_inputs`），与分块无关。`estimate_all` 用数组运算构造每个 bar 的 `B F B' + diag(D)`，不逐 bar 调用 `forecast`：`B` 由模型的 `exposure_matrix` 一次算出所有 bar，`F` 和 `D` 取自估计行，放在模型的因子轴上。它的覆盖规则是逐 bar 预测的简化版，所以 store 有缺口时两种回测可能不同：某 bar 上方差有限的因子才保留（被剔除的因子暴露为零、`F` 的对应行列为零，暴露于它的标的在该 bar 不被覆盖，与逐 bar 相同）；但两个保留因子之间缺失的协方差按 0 处理，而逐 bar 预测会剔除因子直到协方差块全部有限；`exposure_matrix` 覆盖、特质风险有限、且在保留因子上暴露有限的标的才被覆盖，与逐 bar 相同。估计 store 在某 bar 没有行时拒绝，与 `estimate` 一致。在测试用的合成因子风险模型上（两个风格、两个行业），权重与严格求解的回测运行相差 5e-8（L1，14 只标的）和 1.6e-6（300 只），净值相差在 2.5e-4 以内；300 只标的、67 次日频调仓用时 0.25 秒，回测运行 4.0 秒。
 
 ### 暴露约束
 

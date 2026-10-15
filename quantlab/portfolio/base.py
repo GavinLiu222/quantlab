@@ -235,6 +235,15 @@ class DecisionPanel:
         ``(timestamp, symbol)``, NaN where a symbol has none, as each bar's
         ``PortfolioContext.factors`` holds them. ``None`` when the rule
         declares none.
+    risk_exposures : xr.Dataset or None
+        The exposures of the declared factor risk model at the bars, on
+        ``(timestamp, symbol)``, as each bar's ``PortfolioContext.risk_exposures``
+        holds them; ``None`` when the rule declares no risk model.
+    risk_estimates : xr.Dataset or None
+        The model's estimate store's rows at the bars it has a row for, on
+        their own ``timestamp`` axis: bar ``t``'s row is its context's
+        ``risk_estimate``, and a bar without one has none. ``None`` when the
+        rule declares no risk model or the store has no row at the bars.
 
     Examples
     --------
@@ -262,6 +271,8 @@ class DecisionPanel:
     rows: np.ndarray | None = None
     history_bars: int = 1
     factors: xr.Dataset | None = None
+    risk_exposures: xr.Dataset | None = None
+    risk_estimates: xr.Dataset | None = None
 
     def _last_priced(self) -> np.ndarray:
         """``[rows, symbols]``: the row of each symbol's last real price at or before each row, -1 for none."""
@@ -988,6 +999,7 @@ class PortfolioConstructor(_Configured, ABC):
         ...     TopkDropoutConfig(direction="long_only", topk=3, n_drop=1)
         ... ).panel_refusal()
         'TopkDropoutConstructor has no panel decision (prepare and solve)'
+
         With ``rule`` the top-2 rule of the class example:
 
         >>> rule.panel_refusal() is None

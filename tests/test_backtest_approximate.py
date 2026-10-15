@@ -28,6 +28,10 @@ penalty case turns on with #306; a rule constraining its risk term, or
 pricing a reference book per bar without a panel counterpart, is refused
 before any data is read.
 
+Mean-variance on a factor risk model (#308), with a `FactorRiskStoreEstimator`:
+the same bounds against `run()`, and the risk stores read once over the window
+whatever the chunks.
+
 Everything is synthetic, CPU-only and offline.
 """
 
@@ -735,3 +739,68 @@ def test_a_risk_extension_without_a_panel_counterpart_is_refused_before_any_read
     monkeypatch.setattr(type(backtest.config.price_dataset), "panel", refuse)
     with pytest.raises(ValueError, match=named):
         backtest.run(None, rule(_mvo().config))
+
+
+# Mean-variance on a factor risk model (#308): the synthetic factor risk setup
+# of the per-bar mean-variance tests (country, two industries, two styles),
+# its exposures read from the exposures factor's store.
+
+
+@pytest.fixture(scope="module")
+def factor_risk_case(store):
+    import cvxpy
+
+    from quantlab.portfolio.config import FactorRiskStoreEstimatorConfig
+    from quantlab.portfolio.predefined.factor_risk import FactorRiskStoreEstimator
+    from quantlab.runs.record import DataRecorder
+    from tests.test_backtest_mean_variance import _factor_risk_model
+
+    root, dataset_config, bars = store
+    model = _factor_risk_model(root / "factor_risk", dataset_config, bars, strategy="read")
+
+    def rule():
+        return _mvo(covariance=FactorRiskStoreEstimator(FactorRiskStoreEstimatorConfig(risk_model=model)))
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(cvxpy.Problem, "solve", _tightly_solved(cvxpy.Problem.solve))
+        result = _mvo_run(store, rule(), 1, "factor_risk", 1)
+    predictions = BacktestRun.open(result.run_dir).predictions()
+    reads = []
+    original = type(model.estimate).read
+
+    def counted(self, *args, **kwargs):
+        reads.append(args)
+        return original(self, *args, **kwargs)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(type(model.estimate), "read", counted)
+        with DataRecorder(keys=[(model, "risk_model"), (model.config.exposures, "exposures")]) as recorder:
+            # Chunks of 10 bars: the risk stores are still read once over the window.
+            account = _approximate(store, 1, chunk_bars=10).run(predictions, rule())
+            # The recorder reads each request once more on closing, to hash it.
+            read_by_run = list(reads)
+    return result, account, recorder.records, read_by_run
+
+
+def test_factor_risk_mean_variance_weights_and_value_are_within_the_bounds(factor_risk_case):
+    result, account, _, _ = factor_risk_case
+    weights = result.weights.transpose("timestamp", "symbol")
+    decided = weights["decided"].values
+
+    assert result.metrics["portfolio_construction"]["failed_bar_count"] == 0
+    np.testing.assert_array_equal(account.weights.timestamp.values, weights.timestamp.values[decided])
+    gap = np.abs(account.weights.values - weights["weight"].values[decided]).sum(axis=1)
+    assert gap.max() <= WEIGHTS_L1
+    run_value = result.simulation.value.values / result.simulation.value.values[0]
+    np.testing.assert_allclose(account.value.values, run_value, rtol=VALUE_TOLERANCE, atol=0)
+
+
+def test_the_risk_stores_are_read_once_over_the_window(factor_risk_case):
+    _, account, records, reads = factor_risk_case
+    decided = account.weights.timestamp.values
+    window = (pd.Timestamp(decided[0]).isoformat(), pd.Timestamp(decided[-1]).isoformat())
+
+    assert len(reads) == 1
+    for key in ("risk_model.estimate", "exposures"):
+        entry, = records[key]
+        assert (entry["request"]["start"], entry["request"]["end"]) == window
