@@ -158,9 +158,44 @@ def test_a_roster_view_refuses_a_symbol_off_the_roster(setup):
         view.read(_START, _END, symbols=["2", "5"])
 
 
-def test_a_chunked_roster_reads_the_roster(setup):
+def _chunked(factor):
+    return ChunkedFactor(ChunkedConfig(factor=factor, granularity="month"))
+
+
+@pytest.mark.parametrize("name", VIEWS)
+def test_a_chunked_view_answers_the_views_store_queries(setup, name):
+    view = VIEWS[name](*setup)
+    chunked = _chunked(view)
+
+    assert chunked.store_path == view.store_path
+    assert chunked.store_range() == view.store_range()
+    assert chunked.owns_store() is False
+    assert chunked.stored_symbols() == view.stored_symbols()
+    assert chunked.output_symbols() == view.output_symbols()
+    assert chunked.cell_bytes() == view.cell_bytes()
+    assert chunked.read(_START, _END)["symbol"].values.tolist() == KEPT[name]
+    with pytest.raises(ValueError, match="a view has no store of its own"):
+        chunked.build(_START, _END)
+
+
+def test_a_chunked_owner_writes_the_store_through_its_owner(setup):
+    owner = setup[0]
+    chunked = _chunked(owner)
+
+    assert chunked.owns_store() is True
+    assert chunked.store_path == owner.store_path
+    assert chunked.cell_bytes() == owner.cell_bytes()
+    chunked.build(_START, "2024-01-31")
+    assert owner.store_range() == (_START, "2024-01-31")
+    chunked.extend(_END)
+    assert owner.store_range() == (_START, _END)
+    assert chunked.stored_symbols() == ["1", "2", "3", "4", "5"]
+
+
+def test_a_view_over_a_chunked_factor_is_a_view_of_its_store(setup):
     owner, roster, _ = setup
 
-    panel = ChunkedFactor(ChunkedConfig(factor=_roster(owner, roster))).read(_START, _END)
+    view = _roster(_chunked(owner), roster)
 
-    assert panel["symbol"].values.tolist() == ["2", "3", "4"]
+    assert view.store_path == owner.store_path and view.owns_store() is False
+    assert view.read(_START, _END)["symbol"].values.tolist() == ["2", "3", "4"]

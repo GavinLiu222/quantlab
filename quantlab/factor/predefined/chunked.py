@@ -31,7 +31,6 @@ are a ``joblib.Parallel`` (loky) fan-out, like the repository's others.
 """
 
 import ctypes
-import dataclasses
 import json
 import sys
 from collections.abc import Iterator
@@ -47,8 +46,8 @@ from loguru import logger
 
 from quantlab.core.component import rebuild
 from quantlab.dataset._support.ledger import TimeChunkPlanner
-from quantlab.factor.base import Factor
 from quantlab.factor.config import ChunkedConfig
+from quantlab.factor.view import FactorView
 from quantlab.utils.date_range import last_moment
 from quantlab.utils.resample import resample_seconds
 
@@ -92,7 +91,7 @@ def memory_budget() -> int:
     return int(psutil.virtual_memory().available * MEMORY_FRACTION)
 
 
-class ChunkedFactor(Factor):
+class ChunkedFactor(FactorView):
     """The outputs of ``config.factor``, computed one chunk of time at a time.
 
     The chunks are one ``TimeChunkPlanner`` period each, cut on the
@@ -103,8 +102,11 @@ class ChunkedFactor(Factor):
     takes is the wrapped factor's ``cell_bytes()``, and the symbols are the
     ones it outputs (``output_symbols()``), not its dataset's.
 
-    There is no store of its own: ``store_path``, ``store_range`` and
-    ``read`` are the wrapped factor's, so a model can read either.
+    It is a factor view (see ``FactorView``) that writes the wrapped store
+    through its owner: ``store_path``, ``store_range()``, the symbols and
+    ``read`` are the wrapped factor's, so a model can read either, and
+    ``owns_store()`` is the wrapped factor's. Over a view, ``build`` and
+    ``extend`` are refused as the view refuses them.
 
     A resampled wrapped factor is chunked on its source bars, never finer
     than its resampled bars. ``config.workers`` processes compute chunks at
@@ -137,49 +139,18 @@ class ChunkedFactor(Factor):
     # Narrower type annotation for readers and type checkers only.
     config: ChunkedConfig
 
-    @Factor.config.setter
-    def config(self, config: ChunkedConfig):
-        """Install ``config`` with ``dataset`` set to the wrapped factor's dataset."""
-        Factor.config.fset(
-            self, dataclasses.replace(config, dataset=config.factor.config.dataset)
-        )
-
-    def _get_factor_names(self) -> tuple[str, ...]:
-        """Return the wrapped factor's output names."""
-        return tuple(self.config.factor.get_factor_names())
-
     def _validate_config(self) -> None:
-        """Refuse a warm-up, a store, resampling, names or a granularity it cannot honour.
+        """Refuse what a view refuses, and a granularity or workers it cannot honour.
 
         Raises
         ------
         ValueError
-            If ``warmup_bars`` is not 0, ``file_path`` or ``resample_freq``
-            is set, ``factor_names`` are not the wrapped factor's,
-            ``granularity`` is unknown or finer than the wrapped factor's
-            resampled bars, or ``workers`` is not a positive integer.
+            If ``FactorView`` refuses the config, ``granularity`` is unknown
+            or finer than the wrapped factor's resampled bars, or ``workers``
+            is not a positive integer.
         """
+        super()._validate_config()
         config = self.config
-        if config.warmup_bars != 0:
-            raise ValueError(
-                f"{self.class_name}: warmup_bars must be 0, got {config.warmup_bars}; "
-                f"the wrapped factor warms itself up."
-            )
-        if config.file_path is not None:
-            raise ValueError(
-                f"{self.class_name}: file_path must be None; the wrapper writes the "
-                f"wrapped factor's store and has none of its own."
-            )
-        if config.resample_freq is not None:
-            raise ValueError(
-                f"{self.class_name}: cannot be resampled; wrap a resampled factor instead."
-            )
-        if tuple(config.factor_names) != self._get_factor_names():
-            raise ValueError(
-                f"{self.class_name}: factor_names {list(config.factor_names)} are not "
-                f"the wrapped factor's {list(self._get_factor_names())}; pin the "
-                f"wrapped factor instead."
-            )
         if config.granularity not in (None, *TimeChunkPlanner.GRANULARITIES):
             raise ValueError(
                 f"{self.class_name}: unknown granularity {config.granularity!r}; "
@@ -203,40 +174,15 @@ class ChunkedFactor(Factor):
             g for g in TimeChunkPlanner.GRANULARITIES if TimeChunkPlanner.PERIOD_SECONDS[g] >= resample_seconds(freq)
         )
 
-    @property
-    def store_path(self) -> str | None:
-        """Return the wrapped factor's store."""
-        return self.config.factor.store_path
-
     def owns_store(self) -> bool:
-        """Whether the wrapped factor owns its store; see ``Factor.owns_store``."""
-        return self.config.factor.owns_store()
-
-    def store_range(self) -> tuple[str, str] | None:
-        """Return the wrapped factor's recorded store range."""
-        return self.config.factor.store_range()
-
-    def stored_symbols(self) -> list:
-        """Return the symbol axis of the wrapped factor's store."""
-        return self.config.factor.stored_symbols()
-
-    def output_symbols(self) -> list:
-        """Return the symbols the wrapped factor outputs; see ``Factor.output_symbols``.
+        """Return whether the wrapped factor owns its store: this view writes through it.
 
         Examples
         --------
-        >>> chunked.output_symbols() == alpha158.output_symbols()
+        >>> chunked.owns_store() == alpha158.owns_store()
         True
         """
-        return self.config.factor.output_symbols()
-
-    def read(self, start, end, symbols=None) -> xr.Dataset:
-        """Return the wrapped factor's store from ``start`` to ``end``; see ``Factor.read``."""
-        return self.config.factor.read(start, end, symbols=symbols)
-
-    def keep_compiled(self):
-        """Keep the wrapped factor's compiled graph inside the block."""
-        return self.config.factor.keep_compiled()
+        return self.config.factor.owns_store()
 
     def plan(self, start, end) -> tuple[str | None, list[tuple[pd.Timestamp, pd.Timestamp]]]:
         """Return the granularity and the ``(first, last)`` bar of every chunk of a range.
