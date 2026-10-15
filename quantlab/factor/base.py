@@ -24,7 +24,6 @@ import contextlib
 import copy
 import dataclasses
 import datetime
-import json
 import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
@@ -39,15 +38,13 @@ import xarray as xr
 from quantlab.analysis.factor_report import FactorAnalyzer
 from quantlab.core.component import Component, component_fields
 from quantlab.factor.config import BaseFactorConfig
+from quantlab.backend.ranged import RangedStore
 from quantlab.backend.zarr import XrBackend
 from quantlab.dataset.base import InsufficientHistoryError
 from quantlab.dataset.merged import MergedDataset
-from quantlab.utils.atomic import write_json_atomically
 from quantlab.utils.date_range import (
     as_label,
     check_range,
-    last_moment,
-    range_text,
     resample_padding,
 )
 from quantlab.runs.record import record_read
@@ -124,10 +121,6 @@ class Factor(Component, ABC):
     >>> factor.build("2024-01-01", "2024-06-30")
     >>> panel = factor.read("2024-02-01", "2024-02-29")
     """
-
-    #: Appended to ``store_path`` to name the JSON file recording the date
-    #: range ``build`` wrote and ``extend`` lengthened.
-    RANGE_SUFFIX = ".range.json"
 
     def __init__(self, config: BaseFactorConfig):
         """Initialize the factor; see the class docstring for parameters."""
@@ -375,10 +368,10 @@ class Factor(Component, ABC):
         first, last = check_range(start, end, f"{self.class_name}.read()")
         window = slice(as_label(start), as_label(end))
         if self.config.resample_freq is None or Path(self.store_path).exists():
-            self._check_covers(self.store_path, start, end)
+            self._ranged_store().check_covers(start, end)
             data = XrBackend().read(self.store_path).data.sel(timestamp=window)
         else:
-            self._check_covers(self.config.file_path, start, end)
+            self._ranged_store(self.config.file_path).check_covers(start, end)
             pad = resample_padding(self.config.resample_freq)
             source = XrBackend().read(self.config.file_path).data.sel(
                 timestamp=slice(first - pad, last + pad)
@@ -578,7 +571,10 @@ class Factor(Component, ABC):
         and the range is recorded beside it, in
         ``<store_path>.range.json``, for ``store_range``, ``read`` and
         ``extend``. The factor holds nothing afterwards and no config
-        changes. Only the store's owner builds it (see ``owns_store``).
+        changes. Only the store's owner builds it (see ``owns_store``). The
+        store and its range are written through
+        ``quantlab.backend.ranged.RangedStore``, as a factor risk model's
+        stores are.
 
         Parameters
         ----------
@@ -590,60 +586,18 @@ class Factor(Component, ABC):
         Self
             ``self``, for chaining.
 
+        Raises
+        ------
+        ValueError
+            If the factor has no store path or does not own its store.
+
         Examples
         --------
         >>> factor.build("2024-01-01", "2024-03-31").store_range()
         ('2024-01-01', '2024-03-31')
         """
-        self._refuse_unless_owner("build")
-        self._create_store(self.compute(start, end), start, end)
+        self._ranged_store().build(start, end)
         return self
-
-    def _create_store(self, panel: xr.Dataset, start, end) -> None:
-        """Replace the store with ``panel``, computed over ``start``..``end``, and record the range.
-
-        The write half of ``build``; ``ChunkedFactor`` calls it with a
-        chunk computed in a worker process.
-        """
-        with Timer(f"{self.class_name}: build"):
-            self._drop_range(self.store_path)
-            XrBackend().to_internal(panel).create(
-                self.store_path, fill_values=self._widen_fill_values()
-            )
-            self._record_range(self.store_path, start, end)
-
-    def _append_store(self, panel: xr.Dataset, end) -> None:
-        """Append ``panel``, the bars after the recorded range up to ``end``, and record the range.
-
-        The write half of ``extend``; ``ChunkedFactor`` calls it with a
-        chunk computed in a worker process.
-        """
-        recorded_start, _ = self._extendable_range(end)
-        with Timer(f"{self.class_name}: extend"):
-            if panel.sizes["timestamp"]:
-                XrBackend().to_internal(panel).widen_and_append(
-                    self.store_path, fill_values=self._widen_fill_values()
-                )
-            self._record_range(self.store_path, recorded_start, end)
-
-    def _extendable_range(self, end) -> tuple[str, str]:
-        """Return the recorded range, refusing an ``extend`` to ``end``; see ``extend``."""
-        self._refuse_unless_owner("extend")
-        recorded = self._stored_range(self.store_path)
-        if recorded is None:
-            raise ValueError(
-                f"{self.class_name}.extend(): the store at {self.store_path} "
-                f"has no recorded range; write it with build(start, end) "
-                f"first."
-            )
-        recorded_start, recorded_end = recorded
-        if last_moment(end) <= last_moment(recorded_end):
-            raise ValueError(
-                f"{self.class_name}.extend(): the store at {self.store_path} "
-                f"already covers {recorded_start} to {recorded_end}; extend() "
-                f"appends only bars after {recorded_end}, got end {end!r}."
-            )
-        return recorded_start, recorded_end
 
     def extend(self, end: "str | datetime.date | pd.Timestamp") -> Self:
         """Append the bars after the recorded range, up to ``end``.
@@ -672,9 +626,9 @@ class Factor(Component, ABC):
         Raises
         ------
         ValueError
-            If the factor does not own its store (see
-            ``owns_store``), the store has no recorded range, or the recorded
-            range already reaches ``end``.
+            If the factor has no store path, does not own its store (see
+            ``owns_store``), the store has no recorded range, or the
+            recorded range already reaches ``end``.
 
         Examples
         --------
@@ -683,10 +637,43 @@ class Factor(Component, ABC):
         >>> factor.extend("2024-04-30").store_range()
         ('2024-01-01', '2024-04-30')
         """
-        _, recorded_end = self._extendable_range(end)
-        after = last_moment(recorded_end) + pd.Timedelta(1, "ns")
-        self._append_store(self.compute(after, end), end)
+        self._ranged_store().extend(end)
         return self
+
+    def ranged_stores(self) -> tuple:
+        """Return the stores this factor writes or reads by date range: ``(self,)`` with a store.
+
+        The factor itself answers what a caller reads of a ranged store
+        (``store_path``, ``store_range()``, ``owns_store()``, ``extend``),
+        so the live day and the data update extend a factor and a factor
+        risk model's stores in one loop. A view (``FactorView``) declares
+        itself too and answers ``owns_store()`` false; a factor without a
+        store declares none.
+
+        Examples
+        --------
+        >>> factor.ranged_stores() == (factor,)
+        True
+        >>> factor_without_file_path.ranged_stores()
+        ()
+        """
+        return (self,) if self.store_path else ()
+
+    def _ranged_store(self, path: str | None = None) -> RangedStore:
+        """Return the ``RangedStore`` of ``store_path`` (or ``path``) that ``build``, ``extend`` and ``read`` go through.
+
+        Its rows are ``compute``'s, its writes refused unless the factor
+        owns the store (``_refuse_unless_owner``), its widened cells filled
+        from ``_widen_fill_values()``. ``ChunkedFactor`` writes a chunk
+        computed in a worker process through its ``write`` and ``append``.
+        """
+        return RangedStore(
+            self.store_path if path is None else path,
+            self.class_name,
+            self.compute,
+            guard=self._refuse_unless_owner,
+            fill_values=self._widen_fill_values(),
+        )
 
     def owns_store(self) -> bool:
         """Whether the factor may write its store: it holds exactly its outputs.
@@ -776,50 +763,7 @@ class Factor(Component, ABC):
         >>> factor.build("2024-01-01", "2024-03-31").store_range()
         ('2024-01-01', '2024-03-31')
         """
-        return self._stored_range(self.store_path)
-
-    def _check_covers(self, path: str, start, end) -> None:
-        """Raise unless the range recorded for ``path`` contains the request."""
-        recorded = self._stored_range(path)
-        if recorded is None:
-            raise ValueError(
-                f"{self.class_name}.read(): the store at {path} has no "
-                f"recorded range, so it cannot answer a date-range request; "
-                f"write it with build(start, end)."
-            )
-        recorded_start, recorded_end = recorded
-        if pd.Timestamp(start) < pd.Timestamp(recorded_start) or last_moment(
-            end
-        ) > last_moment(recorded_end):
-            raise ValueError(
-                f"{self.class_name}.read(): the store at {path} covers "
-                f"{recorded_start} to {recorded_end}, which does not contain "
-                f"{start} to {end}. Extend it with extend(end) or rebuild it "
-                f"with build(start, end)."
-            )
-
-    def _range_path(self, store: str) -> Path:
-        """Return the file recording the range of the store at ``store``."""
-        return Path(f"{store}{self.RANGE_SUFFIX}")
-
-    def _stored_range(self, store: str | None) -> tuple[str, str] | None:
-        """Return the range recorded for ``store``, or ``None``."""
-        if store is None or not self._range_path(store).is_file():
-            return None
-        recorded = json.loads(self._range_path(store).read_text())
-        return recorded["start"], recorded["end"]
-
-    def _record_range(self, store: str, start, end) -> None:
-        """Record ``start`` and ``end`` as the range of the store at ``store``."""
-        write_json_atomically(
-            self._range_path(store),
-            {"start": range_text(start), "end": range_text(end)},
-        )
-
-    def _drop_range(self, store: str | None) -> None:
-        """Remove the range recorded for ``store``, if any."""
-        if store is not None:
-            self._range_path(store).unlink(missing_ok=True)
+        return self._ranged_store().store_range()
 
     @property
     def store_path(self) -> str | None:

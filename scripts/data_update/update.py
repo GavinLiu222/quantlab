@@ -13,8 +13,9 @@ holding ``<stem>.zarr``, its README.md and a ``component.json``: the component's
 - ``update``: ``update()`` the dataset of a store folder;
 - ``mirror``: append a source dataset's new bars to a store copying its variables
   (``quantlab.backtest.live.mirror_new_bars``);
-- ``extend``: extend a factor (only the store's owner may) or a factor risk model's
-  regression and estimate stores to t;
+- ``extend``: extend to t every store the component declares it writes by date range
+  (``Component.ranged_stores``: a factor's store, which only its owner may extend, or a
+  factor risk model's regression and estimate stores, in that order);
 - ``run``: any script under the repository, with ``args`` in which ``{data_dir}`` and
   ``{download_dir}`` are filled in.
 
@@ -73,8 +74,6 @@ from quantlab.backtest.live import mirror_new_bars
 from quantlab.core.component import walk_components
 from quantlab.core.store_folder import COMPONENT_FILE, load_component
 from quantlab.dataset.base import BaseDataset
-from quantlab.factor.base import Factor
-from quantlab.risk.base import FactorRiskModel
 from quantlab.utils.cli import add_output_dir_args, resolve_output_dirs
 from quantlab.utils.jsonable import to_jsonable
 
@@ -120,21 +119,20 @@ def parse_step(step: dict) -> tuple[str, dict, bool]:
 
 
 def stores_read(item) -> set[Path]:
-    """The stores a component reads or writes from: every dataset's and factor's store below it.
+    """The stores a component reads or writes from: every dataset's and ranged store below it.
 
     A dataset names the stores it reads itself (``BaseDataset.stores``: a
     resample on read its source store, a view its inputs'), and its own store;
-    the components under it are walked too, so a store written from another
-    (a mapped Trade bar store from the Trade bar store) depends on both.
+    every other component its stores written by date range
+    (``Component.ranged_stores``: a factor's, a factor risk model's two). The
+    components under it are walked too, so a store written from another (a
+    mapped Trade bar store from the Trade bar store) depends on both.
     """
     paths = set()
     for _, part in walk_components(item):
+        stores = [store.store_path for store in part.ranged_stores()]
         if isinstance(part, BaseDataset):
-            stores = [*part.stores(), part.store_path]
-        elif isinstance(part, Factor):
-            stores = [part.store_path]
-        else:
-            continue
+            stores += [*part.stores(), part.store_path]
         paths.update(Path(store).absolute() for store in stores if store)
     return paths
 
@@ -156,12 +154,22 @@ def last_bar(path: Path) -> pd.Timestamp | None:
         store.close()
 
 
-def range_end(item, where: str) -> pd.Timestamp:
-    """The end of a factor's or risk store's recorded range; raises when there is none."""
-    recorded = item.store_range()
+def range_end(store, where: str) -> pd.Timestamp:
+    """The end of a ranged store's recorded range; raises when there is none."""
+    recorded = store.store_range()
     if recorded is None:
-        raise ValueError(f"{where}: {type(item).__name__} has no recorded range; build it first")
+        raise ValueError(f"{where}: {store.store_path} has no recorded range; build it first")
     return pd.Timestamp(recorded[1])
+
+
+def extend_problems(item) -> list[str]:
+    """Why ``extend`` cannot take a component: it declares no ranged store, or does not own one."""
+    stores = item.ranged_stores()
+    if not stores:
+        return [f"extend takes a component writing stores by date range (a factor or a factor "
+                f"risk model), got {type(item).__name__}"]
+    return [f"the component is not the owner of {store.store_path}; write the owner's config"
+            for store in stores if not store.owns_store()]
 
 
 def write_status(path: Path, status: dict) -> None:
@@ -250,27 +258,23 @@ class Update:
                                self.t.date().isoformat())
 
     def extend(self, store: str) -> str:
-        """Extend a factor (its store's owner) or a factor risk model's stores to t."""
+        """Extend every store a component writes by date range (a factor's, a risk model's two) to t."""
         if self.dry_run:
             return "would extend"
         # A date, so the recorded range holds the whole day (a Timestamp ends it at midnight).
         day = self.t.date().isoformat()
         item = load_component(self.folder(store))
-        if isinstance(item, FactorRiskModel):
-            done = []
-            for name, part in (("regression", item.regression), ("estimate", item.estimate)):
-                if range_end(part, f"{store} {name}") < self.t:
-                    part.extend(day)
-                done.append(part.store_range()[1])
-            return f"ranges end {done}"
-        if not isinstance(item, Factor):
-            raise TypeError(f"{store}: extend takes a factor or a factor risk model, got {type(item).__name__}")
-        if not item.owns_store():
-            raise ValueError(f"{store}: the config is not the store's owner; write the owner's config")
-        if range_end(item, store) < self.t:
-            item.extend(day)
-            return f"extended to {day}"
-        return "current"
+        if problems := extend_problems(item):
+            raise ValueError(f"{store}: {'; '.join(problems)}")
+        done = []
+        for part in item.ranged_stores():  # in extension order
+            name = Path(part.store_path).name
+            if range_end(part, store) < self.t:
+                part.extend(day)
+                done.append(f"{name} extended to {day}")
+            else:
+                done.append(f"{name} current")
+        return "; ".join(done)
 
     # -- running ------------------------------------------------------------------
 
@@ -320,10 +324,8 @@ class Update:
         except Exception as error:
             return [f"{where}: {relative} does not rebuild: {error!r}"], set()
         problems = []
-        if action == "extend" and isinstance(item, Factor) and not item.owns_store():
-            problems.append(f"{where}: the component is not the owner of its store")
-        if action == "extend" and not isinstance(item, (Factor, FactorRiskModel)):
-            problems.append(f"{where}: extend takes a factor or a factor risk model")
+        if action == "extend":
+            problems += [f"{where}: {problem}" for problem in extend_problems(item)]
         if action in ("update", "fred") and not isinstance(item, BaseDataset):
             problems.append(f"{where}: {action} takes a dataset")
         if action == "mirror" and not isinstance(item, BaseDataset):

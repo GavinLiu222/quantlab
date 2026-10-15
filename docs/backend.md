@@ -231,6 +231,31 @@ XrBackend()
 
 `append` never overwrites. To recompute a range that a store already contains, build the complete panel in memory from source data and call `write`, which replaces the whole directory. Write to a new path if the panel is still being read lazily from the old one.
 
+### Keep a store by date range
+
+`RangedStore` (`quantlab.backend.ranged`) writes a store from a function computing the rows of a date range and records the range it covers beside it, in `<store>.range.json` (`{"start": ..., "end": ...}`). `build(start, end)` replaces the store and its range, `extend(end)` computes the rows after the recorded end and appends them (`widen_and_append`, so the axes widen), and a reader asks `check_covers(start, end)` before it opens the store. A factor's store and a factor risk model's stores are written through one; each supplies its compute function and the name its messages give, and a factor also the rule refusing a write (`guard`, only the store's owner writes it) and the fill values of widened cells. `write(rows, start, end)` and `append(rows, end)` are the write halves of `build` and `extend`, for rows computed elsewhere (a chunk computed in a worker process).
+
+```python
+>>> import numpy as np, pandas as pd, xarray as xr
+>>> from quantlab.backend.ranged import RangedStore
+>>> def compute(start, end):
+...     times = pd.bdate_range(start, end)
+...     return xr.Dataset(
+...         {"x": (("timestamp", "symbol"), np.ones((len(times), 2)))},
+...         coords={"timestamp": times, "symbol": ["a", "b"]},
+...     )
+>>> store = RangedStore("rows.zarr", "Rows", compute)
+>>> store.build("2024-01-01", "2024-01-10")
+>>> store.store_range(), store.range_path
+(('2024-01-01', '2024-01-10'), PosixPath('rows.zarr.range.json'))
+>>> store.check_covers("2024-01-02", "2024-01-11")
+Traceback (most recent call last):
+ValueError: Rows.read(): the store at rows.zarr covers 2024-01-01 to 2024-01-10, which does not contain 2024-01-02 to 2024-01-11. Extend it with extend(end) or rebuild it with build(start, end).
+>>> store.extend("2024-01-31")
+>>> store.store_range()
+('2024-01-01', '2024-01-31')
+```
+
 ## Extending
 
 A new backend subclasses `DataBackend` and implements the nine abstract methods. The module below stores a panel as one long-format CSV file. Save it as `csv_backend.py`.

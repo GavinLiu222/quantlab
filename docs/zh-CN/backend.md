@@ -231,6 +231,31 @@ XrBackend()
 
 `append` 从不覆盖。要重算存储里已有的区间，就用源数据在内存中构造完整面板，再调用 `write`，它会替换整个目录。如果面板仍在从旧路径惰性读取，请写到一个新路径。
 
+### 按日期区间维护存储
+
+`RangedStore`（`quantlab.backend.ranged`）用一个计算日期区间各行的函数写出存储，并把它覆盖的区间记录在旁边的 `<store>.range.json` 中（`{"start": ..., "end": ...}`）。`build(start, end)` 替换存储及其区间，`extend(end)` 计算记录终点之后的行并追加（`widen_and_append`，各轴按需加宽），读取方在打开存储前调用 `check_covers(start, end)`。因子的存储和因子风险模型的存储都通过它写出；各自只提供计算函数和消息里使用的名字，因子另外提供拒绝写入的规则（`guard`，只有存储的拥有者能写）和加宽单元格的填充值。`write(rows, start, end)` 和 `append(rows, end)` 是 `build` 与 `extend` 的写入一半，用于在别处算好的行（工作进程里算出的一块）。
+
+```python
+>>> import numpy as np, pandas as pd, xarray as xr
+>>> from quantlab.backend.ranged import RangedStore
+>>> def compute(start, end):
+...     times = pd.bdate_range(start, end)
+...     return xr.Dataset(
+...         {"x": (("timestamp", "symbol"), np.ones((len(times), 2)))},
+...         coords={"timestamp": times, "symbol": ["a", "b"]},
+...     )
+>>> store = RangedStore("rows.zarr", "Rows", compute)
+>>> store.build("2024-01-01", "2024-01-10")
+>>> store.store_range(), store.range_path
+(('2024-01-01', '2024-01-10'), PosixPath('rows.zarr.range.json'))
+>>> store.check_covers("2024-01-02", "2024-01-11")
+Traceback (most recent call last):
+ValueError: Rows.read(): the store at rows.zarr covers 2024-01-01 to 2024-01-10, which does not contain 2024-01-02 to 2024-01-11. Extend it with extend(end) or rebuild it with build(start, end).
+>>> store.extend("2024-01-31")
+>>> store.store_range()
+('2024-01-01', '2024-01-31')
+```
+
 ## 扩展
 
 新后端继承 `DataBackend` 并实现九个抽象方法。下面的模块把面板存成单个长表 CSV 文件，保存为 `csv_backend.py`。

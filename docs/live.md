@@ -44,16 +44,21 @@ The run directory is the strategy's recipe: `config.json` rebuilds the backteste
      bars after its last bar (`mirror_new_bars`). If the price store has gained a symbol, the
      mirror is instead rewritten from the price store over its own range, so the new symbol
      keeps its history. The rewrite goes through a sidecar and two renames.
-3. **The stores the run built.** Each factor store with a recorded range is extended to t
-   with `Factor.extend`, deepest in the tree first, by its owner: the factor whose outputs
-   are every variable of the store (`Factor.owns_store`). These are the model's factors and
-   the risk model's exposures factor (`BarraStyle`). A factor pinned to some outputs of a
-   store, such as the 12 styles a `RosterFactor` reads from the Barra store, is a view and
-   never extends it; a store the run reaches only through views must already hold t, or the
-   day is refused before anything is extended. Then each factor risk model's regression
-   store and estimate store are extended with `RiskStore.extend`, in that order. A store that
+3. **The stores the run built.** Every component declares the stores it writes by date range
+   (`Component.ranged_stores()`): a factor its own store, a factor risk model its regression
+   and estimate stores. `ranged_stores(components)` gathers those with a recorded range, and
+   one loop extends each to t with its `extend`, deepest in the tree first, so the risk
+   model's exposures factor (`BarraStyle`) comes before its regression store and that before
+   its estimate store. A store is extended by its owner only (`owns_store()`): for a factor,
+   the factor whose outputs are every variable of the store; a risk model owns its two
+   stores. These are the model's factors, the exposures factor and the risk stores. A factor
+   pinned to some outputs of a store, such as the 12 styles a `RosterFactor` reads from the
+   Barra store, is a view and never extends it; a store the run reaches only through views
+   must already hold t, or the day is refused before anything is extended. A store that
    already reaches t is left alone, so the next run finishes a run that was interrupted.
-   Afterwards each store must hold t.
+   Afterwards each store must hold t. What the loop reads of a store is `RangedStoreHandle`
+   (`store_path`, `store_range()`, `owns_store()`, `extend(end)`); a factor and a
+   `RiskStore` both answer it and both write through `quantlab.backend.ranged.RangedStore`.
 4. **The prediction.** The run's model (for an index strategy, the
    `MembershipMaskedPredictor`) loads the checkpoint and predicts `predict_window(t, t)`.
    The prediction runs inside a `DataRecorder` keyed by the backtester's component paths.
@@ -68,7 +73,7 @@ The S&P 500 Barra mean-variance run (`examples/sharadar_us_equity/sp500_xgb_mvo.
 | `market/fred/fred_dtb3_1d` | `--may-lag` |
 | `factors/sp500/alpha101`, `factors/sp500/alpha158` | `Factor.extend` |
 | `factors/market/barra_style` | `Factor.extend` |
-| `risk/use4/regression`, then `risk/use4/estimate` | `RiskStore.extend` |
+| `risk/use4/regression`, then `risk/use4/estimate` | `RiskStore.extend` (the risk model's `ranged_stores()`) |
 
 The us3000 run of `examples/sharadar_us_equity/us3000_h1_mvo.py` reads its 12 style
 features straight from `factors/market/barra_style/barra_style.zarr` through a `RosterFactor`,
@@ -173,8 +178,9 @@ never predicted) is logged as a warning. Only t is predicted.
 ## When a row equals a rebuild
 
 An extended store is identical at t to a store built from scratch through t when its value at
-t depends only on the `warmup_bars` bars before t. This is the contract of `Factor.extend`
-and `RiskStore.extend`. In that case the row equals, bit for bit, what `predict_window(t, t)`
+t depends only on the `warmup_bars` bars before t. This is the contract of every ranged
+store's `extend` (`RangedStore.extend`, which `Factor.extend` and `RiskStore.extend` go
+through). In that case the row equals, bit for bit, what `predict_window(t, t)`
 gives after every store is rebuilt. `tests/test_live_prediction.py` checks this on a
 synthetic run shaped like the Barra one (derived store, read-strategy factor,
 membership-masked model, USE4 exposures, regression and estimate stores). A factor whose

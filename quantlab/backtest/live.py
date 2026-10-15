@@ -22,10 +22,14 @@ labels (a prediction reads none):
   (the example's ``prices.zarr``): it gains the price dataset's bars after
   its last, or, when the price dataset has gained a symbol, is rewritten from
   it over its own range, so its new symbol has its history;
-- every factor whose store has a recorded range (``Factor.build``) is
-  extended to t with ``Factor.extend``, deepest in the tree first;
-- every factor risk model's regression and estimate stores, in that order,
-  with ``RiskStore.extend``.
+- every store a component writes by date range and has a recorded range
+  (``Component.ranged_stores``, gathered by ``ranged_stores``: a factor's
+  store, a factor risk model's regression and estimate stores) is extended
+  to t with its ``extend``, in one loop, deepest in the tree first (so a risk
+  model's exposures before its regression store, and that before its
+  estimate store). Only a store's owner extends it (ADR 0029); a store
+  reached only through views (a factor pinned to some of its variables) is
+  an outside input and must already hold t.
 
 A store already reaching t is left alone, so a run interrupted after some
 stores were extended is finished by the next one. Each store is then checked
@@ -47,7 +51,7 @@ refused after the extension (the stores keep what was appended).
 
 **Exactness.** An extended store equals a store built over the whole range
 at t whenever the value at t depends only on the ``warmup_bars`` bars before
-it, which is ``Factor.extend``'s and ``RiskStore.extend``'s contract; a row
+it, which is the contract of every ranged store's ``extend``; a row
 is then the row ``predict_window(t, t)`` gives on rebuilt stores, bit for
 bit. A vendor restatement of a stored bar reaches no extended store.
 """
@@ -58,17 +62,16 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from os import PathLike
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 import pandas as pd
 import xarray as xr
 from loguru import logger
 
 from quantlab.backend.zarr import XrBackend
-from quantlab.core.component import walk_components
+from quantlab.core.component import Component, walk_components
 from quantlab.dataset.base import BaseDataset
 from quantlab.enums.constant import Date
-from quantlab.factor.base import Factor
-from quantlab.risk.base import FactorRiskModel
 from quantlab.runs.backtest_run import BacktestRun
 from quantlab.runs.live_predictions import LivePredictionStore
 from quantlab.runs.record import DataRecorder
@@ -78,10 +81,12 @@ from quantlab.utils.symbol_axis import sort_symbol_axis
 __all__ = [
     "LivePrediction",
     "LivePredictionRefused",
+    "RangedStoreHandle",
     "input_stores",
     "last_bar",
     "mirror_new_bars",
     "predict_live_bar",
+    "ranged_stores",
 ]
 
 #: The backtester's config fields whose components a prediction and a decision read.
@@ -327,6 +332,100 @@ def input_stores(backtester) -> dict[str, tuple[str, BaseDataset]]:
     return stores
 
 
+@runtime_checkable
+class RangedStoreHandle(Protocol):
+    """What the live day and the data update read of a store written by date range.
+
+    The members a caller reads of each store a component declares
+    (``Component.ranged_stores``), whatever writes it: a factor
+    (``quantlab.factor.base.Factor``, its views included) and a factor risk
+    model's ``quantlab.risk.base.RiskStore`` are the two adapters, neither
+    deriving from the other; both write through
+    ``quantlab.backend.ranged.RangedStore``.
+
+    Attributes
+    ----------
+    store_path : str or None
+        The Zarr store, the key the store is gathered by.
+
+    Examples
+    --------
+    >>> isinstance(factor, RangedStoreHandle), isinstance(model.regression, RangedStoreHandle)
+    (True, True)
+    """
+
+    store_path: "str | None"
+
+    def store_range(self) -> "tuple[str, str] | None":
+        """The recorded ``(start, end)``, ``None`` when nothing is recorded."""
+
+    def owns_store(self) -> bool:
+        """Whether this handle may write the store (a view may not)."""
+
+    def extend(self, end):
+        """Append the bars after the recorded range up to ``end``."""
+
+
+def ranged_stores(
+    components: Iterable[tuple[str, object]],
+) -> tuple[dict[str, tuple[str, RangedStoreHandle]], dict[str, tuple[str, RangedStoreHandle]]]:
+    """Return the ranged stores of ``components`` with a recorded range, the owners' and the views'.
+
+    Every component declares the stores it writes or reads by date range
+    (``Component.ranged_stores``; a component not deriving from
+    ``Component`` declares none). Those with a path and a recorded range are
+    gathered by absolute store path, deepest component path first: a
+    component's inputs lie below it wherever it is held, so the order is one
+    to extend in (a risk model's exposures factor before its regression
+    store, its regression store before its estimate store). A store is
+    listed among the owners when a handle owning it (``owns_store()``)
+    reaches it, among the views otherwise; a key may be in both.
+
+    Parameters
+    ----------
+    components : iterable of (str, object)
+        Component paths and components, as ``walk_components`` yields them.
+
+    Returns
+    -------
+    owners, views : dict
+        ``{store: (component path, handle)}`` each, in extension order.
+
+    Raises
+    ------
+    TypeError
+        If a declared store lacks a member of ``RangedStoreHandle``.
+
+    Examples
+    --------
+    With ``backtester`` rebuilt from a run whose model reads one factor
+    store and whose covariance is a ``FactorRiskStoreEstimator`` of a USE4
+    model:
+
+    >>> owners, views = ranged_stores(walk_components(backtester))
+    >>> [(Path(key).name, path) for key, (path, _) in owners.items()]
+    [('past_ret.zarr', 'model.predictor.factors.0'), ('exposures.zarr', 'constructor.covariance.risk_model.exposures'), ('regression.zarr', 'constructor.covariance.risk_model'), ('estimate.zarr', 'constructor.covariance.risk_model')]
+    >>> views
+    {}
+    """
+    owners: dict[str, tuple[str, RangedStoreHandle]] = {}
+    views: dict[str, tuple[str, RangedStoreHandle]] = {}
+    for path, item in sorted(components, key=lambda pair: -pair[0].count(".")):
+        if not isinstance(item, Component):
+            continue
+        for store in item.ranged_stores():
+            if not isinstance(store, RangedStoreHandle):
+                raise TypeError(
+                    f"{path}: {type(item).__name__}.ranged_stores() declared "
+                    f"{type(store).__name__}, which lacks a member of RangedStoreHandle "
+                    f"(store_path, store_range, owns_store, extend)"
+                )
+            if store.store_path and store.store_range() is not None:
+                found = owners if store.owns_store() else views
+                found.setdefault(_key(store.store_path), (path, store))
+    return owners, views
+
+
 def _refuse(message: str, reason: str) -> None:
     """Log ``message`` and raise ``LivePredictionRefused``."""
     logger.error(message)
@@ -457,18 +556,11 @@ def predict_live_bar(
         for key in sorted(lagging)
     }
 
-    # A store is extended by its owner only; a view of it (a factor pinned to
-    # some of its variables) never writes it (ADR 0029).
-    factors: dict[str, tuple[str, Factor]] = {}
-    views: dict[str, tuple[str, Factor]] = {}
-    for path, item in sorted(components, key=lambda pair: -pair[0].count(".")):
-        if isinstance(item, Factor) and item.store_path and item.store_range() is not None:
-            found = factors if item.owns_store() else views
-            found.setdefault(_key(item.store_path), (path, item))
+    owners, views = ranged_stores(components)
     short = [
         f"{key} (read by {path}, recorded to {view.store_range()[1]})"
         for key, (path, view) in views.items()
-        if key not in factors and last_moment(view.store_range()[1]) < t
+        if key not in owners and last_moment(view.store_range()[1]) < t
     ]
     if short:
         _refuse(
@@ -481,23 +573,11 @@ def predict_live_bar(
     extended: dict[str, str] = {}
     for key in sorted(mirrored):
         extended[key] = mirror_new_bars(price, key, day)
-    for key in views.keys() - factors.keys():
+    for key in views.keys() - owners.keys():
         extended[key] = "current"
-    for key, (_, factor) in factors.items():
-        if last_moment(factor.store_range()[1]) < t:
-            factor.extend(day)
-            extended[key] = "extended"
-        else:
-            extended.setdefault(key, "current")
-    risk_stores = {}
-    for _, item in components:
-        if isinstance(item, FactorRiskModel):
-            for part in (item.regression, item.estimate):
-                if part.path and part.store_range() is not None:
-                    risk_stores.setdefault(_key(part.path), part)
-    for key, part in risk_stores.items():
-        if last_moment(part.store_range()[1]) < t:
-            part.extend(day)
+    for key, (_, store) in owners.items():
+        if last_moment(store.store_range()[1]) < t:
+            store.extend(day)
             extended[key] = "extended"
         else:
             extended.setdefault(key, "current")

@@ -115,7 +115,7 @@ ValueError: Momentum.read(): the store at data/factors/momentum.zarr covers 2024
 (60, '2024-03-20')
 ```
 
-不是由 `build` 写出的存储，`store_range()` 返回 `None`，`read` 和 `extend` 都会拒绝这样的存储。KunQuant 因子只在 batch 模式下应答这些调用。
+不是由 `build` 写出的存储，`store_range()` 返回 `None`，`read` 和 `extend` 都会拒绝这样的存储。KunQuant 因子只在 batch 模式下应答这些调用。区间、`build` 与 `extend` 的步骤顺序和它们的拒绝信息由 `quantlab.backend.ranged.RangedStore` 维护，因子风险模型的存储也通过这个模块写出（见存储后端指南）；因子只提供它的 `compute`、拥有者规则和加宽单元格的填充值。没有 `file_path` 的因子调用 `build`、`extend` 和 `read` 会抛出 `ValueError: Momentum.build(): the store has no path in the config.` 有存储的因子用 `ranged_stores()` 声明它（`(factor,)`，视图也一样），实盘日和每日数据更新扩充的就是这些声明。
 
 `read` 和 `compute` 只返回因子自己的输出 `get_factor_names()`，不管存储或计算图里还有什么；存储缺少某个输出时，`read` 抛出 `ValueError` 并列出缺少的名字。`read(start, end, symbols=[...])` 只保留这些标的，按给定顺序，标签类型须与存储一致；存储缺少某个标的时抛出异常。在 `DataRecorder` 内，symbols 是记录请求的一部分，指纹只覆盖切出的面板。存储只由它的拥有者写入，即输出恰好是存储全部变量的因子（`owns_store()`）：用 `factor_names` 钉住共享存储部分输出的因子只能读它，它的 `build` 和 `extend` 会抛出 `ValueError`，以免用子集替换存储，或在其余变量没跟上时推进记录的区间。
 

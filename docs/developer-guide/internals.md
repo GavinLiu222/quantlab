@@ -176,6 +176,31 @@ artifact succeeded, and the staging directory is removed on any exception,
 including `KeyboardInterrupt`. Widening a store swaps whole directories by
 rename, as described above.
 
+## Date-ranged stores
+
+A factor's store and a factor risk model's two stores answer only inside the
+date range they were built for, recorded beside each in
+`<store>.range.json`. One module keeps that lifecycle,
+`quantlab.backend.ranged.RangedStore`: it reads and atomically writes the
+range file, builds (compute, drop the range, create, record), extends
+(refuse a missing or reached range, compute from the first moment after the
+recorded end, widen and append when there are bars, record), checks a read's
+range, and holds the refusal texts. `Factor` and `RiskStore` each make one
+and supply only what differs: the compute function, the name in messages,
+and for a factor the owner rule (ADR 0029) and the fill values of widened
+cells. A resampled factor without its own store checks its source's range
+through one on `config.file_path` (ADR 0002). `ChunkedFactor` writes a chunk
+computed in a worker process through the wrapped factor's ranged store
+(`write`, `append`).
+
+Callers that lengthen stores (the live day, `quantlab.backtest.live`, and the
+daily data update, `scripts/data_update/update.py`) ask each component what
+it writes by date range, `Component.ranged_stores()` (`()` by default, a
+factor `(self,)`, a risk model `(regression, estimate)`), and read of each
+only `store_path`, `store_range()`, `owns_store()` and `extend(end)`
+(`RangedStoreHandle`, beside its consumer as ADR 0017 asks). `Factor` and
+`RiskStore` are its two adapters; neither inherits from the other.
+
 ## Data fingerprints
 
 A run is reproducible only if the data under it has not changed, and data

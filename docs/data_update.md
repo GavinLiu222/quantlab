@@ -24,7 +24,7 @@ root `--data-dir`. Each step is one action on one store folder (paths relative t
 | `benchmarks` | `scripts/sharadar/price_return_benchmark.py --refresh` for the listed tickers (`market/benchmarks/`) |
 | `update` | rebuilds the dataset of a store folder from its `component.json` and calls `update()` |
 | `mirror` | appends a source dataset's new bars to a store that copies its variables (`quantlab.backtest.live.mirror_new_bars`) |
-| `extend` | rebuilds a factor, or a factor risk model, from the folder's `component.json` and extends it to t |
+| `extend` | rebuilds the folder's component from its `component.json` and extends every store it writes by date range to t (`Component.ranged_stores()`: a factor's store, or a factor risk model's regression and estimate stores, in that order); the step's result names each store, `extended to <t>` or `current` |
 | `run` | runs any script under the repository: `{script: ..., args: [...], writes: [...], reads: [...]}`; `{data_dir}` and `{download_dir}` in `args` are filled in (other braces are kept) |
 
 Any other action is an error, in a run and in `--check`. A `sharadar`, `benchmarks` or `run` step
@@ -41,9 +41,9 @@ after the status file says `done`; a failure there is recorded and the state sta
 t is the last bar of the file's `calendar` store (`market/sharadar/sharadar_sep_1d`) once the
 `raw` stage is done. Until every store in the file's `ready` list holds t, and t is newer than
 `last_done_t` (the t of the last run that reached `done`, whatever states came after it), the raw
-stage is retried every `--retry-minutes` (15) until `--retry-until` (08:30 New York time). A factor
-is extended only by the store's owner (`Factor.owns_store`), never by a view pinned to some of its
-outputs.
+stage is retried every `--retry-minutes` (15) until `--retry-until` (08:30 New York time). A store
+is extended only by its owner (`owns_store()`), never by a factor view pinned to some of its
+outputs; `extend` refuses a component that declares no ranged store or does not own one.
 
 The shipped file updates what the us3000 paper trading reads, plus the base data: every Sharadar
 table, the FRED 3-month T-bill rate, the price-return benchmarks, the Barra exposures, the us3000
@@ -76,7 +76,7 @@ QUANTLAB_DATA_DIR=/data/quantlab taskset -c 64-114 .venv/bin/python scripts/data
 `--dry-run` prints the steps without running them; `--stage NAME` (repeatable) runs only those
 stages, without the retry and without writing the status file. `--check` downloads and computes
 nothing: it rebuilds every step's component, checks that `update` names a dataset, that `extend`
-names a factor owning its store or a factor risk model, and that no step reads a store a later
+names a component declaring ranged stores it owns (a factor owning its store, a factor risk model), and that no step reads a store a later
 step writes, that the first stage writes the `calendar` store and every `ready` store, and that a
 `mirror` source is a dataset, then prints each problem and exits 1 if there is any. Run it after
 editing the file.

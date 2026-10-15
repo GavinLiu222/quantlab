@@ -271,7 +271,7 @@ def test_a_panel_reads_the_estimate_store_once_and_records_the_request_per_bar_r
     inputs = DecisionInputs.from_run(result.run_dir)
     predictions = BacktestRun.open(result.run_dir).predictions().predictions
     model = inputs.declared.risk_model
-    path = model.estimate.path
+    path = model.estimate.store_path
     weights, decided = _decided_bars(result)
     assert len(decided) > 3
     opened = []

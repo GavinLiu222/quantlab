@@ -11,7 +11,8 @@ end)`` returns the rows of a range, ``build`` writes them, ``extend`` appends
 the bars after the recorded range and ``read`` returns a range of the store,
 which must lie inside the range recorded beside it. Its rows are not a
 ``(timestamp, symbol)`` panel (factor returns are on ``(timestamp, factor)``),
-so the store reads and writes its Zarr store itself. Every row depends only
+so the store opens its rows itself; the range, ``build`` and ``extend`` are
+``quantlab.backend.ranged.RangedStore``'s, as a factor's are. Every row depends only
 on a bounded window of bars ending at its own, so a store built in one go and
 one built and then extended are identical.
 
@@ -27,25 +28,21 @@ subclass's; shipped models live in ``quantlab.risk.predefined`` (USE4 on the
 
 import dataclasses
 import datetime
-import json
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from pathlib import Path
 from typing import Self
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 
-from quantlab.backend.zarr import XrBackend
+from quantlab.backend.ranged import RangedStore
 from quantlab.core.component import Component
 from quantlab.dataset.merged import MergedDataset
 from quantlab.risk.config import FactorRiskConfig
 from quantlab.runs.record import record_read
-from quantlab.utils.atomic import write_json_atomically
-from quantlab.utils.date_range import as_label, check_range, last_moment, range_text
+from quantlab.utils.date_range import as_label, check_range
 from quantlab.utils.symbol_axis import sort_symbol_axis
-from quantlab.utils.timer import Timer
 
 #: A date a store is asked for.
 Date = str | datetime.date | pd.Timestamp
@@ -283,6 +280,13 @@ class RiskStore:
     symbols with a value somewhere in the rows are kept, so the axis does not
     depend on how a range was split between ``build`` and ``extend``.
 
+    The store is written through ``quantlab.backend.ranged.RangedStore``, as
+    a factor's store is: the range recorded in ``<store_path>.range.json``,
+    the order of ``build`` and ``extend`` and their refusals are that
+    module's. The model writes its own stores, so ``owns_store()`` is true;
+    a factor risk model declares its two stores to the live day and the data
+    update (``FactorRiskModel.ranged_stores``).
+
     A ``read`` inside an open ``quantlab.runs.record.DataRecorder`` is
     recorded under the model's key and the store's ``part``
     (``risk_model.estimate``); one store's reads are merged into one request
@@ -306,6 +310,13 @@ class RiskStore:
     warmup_bars : int
         Bars before the requested start ``compute`` reads.
 
+    Attributes
+    ----------
+    store_path : str or None
+        As ``path``.
+    owner : str
+        ``Class.part``, named in log and error messages.
+
     Examples
     --------
     >>> store = model.regression
@@ -316,9 +327,6 @@ class RiskStore:
     >>> dict(store.read("2024-04-01", "2024-04-30").sizes)["timestamp"]
     22
     """
-
-    #: Appended to ``path`` to name the JSON file recording the store's range.
-    RANGE_SUFFIX = ".range.json"
 
     def __init__(
         self,
@@ -331,15 +339,15 @@ class RiskStore:
         """Initialize the store; see the class docstring for parameters."""
         self.model = model
         self.part = part
-        #: The ``Class.store`` named in log and error messages.
         self.owner = f"{model.class_name}.{part}"
-        self.path = path
+        self.store_path = path
         self._compute = compute
         self.warmup_bars = warmup_bars
+        self._ranged = RangedStore(path, self.owner, self.compute)
 
     def __repr__(self) -> str:
         """Return the owner and the path."""
-        return f"RiskStore({self.owner!r}, path={self.path!r})"
+        return f"RiskStore({self.owner!r}, path={self.store_path!r})"
 
     def compute(self, start: Date, end: Date) -> xr.Dataset:
         """Compute the rows from ``start`` to ``end``, both inclusive.
@@ -384,7 +392,8 @@ class RiskStore:
     def build(self, start: Date, end: Date) -> Self:
         """Compute ``start`` to ``end`` and write it as the store.
 
-        The store at ``path`` is replaced and the range recorded beside it.
+        The store at ``store_path`` is replaced and the range recorded
+        beside it (``RangedStore.build``).
 
         Parameters
         ----------
@@ -399,26 +408,21 @@ class RiskStore:
         Raises
         ------
         ValueError
-            If the store has no ``path``.
+            If the store has no path.
 
         Examples
         --------
         >>> model.regression.build("2024-01-01", "2024-03-31").store_range()
         ('2024-01-01', '2024-03-31')
         """
-        path = self._require_path("build")
-        rows = self.compute(start, end)
-        with Timer(f"{self.owner}: build"):
-            self._range_file(path).unlink(missing_ok=True)
-            XrBackend().to_internal(rows).create(path)
-            self._record_range(path, start, end)
+        self._ranged.build(start, end)
         return self
 
     def extend(self, end: Date) -> Self:
         """Append the bars after the recorded range, up to ``end``.
 
         The bars are computed with ``compute``, so they are warmed from the
-        inputs' history; a symbol axis widens to fit.
+        inputs' history; a symbol axis widens to fit (``RangedStore.extend``).
 
         Parameters
         ----------
@@ -433,7 +437,7 @@ class RiskStore:
         Raises
         ------
         ValueError
-            If the store has no ``path`` or no recorded range, or the
+            If the store has no path or no recorded range, or the
             recorded range already reaches ``end``.
 
         Examples
@@ -441,25 +445,7 @@ class RiskStore:
         >>> model.regression.extend("2024-04-30").store_range()
         ('2024-01-01', '2024-04-30')
         """
-        path = self._require_path("extend")
-        recorded = self.store_range()
-        if recorded is None:
-            raise ValueError(
-                f"{self.owner}.extend(): the store at {path} has no recorded range; "
-                f"write it with build(start, end) first."
-            )
-        recorded_start, recorded_end = recorded
-        if last_moment(end) <= last_moment(recorded_end):
-            raise ValueError(
-                f"{self.owner}.extend(): the store at {path} already covers "
-                f"{recorded_start} to {recorded_end}; extend() appends only bars after "
-                f"{recorded_end}, got end {end!r}."
-            )
-        rows = self.compute(last_moment(recorded_end) + pd.Timedelta(1, "ns"), end)
-        with Timer(f"{self.owner}: extend"):
-            if rows.sizes["timestamp"]:
-                XrBackend().to_internal(rows).widen_and_append(path)
-            self._record_range(path, recorded_start, end)
+        self._ranged.extend(end)
         return self
 
     def read(self, start: Date, end: Date) -> xr.Dataset:
@@ -482,8 +468,9 @@ class RiskStore:
         Raises
         ------
         ValueError
-            If ``start`` is after ``end``, the store has no recorded range,
-            or the recorded range does not contain the requested one.
+            If ``start`` is after ``end``, the store has no path or no
+            recorded range, or the recorded range does not contain the
+            requested one.
 
         Examples
         --------
@@ -492,22 +479,8 @@ class RiskStore:
         ValueError: Use4RiskModel.regression.read(): the store at ... covers 2024-01-01 to 2024-03-31, ...
         """
         check_range(start, end, f"{self.owner}.read()")
-        path = self._require_path("read")
-        recorded = self.store_range()
-        if recorded is None:
-            raise ValueError(
-                f"{self.owner}.read(): the store at {path} has no recorded range, so it "
-                f"cannot answer a date-range request; write it with build(start, end)."
-            )
-        recorded_start, recorded_end = recorded
-        if pd.Timestamp(start) < pd.Timestamp(recorded_start) or last_moment(
-            end
-        ) > last_moment(recorded_end):
-            raise ValueError(
-                f"{self.owner}.read(): the store at {path} covers {recorded_start} to "
-                f"{recorded_end}, which does not contain {start} to {end}. Extend it "
-                f"with extend(end) or rebuild it with build(start, end)."
-            )
+        self._ranged.check_covers(start, end)
+        path = self.store_path
         rows = xr.open_zarr(path).sel(timestamp=slice(as_label(start), as_label(end)))
         record_read(self.model, rows, part=self.part, store=path, reread_range=self.read)
         return rows
@@ -520,26 +493,17 @@ class RiskStore:
         >>> model.regression.build("2024-01-01", "2024-03-31").store_range()
         ('2024-01-01', '2024-03-31')
         """
-        if self.path is None or not self._range_file(self.path).is_file():
-            return None
-        recorded = json.loads(self._range_file(self.path).read_text())
-        return recorded["start"], recorded["end"]
+        return self._ranged.store_range()
 
-    def _require_path(self, method: str) -> str:
-        """Return ``path``, or raise if the store has none."""
-        if self.path is None:
-            raise ValueError(f"{self.owner}.{method}(): the store has no path in the config.")
-        return self.path
+    def owns_store(self) -> bool:
+        """Return ``True``: the risk model writes its own stores; nothing else does.
 
-    def _range_file(self, path: str) -> Path:
-        """Return the file recording the range of the store at ``path``."""
-        return Path(f"{path}{self.RANGE_SUFFIX}")
-
-    def _record_range(self, path: str, start, end) -> None:
-        """Record ``start`` and ``end`` as the store's range."""
-        write_json_atomically(
-            self._range_file(path), {"start": range_text(start), "end": range_text(end)}
-        )
+        Examples
+        --------
+        >>> model.regression.owns_store()
+        True
+        """
+        return True
 
 
 #: The variables every regression store holds, with their dimensions: the
@@ -1033,6 +997,23 @@ class FactorRiskModel(Component, ABC):
                 self._compute_estimate(start, end), ESTIMATE_VARIABLES, "estimate"
             ),
             warmup_bars=self.estimate_warmup_bars,
+        )
+
+    def ranged_stores(self) -> tuple[RiskStore, ...]:
+        """Return the model's stores written by date range: regression, then estimate.
+
+        The order is the order they are extended in, the estimate being
+        computed from the regression store. A store whose path the config
+        leaves unset is left out. The live day and the data update extend
+        what a component declares here (see ``Component.ranged_stores``).
+
+        Examples
+        --------
+        >>> [store.part for store in model.ranged_stores()]
+        ['regression', 'estimate']
+        """
+        return tuple(
+            store for store in (self.regression, self.estimate) if store.store_path
         )
 
     def _checked(self, rows: xr.Dataset, variables: dict, store: str) -> xr.Dataset:

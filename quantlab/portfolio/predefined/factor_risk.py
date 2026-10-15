@@ -117,7 +117,7 @@ class FactorRiskStoreEstimator(CovarianceEstimator):
             covered = store.store_range()
             raise ValueError(
                 f"{type(self).__name__}: the context at {context.timestamp} has no risk "
-                f"estimate: the estimate store at {store.path} has no row there (it "
+                f"estimate: the estimate store at {store.store_path} has no row there (it "
                 + ("has no recorded range" if covered is None else f"covers {covered[0]} to {covered[1]}")
                 + "); build or extend it to cover the bar."
             )

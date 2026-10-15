@@ -46,6 +46,15 @@ row depends only on a bounded window of bars ending at that bar, so a store
 built in one go and one built and then extended are identical, row for row.
 Changing an estimate parameter therefore rebuilds only the estimate store.
 
+A store (`RiskStore`) is written through `quantlab.backend.ranged.RangedStore`,
+the module a factor's store is written through too: the range is recorded in
+`<store_path>.range.json`, and `build`, `extend` and the refusals of `read`
+are that module's, so a risk store and a factor store say the same thing
+about the same problem. A subclass supplies only the rows of a range
+(`_compute_regression`, `_compute_estimate`). The model declares its two
+stores, regression first, with `ranged_stores()`; the live day and the daily
+data update extend what it declares (each store's `owns_store()` is true).
+
 ```python
 from quantlab.risk.config import Use4RiskConfig
 from quantlab.risk.predefined.use4 import Use4RiskModel

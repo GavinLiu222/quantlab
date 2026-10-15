@@ -310,13 +310,14 @@ class ChunkedFactor(FactorView):
         factor = self.config.factor
         _, chunks = self.plan(start, end)
         if len(chunks) > 1 and self.parallel_workers(chunks) > 1:
+            store = factor._ranged_store()
             factor._refuse_unless_owner("build")
             ranges = self._ranges(start, end, chunks)
             for index, ((_, last), piece) in enumerate(zip(ranges, self._pieces(ranges, chunks))):
                 if index == 0:
-                    factor._create_store(piece, start, last)
+                    store.write(piece, start, last)
                 else:
-                    factor._append_store(piece, last)
+                    store.append(piece, last)
                 del piece
                 release_memory()
             return self
@@ -351,10 +352,11 @@ class ChunkedFactor(FactorView):
         after = last_moment(recorded[1]) + pd.Timedelta(1, "ns")
         _, chunks = self.plan(after, end)
         if len(chunks) > 1 and self.parallel_workers(chunks) > 1:
-            factor._extendable_range(end)
+            store = factor._ranged_store()
+            store.extendable_range(end)
             ranges = self._ranges(after, end, chunks)
             for (_, last), piece in zip(ranges, self._pieces(ranges, chunks)):
-                factor._append_store(piece, last)
+                store.append(piece, last)
                 del piece
                 release_memory()
             return self

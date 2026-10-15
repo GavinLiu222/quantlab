@@ -535,6 +535,27 @@ class Component:
         """
         return {**config_to_dict(self.config), "name": self.import_path}
 
+    def ranged_stores(self) -> tuple:
+        """Return the stores this component writes or reads by date range; none here.
+
+        A *ranged store* records the date range it was built for beside it
+        (``quantlab.backend.ranged.RangedStore``) and is lengthened with
+        ``extend(end)``. A factor declares itself when it has a store, a
+        factor risk model its regression and estimate stores. Each answers
+        what the live day (``quantlab.backtest.live``) and the data update
+        read of it: ``store_path``, ``store_range()``, ``owns_store()`` and
+        ``extend(end)``; they loop over the declarations of every component
+        of a run without asking its type.
+
+        Examples
+        --------
+        >>> label.ranged_stores()          # a Forward label writes through its factor
+        ()
+        >>> factor.ranged_stores() == (factor,)
+        True
+        """
+        return ()
+
     @classmethod
     def from_config(
         cls, config: Mapping[str, Any], run_dir: str | os.PathLike | None = None
