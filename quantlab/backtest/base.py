@@ -968,7 +968,9 @@ class BaseBacktester(Component, ABC):
         Subclasses do not override this method. It opens the walk-forward
         unit ``config.cv_project_dir`` with
         ``quantlab.runs.trained_run.TrainedRun``, keeps the
-        folds whose test segment lies inside the backtest window, and checks
+        folds whose test segment meets the backtest window, cutting a fold
+        that straddles ``start_date`` or ``end_date`` to the window (so the
+        account can start from cash on any bar, #301), and checks
         on the price calendar that those test segments are contiguous and
         non-overlapping before any model is loaded (a stitched curve with a
         gap or an overlap corresponds to no real trading path). Each fold's
@@ -1007,8 +1009,8 @@ class BaseBacktester(Component, ABC):
             If ``config.model`` is ``None``, ``config.cv_project_dir`` is
             unset, ``model_mode`` is not ``"load"``, a label's ``delay`` differs from
             ``fill_delay_bars``, ``cv_project_dir`` is not a walk-forward unit
-            ``TrainedRun`` can open or has no fold, no fold falls
-            inside the window, or the fold test segments are not
+            ``TrainedRun`` can open or has no fold, no fold's test
+            segment meets the window, or the fold test segments are not
             contiguous.
         FileNotFoundError
             If ``cv_project_dir`` or a fold checkpoint is missing.
@@ -1654,10 +1656,14 @@ class BaseBacktester(Component, ABC):
         return {key: value for key, value in fold.items() if not key.startswith("_")}
 
     def _select_folds(self, folds: list[dict]) -> list[dict]:
-        """Keep the folds whose whole test segment lies inside the backtest window.
+        """Keep the folds whose test segment meets the backtest window, cut to it.
 
-        ISO date strings compare in time order. An info line lists the
-        selection when some folds are dropped.
+        A fold whose test segment straddles ``config.start_date`` starts on
+        it, and one straddling ``config.end_date`` ends on it (#301), so the
+        stitched account can start from cash on any bar; the cut fold still
+        predicts with its own checkpoint and keeps its training dates. ISO
+        date strings compare in time order. An info line lists the selection
+        when some folds are dropped, and every fold that is cut.
 
         Raises
         ------
@@ -1667,14 +1673,25 @@ class BaseBacktester(Component, ABC):
         """
         start = self._iso_date(self.config.start_date)
         end = self._iso_date(self.config.end_date)
-        selected = [
-            fold
-            for fold in folds
-            if fold["test_start"] >= start and fold["test_end"] <= end
-        ]
+        selected = []
+        for fold in folds:
+            if fold["test_end"] < start or fold["test_start"] > end:
+                continue
+            cut = {
+                **fold,
+                "test_start": max(fold["test_start"], start),
+                "test_end": min(fold["test_end"], end),
+            }
+            if (cut["test_start"], cut["test_end"]) != (fold["test_start"], fold["test_end"]):
+                logger.info(
+                    f"{self.class_name}: run_cv cuts fold {fold['fold']}'s test segment "
+                    f"{fold['test_start']}..{fold['test_end']} to "
+                    f"{cut['test_start']}..{cut['test_end']} (window {start}..{end})"
+                )
+            selected.append(cut)
         if not selected:
             raise ValueError(
-                f"{self.class_name}: no fold's test segment lies within the "
+                f"{self.class_name}: no fold's test segment overlaps the "
                 f"backtest window {start}..{end}; the walk-forward unit's test segments "
                 f"span {folds[0]['test_start']}..{folds[-1]['test_end']}"
             )

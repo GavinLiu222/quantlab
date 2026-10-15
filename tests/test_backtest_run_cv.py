@@ -29,8 +29,9 @@ What is locked here, and what turns it red:
   across a gap would silently drop the uncovered bars from the "out-of-sample"
   curve; stitching an overlap would trade some bars twice with two different
   models. Either way the stitched curve would describe no real trading path.
-- **Fold selection.** Only folds whose test segment lies inside the config's
-  backtest window are run.
+- **Fold selection.** Only folds whose test segment meets the config's
+  backtest window are run, and a fold straddling the window's start or end is
+  cut to it (#301), so a run_cv can start from cash on any bar.
 - **D-35, the stitched curve.** Its weights come from one pass over the
   concatenated fold predictions and it is ONE continuous simulation, so
   holdings and capital carry across fold boundaries (#90). The portfolio is
@@ -489,6 +490,77 @@ def test_folds_outside_the_config_window_are_skipped(
 
     assert [record["fold"] for record in result.folds] == list(range(first_kept, N_FOLDS))
     assert loaded == cv_project.checkpoints[first_kept:]
+
+
+def test_a_fold_straddling_the_window_is_cut_to_it_and_the_account_starts_from_cash(
+    tmp_path, cv_project, monkeypatch
+):
+    """#301: a start inside fold 2's test segment and an end inside fold 5's.
+
+    Fold 2 trades from the start bar and fold 5 up to the end bar, each with its
+    own checkpoint; the account starts from cash on the start bar, and on the
+    bars both runs trade the cut folds predict what the whole run predicts.
+    """
+    start_bar = FIRST_TEST_BAR + 2 * TEST_PERIODS + 3
+    end_bar = FIRST_TEST_BAR + 5 * TEST_PERIODS + 1
+    backtester = _backtester(tmp_path / "cut", cv_project, start_bar=start_bar, end_bar=end_bar)
+    loaded = _spy_load(monkeypatch, backtester)
+
+    result = backtester.run_cv()
+
+    assert [record["fold"] for record in result.folds] == [2, 3, 4, 5]
+    assert loaded == cv_project.checkpoints[2:6]
+    bars = cv_project.bars.astype("datetime64[ns]")
+    first, last = result.folds[0], result.folds[-1]
+    np.testing.assert_array_equal(
+        first["predictions"].timestamp.values.astype("datetime64[ns]"),
+        bars[start_bar : FIRST_TEST_BAR + 3 * TEST_PERIODS],
+    )
+    np.testing.assert_array_equal(
+        last["predictions"].timestamp.values.astype("datetime64[ns]"),
+        bars[FIRST_TEST_BAR + 5 * TEST_PERIODS : end_bar + 1],
+    )
+    assert first["test_start"] == _day(bars[start_bar])
+    assert last["test_end"] == _day(bars[end_bar])
+    np.testing.assert_array_equal(
+        result.simulation.value.timestamp.values.astype("datetime64[ns]"),
+        bars[start_bar : end_bar + 1],
+    )
+    assert float(result.weights["weight"].isel(timestamp=0).sum()) == pytest.approx(1.0)
+    whole = result.metrics["stitched"]["whole"]
+    assert pd.Timestamp(whole["Start"]) == pd.Timestamp(bars[start_bar])
+
+    full = _backtester(tmp_path / "full", cv_project).run_cv()
+    for record in (first, last):
+        cut = record["predictions"]
+        xr.testing.assert_allclose(
+            cut, full.folds[record["fold"]]["predictions"].sel(timestamp=cut.timestamp)
+        )
+    run = BacktestRun.open(result.run_dir)
+    assert run.window == (_day(bars[start_bar]), _day(bars[end_bar]))
+    assert run.folds[0].window == (_day(bars[start_bar]), _day(bars[FIRST_TEST_BAR + 3 * TEST_PERIODS - 1]))
+
+
+def test_a_window_inside_one_fold_runs_that_fold_cut_on_both_sides(tmp_path, cv_project):
+    start_bar = FIRST_TEST_BAR + 4 * TEST_PERIODS + 1
+    end_bar = start_bar + 3
+
+    result = _backtester(tmp_path, cv_project, start_bar=start_bar, end_bar=end_bar).run_cv()
+
+    assert [record["fold"] for record in result.folds] == [4]
+    np.testing.assert_array_equal(
+        result.simulation.value.timestamp.values.astype("datetime64[ns]"),
+        cv_project.bars[start_bar : end_bar + 1].astype("datetime64[ns]"),
+    )
+
+
+def test_a_window_that_meets_no_test_segment_is_refused(tmp_path, cv_project):
+    backtester = _backtester(
+        tmp_path, cv_project, start_bar=FIRST_TEST_BAR - 10, end_bar=FIRST_TEST_BAR - 1
+    )
+
+    with pytest.raises(ValueError, match=r"no fold's test segment overlaps"):
+        backtester.run_cv()
 
 
 # --------------------------------------------------------------------------

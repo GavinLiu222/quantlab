@@ -344,7 +344,7 @@ Name: 2024-02-12 00:00:00, dtype: float64
 
 ### 回放一次交叉验证
 
-`train_cv` 写出一次 walk-forward 运行：一个试验目录，每折一个训练单元，各有自己的 checkpoint，另有一个列出各折的 `run.json`（见 model 指南）。`run_cv()` 通过 `TrainedRun` 读取它，用各折自己的 checkpoint 预测该折的测试段，再把拼接后的各折预测一次性转换为权重，使持仓像一个账户那样跨折延续，并整体模拟一次。`cv_project_dir` 指向试验目录，即 `train_cv().path`，`model_mode` 必须是 `"load"`。只使用测试段落在窗口内的折，这些测试段必须逐 bar 首尾相接。
+`train_cv` 写出一次 walk-forward 运行：一个试验目录，每折一个训练单元，各有自己的 checkpoint，另有一个列出各折的 `run.json`（见 model 指南）。`run_cv()` 通过 `TrainedRun` 读取它，用各折自己的 checkpoint 预测该折的测试段，再把拼接后的各折预测一次性转换为权重，使持仓像一个账户那样跨折延续，并整体模拟一次。`cv_project_dir` 指向试验目录，即 `train_cv().path`，`model_mode` 必须是 `"load"`。只使用测试段与窗口相交的折，这些测试段必须逐 bar 首尾相接。测试段跨过 `start_date` 或 `end_date` 的折会被截到窗口内：它仍用自己的 checkpoint，只预测窗口内的 bar，其记录的 `test_start` / `test_end` 和子运行的窗口都是截后的测试段。因此 `run_cv()` 可以在任意一根 bar 上从现金开始账户，例如检验依赖持仓的规则的结果有多少取决于起点；截过的折的样本内划分仍按它自己的训练日期。
 
 ```python
 >>> cfg2 = write_price_store(root / "cv", n_bars=80)
