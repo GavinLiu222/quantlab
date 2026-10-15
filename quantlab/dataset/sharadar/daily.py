@@ -148,7 +148,7 @@ class SharadarDailyDataset(RawDataset):
     def _derivation(self) -> pl.DataFrame:
         """Return the panel's rows for the whole configured window, cached.
 
-        The window ends at ``config.end_date`` or at ``_raw_through()``,
+        The window ends at ``config.end_date`` or at the day DAILY is complete through (``raw_through``),
         whichever is earlier.
 
         Returns

@@ -17,25 +17,23 @@ formed at a bar's close should read the panel one bar back.
 
 from __future__ import annotations
 
-from datetime import date
-
 import pandas as pd
 import polars as pl
 import xarray as xr
 
-from quantlab.dataset.raw import RawDataset
 from quantlab.dataset.config import DatasetConfig, SharadarDatasetConfig
-from quantlab.dataset.sharadar.tables import (
-    raw_through,
-    trading_days,
-)
 from quantlab.dataset.sharadar.permatickers import map_raw_table
+from quantlab.dataset.sharadar.point_in_time import (
+    ReleasePanelDataset,
+    ReleaseSpec,
+    on_grid,
+    to_panel,
+)
 from quantlab.dataset.sharadar.universe import normalize_universe, universe
-from quantlab.utils.symbol_axis import sort_symbol_axis
 from quantlab.utils.timer import Timer
 
 
-class FilingPanelDataset(RawDataset):
+class FilingPanelDataset(ReleasePanelDataset):
     """Daily panel of one Sharadar filing table, each filing at its available date.
 
     A subclass sets ``config_cls`` and ``TABLE`` and implements
@@ -81,11 +79,6 @@ class FilingPanelDataset(RawDataset):
             )
         return normalize_universe(config, self.class_name)
 
-    def _on_config_installed(self) -> None:
-        """Drop what was cached for the previous config."""
-        self._placed_cache: pl.DataFrame | None = None
-        self._days_cache: pl.Series | None = None
-
     # -- the subclass's part --------------------------------------------------
 
     def _empty(self) -> dict[str, object]:
@@ -117,35 +110,20 @@ class FilingPanelDataset(RawDataset):
         """Return each variable's attributes; none by default."""
         return {}
 
-    # -- inputs ---------------------------------------------------------------
+    # -- the release table ------------------------------------------------------
 
-    def _raw_through(self) -> date:
-        """Return the last day the filing table and the SEP calendar are complete through."""
-        return raw_through(self.config.raw_data_dir_path, (self.TABLE, "sep"))
+    def _raw_tables(self) -> tuple[str, ...]:
+        """Return the filing table and SEP, the calendar."""
+        return (self.TABLE, "sep")
 
-    def _trading_days(self) -> pl.Series:
-        """Return SEP's trading days up to ``_raw_through()``, sorted, as ns datetimes (cached)."""
-        if self._days_cache is None:
-            self._days_cache = trading_days(self.config.raw_data_dir_path, self._raw_through())
-        return self._days_cache
-
-    def _days_in(self, start_date, end_date) -> pl.Series:
-        """Return the trading days in the configured window and ``start_date``..``end_date``."""
-        first = max(pd.Timestamp(start_date), pd.Timestamp(self.config.start_date))
-        last = min(pd.Timestamp(end_date), pd.Timestamp(self.config.end_date))
-        days = self._trading_days()
-        return days.filter(
-            days.is_between(pl.lit(first.to_datetime64()), pl.lit(last.to_datetime64()))
-        )
-
-    def _placed(self) -> pl.DataFrame:
-        """Return every day with a filing, per security, combined (cached).
+    def _released(self) -> pl.DataFrame:
+        """Return every day with a filing, per security, combined.
 
         Returns
         -------
         pl.DataFrame
-            ``symbol``, ``timestamp`` (the available date) and one column
-            per variable, one row per pair, sorted by both.
+            ``symbol``, ``available`` (the trading day the filings land on)
+            and one column per variable, one row per pair, sorted by both.
 
         Raises
         ------
@@ -153,68 +131,44 @@ class FilingPanelDataset(RawDataset):
             If a raw ticker has two permatickers (``map_raw_table``); a row
             with none is left out and reported in ``<store>.unmapped.json``.
         """
-        if self._placed_cache is not None:
-            return self._placed_cache
         root = self.config.raw_data_dir_path
-        days = self._trading_days()
+        calendar = self._trading_calendar()
         with Timer(f"{self.class_name}: place filings"):
             frame = map_raw_table(
                 root,
                 self.TABLE,
                 owner=self.class_name,
                 store_path=self.config.zarr_file_path,
-                query=lambda scan: scan.filter(pl.col("date") <= pl.lit(self._raw_through())),
+                query=lambda scan: scan.filter(pl.col("date") <= pl.lit(calendar.through)),
                 key=self.KEY,
             )
             frame = frame.filter(pl.col("permaticker").is_in(universe(self.config)))
-            filings = self._filings(frame)
-            if days.len():
-                # A filing before the calendar's first day has no trading
-                # day of its own to land on; rolling it onto the first would
-                # misdate it.
-                filings = filings.filter(pl.col("date") >= days.min().date())
-            calendar = days.to_frame().with_columns(pl.col("timestamp").cast(pl.Date).alias("date"))
-            available = (
-                filings.select(pl.col("date").unique().sort())
-                .join_asof(calendar, on="date", strategy="forward")
-                .filter(pl.col("timestamp").is_not_null())
-            )
-            placed = (
-                filings.join(available, on="date", how="inner")
-                .group_by(pl.col("permaticker").alias("symbol"), "timestamp")
+            # A filing before the calendar's first day has no trading day of
+            # its own to land on; rolling it onto the first would misdate it.
+            return (
+                calendar.place(self._filings(frame), drop_earlier=True)
+                .group_by(pl.col("permaticker").alias("symbol"), "available")
                 .agg(self._combine())
-                .sort("symbol", "timestamp")
+                .sort("symbol", "available")
             )
-        self._placed_cache = placed
-        return placed
 
-    # -- axes and windows -----------------------------------------------------
+    def _spec(self) -> ReleaseSpec:
+        """Return the variables, in ``_empty()`` order, with their attributes."""
+        attrs = self._attrs()
+        return ReleaseSpec(
+            variables={name: attrs.get(name, {}) for name in self._empty()}, stamp=None
+        )
 
-    def _raw_axes_in_range(self) -> tuple[list, pd.DatetimeIndex]:
-        """Return the permatickers with a filing by the window's end, and its trading days.
+    def _nothing_shown(self) -> str:
+        """Return what an empty window lacks."""
+        return f"no {self.TABLE!r} filing"
 
-        Raises
-        ------
-        ValueError
-            If the window holds no trading day or no security has a filing by its end.
-        """
-        days = self._days_in(self.config.start_date, self.config.end_date)
-        placed = self._placed()
-        if days.len():
-            placed = placed.filter(pl.col("timestamp") <= days.max())
-        symbols = placed.get_column("symbol").unique().to_list()
-        if not days.len() or not symbols:
-            raise ValueError(
-                f"{self.class_name}: no {self.TABLE!r} filing in "
-                f"[{self.config.start_date}, {self.config.end_date}] for the "
-                f"configured universe."
-            )
-        return sort_symbol_axis(symbols), pd.DatetimeIndex(days.to_list())
+    # -- windows: a filing on its own day only ----------------------------------
 
     def _raw_data_to_xr_window(
         self, start_date, end_date, symbols: list[int] | None = None
     ) -> xr.Dataset:
-        """Return one window of the panel: every trading day by every symbol.
+        """Return one window of the panel: a day's filings on that day, the empty value elsewhere.
 
         Parameters
         ----------
@@ -224,44 +178,19 @@ class FilingPanelDataset(RawDataset):
             Permatickers to build; ``None`` is every one with a filing by
             the window's end.
         """
-        days = self._days_in(start_date, end_date)
-        placed = self._placed()
-        if symbols is None:
-            visible = placed.filter(pl.col("timestamp") <= days.max()) if days.len() else placed
-            symbols = sort_symbol_axis(visible.get_column("symbol").unique().to_list())
-        symbols = [int(s) for s in symbols]
-        grid = days.to_frame().with_row_index("_day").join(
-            pl.DataFrame({"symbol": symbols}, schema={"symbol": pl.Int64}).with_row_index("_column"),
-            how="cross",
-        )
+        days, symbols = self._window_axes(start_date, end_date, symbols)
         cells = (
-            grid.join(placed, on=["timestamp", "symbol"], how="left")
+            on_grid(days, symbols)
+            .join(
+                self._released_rows(),
+                left_on=["timestamp", "symbol"],
+                right_on=["available", "symbol"],
+                how="left",
+            )
             .sort("_day", "_column")
             .with_columns(pl.col(name).fill_null(value) for name, value in self._empty().items())
         )
-        shape = (days.len(), len(symbols))
-        attrs = self._attrs()
-        return xr.Dataset(
-            {
-                name: (
-                    ("timestamp", "symbol"),
-                    cells.get_column(name).to_numpy().reshape(shape),
-                    dict(attrs.get(name, {})),
-                )
-                for name in self._empty()
-            },
-            coords={
-                "timestamp": pd.DatetimeIndex(days.to_list()),
-                "symbol": pd.Index(symbols, dtype="int64"),
-            },
-        )
-
-    def _raw_data_to_xr(self) -> xr.Dataset:
-        """Return the panel for the whole configured window."""
-        symbols, _ = self._raw_axes_in_range()
-        return self._raw_data_to_xr_window(
-            self.config.start_date, self.config.end_date, symbols=symbols
-        )
+        return to_panel(cells, days, symbols, self._spec().variables)
 
     def _added_symbols_with_raw_history(self, added: list, start, end) -> dict[str, int]:
         """Count each added permaticker's filing days between ``start`` and ``end``.
@@ -272,10 +201,10 @@ class FilingPanelDataset(RawDataset):
         if not added:
             return {}
         counts = (
-            self._placed()
+            self._released_rows()
             .filter(
                 pl.col("symbol").is_in([int(s) for s in added])
-                & pl.col("timestamp").is_between(
+                & pl.col("available").is_between(
                     pl.lit(pd.Timestamp(start).to_datetime64()),
                     pl.lit(pd.Timestamp(end).to_datetime64()),
                 )
@@ -288,7 +217,3 @@ class FilingPanelDataset(RawDataset):
     def _widen_fill_values(self) -> dict:
         """Fill a new permaticker's stored days with the empty values: it filed nothing then."""
         return self._empty()
-
-    def _clean(self, data: xr.Dataset) -> xr.Dataset:
-        """Return the panel unchanged: filings are not OHLCV market data."""
-        return data

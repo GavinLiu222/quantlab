@@ -16,8 +16,6 @@ share-class firm (``quantlab.dataset.sharadar.share_class``) are built on it.
 
 from __future__ import annotations
 
-from datetime import date
-
 import numpy as np
 import pandas as pd
 import polars as pl
@@ -25,7 +23,7 @@ import xarray as xr
 
 from quantlab.dataset.raw import RawDataset
 from quantlab.dataset.config import DatasetConfig, SharadarDatasetConfig
-from quantlab.dataset.sharadar.tables import raw_through, trading_days
+from quantlab.dataset.sharadar.point_in_time import TradingCalendar
 from quantlab.dataset.sharadar.universe import normalize_universe
 from quantlab.utils.symbol_axis import sort_symbol_axis
 from quantlab.utils.timer import Timer
@@ -85,7 +83,7 @@ class SpellPanelDataset(RawDataset):
     def _on_config_installed(self) -> None:
         """Drop what was cached for the previous config."""
         self._spells_cache: pl.DataFrame | None = None
-        self._days_cache: pl.Series | None = None
+        self._calendar_cache: TradingCalendar | None = None
 
     # -- what a subclass provides -------------------------------------------
 
@@ -109,24 +107,20 @@ class SpellPanelDataset(RawDataset):
 
     # -- inputs ---------------------------------------------------------------
 
-    def _raw_through(self) -> date:
-        """Return the last day every table of ``RAW_TABLES`` is complete through."""
-        return raw_through(self.config.raw_data_dir_path, self.RAW_TABLES)
-
-    def _trading_days(self) -> pl.Series:
-        """Return SEP's trading days up to ``_raw_through()``, sorted, as ns datetimes (cached)."""
-        if self._days_cache is None:
-            self._days_cache = trading_days(self.config.raw_data_dir_path, self._raw_through())
-        return self._days_cache
+    def _trading_calendar(self) -> TradingCalendar:
+        """Return SEP's trading days through the day ``RAW_TABLES`` are complete through (cached)."""
+        if self._calendar_cache is None:
+            self._calendar_cache = TradingCalendar.of_sep(
+                self.config.raw_data_dir_path,
+                self.RAW_TABLES,
+                start=self.config.start_date,
+                end=self.config.end_date,
+            )
+        return self._calendar_cache
 
     def _days_in(self, start_date, end_date) -> pl.Series:
         """Return the trading days in the configured window and ``start_date``..``end_date``."""
-        first = max(pd.Timestamp(start_date), pd.Timestamp(self.config.start_date))
-        last = min(pd.Timestamp(end_date), pd.Timestamp(self.config.end_date))
-        days = self._trading_days()
-        return days.filter(
-            days.is_between(pl.lit(first.to_datetime64()), pl.lit(last.to_datetime64()))
-        )
+        return self._trading_calendar().days_in(start_date, end_date)
 
     def _spells(self) -> pl.DataFrame:
         """Return ``_build_spells()``, built once per config (cached)."""

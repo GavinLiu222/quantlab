@@ -48,22 +48,21 @@ Build the store and read the holders of a stock::
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import timedelta
 
-import numpy as np
 import pandas as pd
 import polars as pl
 import xarray as xr
 
-from quantlab.dataset.raw import RawDataset
 from quantlab.dataset.config import DatasetConfig, SharadarHoldingsConfig
 from quantlab.dataset.sharadar.permatickers import map_raw_table
-from quantlab.dataset.sharadar.tables import (
-    raw_through,
-    trading_days,
+from quantlab.dataset.sharadar.point_in_time import (
+    ReleasePanelDataset,
+    ReleaseSpec,
+    on_grid,
+    to_panel,
 )
 from quantlab.dataset.sharadar.universe import normalize_universe, universe
-from quantlab.utils.symbol_axis import sort_symbol_axis
 from quantlab.utils.timer import Timer
 
 #: Days after a quarter's end until its 13F filings are all due.
@@ -83,7 +82,7 @@ UNITS_SCALE = 1_000.0
 _ERROR_SAMPLE = 5
 
 
-class SharadarHoldingsDataset(RawDataset):
+class SharadarHoldingsDataset(ReleasePanelDataset):
     """Daily panel of 13F holders and shares held, each quarter from quarter end + 45 days.
 
     Parameters
@@ -103,6 +102,9 @@ class SharadarHoldingsDataset(RawDataset):
 
     #: The config class used to rebuild this dataset from a saved config.
     config_cls = SharadarHoldingsConfig
+
+    #: SF3A and SEP, the calendar, must be complete through a day for it to be built.
+    RAW_TABLES = ("sf3a", "sep")
 
     def _normalize_config(self, config: DatasetConfig) -> SharadarHoldingsConfig:
         """Normalise as the base class does, then check the table and the universe fields.
@@ -124,31 +126,17 @@ class SharadarHoldingsDataset(RawDataset):
             raise ValueError(f"{self.class_name}: table must be 'sf3a', got {config.table!r}.")
         return normalize_universe(config, self.class_name)
 
-    def _on_config_installed(self) -> None:
-        """Drop what was cached for the previous config."""
-        self._quarters_cache: pl.DataFrame | None = None
-        self._days_cache: pl.Series | None = None
+    # -- the release table ------------------------------------------------------
 
-    # -- inputs ---------------------------------------------------------------
-
-    def _raw_through(self) -> date:
-        """Return the last day SF3A and the SEP calendar are complete through."""
-        return raw_through(self.config.raw_data_dir_path, ("sf3a", "sep"))
-
-    def _trading_days(self) -> pl.Series:
-        """Return SEP's trading days up to ``_raw_through()``, sorted, as ns datetimes (cached)."""
-        if self._days_cache is None:
-            self._days_cache = trading_days(self.config.raw_data_dir_path, self._raw_through())
-        return self._days_cache
-
-    def _quarters(self) -> pl.DataFrame:
-        """Return every security's holdings per quarter, with the quarter's available date (cached).
+    def _released(self) -> pl.DataFrame:
+        """Return every security's holdings per quarter, at the quarter's available date.
 
         Returns
         -------
         pl.DataFrame
-            ``symbol``, ``quarter_end``, ``available`` (a trading day, or
-            null past the calendar), ``holders`` and ``shares_held``.
+            ``symbol``, ``quarter_end``, ``available`` (a trading day; a
+            quarter the calendar does not reach yet is left out),
+            ``holders`` and ``shares_held``.
 
         Raises
         ------
@@ -157,8 +145,6 @@ class SharadarHoldingsDataset(RawDataset):
             of two tickers of one security are settled first
             (``PermatickerResolver.settle``).
         """
-        if self._quarters_cache is not None:
-            return self._quarters_cache
         root = self.config.raw_data_dir_path
         with Timer(f"{self.class_name}: quarters"):
             # SF3A holds funds and securities without Sharadar prices: their
@@ -186,25 +172,25 @@ class SharadarHoldingsDataset(RawDataset):
             )
             frame = frame.filter(pl.col("permaticker").is_in(universe(self.config)))
             self._assert_unique_keys(frame)
-            calendar = self._trading_days().to_frame("available").with_columns(
-                pl.col("available").cast(pl.Date).alias("_due")
+            return (
+                self._trading_calendar()
+                .place(frame, "quarter_end", lag=AVAILABILITY_LAG)
+                .select(
+                    pl.col("permaticker").alias("symbol"),
+                    pl.col("quarter_end").cast(pl.Datetime("ns")),
+                    "available",
+                    pl.col("shrholders").cast(pl.Float64).alias("holders"),
+                    (pl.col("shrunits") * UNITS_SCALE).alias("shares_held"),
+                )
             )
-            due = (
-                frame.select(pl.col("quarter_end").unique().sort())
-                .with_columns((pl.col("quarter_end") + AVAILABILITY_LAG).alias("_due"))
-                .sort("_due")
-                .join_asof(calendar, on="_due", strategy="forward")
-                .drop("_due")
-            )
-            quarters = frame.join(due, on="quarter_end").select(
-                pl.col("permaticker").alias("symbol"),
-                pl.col("quarter_end").cast(pl.Datetime("ns")),
-                "available",
-                pl.col("shrholders").cast(pl.Float64).alias("holders"),
-                (pl.col("shrunits") * UNITS_SCALE).alias("shares_held"),
-            )
-        self._quarters_cache = quarters
-        return quarters
+
+    def _spec(self) -> ReleaseSpec:
+        """Return the variables; a quarter is replaced by the next, never stale."""
+        return ReleaseSpec(variables=VARIABLES, dates=("quarter_end",), stamp=None)
+
+    def _nothing_shown(self) -> str:
+        """Return what an empty window lacks."""
+        return "no 13F quarter is shown"
 
     def _assert_unique_keys(self, frame: pl.DataFrame) -> None:
         """Raise if two rows of one permaticker share a quarter."""
@@ -225,45 +211,22 @@ class SharadarHoldingsDataset(RawDataset):
                 f"rather than choosing one."
             )
 
-    # -- axes and windows -----------------------------------------------------
-
-    def _days_in(self, start_date, end_date) -> pl.Series:
-        """Return the trading days in the configured window and ``start_date``..``end_date``."""
-        first = max(pd.Timestamp(start_date), pd.Timestamp(self.config.start_date))
-        last = min(pd.Timestamp(end_date), pd.Timestamp(self.config.end_date))
-        days = self._trading_days()
-        return days.filter(
-            days.is_between(pl.lit(first.to_datetime64()), pl.lit(last.to_datetime64()))
-        )
+    # -- windows: one quarter a day for every security ------------------------
 
     def _shown_by(self, last) -> pl.DataFrame:
-        """Return the quarters' rows available on or before ``last``."""
-        quarters = self._quarters().filter(pl.col("available").is_not_null())
+        """Return the quarters' rows available on or before ``last`` (every one when ``None``)."""
+        quarters = self._released_rows()
         return quarters.filter(pl.col("available") <= last) if last is not None else quarters
-
-    def _raw_axes_in_range(self) -> tuple[list, pd.DatetimeIndex]:
-        """Return the permatickers shown by the window's end, and its trading days.
-
-        Raises
-        ------
-        ValueError
-            If the window holds no trading day or no quarter is shown by its end.
-        """
-        days = self._days_in(self.config.start_date, self.config.end_date)
-        shown = self._shown_by(days.max() if days.len() else None)
-        symbols = shown.get_column("symbol").unique().to_list()
-        if not days.len() or not symbols:
-            raise ValueError(
-                f"{self.class_name}: no 13F quarter is shown in "
-                f"[{self.config.start_date}, {self.config.end_date}] for the "
-                f"configured universe."
-            )
-        return sort_symbol_axis(symbols), pd.DatetimeIndex(days.to_list())
 
     def _raw_data_to_xr_window(
         self, start_date, end_date, symbols: list[int] | None = None
     ) -> xr.Dataset:
         """Return one window of the panel: each day shows the latest quarter available by then.
+
+        The quarter is the market's, the same for every security: a security
+        without a row in it shows nothing that day. Of several quarters
+        available on one day (those due before the calendar's first day),
+        the latest is the one shown.
 
         Parameters
         ----------
@@ -273,57 +236,29 @@ class SharadarHoldingsDataset(RawDataset):
             Permatickers to build; ``None`` is every one shown by the
             window's end.
         """
-        days = self._days_in(start_date, end_date)
+        days, symbols = self._window_axes(start_date, end_date, symbols)
         quarters = self._shown_by(days.max() if days.len() else None)
-        if symbols is None:
-            symbols = sort_symbol_axis(quarters.get_column("symbol").unique().to_list())
-        symbols = [int(s) for s in symbols]
-        # One quarter per day, the same for every security: the latest available.
-        # Quarters due before the calendar's first day share it; the latest wins.
         current = days.to_frame().join_asof(
             quarters.group_by("available").agg(pl.col("quarter_end").max()).sort("available"),
             left_on="timestamp",
             right_on="available",
             strategy="backward",
         ).select("timestamp", "quarter_end")
-        grid = (
-            current.with_row_index("_day")
+        cells = (
+            on_grid(days, symbols)
+            .join(current, on="timestamp", how="left")
             .join(
-                pl.DataFrame({"symbol": symbols}, schema={"symbol": pl.Int64}).with_row_index("_column"),
-                how="cross",
+                quarters.select("symbol", "quarter_end", "holders", "shares_held"),
+                on=["symbol", "quarter_end"],
+                how="left",
             )
+            .sort("_day", "_column")
         )
-        cells = grid.join(
-            quarters.select("symbol", "quarter_end", "holders", "shares_held"),
-            on=["symbol", "quarter_end"],
-            how="left",
-        ).sort("_day", "_column")
         shown = cells.get_column("holders").is_not_null()
         cells = cells.with_columns(
             pl.when(shown).then(pl.col("quarter_end")).alias("quarter_end")
         )
-        shape = (days.len(), len(symbols))
-        return xr.Dataset(
-            {
-                name: (
-                    ("timestamp", "symbol"),
-                    cells.get_column(name).to_numpy().reshape(shape),
-                    dict(attrs),
-                )
-                for name, attrs in VARIABLES.items()
-            },
-            coords={
-                "timestamp": pd.DatetimeIndex(days.to_list()),
-                "symbol": pd.Index(symbols, dtype="int64"),
-            },
-        )
-
-    def _raw_data_to_xr(self) -> xr.Dataset:
-        """Return the panel for the whole configured window."""
-        symbols, _ = self._raw_axes_in_range()
-        return self._raw_data_to_xr_window(
-            self.config.start_date, self.config.end_date, symbols=symbols
-        )
+        return to_panel(cells, days, symbols, self._spec().variables)
 
     def _added_symbols_with_raw_history(self, added: list, start, end) -> dict[str, int]:
         """Count, per added permaticker, its quarters shown between ``start`` and ``end``.
@@ -346,11 +281,3 @@ class SharadarHoldingsDataset(RawDataset):
             .len()
         )
         return {str(symbol): int(rows) for symbol, rows in counts.iter_rows()}
-
-    def _widen_fill_values(self) -> dict:
-        """Fill a new permaticker's stored days of ``quarter_end`` with NaT."""
-        return {"quarter_end": np.datetime64("NaT", "ns")}
-
-    def _clean(self, data: xr.Dataset) -> xr.Dataset:
-        """Return the panel unchanged: holdings are not OHLCV market data."""
-        return data

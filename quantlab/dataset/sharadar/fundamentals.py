@@ -52,26 +52,18 @@ DAILY's daily value.
 
 from __future__ import annotations
 
-from datetime import date, timedelta
-
-import numpy as np
-import pandas as pd
 import polars as pl
-import xarray as xr
 
-from quantlab.dataset.raw import RawDataset
 from quantlab.dataset.config import DatasetConfig, SharadarFundamentalsConfig
 from quantlab.dataset.sharadar.permatickers import map_raw_table
+from quantlab.dataset.sharadar.point_in_time import ReleasePanelDataset, ReleaseSpec
 from quantlab.dataset.sharadar.universe import normalize_universe, universe
 from quantlab.dataset.sharadar.tables import (
     DAILY_INDICATORS,
     SF1_INDICATORS,
-    raw_through,
     scan_raw_table,
     table,
-    trading_days,
 )
-from quantlab.utils.symbol_axis import sort_symbol_axis
 from quantlab.utils.timer import Timer
 
 #: The dimensions a store may hold: as reported, quarterly or trailing twelve months.
@@ -84,7 +76,7 @@ DATE_VARIABLES: tuple[str, ...] = ("release_date", "reportperiod")
 _ERROR_SAMPLE = 5
 
 
-class SharadarFundamentalsDataset(RawDataset):
+class SharadarFundamentalsDataset(ReleasePanelDataset):
     """Daily point-in-time panel of one as-reported SF1 dimension, keyed by permaticker.
 
     Parameters
@@ -105,6 +97,9 @@ class SharadarFundamentalsDataset(RawDataset):
 
     #: The config class used to rebuild this dataset from a saved config.
     config_cls = SharadarFundamentalsConfig
+
+    #: SF1 and SEP, the calendar, must be complete through a day for it to be built.
+    RAW_TABLES = ("sf1", "sep")
 
     #: SF1's valuation indicators that DAILY also holds (``marketcap``,
     #: ``ev``, ``pe``, ...) go by ``sf1_<name>`` when merged or exported, so
@@ -155,28 +150,10 @@ class SharadarFundamentalsDataset(RawDataset):
             )
         return normalize_universe(config, self.class_name)
 
-    def _on_config_installed(self) -> None:
-        """Drop what was cached for the previous config."""
-        self._shown_cache: pl.DataFrame | None = None
-        self._days_cache: pl.Series | None = None
+    # -- the release table ------------------------------------------------------
 
-    # -- inputs ---------------------------------------------------------------
-
-    def _raw_through(self) -> date:
-        """Return the last day both SF1 and the SEP calendar are complete through.
-
-        See ``quantlab.dataset.sharadar.tables.raw_through``.
-        """
-        return raw_through(self.config.raw_data_dir_path, ("sf1", "sep"))
-
-    def _trading_days(self) -> pl.Series:
-        """Return SEP's trading days up to ``_raw_through()``, sorted, as ns datetimes (cached)."""
-        if self._days_cache is None:
-            self._days_cache = trading_days(self.config.raw_data_dir_path, self._raw_through())
-        return self._days_cache
-
-    def _shown(self) -> pl.DataFrame:
-        """Return the rows the panel ever shows, each at its available date (cached).
+    def _released(self) -> pl.DataFrame:
+        """Return the rows the panel ever shows, each at its available date.
 
         A row is kept when its fiscal period is the latest of its
         permaticker's rows released by then, so a later filing of an older
@@ -196,10 +173,9 @@ class SharadarFundamentalsDataset(RawDataset):
             and permaticker share a release date and fiscal period (rows
             under two tickers are settled, ``PermatickerResolver.settle``).
         """
-        if self._shown_cache is not None:
-            return self._shown_cache
         config = self.config
         root = config.raw_data_dir_path
+        calendar = self._trading_calendar()
         with Timer(f"{self.class_name}: shown rows"):
             frame = map_raw_table(
                 root,
@@ -207,7 +183,7 @@ class SharadarFundamentalsDataset(RawDataset):
                 owner=self.class_name,
                 store_path=config.zarr_file_path,
                 query=lambda scan: scan.filter(pl.col("dimension") == config.dimension).filter(
-                    pl.col("date") <= pl.lit(self._raw_through())
+                    pl.col("date") <= pl.lit(calendar.through)
                 ),
                 key=("dimension", "date", "reportperiod"),
             )
@@ -217,19 +193,8 @@ class SharadarFundamentalsDataset(RawDataset):
                 pl.col("reportperiod")
                 == pl.col("reportperiod").cum_max().over("permaticker")
             )
-            available = (
-                frame.select(pl.col("date").unique().sort())
-                .join_asof(
-                    self._trading_days().to_frame("available").with_columns(
-                        pl.col("available").cast(pl.Date).alias("date")
-                    ),
-                    on="date",
-                    strategy="forward",
-                )
-            )
-            frame = (
-                frame.join(available, on="date", how="inner")
-                .filter(pl.col("available").is_not_null())
+            return (
+                calendar.place(frame)
                 # A join does not keep row order; the last filing must be last.
                 .sort("permaticker", "date", "reportperiod")
                 .unique(subset=["permaticker", "available"], keep="last", maintain_order=True)
@@ -242,8 +207,21 @@ class SharadarFundamentalsDataset(RawDataset):
                 )
                 .sort("available")
             )
-        self._shown_cache = frame
-        return frame
+
+    def _spec(self) -> ReleaseSpec:
+        """Return the indicators (each with its vendor unit) and the date variables."""
+        units = self._units()
+        variables = {
+            name: ({"unit": units[name]} if name in units else {})
+            for name in (*SF1_INDICATORS, *DATE_VARIABLES)
+        }
+        variables["release_date"]["description"] = "SEC filing date of the row shown"
+        variables["reportperiod"]["description"] = "fiscal period end of the row shown"
+        return ReleaseSpec(variables=variables, dates=DATE_VARIABLES)
+
+    def _nothing_shown(self) -> str:
+        """Return what an empty window lacks."""
+        return f"no {self.config.dimension} row is shown"
 
     def _assert_unique_keys(self, frame: pl.DataFrame) -> None:
         """Raise if two rows of one permaticker share a release date and fiscal period."""
@@ -273,123 +251,3 @@ class SharadarFundamentalsDataset(RawDataset):
             .collect()
         )
         return dict(rows.iter_rows())
-
-    # -- axes and windows -------------------------------------------------------
-
-    def _days_in(self, start_date, end_date) -> pl.Series:
-        """Return the trading days in the configured window and ``start_date``..``end_date``."""
-        first = max(pd.Timestamp(start_date), pd.Timestamp(self.config.start_date))
-        last = min(pd.Timestamp(end_date), pd.Timestamp(self.config.end_date))
-        days = self._trading_days()
-        return days.filter(
-            days.is_between(pl.lit(first.to_datetime64()), pl.lit(last.to_datetime64()))
-        )
-
-    def _raw_axes_in_range(self) -> tuple[list, pd.DatetimeIndex]:
-        """Return the permatickers shown by the window's end, and its trading days.
-
-        Raises
-        ------
-        ValueError
-            If no row is shown in the configured window.
-        """
-        days = self._days_in(self.config.start_date, self.config.end_date)
-        shown = self._shown()
-        if days.len():
-            shown = shown.filter(pl.col("available") <= days.max())
-        symbols = shown.get_column("symbol").unique().to_list()
-        if not days.len() or not symbols:
-            raise ValueError(
-                f"{self.class_name}: no {self.config.dimension} row is shown in "
-                f"[{self.config.start_date}, {self.config.end_date}] for the "
-                f"configured universe."
-            )
-        return sort_symbol_axis(symbols), pd.DatetimeIndex(days.to_list())
-
-    def _raw_data_to_xr_window(
-        self, start_date, end_date, symbols: list[int] | None = None
-    ) -> xr.Dataset:
-        """Return one window of the panel: every trading day by every symbol.
-
-        Parameters
-        ----------
-        start_date, end_date : date-like
-            The window, both inclusive.
-        symbols : list of int, optional
-            Permatickers to build; ``None`` is every one shown by the
-            window's end.
-        """
-        days = self._days_in(start_date, end_date)
-        shown = self._shown()
-        if symbols is None:
-            last = days.max() if days.len() else None
-            visible = shown if last is None else shown.filter(pl.col("available") <= last)
-            symbols = sort_symbol_axis(visible.get_column("symbol").unique().to_list())
-        symbols = [int(s) for s in symbols]
-        grid = days.to_frame().with_row_index("_day").join(
-            pl.DataFrame({"symbol": symbols}, schema={"symbol": pl.Int64}).with_row_index("_column"),
-            how="cross",
-        ).sort("_day", "_column")
-        cells = grid.join_asof(
-            shown.filter(pl.col("symbol").is_in(symbols)),
-            left_on="timestamp",
-            right_on="available",
-            by="symbol",
-            strategy="backward",
-            # Both sides are sorted by time; polars cannot check that per group.
-            check_sortedness=False,
-        ).sort("_day", "_column")
-        if self.config.stale_after_days is not None:
-            limit = timedelta(days=self.config.stale_after_days)
-            fresh = (pl.col("timestamp") - pl.col("release_date")) <= pl.lit(limit)
-            cells = cells.with_columns(
-                pl.when(fresh).then(pl.col(name)).otherwise(None).alias(name)
-                for name in (*DATE_VARIABLES, *SF1_INDICATORS)
-            )
-        shape = (days.len(), len(symbols))
-        units = self._units()
-        variables = {}
-        for name in (*SF1_INDICATORS, *DATE_VARIABLES):
-            values = cells.get_column(name).to_numpy().reshape(shape)
-            attrs = {"unit": units[name]} if name in units else {}
-            variables[name] = (("timestamp", "symbol"), values, attrs)
-        variables["release_date"][2]["description"] = "SEC filing date of the row shown"
-        variables["reportperiod"][2]["description"] = "fiscal period end of the row shown"
-        return xr.Dataset(
-            variables,
-            coords={
-                "timestamp": pd.DatetimeIndex(days.to_list()),
-                "symbol": np.asarray(symbols, dtype=np.int64),
-            },
-        )
-
-    def _raw_data_to_xr(self) -> xr.Dataset:
-        """Return the panel for the whole configured window."""
-        symbols, _ = self._raw_axes_in_range()
-        return self._raw_data_to_xr_window(
-            self.config.start_date, self.config.end_date, symbols=symbols
-        )
-
-    def _added_symbols_with_raw_history(self, added: list, start, end) -> dict[str, int]:
-        """Count the cells each added permaticker shows between ``start`` and ``end``.
-
-        A permaticker whose first row is released after the store's last
-        day shows nothing in it, so it is a new filer and widens the store.
-        """
-        if not added:
-            return {}
-        window = self._raw_data_to_xr_window(start, end, symbols=[int(s) for s in added])
-        counts = window["release_date"].notnull().sum("timestamp")
-        return {
-            str(symbol): int(count)
-            for symbol, count in zip(window["symbol"].values.tolist(), counts.values.tolist())
-            if count
-        }
-
-    def _widen_fill_values(self) -> dict:
-        """Fill a new permaticker's stored days of the date variables with NaT."""
-        return {name: np.datetime64("NaT", "ns") for name in DATE_VARIABLES}
-
-    def _clean(self, data: xr.Dataset) -> xr.Dataset:
-        """Return the panel unchanged: fundamentals are not OHLCV market data."""
-        return data

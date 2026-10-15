@@ -235,6 +235,14 @@ records nothing itself, passes the request on, and declares the datasets it
 reads with `inputs()`, so `stores()` (what the live day and the data update
 check) names its inputs' stores; its `store_path` is `None`.
 
+A Sharadar table whose rows become public on some day (a filing, a 13F
+quarter) is a *release* table. Its panel subclasses `ReleasePanelDataset`
+(`quantlab.dataset.sharadar.point_in_time`) and supplies only `RAW_TABLES`,
+its rows with an available date (`_released`, placed by
+`self._trading_calendar().place`) and a `ReleaseSpec` (`_spec`); the base
+class holds the point-in-time rule, SEP's trading calendar, the axes and the
+windows. See [Point-in-time release panels](../sharadar.md#point-in-time-release-panels).
+
 This dataset reads daily bars from a single long-format CSV file:
 
 ```python

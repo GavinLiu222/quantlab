@@ -102,6 +102,37 @@ SharadarStockDataset(spy).from_raw_data().save()
 # then BacktestConfig(benchmark_dataset=SharadarStockDataset(spy), ...)
 ```
 
+## Point-in-time release panels
+
+Four panels are built from *releases*, rows that became public on some day: the fundamentals and the fiscal-year history (SF1, on the SEC filing date), 13F holdings (SF3A, 45 days after the quarter end) and the 8-K and insider panels (EVENTS and SF2, on the filing date). One module, `quantlab.dataset.sharadar.point_in_time`, holds the rule they share ([ADR 0003](adr/0003-point-in-time-fundamentals-by-release-date.md)) and the calendar and axes around it:
+
+- `TradingCalendar` is SEP's trading days up to the day the panel's raw tables are complete through. `place(rows, on="date", lag=None, drop_earlier=False)` gives each row its available date, the first trading day on or after `on` (plus `lag`). A row the calendar does not reach yet is dropped. A row dated before the calendar's first day is placed on it, or dropped with `drop_earlier=True`: a state still holds on the first day, but an event would be misdated.
+- `as_of(rows, days, symbols, spec)` is the rule. On every day, each symbol shows its latest row whose available date is on or before that day, and nothing once that row's release date (`spec.stamp`) is more than `spec.stale_after_days` before the day.
+- `shown_symbols`, `on_grid` and `to_panel` build the axes and the panel. The symbol axis of a window holds only the securities with a row available by its last day, so a store never carries a filer from its future.
+
+```python
+>>> from datetime import date
+>>> import polars as pl
+>>> from quantlab.dataset.sharadar.point_in_time import ReleaseSpec, TradingCalendar, as_of
+>>> days = pl.Series("timestamp", ["2024-01-04", "2024-01-05", "2024-01-08", "2024-01-09"]).str.to_datetime(time_unit="ns")
+>>> calendar = TradingCalendar(days, through=date(2024, 1, 9), start="2024-01-01", end="2024-12-31")
+>>> rows = calendar.place(
+...     pl.DataFrame({"symbol": [101, 101], "date": [date(2024, 1, 4), date(2024, 1, 6)], "value": [1.0, 2.0]})
+... ).with_columns(pl.col("date").cast(pl.Datetime("ns")).alias("release_date")).sort("available")
+>>> spec = ReleaseSpec(variables={"value": {}}, stale_after_days=2)
+>>> as_of(rows, calendar.days_in("2024-01-01", "2024-12-31"), [101], spec)["value"].to_pandas()
+symbol      101
+timestamp
+2024-01-04  1.0
+2024-01-05  1.0
+2024-01-08  2.0
+2024-01-09  NaN
+```
+
+The Saturday release is shown from Monday and is stale two days after its release date, not its available date.
+
+Each dataset is a `ReleasePanelDataset` and supplies its rows and a `ReleaseSpec` (its variables, the datetime ones among them, the column staleness is measured from). The base class supplies the calendar, the axes, the window, the symbols an update adds and the fill of a widened store. What a dataset does with its rows stays its own. The fundamentals panel drops a later filing of an older period, and the fiscal-year history turns the rows into slots; both are then shown as of the day. The 13F panel shows one market quarter a day for every security, and a filing panel shows a filing on its own day only. Those two keep their own window and reuse the calendar, the grid and the shaping. A new release table is a subclass with `RAW_TABLES` (the tables bounding the calendar, `"sep"` among them), `_released()` (rows with `symbol`, `available` and the variables, usually through `self._trading_calendar().place`), `_spec()` and `_nothing_shown()` (the start of the message refusing an empty window); `SharadarFundamentalsDataset` is the model. The industry and share-class panels are not releases, but they take their calendar from `TradingCalendar` too.
+
 ## Fundamentals (SF1)
 
 SF1 holds one row per company, dimension and filing, with 105 indicators (income statement, balance sheet, cash flow, per-share values and ratios). Its raw tier keeps every dimension. A store holds one *as-reported* dimension: `ARQ` (each fiscal quarter) or `ART` (trailing twelve months). For those, `date` is the SEC filing date (the release date), and a filing that restates a period is a new row. The most-recent dimensions (`MRQ`, `MRY`, `MRT`) are dated at the period end and rewritten on restatement, so they would leak values one to three months early. `SharadarFundamentalsConfig` refuses them, and so does `ARY`, which the [fiscal-year history](#fiscal-year-history-sf1-ary) panel reads instead.
