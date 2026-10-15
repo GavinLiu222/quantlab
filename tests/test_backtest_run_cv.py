@@ -907,3 +907,66 @@ def test_the_rule_decides_each_rebalance_bar_once_on_the_holdings_the_previous_f
     carried = next(c for c in _SEEN if c.timestamp == boundary)
     assert float(carried.current_weights.sum()) == pytest.approx(1.0, abs=1e-9)
     assert result.metrics["stitched"]["portfolio_construction"]["failed_bar_count"] == 0
+
+
+# --------------------------------------------------------------------------
+# #302: RecordedPredictor serves a recorded run's predictions
+# --------------------------------------------------------------------------
+
+
+def _recorded(tmp_path, cv, run_dir):
+    from quantlab.model.predefined.recorded import RecordedPredictor
+
+    model = make_model(
+        tmp_path / "recorded_model", cv.dataset_config, n_forward_periods=HORIZON,
+        **_model_dates(cv.bars),
+    )
+    return RecordedPredictor(model, run_dir)
+
+
+def test_a_recorded_predictor_replays_a_run_cv_from_another_start(tmp_path, cv_project):
+    """#302: the folds of a run_cv started inside fold 2 are served from a whole
+    run_cv's predictions, and trade exactly as the same run_cv predicting them."""
+    whole = _backtester(tmp_path / "whole", cv_project).run_cv()
+    start_bar = FIRST_TEST_BAR + 2 * TEST_PERIODS + 3
+    direct = _backtester(tmp_path / "direct", cv_project, start_bar=start_bar).run_cv()
+    backtester = _backtester(tmp_path / "replay", cv_project, start_bar=start_bar)
+    backtester.config = dataclasses.replace(
+        backtester.config, model=_recorded(tmp_path, cv_project, whole.run_dir)
+    )
+
+    replay = backtester.run_cv()
+
+    assert [r["fold"] for r in replay.folds] == [r["fold"] for r in direct.folds]
+    for a, b in zip(replay.folds, direct.folds):
+        xr.testing.assert_allclose(a["predictions"], b["predictions"])
+    xr.testing.assert_allclose(replay.weights, direct.weights)
+    xr.testing.assert_allclose(replay.simulation.value, direct.simulation.value)
+    rebuilt = BacktestRun.open(replay.run_dir).rebuild("model")
+    assert type(rebuilt).__name__ == "RecordedPredictor"
+
+
+def test_a_recorded_predictor_serves_only_its_checkpoints_fold(tmp_path, cv_project):
+    whole = _backtester(tmp_path / "whole", cv_project).run_cv()
+    recorded = _recorded(tmp_path, cv_project, whole.run_dir)
+
+    with pytest.raises(ValueError, match="no checkpoint loaded"):
+        recorded.predict_window(_day(_test_bars(cv_project, 0)[0]), _day(_test_bars(cv_project, 0)[-1]))
+    recorded.load(cv_project.checkpoints[0])
+    inside = recorded.predict_window(
+        _day(_test_bars(cv_project, 0)[1]), _day(_test_bars(cv_project, 0)[-1])
+    )
+    np.testing.assert_array_equal(
+        inside.timestamp.values.astype("datetime64[ns]"), _test_bars(cv_project, 0)[1:]
+    )
+    with pytest.raises(ValueError, match="outside"):
+        recorded.predict_window(_day(_test_bars(cv_project, 1)[0]), _day(_test_bars(cv_project, 1)[-1]))
+    with pytest.raises(ValueError, match="predicts nothing new"):
+        recorded.train()
+    late = _backtester(
+        tmp_path / "late", cv_project, start_bar=FIRST_TEST_BAR + 5 * TEST_PERIODS
+    ).run_cv()
+    other = _recorded(tmp_path / "other", cv_project, late.run_dir)
+    other.load(cv_project.checkpoints[0])
+    with pytest.raises(ValueError, match="holds no prediction of checkpoint"):
+        other.predict_window(_day(_test_bars(cv_project, 0)[0]), _day(_test_bars(cv_project, 0)[-1]))
