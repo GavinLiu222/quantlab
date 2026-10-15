@@ -10,7 +10,10 @@ return ``mu`` is calibrated from a label's prediction (Grinold: ``ic *
 sigma * z``) or is the prediction itself (``raw``), the covariance ``Sigma``
 comes from a covariance estimator, its volatilities optionally from a volatility
 label's prediction, and all are on the span of the expected-return label.
-This is the only quantlab module that imports cvxpy.
+This is the only quantlab module that imports cvxpy. For the approximate
+backtest the optimiser also decides a panel of bars at once (``prepare`` and
+``solve``), long-only without a turnover penalty, by accelerated projected
+gradient in numpy rather than cvxpy.
 """
 
 from collections.abc import Sequence
@@ -31,7 +34,9 @@ except ImportError as exc:
 
 from quantlab.portfolio.config import MeanVarianceConfig
 from quantlab.portfolio.base import (
+    DecisionPanel,
     InputDeclaration,
+    LowRankCovariance,
     PortfolioConstructionError,
     PortfolioConstructor,
     PortfolioContext,
@@ -169,6 +174,79 @@ def _project_capped_simplex(values: np.ndarray, cap: float, total: float = 1.0) 
         else:
             high = tau
     return np.clip(values - high, 0.0, cap)
+
+
+def _project_capped_simplex_rows(values: np.ndarray, cap: np.ndarray, total: float = 1.0) -> np.ndarray:
+    """Row by row, ``_project_capped_simplex`` with a cap per entry (0 keeps an entry at 0).
+
+    The shift of every row is bisected at once, until no float lies inside
+    any row's bracket; each row's ``high`` end is returned, as the one-row
+    projection returns it. Every row must reach ``total`` with every entry
+    at its cap.
+    """
+    low = (values - cap).min(axis=1)
+    high = values.max(axis=1)
+    while True:
+        tau = (low + high) / 2
+        inside = (low < tau) & (tau < high)
+        if not inside.any():
+            break
+        over = np.clip(values - tau[:, None], 0.0, cap).sum(axis=1) > total
+        low = np.where(inside & over, tau, low)
+        high = np.where(inside & ~over, tau, high)
+    return np.clip(values - high[:, None], 0.0, cap)
+
+
+def _maximise_rows(
+    expected: np.ndarray,
+    cap: np.ndarray,
+    estimate: LowRankCovariance,
+    risk_aversion: float,
+    start: np.ndarray,
+    *,
+    tolerance: float = 1e-10,
+    iterations: int = 50_000,
+) -> np.ndarray:
+    """Maximise ``mu' w - risk_aversion / 2 * w' Sigma w`` over each row's capped simplex, all rows at once.
+
+    Accelerated projected gradient (FISTA) with adaptive restart: the step
+    is one over ``risk_aversion`` times each row's largest eigenvalue (an
+    upper bound), the projection ``_project_capped_simplex_rows``. It stops
+    when no row's weights move by more than ``tolerance`` (L1) in one step.
+    """
+    curvature = risk_aversion * estimate.largest_eigenvalue()
+    scale = np.abs(expected).max(axis=1, initial=0.0)
+    # Without curvature the problem is linear: a long step lands on its vertex.
+    step = np.where(curvature > 0, 1.0 / np.where(curvature > 0, curvature, 1.0), 1e12 / np.maximum(scale, 1e-300))
+    w = _project_capped_simplex_rows(start, cap)
+    y, t = w, np.ones(len(w))
+    for _ in range(iterations):
+        gradient = expected - risk_aversion * estimate.times(y)
+        following = _project_capped_simplex_rows(y + step[:, None] * gradient, cap)
+        move = np.abs(following - w).sum(axis=1)
+        restart = ((y - following) * (following - w)).sum(axis=1) > 0
+        t_next = (1.0 + np.sqrt(1.0 + 4.0 * t * t)) / 2.0
+        momentum = np.where(restart, 0.0, (t - 1.0) / t_next)
+        y = following + momentum[:, None] * (following - w)
+        t = np.where(restart, 1.0, t_next)
+        w = following
+        if move.max(initial=0.0) <= tolerance:
+            break
+    return w
+
+
+@dataclass(frozen=True)
+class _PanelProblem:
+    """``MeanVarianceOptimizer.prepare``'s problem: what every bar's decision reads but its holdings."""
+
+    #: Each bar's covariance on the expected-return label's span.
+    estimate: LowRankCovariance
+    #: ``[bars, symbols]``: ``mu``, 0.0 where there is no prediction.
+    expected_return: np.ndarray
+    #: ``[bars, symbols]``: tradable and covered, so a holding there is a candidate.
+    selectable: np.ndarray
+    #: ``[bars, symbols]``: selectable with a finite prediction, a candidate whatever is held.
+    predicted: np.ndarray
 
 
 def _clean_long_short(
@@ -789,6 +867,166 @@ class MeanVarianceOptimizer(PortfolioConstructor):
             events["reference_without_risk"] = [str(s) for s in inputs.reference_without_risk]
         if events:
             weights.attrs["events"] = events
+        return weights
+
+    def panel_refusal(self) -> str | None:
+        """Return why the optimiser cannot decide a panel at once, or ``None`` when it can.
+
+        The panel decision handles the long-only Grinold problem without a
+        turnover penalty, with a covariance estimator that has a batched
+        estimate. Refused, the message naming the field: a tracking-error
+        cap, exposure bounds, a long-short book, ``candidate_top_k``,
+        ``volatility_label``, ``calibration="raw"`` and a turnover penalty;
+        a rule overriding the ``reference_weights`` or ``risk_constraints``
+        extension points; an estimator without ``estimate_all``.
+        ``min_trade`` and ``solver`` are not read.
+
+        Examples
+        --------
+        >>> optimizer.panel_refusal() is None
+        True
+        """
+        config = self.config
+        name = type(self).__name__
+        if getattr(config, "tracking_error", None) is not None:
+            return f"{name}'s tracking_error (a tracking-error cap) is not handled in a panel decision"
+        if config.exposure_bounds:
+            return f"{name}'s exposure_bounds are not handled in a panel decision"
+        unsupported = {
+            "direction": config.direction != "long_only",
+            "candidate_top_k": config.candidate_top_k is not None,
+            "volatility_label": config.volatility_label is not None,
+            "calibration": config.calibration != "grinold",
+            "turnover_penalty": config.turnover_penalty != 0,
+        }
+        for field_name, refused in unsupported.items():
+            if refused:
+                return (
+                    f"{name}'s {field_name}={getattr(config, field_name)!r} is not handled in a "
+                    f"panel decision yet"
+                )
+        base = MeanVarianceOptimizer
+        if type(self).reference_weights is not base.reference_weights or (
+            type(self).risk_constraints is not base.risk_constraints
+        ):
+            return (
+                f"{name} prices risk against a reference book or constrains it "
+                f"(reference_weights, risk_constraints), not handled in a panel decision yet"
+            )
+        refusal = config.covariance.panel_refusal()
+        if refusal is not None:
+            return f"its covariance estimator: {refusal}"
+        return None
+
+    def prepare(self, panel: DecisionPanel) -> _PanelProblem:
+        """Turn every bar's inputs into its problem but the holdings: ``mu``, the covariance and the candidates.
+
+        As ``problem_inputs`` computes them on each bar's context with
+        nothing locked: the covariance estimator's ``estimate_all`` scaled
+        to the expected-return label's span, a symbol selectable when it is
+        tradable and covered, and ``mu = ic * sigma * z`` on the selectable
+        symbols with a prediction (``z`` their cross-sectional z-score).
+
+        Parameters
+        ----------
+        panel : DecisionPanel
+            The bars' decision inputs.
+
+        Returns
+        -------
+        object
+            The problem ``solve`` answers.
+
+        Raises
+        ------
+        RuntimeError
+            If the optimiser has not been bound to label specs.
+
+        Examples
+        --------
+        With ``panel`` the two-bar decision panel of the
+        ``LedoitWolfEstimator.estimate_all`` example (``CCC`` not covered):
+
+        >>> optimizer = MeanVarianceOptimizer(MeanVarianceConfig(
+        ...     expected_return_label="ret_5", ic=0.05, risk_aversion=10.0, weight_cap=0.8,
+        ...     covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=20)),
+        ... ))
+        >>> optimizer.bind([LabelSpec(name="ret_5", scale="raw", delay=1, span=5)])
+        >>> problem = optimizer.prepare(panel)
+        """
+        if self._span is None:
+            raise RuntimeError(
+                "MeanVarianceOptimizer is not bound to label specs; call bind() first"
+            )
+        config = self.config
+        estimate = config.covariance.estimate_all(panel).scaled(self._span)
+        prediction = np.asarray(
+            panel.predictions[config.expected_return_label]
+            .transpose("timestamp", "symbol")
+            .sel(symbol=panel.symbols)
+            .values,
+            dtype=np.float64,
+        )
+        selectable = np.asarray(panel.tradable, dtype=bool) & estimate.covered
+        predicted = selectable & np.isfinite(prediction)
+        z = np.nan_to_num(cross_sectional_zscore(np.where(predicted, prediction, np.nan)), nan=0.0)
+        expected = np.where(predicted, config.ic * np.sqrt(estimate.variance) * z, 0.0)
+        return _PanelProblem(estimate, expected, selectable, predicted)
+
+    def solve(
+        self, problem: _PanelProblem, holdings: np.ndarray | None, warm_start: np.ndarray | None = None
+    ) -> np.ndarray:
+        """Return every bar's long-only mean-variance weights, given the holdings at each bar.
+
+        The candidates are the bars' predicted symbols and, with
+        ``holdings``, the selectable symbols held (at ``mu = 0``), as the
+        per-bar rule takes them. A bar with no candidate, or too few to hold
+        the book under ``weight_cap``, holds (an all-NaN row), as a backtest
+        run holds it. The rest are solved together by accelerated projected
+        gradient (``_maximise_rows``), from ``warm_start`` where it is
+        finite.
+
+        Parameters
+        ----------
+        problem : object
+            What ``prepare`` returned.
+        holdings : np.ndarray or None
+            ``[bars, symbols]`` weights held at each bar, or ``None``.
+        warm_start : np.ndarray, optional
+            ``[bars, symbols]`` weights to start from.
+
+        Returns
+        -------
+        np.ndarray
+            ``[bars, symbols]`` weights.
+
+        Examples
+        --------
+        >>> optimizer.solve(problem, None).round(3)
+        array([[0.654, 0.346, 0.   ],
+               [0.651, 0.349, 0.   ]])
+        """
+        config = self.config
+        candidate = problem.predicted.copy()
+        if holdings is not None:
+            candidate |= problem.selectable & (holdings != 0)
+        count = candidate.sum(axis=1)
+        solvable = (count > 0) & (count * config.weight_cap >= 1.0 - 1e-12)
+        weights = np.full(candidate.shape, np.nan)
+        if not solvable.any():
+            return weights
+        cap = np.where(candidate[solvable], config.weight_cap, 0.0)
+        start = cap
+        if warm_start is not None:
+            given = warm_start[solvable]
+            start = np.where(np.isfinite(given).all(axis=1)[:, None], np.nan_to_num(given), cap)
+        weights[solvable] = _maximise_rows(
+            problem.expected_return[solvable],
+            cap,
+            problem.estimate.take(solvable),
+            config.risk_aversion,
+            start,
+        )
         return weights
 
     def _skip_small_trades(self, solution: np.ndarray, current: np.ndarray, total: float) -> np.ndarray:

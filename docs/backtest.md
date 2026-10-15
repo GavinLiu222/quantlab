@@ -527,6 +527,8 @@ The account also holds `universe_value`, the equal-weighted universe of a run's 
 ['costs', 'selection', 'total', 'universe']
 ```
 
+`MeanVarianceOptimizer` runs too, long-only with the Grinold calibration and no turnover penalty, over a covariance estimator with a batched estimate (`LedoitWolfEstimator`); see [Mean-variance in the approximate backtest](portfolio.md#mean-variance-in-the-approximate-backtest). On 1,000 synthetic symbols and 137 daily rebalances it took 1.0 s against `run()`'s 76 s.
+
 ### Restrict the universe to an index's members
 
 An index's point-in-time membership is a universe: it says which securities the strategy may enter at bar t. It masks the predictions, never the prices. Keep `price_dataset` unmasked (for CRSP, a `CrspStockDataset` over the index store `wrds_crsp_<index>_1d.zarr`) and wrap the model in `MembershipMaskedPredictor` from `quantlab.model.predefined.membership_mask`, with the index's `IndexConstituentDataset`:

@@ -267,6 +267,8 @@ class ApproximateBacktest(Component):
         self.config = config
         self._prices: xr.Dataset | None = None
         self._benchmark: np.ndarray | None = None
+        # The prices with a warm-up before the window, and the warm-up's history_bars.
+        self._history: tuple[int, xr.Dataset] | None = None
 
     def run(self, predictions: PredictionPanel, constructor: PortfolioConstructor) -> ApproximateAccount:
         """Backtest one prediction panel with one rule and return the account.
@@ -341,7 +343,7 @@ class ApproximateBacktest(Component):
             members = np.flatnonzero(decisions // config.chunk_bars == chunk)
             known = members[-1] + 1
             problem = constructor.prepare(
-                inputs.panel(panel.isel(timestamp=decisions[members]), prices=prices)
+                inputs.panel(panel.isel(timestamp=decisions[members]), prices=self._history_prices(inputs))
             )
             weights = constructor.solve(problem, None)
             self._check_rows(constructor, weights)
@@ -414,6 +416,19 @@ class ApproximateBacktest(Component):
                 )
             self._prices = prices
         return self._prices
+
+    def _history_prices(self, inputs: DecisionInputs) -> xr.Dataset:
+        """Return the window's prices with the rule's warm-up before it, read once per warm-up.
+
+        Kept for later runs: a rule reading no more warm-up than the one
+        read uses it again (a longer history does not change a bar's
+        window, which reads only its own ``history_bars`` prices).
+        """
+        needed = inputs.declared.history_bars
+        if self._history is None or self._history[0] < needed:
+            window = self._window_prices().timestamp.values
+            self._history = (needed, inputs.history_prices(window[0], window[-1]))
+        return self._history[1]
 
     def _account(
         self, timestamps, symbols, decisions, targets, simulation, without_costs, sweeps, converged

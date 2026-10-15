@@ -369,6 +369,12 @@ array([ 0.4  , -0.212, -0.261,  0.073])
 
 每根 bar 的优化问题由 `solver` 指定的 cvxpy 求解器求解，默认是 `"CLARABEL"`，一个内点法求解器，约束满足到约 1e-9。`"OSQP"` 是一阶方法求解器，也是 cvxpy 1.9 对这类问题自动选的那个，约束满足到约 1e-5；在 900 到 1500 个候选的模拟问题上 Clarabel 约快一倍，3000 个时两者相近。内点法的解会在几乎每个不想持有的标的上留下 1e-10 到 1e-6 的残值，`min_trade`（见[最小交易量](#最小交易量)）让它们不变成订单。写明求解器，是为了 cvxpy 更换默认求解器时运行结果仍可复现；设为 `None` 则交给 cvxpy 自己选。构造优化器时，未安装的求解器（不在 `cvxpy.installed_solvers()` 里）会被拒绝。
 
+### 近似回测中的均值-方差
+
+近似回测（见[用近似回测做参数扫描](backtest.md#用近似回测做参数扫描)）通过 `prepare` 和 `solve` 一次决定一个分块里的所有 bar。`prepare` 向协方差估计器要每个 bar 的低秩形式估计（`estimate_all`，一个 `LowRankCovariance`：每个 bar 为 `B F B' + diag(D)`），按预期收益标签的 span 缩放，并像逐 bar 规则一样计算 `mu`：可交易且被估计覆盖的标的为可选，有预测的可选标的上 `mu = ic * sigma * z`。`solve` 再把持有的可选标的以 `mu = 0` 加入候选，在预算和上限约束下，对所有 bar 同时最大化 `w @ mu - risk_aversion / 2 * w @ Sigma @ w`，方法是加速投影梯度（带自适应重启的 FISTA，步长取自每个 bar 的最大特征值，向带上限单纯形做精确投影），直到没有哪个 bar 的权重变动超过 1e-10。候选太少的 bar 保持仓位，与回测运行相同。在合成数据上，权重与以严格容差求解的回测运行相差在 2e-7（L1，14 只标的）和 6e-6（1,000 只）以内；在 CLARABEL 默认容差下，回测运行自己的解在目标几乎平坦的 bar 上可能离最优约 2e-3，两种回测在那里可能相差这么多。
+
+目前支持：只做多、`calibration="grinold"`、无换手惩罚、不设 `candidate_top_k` 和 `volatility_label`，以及 `LedoitWolfEstimator`。其他设置都在读任何数据之前被拒绝，消息会指明原因：跟踪误差上限（`tracking_error`）、`exposure_bounds`、其他字段、重写了 `reference_weights` 或 `risk_constraints` 的规则、没有 `estimate_all` 的估计器。`solver` 和 `min_trade` 不读取。
+
 ### 暴露约束
 
 `exposure_bounds` 把组合对某个因子的暴露限制在两个界之间：对 `exposure_factors` 中每个被点名的输出 `x`，要求 `lower <= sum_i w_i * x_i <= upper`，被锁持仓的暴露也计入（没有暴露值的被锁标的会让这根 bar 失败，因为组合的暴露此时未知）。规则把这些 `exposure_factors` 声明为它的因子（`declared_inputs()`），所以回测会在窗口内计算它们，并把每根 bar 的取值放进 `context.factors`。没有暴露值的候选标的不分配权重；如果它当前已持有，就被平掉，并记在该 bar 的 `closed_without_exposure` 事件里。协方差估计器所用因子风险模型的因子（`factor_names` 之一）也可以直接约束，不必声明因子：它的暴露由预测自己给出，即 `forecast.factor_exposure(name, symbols)`：`B` 的那一列，预测未覆盖的标的没有暴露值；该因子在这根 bar 上没有协方差、因而不在预测中时为 0。Ledoit-Wolf 这样的稠密估计没有风险因子。以因子风险模型为协方差时，`exposure_bounds={"style_beta": (-0.1, 0.1)}` 把组合的 USE4 Beta 暴露控制在市值加权估计域的水平（即 0）附近，行业因子也能这样约束。被约束的名字如果既是 `exposure_factors` 的输出又是风险模型的因子，会被拒绝。候选标的无法满足的界会让这根 bar 无解，回测会保持原持仓（见[在回测中](#在回测中)）。约束满足到求解器的精度：`"CLARABEL"` 约 1e-9，`"OSQP"` 约 1e-5。
@@ -508,7 +514,7 @@ rule = ActiveRiskOptimizer(ActiveRiskConfig(
 
 `get_config` 和 `from_config` 把规则序列化为配置的各字段加上类的导入路径。字段里如果是另一个组件（例如协方差估计器），会嵌套序列化，所以重建一次运行不需要额外代码。
 
-新的协方差估计器同样继承 `CovarianceEstimator` 并实现 `estimate`。见[扩展 quantlab](../developer-guide/extending.md)。
+新的协方差估计器同样继承 `CovarianceEstimator` 并实现 `estimate`。要在近似回测中运行，它还要实现 `estimate_all(panel)`，以 `LowRankCovariance` 返回每个 bar 的估计，覆盖的标的与 `estimate` 在该 bar 上覆盖的相同（面板的 `return_windows` 和 `staleness()` 给出每个 bar 的收益窗口和 staleness，与其 context 中一致），并让 `panel_refusal()` 返回 `None`。见[扩展 quantlab](../developer-guide/extending.md)。
 
 ## 另请参阅
 

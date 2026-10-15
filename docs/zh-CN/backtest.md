@@ -527,6 +527,8 @@ ValueError: USEquityApproximateBacktest cannot run TopkDropoutConstructor: TopkD
 ['costs', 'selection', 'total', 'universe']
 ```
 
+`MeanVarianceOptimizer` 也能运行：只做多、Grinold 校准、无换手惩罚，协方差估计器要有批量估计（`LedoitWolfEstimator`）；见[近似回测中的均值-方差](portfolio.md#近似回测中的均值-方差)。在 1,000 只合成标的、137 次日度调仓上，它用时 1.0 秒，`run()` 用时 76 秒。
+
 ### 限定为指数成分股
 
 指数的 point-in-time 成分是一个股票池：它规定策略在 bar t 可以买入哪些证券。它遮蔽的是预测，从不遮蔽价格。`price_dataset` 保持未遮蔽（CRSP 下即指数 store `wrds_crsp_<index>_1d.zarr` 上的 `CrspStockDataset`），并用 `quantlab.model.predefined.membership_mask` 中的 `MembershipMaskedPredictor` 配合该指数的 `IndexConstituentDataset` 包装模型：

@@ -453,10 +453,14 @@ class DecisionInputs:
     def panel(self, predictions: xr.Dataset, *, prices: xr.Dataset | None = None) -> DecisionPanel:
         """Return the decision inputs of a block of decision bars at once, for ``PortfolioConstructor.prepare``.
 
-        The panel counterpart of ``context``: each bar's predictions and its
+        The panel counterpart of ``context``: each bar's predictions, its
         tradability (``tradable_bars``, judged from nothing later than the
-        bar), as the per-bar context reads them. No holdings: a rule's
-        ``solve`` is handed those.
+        bar) and the raw valuation prices its return window and staleness
+        are read from (the rule's ``history_bars`` up to the bar), as the
+        per-bar context reads them; ``DecisionPanel.return_windows`` and
+        ``DecisionPanel.staleness`` give each bar's window and staleness as
+        its context holds them. No holdings: a rule's ``solve`` is handed
+        those.
 
         Parameters
         ----------
@@ -464,10 +468,10 @@ class DecisionInputs:
             One variable per label on ``(timestamp, symbol)``, at the
             decision bars (bars of the dataset's calendar, in time order).
         prices : xr.Dataset, optional
-            The fill and valuation prices on ``(timestamp, symbol)``
-            covering the bars, already read (an approximate backtest reads
-            its window once); read from the dataset over the bars when
-            omitted.
+            The fill and valuation prices on ``(timestamp, symbol)`` from
+            the first bar's warm-up (``history_prices``) to the last bar or
+            beyond, already read (an approximate backtest reads its window
+            once); read from the dataset when omitted.
 
         Returns
         -------
@@ -476,7 +480,8 @@ class DecisionInputs:
         Raises
         ------
         ValueError
-            If a bar is not a bar of the prices.
+            If a bar is not a bar of the prices, or ``prices`` starts after
+            the first bar's warm-up.
 
         Examples
         --------
@@ -484,31 +489,68 @@ class DecisionInputs:
         >>> block.tradable
         array([[ True,  True,  True],
                [ True, False,  True]])
+        >>> block.staleness()
+        array([[ 0.,  0.,  0.],
+               [ 0., nan,  0.]])
         """
         predictions = predictions.transpose(*_DIMS)
         timestamps = pd.DatetimeIndex(predictions.timestamp.values)
         symbols = predictions.symbol.values
+        first, last = timestamps[0], timestamps[-1]
+        start = self._history_start(first, warn=False)
         if prices is None:
-            prices = self.dataset.panel(
-                timestamps[0], timestamps[-1], variables=[self.fill_column, self.valuation_column]
-            )
-        window = prices.sel(timestamp=slice(timestamps[0], timestamps[-1]))
-        missing = timestamps[pd.Index(window.timestamp.values).get_indexer(timestamps) < 0]
-        if len(missing):
+            prices = self._prices(first, last, symbols, warn=False)
+        elif pd.Timestamp(prices.timestamp.values[0]) > start:
             raise ValueError(
-                f"every decision bar must be a bar of the prices; missing {[str(t) for t in missing[:5]]}"
+                f"the prices start at {pd.Timestamp(prices.timestamp.values[0])}, after the "
+                f"first bar's warm-up from {start}"
+            )
+        prices = prices.sel(timestamp=slice(start, last))
+        rows = pd.Index(prices.timestamp.values).get_indexer(timestamps)
+        if (rows < 0).any():
+            raise ValueError(
+                "every decision bar must be a bar of the prices; missing "
+                f"{[str(t) for t in timestamps[rows < 0][:5]]}"
             )
         tradable = (
-            self.dataset.tradable_bars(window.sel(timestamp=timestamps), self.fill_column)
+            self.dataset.tradable_bars(prices.isel(timestamp=rows), self.fill_column)
             .transpose(*_DIMS)
             .reindex(symbol=symbols, fill_value=False)
         )
+        valuation = prices[self.valuation_column].transpose(*_DIMS).reindex(symbol=symbols)
         return DecisionPanel(
             timestamps=timestamps,
             symbols=symbols,
             predictions=predictions,
             tradable=np.asarray(tradable.values, dtype=bool),
+            valuation_prices=np.asarray(valuation.values, dtype=np.float64),
+            rows=rows,
+            history_bars=self.declared.history_bars,
         )
+
+    def history_prices(self, first, last) -> xr.Dataset:
+        """Return the fill and valuation prices the bars from ``first`` to ``last`` read, warm-up included.
+
+        From ``history_bars - 1`` bars before ``first`` (a warning names the
+        shortfall when the dataset holds fewer, as ``weights`` warns) to
+        ``last``, on every symbol, in one request: what ``panel`` takes as
+        ``prices`` for any block of those bars.
+
+        Parameters
+        ----------
+        first, last : pd.Timestamp or datetime-like
+            The first and last bar.
+
+        Returns
+        -------
+        xr.Dataset
+
+        Examples
+        --------
+        >>> inputs.history_prices(ts[1], ts[3]).sizes["timestamp"]  # top-n reads no warm-up
+        3
+        """
+        return self._prices(pd.Timestamp(first), pd.Timestamp(last), None, warn=True)
 
     def weights(self, predictions: xr.Dataset, *, delisted: xr.DataArray | None = None) -> xr.Dataset:
         """Decide every rebalance bar of a prediction panel and return the target weights.

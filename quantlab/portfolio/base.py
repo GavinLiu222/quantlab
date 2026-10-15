@@ -24,7 +24,8 @@ A rule may also decide a block of bars at once, for the approximate
 backtest (ADR 0041): ``prepare`` turns a ``DecisionPanel`` into a problem
 once and ``solve`` answers it for the holdings at every bar. The base class
 refuses (``panel_refusal`` names the rule); a rule opts in by implementing
-the pair.
+the pair. A covariance estimator opts in the same way with
+``estimate_all``, every bar's estimate at once as a ``LowRankCovariance``.
 
 A *covariance estimator* (``CovarianceEstimator``) estimates the covariance
 of one-bar returns at a bar, as a ``quantlab.risk.base.ReturnCovariance``
@@ -218,6 +219,16 @@ class DecisionPanel:
     tradable : np.ndarray
         Booleans ``[bars, symbols]``: whether the symbol can be traded at
         the bar, as ``PortfolioContext.tradable`` judges it.
+    valuation_prices : np.ndarray or None
+        ``[rows, symbols]``: the raw valuation prices from the first bar's
+        warm-up to the last bar, the prices every bar's return window and
+        staleness are read from (``return_windows``, ``staleness``);
+        ``None`` in a panel built by hand for a rule that reads none.
+    rows : np.ndarray or None
+        Each bar's row in ``valuation_prices``.
+    history_bars : int
+        Raw prices up to and including a bar that its window reads, as
+        ``InputDeclaration.history_bars``.
 
     Examples
     --------
@@ -229,6 +240,9 @@ class DecisionPanel:
     ...         coords={"timestamp": pd.DatetimeIndex(["2024-01-02", "2024-01-03"]), "symbol": ["AAA", "BBB"]},
     ...     ),
     ...     tradable=np.array([[True, True], [True, False]]),
+    ...     valuation_prices=np.array([[10.0, 20.0], [11.0, 20.0], [12.1, np.nan]]),
+    ...     rows=np.array([1, 2]),
+    ...     history_bars=3,
     ... )
     >>> panel.tradable.shape
     (2, 2)
@@ -238,6 +252,82 @@ class DecisionPanel:
     symbols: np.ndarray
     predictions: xr.Dataset
     tradable: np.ndarray
+    valuation_prices: np.ndarray | None = None
+    rows: np.ndarray | None = None
+    history_bars: int = 1
+
+    def _last_priced(self) -> np.ndarray:
+        """``[rows, symbols]``: the row of each symbol's last real price at or before each row, -1 for none."""
+        prices = self._prices()
+        rows = np.where(np.isfinite(prices), np.arange(len(prices))[:, None], -1)
+        return np.maximum.accumulate(rows, axis=0)
+
+    def _prices(self) -> np.ndarray:
+        """The valuation prices, refusing a panel without them."""
+        if self.valuation_prices is None or self.rows is None:
+            raise ValueError("the decision panel holds no valuation prices")
+        return self.valuation_prices
+
+    def _window_starts(self, bars: np.ndarray) -> np.ndarray:
+        """The first price row of each of ``bars``' windows: ``history_bars`` rows ending at the bar."""
+        return np.maximum(0, self.rows[bars] - (self.history_bars - 1))
+
+    def staleness(self) -> np.ndarray:
+        """``[bars, symbols]``: each bar's ``PortfolioContext.staleness``.
+
+        The bars since the symbol's last real valuation price within the
+        bar's last ``history_bars`` prices, NaN with none there.
+
+        Examples
+        --------
+        >>> panel.staleness()  # BBB's last price is a bar before the second bar
+        array([[0., 0.],
+               [0., 1.]])
+        """
+        last = self._last_priced()[self.rows]
+        starts = self._window_starts(np.arange(len(self.rows)))
+        since = (self.rows[:, None] - last).astype(np.float64)
+        return np.where(last >= starts[:, None], since, np.nan)
+
+    def return_windows(self, bars: np.ndarray, lookback: int) -> np.ndarray:
+        """``[len(bars), lookback, symbols]``: the bars' trailing one-bar returns, as each context holds them.
+
+        Bar ``k``'s window equals the last ``lookback`` rows of
+        ``PortfolioContext.returns`` at that bar: the bar's last
+        ``history_bars`` valuation prices forward-filled within themselves
+        alone, so a price before them never fills a gap, NaN before a
+        symbol's first price in them (and NaN rows when fewer than
+        ``lookback + 1`` prices are there).
+
+        Parameters
+        ----------
+        bars : np.ndarray
+            Positions of the bars in the panel.
+        lookback : int
+            Returns per window.
+
+        Returns
+        -------
+        np.ndarray
+
+        Examples
+        --------
+        >>> panel.return_windows(np.array([1]), 2)
+        array([[[0.1, 0. ],
+                [0.1, 0. ]]])
+        """
+        prices = self._prices()
+        bars = np.asarray(bars, dtype=np.intp)
+        last = self._last_priced()
+        starts = self._window_starts(bars)
+        # Rows of the window's last lookback + 1 prices, oldest first.
+        at = self.rows[bars][:, None] - lookback + np.arange(lookback + 1)[None, :]
+        source = last[np.maximum(at, 0)]
+        known = (at[..., None] >= 0) & (source >= starts[:, None, None])
+        filled = np.where(
+            known, prices[np.maximum(source, 0), np.arange(prices.shape[1])], np.nan
+        )
+        return filled[:, 1:] / filled[:, :-1] - 1.0
 
 
 @dataclass(frozen=True)
@@ -526,6 +616,126 @@ class CovarianceEstimate:
         )
 
 
+@dataclass(frozen=True)
+class LowRankCovariance:
+    """Every bar's covariance of a decision panel, in low-rank form: ``CovarianceEstimator.estimate_all``'s result.
+
+    Bar ``k``'s covariance over its covered symbols is ``B F B' +
+    diag(D)``, with ``B = exposures[k]``, ``F = factor_covariance[k]`` (the
+    identity when ``None``) and ``D = specific_variance[k]``; the dense
+    ``[symbols, symbols]`` matrix is never built. A symbol a bar does not
+    cover has zero exposures and specific variance there.
+
+    Attributes
+    ----------
+    covered : np.ndarray
+        Booleans ``[bars, symbols]``: the symbols each bar's estimate covers.
+    exposures : np.ndarray
+        ``[bars, symbols, k]``: ``B`` per bar.
+    factor_covariance : np.ndarray or None
+        ``[bars, k, k]``: ``F`` per bar, or ``None`` for the identity.
+    specific_variance : np.ndarray
+        ``[bars, symbols]``: ``D`` per bar.
+
+    Examples
+    --------
+    >>> covariance = LowRankCovariance(
+    ...     covered=np.array([[True, True]]),
+    ...     exposures=np.array([[[0.1], [0.2]]]),
+    ...     factor_covariance=None,
+    ...     specific_variance=np.array([[0.01, 0.02]]),
+    ... )
+    >>> covariance.variance
+    array([[0.02, 0.06]])
+    >>> covariance.times(np.array([[1.0, 0.0]]))
+    array([[0.02, 0.02]])
+    """
+
+    covered: np.ndarray
+    exposures: np.ndarray
+    factor_covariance: np.ndarray | None
+    specific_variance: np.ndarray
+
+    @property
+    def variance(self) -> np.ndarray:
+        """``[bars, symbols]``: each covered symbol's variance, the diagonal; 0 where not covered.
+
+        Examples
+        --------
+        >>> covariance.variance
+        array([[0.02, 0.06]])
+        """
+        if self.factor_covariance is None:
+            factor = np.einsum("bsk,bsk->bs", self.exposures, self.exposures)
+        else:
+            factor = np.einsum("bsk,bkl,bsl->bs", self.exposures, self.factor_covariance, self.exposures)
+        return factor + self.specific_variance
+
+    def scaled(self, factor: float) -> Self:
+        """Return the covariance with every entry multiplied by ``factor``, the span scaling.
+
+        Examples
+        --------
+        >>> covariance.scaled(5).variance
+        array([[0.1, 0.3]])
+        """
+        if self.factor_covariance is None:
+            return dataclasses.replace(
+                self,
+                exposures=self.exposures * np.sqrt(factor),
+                specific_variance=self.specific_variance * factor,
+            )
+        return dataclasses.replace(
+            self,
+            factor_covariance=self.factor_covariance * factor,
+            specific_variance=self.specific_variance * factor,
+        )
+
+    def take(self, bars: np.ndarray) -> Self:
+        """Return the covariance of the bars at positions (or the mask) ``bars``.
+
+        Examples
+        --------
+        >>> covariance.take(np.array([True])).variance
+        array([[0.02, 0.06]])
+        """
+        return LowRankCovariance(
+            covered=self.covered[bars],
+            exposures=self.exposures[bars],
+            factor_covariance=None if self.factor_covariance is None else self.factor_covariance[bars],
+            specific_variance=self.specific_variance[bars],
+        )
+
+    def times(self, weights: np.ndarray) -> np.ndarray:
+        """``[bars, symbols]``: each bar's covariance times its row of ``weights``.
+
+        Examples
+        --------
+        >>> covariance.times(np.array([[1.0, 0.0]]))
+        array([[0.02, 0.02]])
+        """
+        load = np.einsum("bsk,bs->bk", self.exposures, weights)
+        if self.factor_covariance is not None:
+            load = np.einsum("bkl,bl->bk", self.factor_covariance, load)
+        return np.einsum("bsk,bk->bs", self.exposures, load) + self.specific_variance * weights
+
+    def largest_eigenvalue(self) -> np.ndarray:
+        """``[bars]``: an upper bound of each bar's largest eigenvalue, at most ``max(D) + |F^1/2 B' B F^1/2|``.
+
+        Examples
+        --------
+        >>> covariance.largest_eigenvalue().round(4)
+        array([0.07])
+        """
+        gram = np.einsum("bsk,bsl->bkl", self.exposures, self.exposures)
+        if self.factor_covariance is not None:
+            values, vectors = np.linalg.eigh(self.factor_covariance)
+            root = np.sqrt(np.clip(values, 0.0, None))[..., None] * np.swapaxes(vectors, -1, -2)
+            gram = root @ gram @ np.swapaxes(root, -1, -2)
+        top = np.linalg.eigvalsh(gram)[..., -1] if gram.shape[-1] else np.zeros(len(gram))
+        return np.clip(top, 0.0, None) + self.specific_variance.max(axis=1, initial=0.0)
+
+
 class CovarianceEstimator(_Configured, ABC):
     """Base class of every covariance estimator: the covariance of returns at one bar.
 
@@ -611,6 +821,47 @@ class CovarianceEstimator(_Configured, ABC):
         >>> risk.estimate(context).symbols.tolist()
         ['AAA', 'BBB', 'CCC']
         """
+
+    def panel_refusal(self) -> str | None:
+        """Return why the estimator has no batched estimate, or ``None`` when it has one.
+
+        Asked, through the rule holding it, by the approximate backtest
+        before it reads any data. The default names the estimator.
+
+        Examples
+        --------
+        >>> risk.panel_refusal() is None
+        True
+        """
+        return f"{type(self).__name__} has no batched estimate (estimate_all)"
+
+    def estimate_all(self, panel: DecisionPanel) -> LowRankCovariance:
+        """Estimate the covariance of one-bar returns at every bar of a decision panel.
+
+        The panel counterpart of ``estimate``: bar ``k``'s covariance is the
+        one ``estimate`` gives on that bar's context, over the same covered
+        symbols, in low-rank form. The default refuses.
+
+        Parameters
+        ----------
+        panel : DecisionPanel
+            The bars' decision inputs, their valuation prices included.
+
+        Returns
+        -------
+        LowRankCovariance
+
+        Raises
+        ------
+        NotImplementedError
+            When the estimator has no batched estimate (``panel_refusal``).
+
+        Examples
+        --------
+        >>> risk.estimate_all(panel).covered.shape  # [bars, symbols]
+        (2, 3)
+        """
+        raise NotImplementedError(self.panel_refusal())
 
 
 class PortfolioConstructor(_Configured, ABC):

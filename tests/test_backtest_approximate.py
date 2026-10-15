@@ -14,6 +14,13 @@ the same config on the run's recorded predictions:
 - a rule without a panel decision (`TopkDropoutConstructor`) is refused
   before any data is read, the message naming the rule.
 
+Mean-variance, long-only with Ledoit-Wolf and no turnover penalty (#305),
+against `run()` with the same `MeanVarianceConfig`: weights within 1e-3 (L1)
+on every decided bar and the value within 1e-3, a long halt before the
+window keeping a symbol out of the first estimates in both; a tracking-error
+cap, exposure bounds and an estimator without a batched estimate are refused
+before any data is read, each message naming the field or the estimator.
+
 Everything is synthetic, CPU-only and offline.
 """
 
@@ -22,6 +29,7 @@ import dataclasses
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 
 from quantlab.backtest.config import ApproximateBacktestConfig, CrossSectionBacktestConfig
 from quantlab.backtest.predefined.us_equity import (
@@ -29,11 +37,23 @@ from quantlab.backtest.predefined.us_equity import (
     USEquityCrossectionSelectStockVectorBt,
 )
 from quantlab.core.component import rebuild
-from quantlab.portfolio.config import TopkDropoutConfig, TopNConfig
+from quantlab.factor.config import PolarsFactorConfig
+from quantlab.portfolio.base import CovarianceEstimate, CovarianceEstimator
+from quantlab.portfolio.config import (
+    ActiveRiskConfig,
+    LedoitWolfEstimatorConfig,
+    MeanVarianceConfig,
+    TopkDropoutConfig,
+    TopNConfig,
+)
+from quantlab.portfolio.predefined.active_risk import ActiveRiskOptimizer
+from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
+from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
 from quantlab.portfolio.predefined.top_n import TopNConstructor
 from quantlab.portfolio.predefined.topk_dropout import TopkDropoutConstructor
 from quantlab.runs.backtest_run import BacktestRun
-from tests.backtest_fixtures import make_model, make_stock_dataset, write_price_store
+from tests.backtest_fixtures import PastReturnFactor, make_model, make_stock_dataset, write_price_store
+from tests.test_portfolio_active_risk import _benchmark
 
 N_BARS = 130
 SYMBOLS = [f"S{i:02d}" for i in range(14)]
@@ -398,3 +418,187 @@ def test_a_benchmark_of_more_than_one_symbol_is_refused(case, store):
 
     with pytest.raises(ValueError, match="exactly one symbol"):
         backtest.run(predictions, TopNConstructor(top_n_config))
+
+
+
+# Mean-variance, long-only, Ledoit-Wolf, no turnover penalty (#305).
+#
+# Another synthetic store, one symbol halted for a long stretch before the
+# window and one for a short stretch inside the first return windows, so the
+# coverage rule (each bar's window forward-filled within its own
+# history_bars prices, max_stale_bars) is exercised: the long halt leaves S03
+# uncovered on the first bars, the short one leaves S07 covered.
+
+MVO_LOOKBACK = 20
+WEIGHTS_L1 = 1e-3
+
+
+def _halted(store_path, symbol, rows):
+    data = xr.open_zarr(store_path).load()
+    j = list(data.symbol.values).index(symbol)
+    for name in data.data_vars:
+        values = data[name].transpose("timestamp", "symbol").values.copy()
+        values[rows, j] = np.nan
+        data[name] = (("timestamp", "symbol"), values)
+    data.to_zarr(store_path, mode="w")
+
+
+@pytest.fixture(scope="module")
+def mvo_store(tmp_path_factory):
+    root = tmp_path_factory.mktemp("approximate_mvo")
+    dataset_config = write_price_store(root, symbols=SYMBOLS, n_bars=N_BARS, seed=5)
+    _halted(dataset_config.zarr_file_path, "S03", list(range(30, 58)))
+    _halted(dataset_config.zarr_file_path, "S07", [50, 51, 52])
+    bars = pd.bdate_range("2024-01-01", periods=N_BARS)
+    return root, dataset_config, bars
+
+
+def _mvo(**overrides):
+    params = dict(
+        expected_return_label="fwd_ret_1",
+        covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=MVO_LOOKBACK)),
+        ic=0.05,
+        risk_aversion=5.0,
+        weight_cap=0.2,
+    )
+    params.update(overrides)
+    return MeanVarianceOptimizer(MeanVarianceConfig(**params))
+
+
+def _mvo_run(store, constructor, rebalance_periods, tag, n_forward_periods):
+    root, dataset_config, bars = store
+    model = make_model(
+        root / f"model_{tag}",
+        dataset_config,
+        n_forward_periods=n_forward_periods,
+        start_date=_day(bars[0]),
+        end_date=_day(bars[59]),
+        train_start=_day(bars[0]),
+        train_end=_day(bars[49]),
+        test_start=_day(bars[50]),
+        test_end=_day(bars[59]),
+    )
+    return USEquityCrossectionSelectStockVectorBt(
+        CrossSectionBacktestConfig(
+            price_dataset=make_stock_dataset(dataset_config),
+            model=model,
+            model_mode="train",
+            start_date=_day(bars[WINDOW[0]]),
+            end_date=_day(bars[WINDOW[1]]),
+            output_dir=str(root / f"runs_{tag}"),
+            rebalance_periods=rebalance_periods,
+            constructor=constructor,
+            fees=FEES,
+            slippage=0.0,
+        )
+    ).run()
+
+
+#: Rule overrides, rebalance_periods and the expected-return label's span.
+MVO_CASES = {
+    "span1_r1": (dict(), 1, 1),
+    "span5_r5": (dict(expected_return_label="fwd_ret_5", weight_cap=0.15, risk_aversion=2.0), 5, 5),
+}
+
+
+def _tightly_solved(solve):
+    """``cvxpy.Problem.solve`` with CLARABEL's tolerances at 1e-12.
+
+    At its default tolerances CLARABEL stops up to about 1.3e-3 (L1) from
+    the optimum of a bar whose objective is nearly flat; solved tightly, the
+    run's weights are the optimum, so the bound measures the approximation,
+    not the oracle's solver.
+    """
+
+    def tight(self, *args, **kwargs):
+        tolerances = dict(tol_gap_abs=1e-12, tol_gap_rel=1e-12, tol_feas=1e-12, max_iter=500)
+        return solve(self, *args, **{**tolerances, **kwargs})
+
+    return tight
+
+
+@pytest.fixture(scope="module", params=sorted(MVO_CASES))
+def mvo_case(request, mvo_store):
+    import cvxpy
+
+    overrides, rebalance_periods, span = MVO_CASES[request.param]
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(cvxpy.Problem, "solve", _tightly_solved(cvxpy.Problem.solve))
+        result = _mvo_run(mvo_store, _mvo(**overrides), rebalance_periods, request.param, span)
+    predictions = BacktestRun.open(result.run_dir).predictions()
+    account = _approximate(mvo_store, rebalance_periods).run(predictions, _mvo(**overrides))
+    return result, account
+
+
+def test_mean_variance_weights_are_within_the_bound_of_the_runs(mvo_case):
+    result, account = mvo_case
+    weights = result.weights.transpose("timestamp", "symbol")
+    decided = weights["decided"].values
+
+    assert result.metrics["portfolio_construction"]["failed_bar_count"] == 0
+    np.testing.assert_array_equal(account.weights.timestamp.values, weights.timestamp.values[decided])
+    gap = np.abs(account.weights.values - weights["weight"].values[decided]).sum(axis=1)
+    assert gap.max() <= WEIGHTS_L1
+    # The long halt keeps S03 out of the first bar's estimate, in both backtests.
+    assert float(account.weights.isel(timestamp=0).sel(symbol="S03")) == 0.0
+    assert float(account.weights.isel(timestamp=0).sel(symbol="S07")) != 0.0
+
+
+def test_mean_variance_value_is_within_the_tolerance_of_the_runs(mvo_case):
+    result, account = mvo_case
+    run_value = result.simulation.value.values / result.simulation.value.values[0]
+
+    np.testing.assert_allclose(account.value.values, run_value, rtol=VALUE_TOLERANCE, atol=0)
+    assert account.metrics["converged"] is True
+
+
+@dataclasses.dataclass(frozen=True)
+class DenseOnlyConfig:
+    lookback_bars: int = 5
+
+
+class DenseOnlyEstimator(CovarianceEstimator):
+    """A covariance estimator without a batched estimate."""
+
+    config_cls = DenseOnlyConfig
+
+    def estimate(self, context, volatility=None):
+        symbols = context.symbols
+        return CovarianceEstimate(symbols=symbols, covariance=np.eye(len(symbols)) * 1e-4)
+
+
+def _refused_rule(store, named):
+    _, dataset_config, bars = store
+    if named == "tracking_error":
+        weights = xr.DataArray(
+            np.full((1, len(SYMBOLS)), 1.0 / len(SYMBOLS)),
+            dims=("timestamp", "symbol"),
+            coords={"timestamp": bars[:1], "symbol": SYMBOLS},
+        )
+        return ActiveRiskOptimizer(
+            ActiveRiskConfig(
+                expected_return_label="fwd_ret_1",
+                covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=MVO_LOOKBACK)),
+                ic=0.05, risk_aversion=5.0, weight_cap=0.2,
+                benchmark=_benchmark(weights), tracking_error=0.01,
+            )
+        )
+    if named == "exposure_bounds":
+        factor = PastReturnFactor(
+            PolarsFactorConfig(warmup_bars=5, dataset=make_stock_dataset(dataset_config), kwargs={"n": 1})
+        )
+        return _mvo(exposure_factors=(factor,), exposure_bounds={"past_ret_1": (-1.0, 1.0)})
+    return _mvo(covariance=DenseOnlyEstimator(DenseOnlyConfig()))
+
+
+@pytest.mark.parametrize("named", ["tracking_error", "exposure_bounds", "DenseOnlyEstimator"])
+def test_an_unsupported_mean_variance_setup_is_refused_before_any_read(mvo_store, monkeypatch, named):
+    backtest = _approximate(mvo_store, 5)
+    rule = _refused_rule(mvo_store, named)
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("the price dataset was read")
+
+    monkeypatch.setattr(type(backtest.config.price_dataset), "panel", refuse)
+    with pytest.raises(ValueError, match=named):
+        backtest.run(None, rule)
