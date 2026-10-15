@@ -7,23 +7,21 @@ This module is the lock on the HELPER itself.
 
 It exists because the realistic construction is COUNTER-INTUITIVE, and getting
 it wrong reproduces the exact blind spot the helper was written to close, one
-level up. Measured on this machine 2026-09-08 (numpy 2.5.2 / xarray 2026.7.0 /
+level up. Measured on this machine 2026-10-14 (numpy 2.5.3 / xarray 2026.9.0 /
 zarr 3.3.0), in-memory spelling to on-disk result:
 
     python list literal                     -> <U{n}         BytesCodec
     np.asarray(list)                        -> <U{n}         BytesCodec
     np.array(list, dtype=object)            -> StringDType() VLenUTF8Codec
-    np.array(list, dtype=StringDType())     -> <U{n}         BytesCodec
+    np.array(list, dtype=StringDType())     -> StringDType() VLenUTF8Codec
     pd.Index(list)                          -> StringDType() VLenUTF8Codec
 
-Row four is the trap: `np.dtypes.StringDType()` NAMES the dtype production
-decodes to, and lands on the WRONG arm. Only the `object` spelling reproduces
-the store the shipped `ValueError` names. Without
-`test_the_obvious_string_dtype_spelling_does_not_reproduce_the_production_store`
-and `test_the_two_arms_are_distinct_on_disk` below, a later reader "simplifies"
-the object spelling to the StringDType one, the variable-length arm silently
-becomes a second copy of the fixed-width arm, and every suite stays green while
-covering one encoding instead of two.
+Row four changed with xarray 2026.9: under 2026.7 a `StringDType()` array was
+written fixed-width, the other arm. The helper keeps the `object` spelling,
+which lands on the variable-length store under both;
+`test_the_string_dtype_spelling_writes_the_variable_length_store` pins the
+current row four, and `test_the_two_arms_are_distinct_on_disk` keeps the two
+arms apart.
 
 Every test here names, in its docstring, the mutation that reddens it.
 
@@ -153,7 +151,7 @@ def test_the_variable_length_arm_lands_on_the_object_encoded_string_store(
 
     opened = xr.open_zarr(path)
     assert opened["symbol"].dtype == np.dtypes.StringDType()
-    assert opened["symbol"].encoding["dtype"] == object
+    assert opened["symbol"].encoding["dtype"] == np.dtypes.StringDType()
     assert list(opened["symbol"].values) == list(_LABELS)
 
 
@@ -187,43 +185,29 @@ def test_the_two_arms_are_distinct_on_disk(tmp_path: Path) -> None:
     )
 
 
-def test_the_obvious_string_dtype_spelling_does_not_reproduce_the_production_store(
+def test_the_string_dtype_spelling_writes_the_variable_length_store(
     tmp_path: Path,
 ) -> None:
-    """THE TRAP, pinned as a fact rather than left in a comment.
+    """Row four of the module table, pinned as a fact.
 
-    `np.dtypes.StringDType()` is the dtype `xr.open_zarr` DECODES the
-    production coordinate to, so it is the spelling a careful reader reaches
-    for. Measured: it writes a fixed-width unicode array, i.e. the OTHER arm.
-    Only `dtype=object` survives the round trip as a variable-length store.
+    Since xarray 2026.9 an in-memory `np.dtypes.StringDType()` coordinate is
+    written as a variable-length string array, the same store the helper's
+    `object` spelling writes. Under xarray 2026.7 it was written fixed-width.
 
-    This test and `test_the_two_arms_are_distinct_on_disk` redden together
-    under M5, and that pairing is deliberate: one says the arms collapsed, this
-    one says WHY.
-
-    RED under: nothing in `quantlab/` -- it is a numpy/zarr round-trip fact.
-    It goes red if that round trip ever changes, which is exactly when the
-    helper's `object` spelling would need revisiting.
+    RED under: nothing in `quantlab/` -- it is a numpy/xarray/zarr round-trip
+    fact. It goes red if that round trip changes again.
     """
-    looks_right = _write_panel(
-        tmp_path / "looks_right.zarr",
+    spelled = _write_panel(
+        tmp_path / "string_dtype.zarr",
         np.array(list(_LABELS), dtype=np.dtypes.StringDType()),
     )
     real = _write_panel(
         tmp_path / "real.zarr", symbol_coord(_LABELS, "variable_length")
     )
 
-    assert stored_symbol_dtype(looks_right).kind == "U", stored_symbol_dtype(
-        looks_right
-    )
-    assert stored_symbol_dtype(real) == np.dtypes.StringDType()
-    assert stored_symbol_dtype(looks_right) != stored_symbol_dtype(real)
-
-    # And it is byte-for-byte the fixed-width arm, not some third thing.
-    fixed = _write_panel(
-        tmp_path / "fixed.zarr", symbol_coord(_LABELS, "fixed_width")
-    )
-    assert stored_symbol_dtype(looks_right) == stored_symbol_dtype(fixed)
+    assert stored_symbol_dtype(spelled) == np.dtypes.StringDType()
+    assert stored_symbol_dtype(spelled) == stored_symbol_dtype(real)
+    assert _serializer_name(spelled) == _serializer_name(real)
 
 
 def test_the_variable_length_arm_matches_what_the_real_chunked_ingest_writes(

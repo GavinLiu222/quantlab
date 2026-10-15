@@ -354,7 +354,19 @@ class XrBackend(DataBackend):
         # xarray rejects `encoding` on an append; the grid was pinned by the
         # creating write above.
         kwargs.pop("encoding", None)
-        self.data.to_zarr(path, mode="a", append_dim=append_dim, **kwargs)
+        # The other dimensions' labels were just checked equal to the stored
+        # ones, so they are not written again and the window aligns by
+        # position, as the filler of `widen_data_vars` does. Writing them back
+        # would compare their in-memory dtype with the stored one: xarray
+        # 2026.9 refuses fixed-width `<U` labels on a variable-length store.
+        stored = [
+            dim
+            for dim in self.data.dims
+            if dim != append_dim and dim in self.data.indexes
+        ]
+        self.data.drop_vars(stored).to_zarr(
+            path, mode="a", append_dim=append_dim, **kwargs
+        )
         # The coordinate's grid was fixed by the creating write; without this
         # a store created from a one-bar window keeps one chunk per bar.
         rechunk_index_coordinates(path)
@@ -800,12 +812,15 @@ class XrBackend(DataBackend):
                     ),
                 )
                 continue
+            # The first block also wrote the other dimensions' labels; writing
+            # them again would trip xarray 2026.9's dtype check (see `append`).
             block = block.drop_vars(
                 [
                     name
                     for name, variable in block.data_vars.items()
                     if append_dim not in variable.dims
                 ]
+                + [name for name in block.indexes if name != append_dim]
             )
             block.to_zarr(str(widening), mode="a", append_dim=append_dim)
         rechunk_index_coordinates(widening)

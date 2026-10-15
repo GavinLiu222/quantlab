@@ -1542,7 +1542,8 @@ def acquisition_config(tmp_path: Path) -> Callable[..., AcquisitionConfig]:
 #:
 #:   "variable_length"  data/data/us_equity/1m/stock_alpaca.zarr
 #:                      on-disk `StringDType()`, decoded `StringDType()`,
-#:                      encoding['dtype'] `object`, serializer
+#:                      encoding['dtype'] `object` (`StringDType()` since
+#:                      xarray 2026.9), serializer
 #:                      `VLenUTF8Codec`. 102 symbols. This is what the CURRENT
 #:                      chunked ingest writes -- traced end to end,
 #:                      `_raw_data_to_xr()` yields `object`, the reindexed
@@ -1628,26 +1629,22 @@ def symbol_coord(symbols: Sequence[str], encoding: str) -> np.ndarray:
 
     The encoding does not exist in memory -- it is decided by the write. This
     is the measured in-memory-spelling to on-disk-result mapping
-    (2026-09-08, numpy 2.5.2 / xarray 2026.7.0 / zarr 3.3.0):
+    (2026-09-08, numpy 2.5.2 / xarray 2026.7.0 / zarr 3.3.0; row four
+    re-measured 2026-10-14 under xarray 2026.9.0):
 
         spelling                              zarr            serializer
         ------------------------------------  --------------  -------------
         python list literal                   <U{n}           BytesCodec
         np.asarray(list)                      <U{n}           BytesCodec
         np.array(list, dtype=object)          StringDType()   VLenUTF8Codec
-        np.array(list, dtype=StringDType())   <U{n}           BytesCodec
+        np.array(list, dtype=StringDType())   StringDType()   VLenUTF8Codec
         pd.Index(list)                        StringDType()   VLenUTF8Codec
         np.asarray([int(s) ...], np.int64)    int64           BytesCodec
 
-    READ ROW FOUR TWICE. `np.dtypes.StringDType()` is the dtype
-    `xr.open_zarr` DECODES a production coordinate to, so it is the spelling
-    that looks correct -- and it writes a FIXED-WIDTH array, i.e. the wrong
-    arm. Only the `object` spelling reproduces the store the shipped
-    `ValueError` names. Simplifying `dtype=object` to `dtype=StringDType()`
-    here would silently turn the variable-length arm into a second copy of
-    the fixed-width one, with every suite still green.
-    `tests/test_symbol_coord_encoding.py` exists to make that impossible;
-    do not change this function without reading it.
+    Row four wrote a FIXED-WIDTH array under xarray 2026.7, the other arm;
+    the `object` spelling lands on the variable-length store under both
+    versions, so it stays. `tests/test_symbol_coord_encoding.py` pins the
+    table; do not change this function without reading it.
 
     The fixed-width arm is `np.asarray(list(symbols))`, letting numpy resolve
     the natural `<U` width. That is deliberately byte-identical to what the
