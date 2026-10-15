@@ -76,7 +76,7 @@ if TYPE_CHECKING:
 def most_common_spacing(timestamps: xr.DataArray | pd.Index | np.ndarray) -> np.timedelta64:
     """Return the most common spacing between consecutive timestamps.
 
-    This is the rule ``BaseDataset.time_interval`` uses: the mode rather than
+    This is the rule ``RawDataset.time_interval`` uses: the mode rather than
     the minimum, so weekend and holiday gaps do not change the answer.
 
     Parameters

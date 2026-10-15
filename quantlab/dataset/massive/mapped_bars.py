@@ -59,7 +59,7 @@ from quantlab.dataset.base import MarketDataset
 from quantlab.dataset.config import MappedTradeBarsConfig
 from quantlab.dataset.massive.permaticker_bars import PermatickerTradeBarDataset
 from quantlab.dataset.massive.ticker_map import RULES_VERSION
-from quantlab.dataset.massive.trade_bars import TRADE_BAR_RESAMPLE_HOW
+from quantlab.dataset.massive.trade_bars import TRADE_BAR_RESAMPLE_HOW, no_trade_fills
 from quantlab.utils.atomic import write_json_atomically
 from quantlab.utils.date_range import last_moment
 
@@ -333,10 +333,6 @@ class MappedTradeBarDataset(MarketDataset):
         """Export the columns as the Trade bar dataset does."""
         return self.source._to_kunquant(data, data_columns)
 
-    def _widen_fill_values(self) -> dict:
-        """The Trade bars' fills: zero volumes and trade counts, NaN prices."""
-        return self.source.trade_bars._widen_fill_values()
-
     # -- writing ------------------------------------------------------------------
 
     def _available_days(self, end) -> list[date]:
@@ -401,7 +397,7 @@ class MappedTradeBarDataset(MarketDataset):
         if not days:
             return self
         batches = [days[i : i + self.BATCH_DAYS] for i in range(0, len(days), self.BATCH_DAYS)]
-        fills = self._widen_fill_values()
+        fills = no_trade_fills()
         digests = dict(recorded)
 
         def write(batch: list[date], mapped: tuple[xr.Dataset, dict[str, str]]) -> None:
@@ -434,7 +430,7 @@ class MappedTradeBarDataset(MarketDataset):
         if not changed:
             return
         logger.warning(f"{self.class_name}: the Ticker map changed on {len(changed)} stored day(s); mapping them again.")
-        fills = self._widen_fill_values()
+        fills = no_trade_fills()
         digests = dict(recorded)
         for day in changed:
             panel, mapped_with = map_days(self.source, day, day)
@@ -453,31 +449,3 @@ class MappedTradeBarDataset(MarketDataset):
             )
             digests[day] = mapped_with.get(day, "")
             self._record(digests)
-
-    # -- no raw files ----------------------------------------------------------------
-
-    def _refuse(self, method: str):
-        """Raise: the store is written by ``update`` from the view."""
-        raise ValueError(
-            f"{self.class_name}.{method}(): the store is written from the permaticker view by update()."
-        )
-
-    def save(self, **kwargs):
-        """Refuse: the store is written by ``update``."""
-        self._refuse("save")
-
-    def from_raw_data(self) -> Self:
-        """Refuse: the store is written by ``update``."""
-        self._refuse("from_raw_data")
-
-    def from_raw_data_chunked(self, *args, **kwargs):
-        """Refuse: the store is written by ``update``."""
-        self._refuse("from_raw_data_chunked")
-
-    def _raw_data_to_xr(self) -> xr.Dataset:
-        """Refuse: there are no raw files."""
-        self._refuse("_raw_data_to_xr")
-
-    def _raw_data_to_xr_window(self, start_date, end_date, symbols=None) -> xr.Dataset:
-        """Refuse: there are no raw files."""
-        self._refuse("_raw_data_to_xr_window")

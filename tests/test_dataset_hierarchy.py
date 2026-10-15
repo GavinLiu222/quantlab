@@ -1,22 +1,21 @@
-"""Dataset-hierarchy boundary-contract tests (DATA-06 + D-03).
+"""The dataset hierarchy: a read interface, and a build path only where a store is built (#285).
 
-Created by 03.1-01 Task 2, which splits `base/data.py:Dataset` into a shared
-`BaseDataset(ABC)` and a `MarketDataset(BaseDataset)` carrying every
-KunQuant-specific member -- the dataset-layer twin of the
-`Factor`/`FactorKunQuant` split that `tests/test_factor_hierarchy.py` locks.
+``BaseDataset`` is the read interface every dataset answers (``panel``,
+``calendar``, ``bar_before``, the store declaration); ``MarketDataset`` adds the
+market rules and the KunQuant export. Neither has a build path. A dataset
+converted from raw files into a store it owns derives from
+``quantlab.dataset.raw.RawDataset`` (or ``RawMarketDataset`` for price bars),
+which owns ``from_raw_data``, ``save``, ``from_raw_data_chunked``, ``update``
+and their hooks. A view (``RosterDataset``, ``MergedDataset``,
+``BadPrintMaskedDataset``, ``PermatickerTradeBarDataset``), a panel held in
+memory (``FrameDataset``) and the mapped Trade bar store (which writes its
+store with its own ``update`` from a view, not from raw files) have none of
+those methods, so none of them refuses anything.
 
-Like that file, several tests here are **source-introspection rather than
-behavioural**, because nothing at runtime fails today if the invariants break.
-The breakage only surfaces later, in the index-constituent backend that does
-not exist yet: a market-only field such as `raw_data_dir_path` leaking onto the
-shared config would only bite the first dataset constructed without one, and a
-reversed `__init__` would only bite through `_reset_symbols()`. These tests move both failures to test time.
-
-The two genuinely behavioural tests are the last two. `PanelDataset` below is
-the non-market dataset DATA-06 is about: no OHLCV, no bar representation, no
-catalog, no KunQuant graph -- one boolean membership variable over
-`(timestamp, symbol)`, which it round-trips through the whole storage
-lifecycle using nothing but `BaseDataset` plus one implemented abstract method.
+Two behavioural tests close the file: ``PanelDataset``, a non-market raw dataset
+(one boolean membership variable), round-trips through the whole storage
+lifecycle implementing only ``_raw_data_to_xr``, and a plain ``BaseDataset``
+reads a store nobody here built.
 """
 
 import dataclasses
@@ -25,240 +24,202 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 import xarray as xr
 
 from conftest import WHOLE_STORE
-from quantlab.dataset.config import BaseDatasetConfig, ConstituentDatasetConfig, DatasetConfig
+from quantlab.dataset.bad_prints import BadPrintMaskedDataset
 from quantlab.dataset.base import BaseDataset, MarketDataset
+from quantlab.dataset.config import BaseDatasetConfig, ConstituentDatasetConfig, DatasetConfig
+from quantlab.dataset.massive.mapped_bars import MappedTradeBarDataset
+from quantlab.dataset.massive.permaticker_bars import PermatickerTradeBarDataset
+from quantlab.dataset.memory import FrameDataset
+from quantlab.dataset.merged import MergedDataset
+from quantlab.dataset.raw import IndexConstituentDataset, RawDataset, RawMarketDataset
+from quantlab.dataset.roster import RosterDataset
+from quantlab.dataset.spot import SpotKlineDataset
+from quantlab.dataset.stock import StockDataset
 
-# The KunQuant-specific members. A membership panel has no compiled-graph
-# representation, so none of these may live on the shared base
-# -- especially not as an `@abstractmethod`, which would force every future
-# dataset kind to carry a meaningless `raise NotImplementedError` stub (D-03).
-MARKET_ONLY_MEMBERS = (
-    "to_kunquant",
-    "_to_kunquant",
+#: The build path: every member a dataset needs only to convert raw files into its store.
+BUILD_MEMBERS = (
+    "from_raw_data",
+    "from_raw_data_chunked",
+    "update",
+    "save",
+    "data_backend",
+    "last_chunk_result",
+    "get_xarray_dataset",
+    "get_lazyframe",
+    "symbols",
+    "num_symbols",
+    "time_interval",
+    "_raw_data_to_xr",
+    "_raw_data_to_xr_window",
+    "_raw_axes_in_range",
+    "_clean",
+    "_continue_store",
+    "_widen_fill_values",
+    "_pinned_symbol_axis",
+    "_reconcile_new_listings",
+    "_resolve_new_listing_strategy",
+    "_added_symbols_with_raw_history",
+    "_restore_rebuild_asides",
+    "NEW_LISTING_STRATEGIES",
+    "SUPERSEDED_SUFFIX",
+)
+
+#: The KunQuant members: a membership panel has no compiled-graph representation.
+MARKET_ONLY_MEMBERS = ("to_kunquant", "_to_kunquant", "tradable_bars", "delisting_bars")
+
+#: Datasets that build no store from raw files.
+NOT_RAW = (
+    RosterDataset,
+    MergedDataset,
+    BadPrintMaskedDataset,
+    PermatickerTradeBarDataset,
+    FrameDataset,
+    MappedTradeBarDataset,
 )
 
 # The market-only `DatasetConfig` fields that must NOT be on the shared
-# `BaseDatasetConfig` (CONFLICT 4).
-#
-# `vendor` (03.2 D-11) belongs here for the same reason `raw_data_dir_path`
-# does: it names WHOSE raw market files that directory holds, and a dataset
-# with no directory of raw vendor files -- an index-membership panel, say --
-# has no vendor either. Putting it on the shared base would hand every
-# non-market dataset a provenance field none of them can honestly fill.
-MARKET_ONLY_CONFIG_FIELDS = {
-    "raw_data_dir_path",
-    "market",
-    "frequency",
-    "vendor",
-}
+# `BaseDatasetConfig`: `vendor` names whose raw market files the directory holds.
+MARKET_ONLY_CONFIG_FIELDS = {"raw_data_dir_path", "market", "frequency", "vendor"}
 
-# The two fields `ConstituentDatasetConfig` adds: `cache_dir`, the cached
-# source snapshot directory an index-membership fetcher writes to, and
-# `as_of`, which pins the panel's right edge so a rebuild is a function of the
-# config rather than of the wall clock (WR-07).
-#
-# Both are deliberately NOT on `BaseDatasetConfig`: neither means anything to
-# a market dataset, whose right edge comes from its bars.
+# `ConstituentDatasetConfig` adds the cached source directory and the `as_of`
+# that pins a membership panel's right edge.
 CONSTITUENT_ONLY_CONFIG_FIELDS = {"cache_dir", "as_of"}
 
 _PANEL_SYMBOLS = ("PANEL_A", "PANEL_B")
 _PANEL_PERIODS = 4
 
-# Hand-checkable membership pattern, shaped (timestamp, symbol): PANEL_A is a
-# member throughout, PANEL_B joins on the third day. Asserted byte-identical
-# on the way back out of Zarr.
-_PANEL_IS_MEMBER = np.array(
-    [
-        [True, False],
-        [True, False],
-        [True, True],
-        [True, True],
-    ]
-)
+# PANEL_A is a member throughout, PANEL_B joins on the third day.
+_PANEL_IS_MEMBER = np.array([[True, False], [True, False], [True, True], [True, True]])
 
 
-class PanelDataset(BaseDataset):
-    """A test-only non-market dataset: a boolean membership panel.
+class PanelDataset(RawDataset):
+    """A test-only non-market raw dataset: a boolean membership panel.
 
-    Implements exactly ONE abstract method, `_raw_data_to_xr()`. It overrides
-    `_clean()` because the inherited default runs the OHLCV-shaped
-    `clean_market_data()` pipeline, and `_reset_symbols()` because a panel
-    derives its symbol axis from its own source rather than from the store
-    (CONFLICT 1). It defines no bar conversion, no catalog write and no
-    KunQuant input path -- that is the whole point.
+    Implements exactly one abstract method, `_raw_data_to_xr()`, and overrides
+    `_clean()` because the default runs the OHLCV cleaner.
     """
 
-    def __init__(self, config: BaseDatasetConfig):
-        self.raw_data_calls = 0
-        super().__init__(config)
-
     def _raw_data_to_xr(self) -> xr.Dataset:
-        self.raw_data_calls += 1
         return xr.Dataset(
             {"is_member": (["timestamp", "symbol"], _PANEL_IS_MEMBER)},
             coords={
-                "timestamp": pd.date_range(
-                    "2024-01-01", periods=_PANEL_PERIODS, freq="D"
-                ),
+                "timestamp": pd.date_range("2024-01-01", periods=_PANEL_PERIODS, freq="D"),
                 "symbol": list(_PANEL_SYMBOLS),
             },
         )
 
     def _clean(self, data: xr.Dataset) -> xr.Dataset:
-        # A membership panel has no OHLCV columns to validate or flag.
         return data
 
-    def _reset_symbols(self) -> None:
-        # The seam (CONFLICT 1): the symbol axis comes from the membership
-        # source, not from the store, so construction must not touch disk.
-        return None
+
+def _defines(cls: type, name: str) -> bool:
+    """Whether ``name`` is reachable on ``cls`` (a class attribute or one set by its ``__init__``)."""
+    if hasattr(cls, name):
+        return True
+    return any(
+        f"self.{name}" in inspect.getsource(klass.__init__)
+        for klass in cls.__mro__ if "__init__" in klass.__dict__ and klass.__module__.startswith("quantlab.")
+    )
 
 
-def test_base_dataset_is_abstract_and_market_dataset_subclasses_it() -> None:
-    """D-03/DATA-06: a shared abstract `BaseDataset` exists and `MarketDataset`
-    is one implementation of it, not the root of the hierarchy.
+def test_the_read_roots_define_no_build_member() -> None:
+    for cls in (BaseDataset, MarketDataset):
+        leaked = [name for name in BUILD_MEMBERS if _defines(cls, name)]
+        assert not leaked, f"{cls.__name__} defines build members {leaked}"
 
-    `_raw_data_to_xr` is the ONE abstract method on the shared base -- the
-    single obligation every dataset kind genuinely has. TWO abstract methods
-    are added by `MarketDataset` and by it alone, which is the mechanism that
-    keeps them off a membership panel: the KunQuant one, and
-    `_raw_data_to_xr_window` (D-08).
 
-    The second is the odd one out and deliberately so. `BaseDataset` keeps a
-    working concrete default for it -- a membership panel that cannot push a
-    date filter down still needs one -- so this is a RE-declaration, not a
-    relocation. For a market dataset the seam is the single entrance ticket to
-    chunked conversion, and leaving it merely overridable meant a source with
-    no windowed densify silently degraded to a whole-range densify per window,
-    announced only by a `logger.warning`. Abstract here turns that into a
-    `TypeError` at construction.
+@pytest.mark.parametrize("cls", NOT_RAW, ids=lambda cls: cls.__name__)
+def test_a_dataset_that_builds_no_store_has_no_build_path(cls) -> None:
+    """A view, a held panel and the mapped store have nothing to refuse."""
+    assert not issubclass(cls, RawDataset)
+    leaked = [
+        name for name in BUILD_MEMBERS
+        if _defines(cls, name) and name not in ("update", "_widen_fill_values")
+    ]
+    assert not leaked, f"{cls.__name__} defines build members {leaked}"
+    assert "_refuse" not in dir(cls)
 
-    The `BaseDataset.__abstractmethods__` assertion below is therefore
-    UNCHANGED, and that is the point: it forbids the other placement.
-    """
-    assert inspect.isabstract(BaseDataset)
-    assert issubclass(MarketDataset, BaseDataset)
-    assert BaseDataset.__abstractmethods__ == frozenset({"_raw_data_to_xr"})
-    assert set(MarketDataset.__abstractmethods__) - set(
-        BaseDataset.__abstractmethods__
-    ) == {"_to_kunquant", "_raw_data_to_xr_window"}
+
+def test_only_the_mapped_store_keeps_its_own_update() -> None:
+    """``MappedTradeBarDataset.update`` writes its store from its source view; no other non-raw dataset has one."""
+    assert "update" in MappedTradeBarDataset.__dict__
+    assert [cls.__name__ for cls in NOT_RAW if hasattr(cls, "update")] == ["MappedTradeBarDataset"]
+
+
+def test_the_raw_roots_own_the_build_path_and_their_abstract_methods() -> None:
+    assert issubclass(RawDataset, BaseDataset) and not issubclass(RawDataset, MarketDataset)
+    assert issubclass(RawMarketDataset, RawDataset) and issubclass(RawMarketDataset, MarketDataset)
+    assert all(_defines(RawDataset, name) for name in BUILD_MEMBERS)
+    assert BaseDataset.__abstractmethods__ == frozenset()
+    assert RawDataset.__abstractmethods__ == frozenset({"_raw_data_to_xr"})
+    assert MarketDataset.__abstractmethods__ == frozenset({"_to_kunquant"})
+    assert RawMarketDataset.__abstractmethods__ == frozenset(
+        {"_raw_data_to_xr", "_raw_data_to_xr_window", "_to_kunquant"}
+    )
+    for cls in (StockDataset, SpotKlineDataset):
+        assert issubclass(cls, RawMarketDataset)
+    assert issubclass(IndexConstituentDataset, RawDataset)
+    assert not issubclass(IndexConstituentDataset, MarketDataset)
 
 
 def test_market_only_members_stay_on_market_dataset() -> None:
-    """D-03: every KunQuant member stays on `MarketDataset` and is
-    absent from `BaseDataset`.
-
-    If any of these leaked onto the shared base, a dataset with no bar and no
-    catalog representation would inherit an obligation it cannot honestly
-    meet -- exactly the two `raise NotImplementedError` stubs DATA-06 exists
-    to remove.
-    """
     own = set(MarketDataset.__dict__)
     shared = set(BaseDataset.__dict__)
-
-    missing = [name for name in MARKET_ONLY_MEMBERS if name not in own]
-    leaked = [name for name in MARKET_ONLY_MEMBERS if name in shared]
-
-    assert not missing, f"no longer defined on MarketDataset: {missing}"
-    assert not leaked, f"leaked onto the shared BaseDataset base: {leaked}"
+    assert [name for name in MARKET_ONLY_MEMBERS if name not in own] == []
+    assert [name for name in MARKET_ONLY_MEMBERS if name in shared] == []
 
 
 def test_market_only_config_fields_stay_off_the_shared_base() -> None:
-    """CONFLICT 4: the market-only config fields are exactly the delta on
-    `DatasetConfig`, and `ConstituentDatasetConfig` adds only `cache_dir`.
-
-    Stated positively rather than as a bare absence check, so moving a field
-    onto `BaseDatasetConfig` fails here rather than silently making a
-    catalog write path available to a dataset that has no catalog.
-    """
     assert issubclass(DatasetConfig, BaseDatasetConfig)
     assert issubclass(ConstituentDatasetConfig, BaseDatasetConfig)
-
     base_fields = {f.name for f in dataclasses.fields(BaseDatasetConfig)}
     market_fields = {f.name for f in dataclasses.fields(DatasetConfig)}
-    constituent_fields = {
-        f.name for f in dataclasses.fields(ConstituentDatasetConfig)
-    }
-
+    constituent_fields = {f.name for f in dataclasses.fields(ConstituentDatasetConfig)}
     assert market_fields - base_fields == MARKET_ONLY_CONFIG_FIELDS
     assert constituent_fields - base_fields == CONSTITUENT_ONLY_CONFIG_FIELDS
 
 
-def test_base_dataset_init_assigns_the_storage_backend_before_the_config() -> (
-    None
-):
-    """CONFLICT 2: `BaseDataset.__init__` must assign the storage backend
-    BEFORE `self.config`.
-
-    This is deliberately the INVERSE of
-    `tests/test_factor_hierarchy.py:test_factor_init_assigns_config_before_
-    the_storage_backend`. The two hierarchies hold opposite invariants for
-    different, equally correct reasons: no method reachable from the `Factor`
-    config setter may touch the backend, whereas the `BaseDataset` config
-    setter DOES reach it -- through `_reset_symbols()` -> `read()`. Reversing
-    the two lines here raises `AttributeError` on every dataset construction
-    that pins `config.symbols`. Do not "harmonize" the two files.
-    """
-    init_source = inspect.getsource(BaseDataset.__init__)
-    backend_index = init_source.index("self.data_backend =")
-    config_index = init_source.index("self.config = config")
-
-    assert backend_index < config_index, (
-        "BaseDataset.__init__ assigns self.config before the storage "
-        "backend; _reset_symbols() would then run against a half-built "
-        "instance and raise AttributeError (CONFLICT 2)"
-    )
+def test_a_raw_dataset_assigns_its_backend_before_its_config() -> None:
+    """A config setter may reach the backend, so it must exist first."""
+    source = inspect.getsource(RawDataset.__init__)
+    assert source.index("self.data_backend =") < source.index("self.config = config")
 
 
-def test_non_market_dataset_round_trips_through_base_dataset(
-    tmp_path: Path,
-) -> None:
-    """DATA-06 in its most direct form: a dataset with no bar, no catalog and
-    no KunQuant representation completes the entire storage lifecycle by
-    implementing one abstract method.
+def test_non_market_raw_dataset_round_trips(tmp_path: Path) -> None:
+    """`from_raw_data()` -> `save()` -> `panel()` with one abstract method implemented; bool survives Zarr."""
+    config = BaseDatasetConfig(zarr_file_path=str(tmp_path / "panel" / "membership.zarr"))
 
-    `from_raw_data()` -> `save()` -> `panel(start, end)` runs entirely on
-    `BaseDataset`. The boolean
-    variable must survive the Zarr round trip as dtype `bool` (not as a
-    float or an int8), and the membership pattern must come back
-    byte-identical -- a silently-widened dtype or a transposed panel would
-    both read downstream as a plausible-but-wrong universe mask.
-    """
-    config = BaseDatasetConfig(
-        zarr_file_path=str(tmp_path / "panel" / "membership.zarr")
-    )
-    dataset = PanelDataset(config)
-
-    dataset.from_raw_data().save()
+    PanelDataset(config).from_raw_data().save()
     result = PanelDataset(config).panel(*WHOLE_STORE)
 
-    assert isinstance(result, xr.Dataset)
     assert result["is_member"].dims == ("timestamp", "symbol")
     assert result["is_member"].dtype == np.dtype("bool")
     assert result.symbol.values.tolist() == list(_PANEL_SYMBOLS)
     np.testing.assert_array_equal(result["is_member"].values, _PANEL_IS_MEMBER)
 
 
-def test_base_data_module_exposes_only_the_two_split_classes() -> None:
-    """The pre-split `Dataset` name was RETIRED, not kept as an alias.
+def test_the_read_root_reads_a_store_alone(tmp_path: Path) -> None:
+    """A `BaseDataset` is a complete reader of a store: no build path is needed to read."""
+    config = BaseDatasetConfig(zarr_file_path=str(tmp_path / "membership.zarr"))
+    PanelDataset(config).from_raw_data().save()
 
-    03.1-01 introduced `Dataset = MarketDataset` as a transitional alias so
-    the split could land with a green suite, and removed it in the same plan
-    once every call site was re-pointed. Two live names for one class is
-    exactly the ambiguity a later reader "fixes" in the wrong direction, and
-    an unused alias is dead code (QUAL-02). This test exists so nobody
-    reintroduces it out of caution: if you are here because an import of
-    `base.data.Dataset` failed, the answer is `MarketDataset` for a dataset
-    with bars and a catalog, `BaseDataset` for anything else.
-    """
-    import quantlab.dataset.base as base_data_module
+    reader = BaseDataset(config)
 
-    assert hasattr(base_data_module, "BaseDataset")
-    assert hasattr(base_data_module, "MarketDataset")
-    assert not hasattr(base_data_module, "Dataset"), (
-        "base.data.Dataset is back; the pre-split name was retired rather "
-        "than aliased (03.1-01 Task 3)"
-    )
+    xr.testing.assert_identical(reader.panel(*WHOLE_STORE).load(), PanelDataset(config).panel(*WHOLE_STORE).load())
+    assert reader.bar_before("2024-01-03", 2) == pd.Timestamp("2024-01-01")
+    assert reader.stores() == [config.zarr_file_path]
+
+
+def test_the_dataset_modules_expose_the_split_classes() -> None:
+    """The pre-split `Dataset` name stays retired; the build path lives in `raw`."""
+    import quantlab.dataset.base as base_module
+    import quantlab.dataset.raw as raw_module
+
+    assert hasattr(base_module, "BaseDataset") and hasattr(base_module, "MarketDataset")
+    assert not hasattr(base_module, "Dataset")
+    for name in ("RawDataset", "RawMarketDataset", "IndexConstituentDataset", "ConversionResult"):
+        assert hasattr(raw_module, name) and not hasattr(base_module, name)

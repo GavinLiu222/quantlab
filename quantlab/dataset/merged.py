@@ -34,8 +34,9 @@ class MergedDataset(MarketDataset):
     renames each to the shared variable names, checks that no cell holds a
     value in two inputs, and outer-joins them. ``bar_before`` counts bars on
     the union of the inputs' calendars. The merged view holds no store and
-    no data: it cannot be built from raw files, saved or resampled; build,
-    save or resample its inputs instead.
+    no data, so it has no build path; its inputs are its ``inputs()`` and
+    its ``stores()`` theirs. It is not resampled (``resample`` refuses a
+    view): build, save or resample its inputs instead.
 
     Parameters
     ----------
@@ -389,104 +390,6 @@ class MergedDataset(MarketDataset):
         (True, False)
         """
         return type(self)([dataset.copy() for dataset in self.datasets])
-
-    def _refuse(self, method: str):
-        """Raise: the merged view holds no store of its own."""
-        raise ValueError(
-            f"{self.class_name}.{method}(): a merged dataset is a view of its "
-            f"inputs and holds no store of its own. Call {method}() on each "
-            f"input instead."
-        )
-
-    def resample(self, freq, how) -> Self:
-        """Refuse: resample the inputs, then merge them.
-
-        Raises
-        ------
-        ValueError
-            Always.
-
-        Examples
-        --------
-        >>> MergedDataset([minute_index, minute_etf]).resample("1d", "last")
-        Traceback (most recent call last):
-        ValueError: MergedDataset.resample(): a merged dataset is a view of its inputs ...
-        >>> daily = MergedDataset([minute_index.resample("1d", "last"),
-        ...                        minute_etf.resample("1d", "last")])
-        """
-        self._refuse("resample")
-
-    def save(self, **kwargs):
-        """Refuse: save each input instead.
-
-        Raises
-        ------
-        ValueError
-            Always.
-
-        Examples
-        --------
-        >>> merged.save()
-        Traceback (most recent call last):
-        ValueError: MergedDataset.save(): a merged dataset is a view of its inputs ...
-        """
-        self._refuse("save")
-
-    def from_raw_data(self) -> Self:
-        """Refuse: build each input instead.
-
-        Raises
-        ------
-        ValueError
-            Always.
-
-        Examples
-        --------
-        >>> merged.from_raw_data()
-        Traceback (most recent call last):
-        ValueError: MergedDataset.from_raw_data(): a merged dataset is a view of its inputs ...
-        """
-        self._refuse("from_raw_data")
-
-    def from_raw_data_chunked(self, *args, **kwargs):
-        """Refuse: build each input instead.
-
-        Raises
-        ------
-        ValueError
-            Always.
-
-        Examples
-        --------
-        >>> merged.from_raw_data_chunked()
-        Traceback (most recent call last):
-        ValueError: MergedDataset.from_raw_data_chunked(): a merged dataset is a view of its inputs ...
-        """
-        self._refuse("from_raw_data_chunked")
-
-    def update(self, *args, **kwargs):
-        """Refuse: update each input instead.
-
-        Raises
-        ------
-        ValueError
-            Always.
-
-        Examples
-        --------
-        >>> merged.update()
-        Traceback (most recent call last):
-        ValueError: MergedDataset.update(): a merged dataset is a view of its inputs ...
-        """
-        self._refuse("update")
-
-    def _raw_data_to_xr(self) -> xr.Dataset:
-        """Refuse: a merged view has no raw files."""
-        self._refuse("_raw_data_to_xr")
-
-    def _raw_data_to_xr_window(self, start_date, end_date, symbols=None) -> xr.Dataset:
-        """Refuse: a merged view has no raw files."""
-        self._refuse("_raw_data_to_xr_window")
 
 
 def _own_names(dataset: BaseDataset, variables) -> "list[str] | None":

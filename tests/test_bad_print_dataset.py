@@ -214,8 +214,10 @@ def test_the_view_refuses_invalid_parameters():
 
 
 def test_the_view_holds_no_store():
+    view = _view()
+    assert view.store_path is None and not hasattr(view, "save")
     with pytest.raises(ValueError, match="view"):
-        _view().save()
+        view.resample("1d", "last")
 
 
 def test_the_view_rebuilds_from_its_saved_config(tmp_path):

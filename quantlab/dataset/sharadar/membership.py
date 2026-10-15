@@ -40,7 +40,7 @@ from pathlib import Path
 import polars as pl
 from loguru import logger
 
-from quantlab.dataset.base import IndexConstituentDataset
+from quantlab.dataset.raw import IndexConstituentDataset
 from quantlab.dataset.sharadar.tables import (
     map_permatickers,
     permaticker_mapping,

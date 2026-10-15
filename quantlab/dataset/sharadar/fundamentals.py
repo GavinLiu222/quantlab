@@ -59,7 +59,7 @@ import pandas as pd
 import polars as pl
 import xarray as xr
 
-from quantlab.dataset.base import BaseDataset
+from quantlab.dataset.raw import RawDataset
 from quantlab.dataset.config import DatasetConfig, SharadarFundamentalsConfig
 from quantlab.dataset.sharadar.permatickers import map_raw_table
 from quantlab.dataset.sharadar.universe import normalize_universe, universe
@@ -84,7 +84,7 @@ DATE_VARIABLES: tuple[str, ...] = ("release_date", "reportperiod")
 _ERROR_SAMPLE = 5
 
 
-class SharadarFundamentalsDataset(BaseDataset):
+class SharadarFundamentalsDataset(RawDataset):
     """Daily point-in-time panel of one as-reported SF1 dimension, keyed by permaticker.
 
     Parameters

@@ -695,8 +695,9 @@ def test_registry_reaches_no_zarr_writer() -> None:
     durable proof of "reaches no Zarr writer" is that this module imports no
     dataset of `quantlab.dataset` -- a behavioural test could only show that
     one particular call did not convert. The layer's root types and configs
-    (`quantlab.dataset.base`, `quantlab.dataset.config`), which the registry
-    names in its signatures, are not datasets (ADR 0022).
+    (`quantlab.dataset.base`, `quantlab.dataset.raw` with its
+    `ConversionResult`, `quantlab.dataset.config`), which the registry names
+    in its signatures, are not datasets (ADR 0022, ADR 0036).
 
     An `ast` walk rather than a substring scan: the docstrings in this file
     discuss Zarr conversion by name, and a grep would fail on the prose that
@@ -720,7 +721,7 @@ def test_registry_reaches_no_zarr_writer() -> None:
         name
         for name in imported
         if (name == "quantlab.dataset" or name.startswith("quantlab.dataset."))
-        and not name.startswith(("quantlab.dataset.base", "quantlab.dataset.config"))
+        and not name.startswith(("quantlab.dataset.base", "quantlab.dataset.raw", "quantlab.dataset.config"))
     )
     assert offending == [], offending
     assert "quantlab.acquisition.base" in imported

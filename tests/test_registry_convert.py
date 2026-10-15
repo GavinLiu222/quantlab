@@ -23,7 +23,7 @@ import pytest
 import xarray as xr
 
 from quantlab.dataset.config import DatasetConfig
-from quantlab.dataset.base import ConversionResult
+from quantlab.dataset.raw import ConversionResult
 from quantlab.acquisition.base import DataSourceRegistry
 from quantlab.acquisition.registry import convert
 
@@ -408,7 +408,7 @@ def test_alpaca_rows_carry_targets_on_bars_and_none_on_tick() -> None:
 # ---------------------------------------------------------------------------
 # The two handles: `reporter` and `cancel` (03.5 D-05, plan 06).
 #
-# These reach `BaseDataset.from_raw_data_chunked()` DIRECTLY rather than
+# These reach `RawDataset.from_raw_data_chunked()` DIRECTLY rather than
 # through `convert()`, and that is a deliberate exception to this module's
 # opening rule. The contract under test is the CHUNK LOOP's -- where the
 # cancel token is observed, what is emitted per window, and what a reporter

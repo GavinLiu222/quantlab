@@ -99,7 +99,8 @@ write.
 ## Resumable conversions
 
 Converting a large raw tier into a Zarr store is also resumable.
-`BaseDataset.from_raw_data_chunked` splits the time axis into windows with
+`RawDataset.from_raw_data_chunked` (`quantlab.dataset.raw`, the build path of
+every dataset that converts raw files into a store it owns) splits the time axis into windows with
 `TimeChunkPlanner` (`quantlab.dataset._support.ledger`), densifies each window onto one
 symbol axis fixed for the whole range before the first window (so all windows
 line up column by column), appends it to the store, and records it in a
@@ -208,7 +209,9 @@ Nothing decides what to fingerprint. The data is recorded where it is read
 request made while it is open:
 
 - `BaseDataset.panel(start, end, symbols=None, variables=None)` on a leaf
-  dataset, a store or a panel held in memory;
+  dataset, a store or a panel held in memory, keyed by the store the leaf
+  declares it reads (`BaseDataset.stores()`: its own store, or the source
+  store while a resampled dataset resamples on read);
 - `Factor.read(start, end)`, a factor store;
 - `RiskStore.read(start, end)`, the regression or estimate store of a factor
   risk model. Both its readers go through it: the covariance estimator

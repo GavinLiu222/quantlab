@@ -39,8 +39,11 @@ Data moves through three tiers:
    xarray reads lazily. Factors, labels and the backtester read this store;
    they never touch the raw tier.
 
-Every dataset class shares the same lifecycle, defined on
-`quantlab.dataset.base.BaseDataset`:
+Every dataset that converts raw files into a store it owns shares the same
+lifecycle, defined on `quantlab.dataset.raw.RawDataset` (requests such as
+`panel(start, end)` are the read interface of every dataset,
+`quantlab.dataset.base.BaseDataset`; a view or a panel held in memory has no
+build path):
 
 | Method | What it does |
 |---|---|
@@ -448,6 +451,6 @@ you (see [Factors](factors.md)).
 - [Data sources](data-sources.md) and [WRDS](wrds.md): produce the raw tier.
 - [Extending quantlab](../developer-guide/extending.md): write a dataset for a
   new vendor by implementing `_raw_data_to_xr`.
-- The docstrings of `quantlab.dataset.base.BaseDataset`,
+- The docstrings of `quantlab.dataset.base.BaseDataset`, `quantlab.dataset.raw.RawDataset`,
   `quantlab.backend.zarr.XrBackend` and `quantlab.dataset._support.ledger.ChunkLedger` for
   every parameter.

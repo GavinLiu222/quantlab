@@ -1,4 +1,4 @@
-"""`BaseDataset.update()` extends a store whose last window is still growing.
+"""`RawDataset.update()` extends a store whose last window is still growing.
 
 A chunked build records each window's exact edges in the ledger. The last
 window's end moves forward with every new bar (a year window that ended on the

@@ -23,7 +23,7 @@ import pandas as pd
 import polars as pl
 import xarray as xr
 
-from quantlab.dataset.base import BaseDataset
+from quantlab.dataset.raw import RawDataset
 from quantlab.dataset.config import DatasetConfig, SharadarDatasetConfig
 from quantlab.dataset.sharadar.tables import raw_through, trading_days
 from quantlab.dataset.sharadar.universe import normalize_universe
@@ -39,7 +39,7 @@ _LATEST = np.datetime64("9999-12-31", "D")
 _ONE_DAY = np.timedelta64(1, "D")
 
 
-class SpellPanelDataset(BaseDataset):
+class SpellPanelDataset(RawDataset):
     """Daily panel of one per-security value held over spells of days.
 
     A subclass sets ``config_cls`` (a ``SharadarDatasetConfig`` whose

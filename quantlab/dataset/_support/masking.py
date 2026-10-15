@@ -26,7 +26,7 @@ from quantlab.utils.symbol_axis import sort_symbol_axis
 if TYPE_CHECKING:  # type hints only, so no import cycle at runtime
     import datetime
 
-    from quantlab.dataset.base import IndexConstituentDataset
+    from quantlab.dataset.raw import IndexConstituentDataset
     from quantlab.dataset.base import MarketDataset
     from quantlab.dataset.base import TickerLookup
 

@@ -208,20 +208,20 @@ class _NoOpDataset:
         return None
 
     def _clean(self, data: xr.Dataset) -> xr.Dataset:
-        from quantlab.dataset.base import BaseDataset
+        from quantlab.dataset.raw import RawDataset
 
-        return BaseDataset._clean(self, data)  # type: ignore[arg-type]
+        return RawDataset._clean(self, data)  # type: ignore[arg-type]
 
     def from_raw_data(self) -> Self:
-        from quantlab.dataset.base import BaseDataset
+        from quantlab.dataset.raw import RawDataset
 
-        return BaseDataset.from_raw_data(self)  # type: ignore[arg-type]
+        return RawDataset.from_raw_data(self)  # type: ignore[arg-type]
 
 
 def test_from_raw_data_calls_clean_market_data(monkeypatch) -> None:
     """Test 7: Dataset.from_raw_data() calls clean_market_data() exactly
     once with the xr.Dataset produced by _raw_data_to_xr()."""
-    import quantlab.dataset.base as base_data_module
+    import quantlab.dataset.raw as base_data_module
 
     raw_data = _make_xr_dataset([[100.0, 101.0]])
     calls: list[xr.Dataset] = []

@@ -134,10 +134,9 @@ def test_it_answers_on_the_wrapped_calendar_and_has_no_store(market):
     assert view.stored_symbols() == ["2", "4"]
     assert view.store_path is None
     assert view.leaves() == (prices, roster) and view.stores() == []  # held panels read no store
-    for refused in (view.update, view.save, view.from_raw_data,
-                    lambda: view.resample("1w", "last")):
-        with pytest.raises(ValueError, match="holds no store of its own"):
-            refused()
+    assert not any(hasattr(view, name) for name in ("update", "save", "from_raw_data"))
+    with pytest.raises(ValueError, match="a view of its inputs is not resampled"):
+        view.resample("1w", "last")
 
 
 def test_a_factor_holding_it_rebuilds_from_its_config(market):

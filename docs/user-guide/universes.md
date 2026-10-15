@@ -133,7 +133,7 @@ The download scripts resolve their symbol lists from this table; see
 The catalog answers questions about symbols. To use membership inside the
 pipeline, turn it into a panel: a dataset whose single boolean variable
 `is_member` is `True` where a symbol belonged to the index on that day. These
-datasets subclass `quantlab.dataset.base.IndexConstituentDataset` and are
+datasets subclass `quantlab.dataset.raw.IndexConstituentDataset` and are
 configured with `ConstituentDatasetConfig`:
 
 | Class (in `quantlab.dataset.constituent`) | Index | `symbol` axis | Source | Coverage starts |
@@ -186,7 +186,7 @@ price data:
 ```python
 import polars as pl
 from quantlab.dataset.config import ConstituentDatasetConfig
-from quantlab.dataset.base import IndexConstituentDataset
+from quantlab.dataset.raw import IndexConstituentDataset
 from quantlab.dataset._support.masking import UniverseMask
 
 class DemoIndex(IndexConstituentDataset):
@@ -296,5 +296,5 @@ normally once it lists.
 - [Factors](factors.md): the factors and labels computed on a masked panel.
 - [WRDS](wrds.md): CRSP reference tables, PERMNOs and `security_filter`.
 - The docstrings of `quantlab.universe.UniverseCatalog`,
-  `quantlab.dataset.base.IndexConstituentDataset` and
+  `quantlab.dataset.raw.IndexConstituentDataset` and
   `quantlab.dataset._support.masking.UniverseMask` for every parameter.

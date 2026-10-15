@@ -51,11 +51,11 @@ import pandas as pd
 import polars as pl
 import xarray as xr
 
-from quantlab.dataset.base import BaseDataset
+from quantlab.dataset.raw import RawDataset
 from quantlab.dataset.config import DatasetConfig, FredRateConfig
 
 
-class FredRateDataset(BaseDataset):
+class FredRateDataset(RawDataset):
     """Single-symbol daily panel of one FRED rate series: ``rate`` and ``risk_free``.
 
     Parameters

@@ -46,7 +46,7 @@ import quantlab.core.component as component_rule
 from quantlab.model.config import ModelConfig
 from quantlab.factor.config import FactorConfig, PolarsFactorConfig
 from quantlab.dataset.config import ConstituentDatasetConfig, DatasetConfig
-from quantlab.dataset.base import IndexConstituentDataset
+from quantlab.dataset.raw import IndexConstituentDataset
 from quantlab.dataset.base import BaseDataset, MarketDataset
 from quantlab.factor.base import Factor
 from quantlab.factor.kunquant import FactorKunQuant

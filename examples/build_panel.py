@@ -38,7 +38,7 @@ from quantlab.backend.parquet import PlBackend
 from quantlab.backend.zarr import XrBackend
 from quantlab.dataset.config import ConstituentDatasetConfig, DatasetConfig
 from quantlab.universe import UniverseConfig
-from quantlab.dataset.base import IndexConstituentDataset
+from quantlab.dataset.raw import IndexConstituentDataset
 from quantlab.dataset._support.masking import UniverseMask
 from quantlab.dataset.stock import StockDataset
 from quantlab.universe import UniverseCatalog

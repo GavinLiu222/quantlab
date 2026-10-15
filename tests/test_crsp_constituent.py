@@ -848,7 +848,7 @@ def test_the_crsp_classes_add_only_the_two_hooks_and_leave_wikipedia_alone(tmp_p
     touches the two Wikipedia-based classes that were already here -- which
     still answer with their own coverage starts, from their own fetchers.
     """
-    from quantlab.dataset.base import IndexConstituentDataset
+    from quantlab.dataset.raw import IndexConstituentDataset
     from quantlab.dataset.constituent import (
         CompustatNasdaq100ConstituentDataset,
         CrspSP500ConstituentDataset,

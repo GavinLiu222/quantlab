@@ -23,7 +23,7 @@ import pandas as pd
 import polars as pl
 import xarray as xr
 
-from quantlab.dataset.base import BaseDataset
+from quantlab.dataset.raw import RawDataset
 from quantlab.dataset.config import DatasetConfig, SharadarDatasetConfig
 from quantlab.dataset.sharadar.tables import (
     raw_through,
@@ -35,7 +35,7 @@ from quantlab.utils.symbol_axis import sort_symbol_axis
 from quantlab.utils.timer import Timer
 
 
-class FilingPanelDataset(BaseDataset):
+class FilingPanelDataset(RawDataset):
     """Daily panel of one Sharadar filing table, each filing at its available date.
 
     A subclass sets ``config_cls`` and ``TABLE`` and implements

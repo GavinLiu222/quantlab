@@ -18,8 +18,8 @@ from loguru import logger
 
 from conftest import WHOLE_STORE
 from quantlab.dataset.config import ConstituentDatasetConfig
-from quantlab.dataset.base import IndexConstituentDataset
-from quantlab.dataset.base import BaseDataset
+from quantlab.dataset.raw import IndexConstituentDataset
+from quantlab.dataset.raw import RawDataset
 from quantlab.dataset._support.cleaning import clean_membership_panel
 from quantlab.dataset.constituent import SP500ConstituentDataset
 
@@ -528,7 +528,7 @@ def test_membership_panel_cleaning_replaces_market_data_cleaning():
     all-False `anomaly_flag` variable to a panel whose only variable is
     already a boolean.
     """
-    assert IndexConstituentDataset._clean is not BaseDataset._clean
+    assert IndexConstituentDataset._clean is not RawDataset._clean
 
     timestamps = pd.date_range("2020-01-01", periods=3, freq="D")
     values = np.array(

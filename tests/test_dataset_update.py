@@ -1,4 +1,4 @@
-"""`BaseDataset.update()` and the evidence-driven strategy resolver
+"""`RawDataset.update()` and the evidence-driven strategy resolver
 (260908-0f4 Task 2).
 
 `update()` is the AUTOMATIC incremental entry point, symmetric with
@@ -36,7 +36,7 @@ import xarray as xr
 from loguru import logger
 
 from quantlab.dataset.config import DatasetConfig
-from quantlab.dataset.base import BaseDataset
+from quantlab.dataset.raw import RawDataset
 from quantlab.dataset.stock import StockDataset
 
 # ---------------------------------------------------------------------------
@@ -353,7 +353,7 @@ def test_update_exposes_no_strategy_parameter() -> None:
     `update()` a second spelling of `from_raw_data_chunked` rather than a
     different contract.
     """
-    parameters = inspect.signature(BaseDataset.update).parameters
+    parameters = inspect.signature(RawDataset.update).parameters
 
     assert set(parameters) == {"self", "granularity", "ledger_path", "append_dim"}
     for forbidden in ("on_new_listing", "mode", "force", "overwrite"):
@@ -382,7 +382,7 @@ def test_no_string_reaches_the_automatic_branch(
 
         message = str(excinfo.value)
         assert spelling in message
-        for accepted in BaseDataset.NEW_LISTING_STRATEGIES:
+        for accepted in RawDataset.NEW_LISTING_STRATEGIES:
             assert accepted in message
 
     assert not Path(config.zarr_file_path).exists()
@@ -400,15 +400,15 @@ def test_the_sentinel_is_absent_from_the_published_strategies(
     config = growing_roster.config("never-built.zarr")
     growing_roster.write_initial()
 
-    assert BaseDataset.NEW_LISTING_STRATEGIES == ("refuse", "rebuild", "widen")
-    assert BaseDataset._AUTOMATIC not in BaseDataset.NEW_LISTING_STRATEGIES
-    assert not isinstance(BaseDataset._AUTOMATIC, str)
+    assert RawDataset.NEW_LISTING_STRATEGIES == ("refuse", "rebuild", "widen")
+    assert RawDataset._AUTOMATIC not in RawDataset.NEW_LISTING_STRATEGIES
+    assert not isinstance(RawDataset._AUTOMATIC, str)
 
     with pytest.raises(ValueError) as excinfo:
         StockDataset(config).from_raw_data_chunked(on_new_listing="nope")
 
     message = str(excinfo.value)
-    assert repr(BaseDataset._AUTOMATIC) not in message
+    assert repr(RawDataset._AUTOMATIC) not in message
     assert "_AUTOMATIC" not in message
 
 
@@ -489,7 +489,7 @@ def test_the_probe_is_asked_about_the_stores_extent_not_the_config_range(
     config = _built_over_ab(growing_roster)
     growing_roster.write_spanning_listing()
 
-    extent_before = BaseDataset._stored_append_extent(config.zarr_file_path)
+    extent_before = RawDataset._stored_append_extent(config.zarr_file_path)
     assert extent_before is not None
     # The premise: the config range genuinely brackets the store's extent.
     assert pd.Timestamp(_CONFIG_START) < pd.Timestamp(extent_before[0])

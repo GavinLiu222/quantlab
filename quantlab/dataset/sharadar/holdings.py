@@ -54,7 +54,7 @@ import pandas as pd
 import polars as pl
 import xarray as xr
 
-from quantlab.dataset.base import BaseDataset
+from quantlab.dataset.raw import RawDataset
 from quantlab.dataset.config import DatasetConfig, SharadarHoldingsConfig
 from quantlab.dataset.sharadar.permatickers import map_raw_table
 from quantlab.dataset.sharadar.tables import (
@@ -82,7 +82,7 @@ UNITS_SCALE = 1_000.0
 _ERROR_SAMPLE = 5
 
 
-class SharadarHoldingsDataset(BaseDataset):
+class SharadarHoldingsDataset(RawDataset):
     """Daily panel of 13F holders and shares held, each quarter from quarter end + 45 days.
 
     Parameters

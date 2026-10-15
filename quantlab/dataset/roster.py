@@ -11,8 +11,9 @@ a universe's membership store gains a symbol the day it first enters.
 The wrapper is a drop-in ``MarketDataset``: a factor, a label or a backtest
 given it in place of the wrapped dataset changes nothing else. Its calendar,
 variable names, KunQuant export, tradable and delisting bars and ticker
-lookup are the wrapped dataset's. It has no store of its own; the wrapped
-dataset's store is updated by its own vendor update. Who is a member on a
+lookup are the wrapped dataset's. It has no store of its own and no build
+path: its inputs are the wrapped and the roster datasets (``inputs()``), whose
+stores are updated by their own vendor updates. Who is a member on a
 given date is the membership a label or a predictor is masked with.
 
 The wrapped dataset records the read in an open ``DataRecorder``, asked
@@ -282,99 +283,3 @@ class RosterDataset(MarketDataset):
         (True, False)
         """
         return type(self)(self.dataset.copy(), self.config.roster.copy())
-
-    def _refuse(self, method: str):
-        """Raise: the roster view holds no store of its own."""
-        raise ValueError(
-            f"{self.class_name}.{method}(): a roster dataset is a view of "
-            f"{self.dataset.class_name}'s store and holds no store of its own; "
-            f"call {method}() on the wrapped dataset."
-        )
-
-    def resample(self, freq, how) -> Self:
-        """Refuse: resample the wrapped dataset, then wrap it.
-
-        Raises
-        ------
-        ValueError
-            Always.
-
-        Examples
-        --------
-        >>> prices.resample("1w", "last")
-        Traceback (most recent call last):
-        ValueError: RosterDataset.resample(): a roster dataset is a view of ...
-        """
-        self._refuse("resample")
-
-    def save(self, **kwargs):
-        """Refuse: the view has no store.
-
-        Raises
-        ------
-        ValueError
-            Always.
-
-        Examples
-        --------
-        >>> prices.save()
-        Traceback (most recent call last):
-        ValueError: RosterDataset.save(): a roster dataset is a view of ...
-        """
-        self._refuse("save")
-
-    def from_raw_data(self) -> Self:
-        """Refuse: build the wrapped dataset instead.
-
-        Raises
-        ------
-        ValueError
-            Always.
-
-        Examples
-        --------
-        >>> prices.from_raw_data()
-        Traceback (most recent call last):
-        ValueError: RosterDataset.from_raw_data(): a roster dataset is a view of ...
-        """
-        self._refuse("from_raw_data")
-
-    def from_raw_data_chunked(self, *args, **kwargs):
-        """Refuse: build the wrapped dataset instead.
-
-        Raises
-        ------
-        ValueError
-            Always.
-
-        Examples
-        --------
-        >>> prices.from_raw_data_chunked()
-        Traceback (most recent call last):
-        ValueError: RosterDataset.from_raw_data_chunked(): a roster dataset is a view of ...
-        """
-        self._refuse("from_raw_data_chunked")
-
-    def update(self, *args, **kwargs):
-        """Refuse: update the wrapped dataset instead.
-
-        Raises
-        ------
-        ValueError
-            Always.
-
-        Examples
-        --------
-        >>> prices.update()
-        Traceback (most recent call last):
-        ValueError: RosterDataset.update(): a roster dataset is a view of ...
-        """
-        self._refuse("update")
-
-    def _raw_data_to_xr(self) -> xr.Dataset:
-        """Refuse: a roster view has no raw files."""
-        self._refuse("_raw_data_to_xr")
-
-    def _raw_data_to_xr_window(self, start_date, end_date, symbols=None) -> xr.Dataset:
-        """Refuse: a roster view has no raw files."""
-        self._refuse("_raw_data_to_xr_window")

@@ -1,7 +1,7 @@
 """WR-04: a cleanup failure inside the rebuild rollback must not replace the
 failure it is cleaning up after.
 
-`BaseDataset._restore_rebuild_asides` runs from inside
+`RawDataset._restore_rebuild_asides` runs from inside
 `from_raw_data_chunked`'s `except BaseException: ... raise` handler. An
 exception raised INSIDE an exception handler replaces the exception being
 handled: the operator of a multi-hour rebuild is shown "Directory not empty"
@@ -37,15 +37,15 @@ import xarray as xr
 from loguru import logger
 
 from quantlab.dataset.config import BaseDatasetConfig
-from quantlab.dataset.base import BaseDataset
+from quantlab.dataset.raw import RawDataset
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
 # ---------------------------------------------------------------------------
 
 
-class _TrivialDataset(BaseDataset):
-    """The minimal concrete `BaseDataset`, mirroring
+class _TrivialDataset(RawDataset):
+    """The minimal concrete `RawDataset`, mirroring
     `tests/test_chunked_ingest.py`'s `_UnboundedDataset`.
 
     `_restore_rebuild_asides` reads nothing off `self` but `class_name`, so

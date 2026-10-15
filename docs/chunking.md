@@ -2,7 +2,7 @@
 
 English | [简体中文](zh-CN/chunking.md)
 
-Chunked conversion turns a large date range of raw files into a Zarr store one time window at a time. Each window is converted to a dense `(timestamp, symbol)` panel, appended to the store, and recorded in a small JSON ledger, so peak memory is bounded by the window rather than the whole range and an interrupted run resumes at the first window that was not written. It is available on every dataset through `BaseDataset.from_raw_data_chunked()` and `BaseDataset.update()`.
+Chunked conversion turns a large date range of raw files into a Zarr store one time window at a time. Each window is converted to a dense `(timestamp, symbol)` panel, appended to the store, and recorded in a small JSON ledger, so peak memory is bounded by the window rather than the whole range and an interrupted run resumes at the first window that was not written. It is available on every dataset that converts raw files into a store it owns, through `RawDataset.from_raw_data_chunked()` and `RawDataset.update()` (`quantlab.dataset.raw`); a view or a panel held in memory has no build path.
 
 ## Prerequisites
 
@@ -289,7 +289,7 @@ itself needs a vendor credential; see the acquisition guide.
 
 ## Extending
 
-A dataset joins the chunked path through two methods. `_raw_axes_in_range()` returns the pinned symbols and the observed timestamps, and `_raw_data_to_xr_window(start, end, symbols)` returns the dense panel for one window on exactly those symbols. The defaults in `BaseDataset` convert the whole range and then slice, which is correct but does not reduce the memory needed to densify. A dataset that can read less overrides both. The class below reads only the date column to plan the windows, and keeps only the rows inside each window. A CSV file cannot skip rows, so every window still parses each file, but only the window's rows are retained and densified.
+A dataset joins the chunked path through two methods. `_raw_axes_in_range()` returns the pinned symbols and the observed timestamps, and `_raw_data_to_xr_window(start, end, symbols)` returns the dense panel for one window on exactly those symbols. The defaults in `RawDataset` convert the whole range and then slice, which is correct but does not reduce the memory needed to densify. A dataset that can read less overrides both. The class below reads only the date column to plan the windows, and keeps only the rows inside each window. A CSV file cannot skip rows, so every window still parses each file, but only the window's rows are retained and densified.
 
 ```python
 # csv_windowed.py
@@ -298,11 +298,11 @@ from pathlib import Path
 import pandas as pd
 import xarray as xr
 
-from quantlab.dataset.base import BaseDataset
+from quantlab.dataset.raw import RawDataset
 from quantlab.utils.symbol_axis import sort_symbol_axis
 
 
-class WindowedCsvDataset(BaseDataset):
+class WindowedCsvDataset(RawDataset):
     """One CSV per symbol (date,open,high,low,close,volume), converted window by window."""
 
     def _files(self):

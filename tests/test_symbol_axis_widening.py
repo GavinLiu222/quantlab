@@ -103,7 +103,7 @@ def _typed_panel(
     """A panel carrying the two non-float shapes a real cleaned panel has:
     an int64 `volume` and a bool `anomaly_flag`.
 
-    `BaseDataset._pin_append_dtypes` promotes integer variables to float64
+    `RawDataset._pin_append_dtypes` promotes integer variables to float64
     before an append but deliberately leaves `anomaly_flag` bool, so a real
     store has exactly one non-float variable. Both are exercised here because
     the guard is a dtype rule, not an `anomaly_flag` special case.

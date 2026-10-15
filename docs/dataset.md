@@ -2,7 +2,7 @@
 
 English | [简体中文](zh-CN/dataset.md)
 
-A dataset converts the raw files a vendor delivers into the panel that every later stage of quantlab consumes: an `xarray.Dataset` indexed by `(timestamp, symbol)`, stored as Zarr. Each market or vendor has one subclass of `BaseDataset` or `MarketDataset`. Factors, models and backtests read the panel and never see the raw format.
+A dataset converts the raw files a vendor delivers into the panel that every later stage of quantlab consumes: an `xarray.Dataset` indexed by `(timestamp, symbol)`, stored as Zarr. Each market or vendor has one subclass of `RawDataset` or `RawMarketDataset` (`quantlab.dataset.raw`), which own the build path from raw files to a store. Factors, models and backtests read the panel through the read interface every dataset shares (`BaseDataset`, `MarketDataset` in `quantlab.dataset.base`) and never see the raw format.
 
 ## Prerequisites
 
@@ -37,6 +37,23 @@ for month, days in {"2024-01": [2, 3, 4], "2024-02": [1, 2]}.items():
 ### The panel
 
 Every dataset produces the same shape of object: an `xarray.Dataset` whose data variables all lie on the two dimensions `timestamp` and `symbol`. The panel is dense. When a symbol has no bar at a timestamp, the cell holds NaN in every variable rather than the row being absent. Variables keep the names the vendor uses (`open`, `close`, `adjClose`, `Volume`, and so on), and cleaning adds one boolean variable, `anomaly_flag`.
+
+### Reading and building
+
+Every dataset answers the same read interface, `BaseDataset`: `panel(start, end, symbols, variables)`, `calendar`, `bar_before`, `bar_after`, `stored_symbols` and `head`. A *leaf* reads a store of its own (or a panel held in memory); a *view* reads other datasets, its `inputs()`, and keeps no store (a `RosterDataset`, a `MergedDataset`, the permaticker Trade bar view). Only a dataset that converts raw files into a store it owns has a build path (`from_raw_data`, `save`, `from_raw_data_chunked`, `update`): it derives from `RawDataset`, or `RawMarketDataset` for price bars. A view or a `FrameDataset` has no build methods at all.
+
+Every dataset declares the stores its panel reads: `stores()` lists them (a leaf's own store, the source store of a dataset resampled on read, a view's inputs' stores), `leaves()` the leaf datasets behind them, and `store_path` is the store a dataset keeps its own bars in, `None` for a view. The live day checks these stores hold the bar it predicts, and a run's data fingerprint records the store a read came from. With `sep` a `StockDataset` over `sep.zarr` and `members` one over a membership store `members.zarr`:
+
+```python
+>>> from quantlab.dataset.roster import RosterDataset
+>>> prices = RosterDataset(sep, members)
+>>> prices.inputs() == (sep, members), prices.store_path
+(True, None)
+>>> [Path(store).name for store in prices.stores()]
+['sep.zarr', 'members.zarr']
+>>> [Path(store).name for store in sep.resample("1d", "last").stores()]  # no resampled store saved yet
+['sep.zarr']
+```
 
 ### The config
 
@@ -175,7 +192,7 @@ timestamp
 2024-01-04  111.0  113.0
 ```
 
-The wrapper is a `MarketDataset`, so a factor, a label or a backtest takes it in place of the wrapped dataset with nothing else changed. Its calendar (`calendar`, `bar_before`, `bar_after`), variable names, KunQuant export, `tradable_bars`, `delisting_bars` and `ticker_lookup` are the wrapped dataset's, and `get_config()` rebuilds it through `rebuild`. A cross-sectional factor computed on it standardises over the roster, exactly as on a store cut to the roster. The wrapped dataset records each read in an open `DataRecorder` with the roster as its `symbols`, so a run's data fingerprint covers the roster's cells only. The wrapper has no store: `store_path`, `update`, `save`, `from_raw_data` and `resample` raise `ValueError`; the wrapped store is updated by its own vendor update. A factor store extended on it (`Factor.extend`) gains a symbol that enters the roster as a new column from that bar on; its earlier bars keep the cross-sections they were computed on, so a rebuild over the grown roster differs from the extended store on those bars.
+The wrapper is a `MarketDataset`, so a factor, a label or a backtest takes it in place of the wrapped dataset with nothing else changed. Its calendar (`calendar`, `bar_before`, `bar_after`), variable names, KunQuant export, `tradable_bars`, `delisting_bars` and `ticker_lookup` are the wrapped dataset's, and `get_config()` rebuilds it through `rebuild`. A cross-sectional factor computed on it standardises over the roster, exactly as on a store cut to the roster. The wrapped dataset records each read in an open `DataRecorder` with the roster as its `symbols`, so a run's data fingerprint covers the roster's cells only. The wrapper is a view with no store: `store_path` is `None`, its `stores()` are the wrapped and the roster datasets' stores, it has no build path, and `resample` raises `ValueError` (resample the wrapped dataset, then wrap it); the wrapped store is updated by its own vendor update. A factor store extended on it (`Factor.extend`) gains a symbol that enters the roster as a new column from that bar on; its earlier bars keep the cross-sections they were computed on, so a rebuild over the grown roster differs from the extended store on those bars.
 
 ### Read the anomaly flags
 
@@ -345,16 +362,16 @@ The variables keep their names in `to_kunquant()`, so name them as the factor re
 10
 ```
 
-Nothing is read from or written to disk, so building or saving is refused: `from_raw_data()`, `from_raw_data_chunked()`, `update()` and `save()` raise, and so does a stream-mode factor built on the dataset.
+Nothing is read from or written to disk, so the dataset has no build path: there is no `from_raw_data()`, `from_raw_data_chunked()`, `update()` or `save()`, and a stream-mode factor built on the dataset raises.
 
 ```python
 >>> mem.save()
 Traceback (most recent call last):
     ...
-ValueError: FrameDataset.save(): the panel is held in memory, handed over at construction; there are no raw files to build it from and no store of its own to write. Build a new FrameDataset from updated data, or write a copy with to_zarr(path).
+AttributeError: 'FrameDataset' object has no attribute 'save'
 ```
 
-`resample(freq, how)` takes the same `freq` and `how` as on a Zarr-backed dataset (see [Resample onto coarser bars](#resample-onto-coarser-bars)) and cuts and aggregates the bars the same way, UTC-clock buckets labelled at their start. The result is a new `FrameDataset` holding the resampled panel in memory: nothing is written, `store_path` is `None`, and it refuses building, saving and stream mode like any `FrameDataset`. The source is not changed.
+`resample(freq, how)` takes the same `freq` and `how` as on a Zarr-backed dataset (see [Resample onto coarser bars](#resample-onto-coarser-bars)) and cuts and aggregates the bars the same way, UTC-clock buckets labelled at their start. The result is a new `FrameDataset` holding the resampled panel in memory: nothing is written, `store_path` is `None`, and like any `FrameDataset` it has no build path and refuses stream mode. The source is not changed.
 
 ```python
 >>> hours = pd.DataFrame({
@@ -383,7 +400,7 @@ Traceback (most recent call last):
 ValueError: FrameDataset.update(): the panel is held in memory, handed over at construction; there are no raw files to build it from and no store of its own to write. Build a new FrameDataset from updated data, or write a copy with to_zarr(path).
 ```
 
-`to_zarr(path)` writes the held panel to a new Zarr store (a resampled dataset writes its resampled bars) and returns a `FrameDataset` read back from it; an existing path is refused. A `FrameDataset` built from a `FrameDatasetConfig` whose `zarr_file_path` names a store reads that store into memory once, at construction, and then behaves like any `FrameDataset`: it still refuses building and saving, and its `resample()` stays in memory, with `store_path` `None` and no store beside the source written or read. This is how a backtest run directory keeps its input panels (see Rebuild a run of given weights in the backtest guide), and `get_config()` of such a dataset rebuilds through `rebuild`. Three hooks of every dataset carry this, so the backtester and the loader need no special case: `persist_with_run(run_dir, store)` writes what a run directory needs at the store path the run chose (nothing by default; a `FrameDataset` writes its panel there and returns a config naming it relative to the run directory), the class method `resolve_run_config(config, run_dir)` turns a recorded config back into one to construct from (unchanged by default; a `FrameDataset` resolves the relative path, and refuses it without `run_dir`), and `ticker_lookup()` names the `TickerLookup` that labels the symbols with the ticker and company in use on a day (`None` by default, so a `FrameDataset` shows its symbols as they are; a CRSP or NBBO store returns a `CrspTickerLookup` over its `.crsp_tickers.json` sidecar, a Sharadar price store a `SharadarTickerLookup` over its `.sharadar_tickers.json` sidecar (see `docs/sharadar.md`); a `MergedDataset` or `BadPrintMaskedDataset` names each symbol through the first input whose lookup knows it).
+`to_zarr(path)` writes the held panel to a new Zarr store (a resampled dataset writes its resampled bars) and returns a `FrameDataset` read back from it; an existing path is refused. A `FrameDataset` built from a `FrameDatasetConfig` whose `zarr_file_path` names a store reads that store into memory once, at construction, and then behaves like any `FrameDataset`: it still has no build path, and its `resample()` stays in memory, with `store_path` `None` and no store beside the source written or read. This is how a backtest run directory keeps its input panels (see Rebuild a run of given weights in the backtest guide), and `get_config()` of such a dataset rebuilds through `rebuild`. Three hooks of every dataset carry this, so the backtester and the loader need no special case: `persist_with_run(run_dir, store)` writes what a run directory needs at the store path the run chose (nothing by default; a `FrameDataset` writes its panel there and returns a config naming it relative to the run directory), the class method `resolve_run_config(config, run_dir)` turns a recorded config back into one to construct from (unchanged by default; a `FrameDataset` resolves the relative path, and refuses it without `run_dir`), and `ticker_lookup()` names the `TickerLookup` that labels the symbols with the ticker and company in use on a day (`None` by default, so a `FrameDataset` shows its symbols as they are; a CRSP or NBBO store returns a `CrspTickerLookup` over its `.crsp_tickers.json` sidecar, a Sharadar price store a `SharadarTickerLookup` over its `.sharadar_tickers.json` sidecar (see `docs/sharadar.md`); a `MergedDataset` or `BadPrintMaskedDataset` names each symbol through the first input whose lookup knows it).
 
 ```python
 >>> import tempfile
@@ -427,7 +444,7 @@ True
 
 ### A new market source
 
-A new source needs one subclass of `MarketDataset` and a config. Three methods are required. `_raw_data_to_xr` returns the panel for the whole configured range, deduplicated and unique on `(timestamp, symbol)`. `_raw_data_to_xr_window` returns one date window, reindexed onto `symbols` when they are given; the simplest form slices the whole-range result. `_to_kunquant` maps the panel onto arrays; a source whose variable names differ from the shared ones (`open`, `high`, `low`, `close`, `volume`, `amount`) also sets `COLUMN_MAP`, which `to_shared_names` and a merge apply. Any dataset can set it, not only a market one: the SF1 fundamentals panel renames its copies of DAILY's valuation columns to `sf1_<name>`, so a merge with the DAILY panel keeps the two apart. The example reads one CSV per symbol and is saved as `csv_daily.py`.
+A new source needs one subclass of `RawMarketDataset` (`quantlab.dataset.raw`) and a config. Three methods are required. `_raw_data_to_xr` returns the panel for the whole configured range, deduplicated and unique on `(timestamp, symbol)`. `_raw_data_to_xr_window` returns one date window, reindexed onto `symbols` when they are given; the simplest form slices the whole-range result. `_to_kunquant` maps the panel onto arrays; a source whose variable names differ from the shared ones (`open`, `high`, `low`, `close`, `volume`, `amount`) also sets `COLUMN_MAP`, which `to_shared_names` and a merge apply. Any dataset can set it, not only a market one: the SF1 fundamentals panel renames its copies of DAILY's valuation columns to `sf1_<name>`, so a merge with the DAILY panel keeps the two apart. The example reads one CSV per symbol and is saved as `csv_daily.py`.
 
 ```python
 # csv_daily.py
@@ -437,10 +454,10 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from quantlab.dataset.base import MarketDataset
+from quantlab.dataset.raw import RawMarketDataset
 
 
-class CsvDailyDataset(MarketDataset):
+class CsvDailyDataset(RawMarketDataset):
     """One CSV file per symbol with columns date,open,high,low,close,volume."""
 
     def _raw_data_to_xr(self) -> xr.Dataset:
@@ -499,8 +516,8 @@ timestamp
 A subclass that leaves out a required method cannot be constructed:
 
 ```python
->>> from quantlab.dataset.base import BaseDataset
->>> class Incomplete(BaseDataset):
+>>> from quantlab.dataset.raw import RawDataset
+>>> class Incomplete(RawDataset):
 ...     pass
 ...
 >>> Incomplete(csv_config)
@@ -513,17 +530,17 @@ A dataset that validates or completes its config overrides `_normalize_config(co
 
 For a raw source that can filter by date before it loads, implement `_raw_data_to_xr_window` to read only that window. `StockDataset` does so by pruning Parquet partitions, which bounds memory by the window. The slicing form above bounds only the write.
 
-A dataset whose bars do not come from its own Zarr store (a panel held in memory, a store written from another dataset) does not override `panel`. It overrides `_open_bars(start, end)`, which returns its bars from `start` to `end` with every symbol and variable, and `_resamples_on_read()` when `panel` should resample those bars onto `resample_freq`; `panel` applies the symbol and variable query, the resample and the run record. `FrameDataset` and `MappedTradeBarDataset` are the two examples.
+A dataset that builds no store from raw files derives from `BaseDataset` or `MarketDataset`, not from a raw class, and so has no build methods to refuse. A view declares the datasets it reads with `inputs()`, and `stores()` and `leaves()` follow. A dataset whose bars do not come from its own Zarr store (a panel held in memory, a store written from another dataset) does not override `panel`. It overrides `_open_bars(start, end)`, which returns its bars from `start` to `end` with every symbol and variable, and `_resamples_on_read()` when `panel` should resample those bars onto `resample_freq`; `panel` applies the symbol and variable query, the resample and the run record. `FrameDataset` and `MappedTradeBarDataset` are the two examples.
 
 ### A dataset that is not OHLCV
 
-A panel without price columns subclasses `BaseDataset` directly, uses `BaseDatasetConfig`, and overrides `_clean`. The default `_clean` requires OHLCV columns, so a boolean membership panel is validated with its own function instead. `clean_membership_panel` checks the dtype, dimensions and time order and returns the panel unchanged.
+A panel without price columns subclasses `RawDataset` directly, uses `BaseDatasetConfig`, and overrides `_clean`. The default `_clean` requires OHLCV columns, so a boolean membership panel is validated with its own function instead. `clean_membership_panel` checks the dtype, dimensions and time order and returns the panel unchanged.
 
 ```python
 >>> from quantlab.dataset.config import BaseDatasetConfig
->>> from quantlab.dataset.base import BaseDataset
+>>> from quantlab.dataset.raw import RawDataset
 >>> from quantlab.dataset._support.cleaning import clean_membership_panel
->>> class InIndexDataset(BaseDataset):
+>>> class InIndexDataset(RawDataset):
 ...     def _raw_data_to_xr(self) -> xr.Dataset:
 ...         days = pd.date_range("2024-01-02", periods=3)
 ...         member = np.array([[True, False], [True, True], [True, True]])

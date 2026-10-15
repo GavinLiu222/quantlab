@@ -27,7 +27,7 @@ import xarray as xr
 
 from conftest import WHOLE_STORE
 from quantlab.dataset.config import DatasetConfig
-from quantlab.dataset.base import MarketDataset
+from quantlab.dataset.raw import RawMarketDataset
 
 CORE_LAYER_FILES = (
     "quantlab/factor/base.py",
@@ -101,7 +101,7 @@ def test_no_backtest_module_names_the_crsp_ticker_lookup() -> None:
     assert offenders == []
 
 
-class FakeDataset(MarketDataset):
+class FakeDataset(RawMarketDataset):
     """A genuinely novel, test-only `Dataset` subclass for a fake market and
     frequency that exists nowhere else in the codebase. Proves the
     `Dataset` ABC's contract (`from_raw_data()` -> `save()` -> `read()`) is
@@ -113,7 +113,7 @@ class FakeDataset(MarketDataset):
     `NotImplementedError`.
 
     `_raw_data_to_xr_window` IS implemented, and had to be: 03.5 D-08 makes
-    it abstract on `MarketDataset`, so a new market source that omits it
+    it abstract on `RawMarketDataset`, so a new market source that omits it
     cannot be constructed at all. That is the point of this fixture as a
     contract test -- the obligation a genuinely novel subclass must meet is
     now visible here, in the smallest honest implementation of it, instead of
@@ -151,11 +151,11 @@ class FakeDataset(MarketDataset):
     def _raw_data_to_xr_window(
         self, start_date, end_date, symbols: "list[str] | None" = None
     ) -> xr.Dataset:
-        """The windowed densify `MarketDataset` requires (03.5 D-08).
+        """The windowed densify `RawMarketDataset` requires (03.5 D-08).
 
         This fake source materialises its whole panel in memory anyway, so
         there is no date filter to push down and the body is the same
-        densify-then-slice `BaseDataset` offers non-market datasets. A real
+        densify-then-slice `RawDataset` offers non-market datasets. A real
         source with a filterable raw tier scans only the window -- see
         `StockDataset._raw_data_to_xr_window`.
         """

@@ -211,9 +211,9 @@ def test_the_view_rebuilds_from_its_config(built):
 
 
 def test_the_view_has_no_store(built):
-    _, _, dataset = built
-    with pytest.raises(ValueError, match="no store of its own"):
-        dataset.update()
+    trade_bars, _, dataset = built
+    assert dataset.store_path is None and dataset.stores() == [trade_bars.store_path]
+    assert not hasattr(dataset, "update") and not hasattr(dataset, "save")
 
 
 def test_the_busier_ticker_is_decided_over_the_whole_day(built):

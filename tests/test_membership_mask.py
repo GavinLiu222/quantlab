@@ -26,7 +26,7 @@ import pytest
 import xarray as xr
 
 from quantlab.dataset.config import ConstituentDatasetConfig
-from quantlab.dataset.base import IndexConstituentDataset
+from quantlab.dataset.raw import IndexConstituentDataset
 from quantlab.model.predefined.membership_mask import MembershipMaskedPredictor
 from quantlab.runs.backtest_run import BacktestRun
 from tests.backtest_fixtures import make_model, train_checkpoint

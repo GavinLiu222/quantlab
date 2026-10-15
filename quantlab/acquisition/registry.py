@@ -42,7 +42,7 @@ from quantlab.acquisition.base import (
 )
 from quantlab.acquisition.config import AcquisitionConfig
 from quantlab.dataset.config import DatasetConfig
-from quantlab.dataset.base import ConversionResult
+from quantlab.dataset.raw import ConversionResult
 from quantlab.utils.progress import CancelToken, ProgressReporter
 
 

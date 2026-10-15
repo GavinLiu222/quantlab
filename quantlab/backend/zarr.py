@@ -559,7 +559,7 @@ class XrBackend(DataBackend):
                 if integer:
                     remedy += (
                         f" For the integer variable(s) {integer}, the promotion "
-                        f"normally happens in BaseDataset._pin_append_dtypes, "
+                        f"normally happens in RawDataset._pin_append_dtypes, "
                         f"which converts integer variables to float before an "
                         f"append; a store written before that step existed is "
                         f"the usual cause."
@@ -1419,7 +1419,7 @@ class XrBackend(DataBackend):
                         f"every previously written row to a different label. "
                         f"Fix the '{dim}' axis over the whole range before the "
                         f"first window, as "
-                        f"BaseDataset.from_raw_data_chunked() does."
+                        f"RawDataset.from_raw_data_chunked() does."
                     )
             # The append dimension itself; skipped when either side has no
             # coordinate on it or is empty, since then there is no order.

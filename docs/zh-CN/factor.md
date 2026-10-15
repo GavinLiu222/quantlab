@@ -179,7 +179,7 @@ XrBackend()
 True
 ```
 
-合并从不按输入顺序取值。同一个格子在两个输入里都有值时抛出 `ValueError: MergedDataset: variable 'close' holds a value in both SpotKlineDataset(data/spot_half.zarr) and SpotKlineDataset(data/overlap.zarr), for example at symbol 'S3USDT' on 2024-02-01 00:00:00. ...`；bar 间隔不同的输入抛出 `ValueError: MergedDataset: the inputs have different bar spacing (SpotKlineDataset(data/spot_half.zarr): 1 days 00:00:00, SpotKlineDataset(data/hourly.zarr): 0 days 01:00:00). ...`。合并输入上的 KunQuant 因子在 `data_columns` 里写共享列名，Polars 因子在表达式里也用共享列名（`close` 而不是 `Close`）。流式模式在构造因子时就拒绝合并输入：`ValueError: MaDeviation: stream mode takes one dataset, got a merge of 2. ...`。`MergedDataset` 本身就是数据集，有 `panel` 和 `bar_before`；它没有自己的存储，所以 `store_path`、`save`、`resample` 和构建路径都会拒绝。要先对各输入重采样再合并；合并输入上的因子本身可以重采样，前提是各输入切 bar 的方式相同。合并数据集目前还不能作为回测的 `price_dataset` 或 `benchmark_dataset`，它们需要存储路径。
+合并从不按输入顺序取值。同一个格子在两个输入里都有值时抛出 `ValueError: MergedDataset: variable 'close' holds a value in both SpotKlineDataset(data/spot_half.zarr) and SpotKlineDataset(data/overlap.zarr), for example at symbol 'S3USDT' on 2024-02-01 00:00:00. ...`；bar 间隔不同的输入抛出 `ValueError: MergedDataset: the inputs have different bar spacing (SpotKlineDataset(data/spot_half.zarr): 1 days 00:00:00, SpotKlineDataset(data/hourly.zarr): 0 days 01:00:00). ...`。合并输入上的 KunQuant 因子在 `data_columns` 里写共享列名，Polars 因子在表达式里也用共享列名（`close` 而不是 `Close`）。流式模式在构造因子时就拒绝合并输入：`ValueError: MaDeviation: stream mode takes one dataset, got a merge of 2. ...`。`MergedDataset` 本身就是数据集，有 `panel` 和 `bar_before`；它是没有自己存储的视图：`store_path` 为 `None`，`stores()` 是各输入的存储，它没有构建路径，`resample` 会报错。要先对各输入重采样再合并；合并输入上的因子本身可以重采样，前提是各输入切 bar 的方式相同。合并数据集目前还不能作为回测的 `price_dataset` 或 `benchmark_dataset`，它们需要存储路径。
 
 ### 把指数或 ETF 特征广播到每个标的
 

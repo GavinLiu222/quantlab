@@ -129,8 +129,8 @@ def test_resample_aggregates_in_memory_and_writes_nothing(tmp_path):
     ],
     ids=["from_raw_data", "from_raw_data_chunked", "update", "save"],
 )
-def test_building_or_saving_is_refused(store, call):
-    with pytest.raises(ValueError, match="FrameDataset.*in memory"):
+def test_a_held_panel_has_no_build_path(store, call):
+    with pytest.raises(AttributeError, match="'FrameDataset' object has no attribute"):
         call(FrameDataset(store))
 
 
@@ -271,8 +271,7 @@ def test_a_path_backed_resample_stays_in_memory(tmp_path):
     panel = daily.panel("2024-01-01", "2024-01-02")
     np.testing.assert_array_equal(panel["close"].sel(symbol="AAA").values, [46.0, 94.0])
     assert daily.bar_before("2024-01-02", 1) == pd.Timestamp("2024-01-01")
-    with pytest.raises(ValueError, match="FrameDataset.save"):
-        daily.save()
+    assert not hasattr(daily, "save")
     assert _files_under(tmp_path) == before
 
 

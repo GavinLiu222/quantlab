@@ -24,7 +24,7 @@ vendor API --> acquisition --> raw tier --> dataset --> factors, labels --> mode
 | Stage | Input | Output | Base class |
 |-------|-------|--------|------------|
 | Acquisition | a vendor API and an `AcquisitionConfig` | raw parquet files on disk | `quantlab.acquisition.base.Acquisition` |
-| Dataset | the raw files | a price panel in a Zarr store | `quantlab.dataset.base.BaseDataset` |
+| Dataset | the raw files | a price panel in a Zarr store | `quantlab.dataset.base.BaseDataset` (read), `quantlab.dataset.raw.RawDataset` (build) |
 | Factor and label | a price panel | a factor panel | `quantlab.factor.base.Factor` |
 | Model | factor and label panels | a prediction panel | `quantlab.model.base.BaseModel` |
 | Selection | a prediction panel | a target-weight panel | a strategy-specific class |
@@ -281,7 +281,8 @@ quantlab/
                      run_metrics.py, backtest_stats.py and backtest_report.py (metrics.json,
                      report.html)
     universe.py      point-in-time symbol universe
-    dataset/         base.py (BaseDataset, MarketDataset, IndexConstituentDataset), config.py,
+    dataset/         base.py (BaseDataset, MarketDataset: the read interface), raw.py (RawDataset,
+                     RawMarketDataset, IndexConstituentDataset: the build path), config.py,
                      then one entry per dataset: stock.py, spot.py, constituent.py, crsp/, nbbo/
     config/          data-root resolution and config factories for the bundled datasets
     acquisition/     base.py (Acquisition, source registration), config.py, registry.py,

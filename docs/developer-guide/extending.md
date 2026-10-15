@@ -205,7 +205,7 @@ For a real vendor, a few more steps apply:
 ## A dataset
 
 A dataset converts a raw tier into a dense panel and stores it. For market
-bars, subclass `MarketDataset` (`quantlab.dataset.base`) and implement three
+bars, subclass `RawMarketDataset` (`quantlab.dataset.raw`) and implement three
 hooks: `_raw_data_to_xr` returns the panel for the configured date range,
 `_raw_data_to_xr_window` returns one time window of it on a given symbol axis
 (used by chunked conversion), and `_to_kunquant` exports a panel to the
@@ -217,15 +217,23 @@ from the shared ones (`open`, `high`, `low`, `close`, `volume`, `amount`),
 set the class attribute `COLUMN_MAP` from store name to shared name:
 `to_shared_names` applies it, `_to_kunquant` can export through
 `self._kunquant_arrays(self.to_shared_names(data), data_columns)`, and a
-`MergedDataset` renames the dataset with it before merging. A dataset that
-overrides `panel` itself, such as one held in memory, accepts
-`variables=None` to narrow the panel to those variables, and ends with
-`record_read(self, panel, symbols=symbols, variables=variables,
-reread=lambda: self.panel(start, end, symbols, variables))` with the panel it
-returns
-(`quantlab.runs.record`), so a run records what it read (see
-[Data fingerprints](internals.md#data-fingerprints)). A dataset that only
-composes other datasets records nothing itself and passes the request on.
+`MergedDataset` renames the dataset with it before merging.
+
+The read interface and the build path are two roots. `BaseDataset` and
+`MarketDataset` (`quantlab.dataset.base`) are the read interface every dataset
+answers, with no build method; `RawDataset` and `RawMarketDataset`
+(`quantlab.dataset.raw`) add the build path (`from_raw_data`, `save`,
+`from_raw_data_chunked`, `update`) for a dataset that converts raw files into
+a store it owns. A dataset that builds nothing from raw files derives from the
+read root alone and so has nothing to refuse. A leaf whose bars do not come
+from its own Zarr store, such as one held in memory, does not override
+`panel`: it overrides `_open_bars(start, end)` (and `_resamples_on_read()`),
+and `panel` does the query, the resample and the run record
+(`quantlab.runs.record`, see [Data fingerprints](internals.md#data-fingerprints)).
+A *view*, a dataset that only composes other datasets, overrides `panel`,
+records nothing itself, passes the request on, and declares the datasets it
+reads with `inputs()`, so `stores()` (what the live day and the data update
+check) names its inputs' stores; its `store_path` is `None`.
 
 This dataset reads daily bars from a single long-format CSV file:
 
@@ -237,10 +245,10 @@ import pandas as pd
 import xarray as xr
 
 from quantlab.dataset.config import DatasetConfig
-from quantlab.dataset.base import MarketDataset
+from quantlab.dataset.raw import RawMarketDataset
 
 
-class CsvBarDataset(MarketDataset):
+class CsvBarDataset(RawMarketDataset):
     """Daily bars from one long-format CSV file: date, ticker, open, ..., volume."""
 
     def _read_csv(self) -> pd.DataFrame:
@@ -300,10 +308,10 @@ windows written on re-run: 0 skipped: 3
 
 The default cleaning step (`_clean`) requires lowercase `open`, `high`,
 `low`, `close` and `volume` columns and adds `anomaly_flag`. Override `_clean`
-for panels with other columns, and derive from `BaseDataset` instead of
-`MarketDataset` for data that is not price bars (an index-membership panel,
-for example). The default `_raw_data_to_xr_window` of `BaseDataset` converts
-the whole range and slices it; `MarketDataset` makes the method abstract so
+for panels with other columns, and derive from `RawDataset` instead of
+`RawMarketDataset` for data that is not price bars (an index-membership panel,
+for example). The default `_raw_data_to_xr_window` of `RawDataset` converts
+the whole range and slices it; `RawMarketDataset` makes the method abstract so
 that a large market dataset filters each window at read time instead, as
 `StockDataset._raw_data_to_xr_window` does with a Parquet scan. To make the
 registry's `convert()` reach a new dataset, name it as the `dataset_cls` of

@@ -36,7 +36,7 @@ from loguru import logger
 
 from quantlab.dataset._support.ledger import ChunkLedger, TimeChunkPlanner
 from quantlab.dataset.config import BaseDatasetConfig, DatasetConfig
-from quantlab.dataset.base import BaseDataset
+from quantlab.dataset.raw import RawDataset
 from quantlab.utils.progress import CancelToken, ProgressEvent, ProgressReporter
 from quantlab.backend.zarr import XrBackend
 from quantlab.dataset.stock import StockDataset
@@ -422,7 +422,7 @@ def test_the_calendar_sizing_planner_is_deleted_and_the_observed_one_is_not() ->
         assert hasattr(TimeChunkPlanner, survivor), (
             f"the deletion took {survivor!r} with it. SC-2 removes the SIZING "
             f"planner, not the class: `plan_from_timestamps` is the one "
-            f"production caller `BaseDataset.from_raw_data_chunked` reaches."
+            f"production caller `RawDataset.from_raw_data_chunked` reaches."
         )
 
 
@@ -958,7 +958,7 @@ def test_whole_range_densification_equals_the_union_of_its_windows(
 
 
 # ---------------------------------------------------------------------------
-# BaseDataset.from_raw_data_chunked
+# RawDataset.from_raw_data_chunked
 # ---------------------------------------------------------------------------
 
 
@@ -1418,7 +1418,7 @@ def test_a_store_built_by_write_keeps_two_chunk_grids_accepted_cost(
     WHY the sibling arms are blind to it: every other grid arm in this family
     builds its store through `_incomplete_store`, i.e. through
     `append(append_dim_size=9)` -- a store already ON the correct grid. None of
-    them goes through `write()`, which is the path `BaseDataset.save()` and
+    them goes through `write()`, which is the path `RawDataset.save()` and
     `Factor.save()` actually take. `test_a_variable_widen_leaves_one_chunk_grid_not_two`
     directly above asserts a SINGLETON grid set, and both it and this arm are
     correct at the same time: that pair IS the narrowed claim made executable.
@@ -1684,16 +1684,16 @@ def test_chunked_run_warns_about_the_cleaning_boundaries(
     assert "2" in boundary_warnings[0]
 
 
-class _UnboundedDataset(BaseDataset):
+class _UnboundedDataset(RawDataset):
     """A dataset kind whose raw source cannot push a date filter down.
 
     It implements only the one abstract member and inherits BOTH default
-    seams, which is exactly the shape `BaseDataset`'s
+    seams, which is exactly the shape `RawDataset`'s
     correct-but-unbounded defaults exist to serve: a non-market dataset for
     which densify-then-slice is the intended behaviour, not a degradation.
 
-    Note it subclasses `BaseDataset`, NOT `MarketDataset`. That distinction
-    became load-bearing in 03.5 D-08: a `MarketDataset` with no windowed
+    Note it subclasses `RawDataset`, NOT `RawMarketDataset`. That distinction
+    became load-bearing in 03.5 D-08: a `RawMarketDataset` with no windowed
     densify no longer reaches this code path at all, because it cannot be
     constructed.
     """
@@ -1730,7 +1730,7 @@ def test_default_windowed_seam_is_silent_for_a_non_market_dataset(
     "not been overridden" warning. That warning was deleted with the
     warn-and-degrade block it guarded, because it was answering the wrong
     question in both directions. For a MARKET dataset the answer is now
-    structural: `MarketDataset` declares the seam abstract, so a source with
+    structural: `RawMarketDataset` declares the seam abstract, so a source with
     no windowed densify raises `TypeError` at construction rather than
     degrading silently and logging about it mid-backfill. For a dataset kind
     like this one, densify-then-slice IS the intended behaviour and there is
@@ -2192,7 +2192,7 @@ def test_a_cancelled_rebuild_restores_the_original_store(
     with open(ledger_path, "r", encoding="utf-8") as handle:
         assert handle.read() == ledger_before
     # Restored by RENAME, so no aside is left behind to pay for twice.
-    aside = BaseDataset.SUPERSEDED_SUFFIX
+    aside = RawDataset.SUPERSEDED_SUFFIX
     assert not Path(f"{config.zarr_file_path}{aside}").exists()
     assert not Path(f"{ledger_path}{aside}").exists()
 
@@ -2228,7 +2228,7 @@ def test_a_rebuild_cancelled_before_the_first_window_keeps_everything(
     assert Path(result.zarr_path).exists()
     assert Path(ledger_path).exists()
     xr.testing.assert_identical(_panel(config.zarr_file_path), before)
-    aside = BaseDataset.SUPERSEDED_SUFFIX
+    aside = RawDataset.SUPERSEDED_SUFFIX
     assert not Path(f"{config.zarr_file_path}{aside}").exists()
 
 
@@ -2257,7 +2257,7 @@ def test_a_completed_rebuild_still_discards_the_superseded_copies(
         "B",
         "C",
     ]
-    aside = BaseDataset.SUPERSEDED_SUFFIX
+    aside = RawDataset.SUPERSEDED_SUFFIX
     assert not Path(f"{config.zarr_file_path}{aside}").exists()
     assert not Path(f"{ledger_path}{aside}").exists()
 
@@ -2279,7 +2279,7 @@ def test_an_unknown_strategy_lists_the_accepted_values(
 
     message = str(excinfo.value)
     assert "rebiuld" in message
-    for accepted in BaseDataset.NEW_LISTING_STRATEGIES:
+    for accepted in RawDataset.NEW_LISTING_STRATEGIES:
         assert accepted in message
     assert not Path(config.zarr_file_path).exists()
 
@@ -2577,7 +2577,7 @@ def test_agreeing_axes_still_go_through_the_unchanged_append_guard(
 #
 # The pinned whole-range symbol axis is decided in THREE places -- CRSP's own
 # `_raw_axes_in_range` (on `sort_symbol_axis` since 03.11-03),
-# `StockDataset._raw_axes_in_range`, and `BaseDataset._raw_axes_in_range`.
+# `StockDataset._raw_axes_in_range`, and `RawDataset._raw_axes_in_range`.
 # Each of the latter two ran the labels through `str()` and, in the stock
 # case, a bare `sorted()`, so each was an independent re-statement of an order
 # contract that lives in `quantlab/utils/symbol_axis.py`.
@@ -2605,7 +2605,7 @@ def _permno_ohlcv_panel(symbols: list) -> xr.Dataset:
 
 
 def test_base_raw_axes_pins_an_int64_axis_in_numeric_order(tmp_path: Path) -> None:
-    """`BaseDataset._raw_axes_in_range` keeps the panel's own labels, sorted.
+    """`RawDataset._raw_axes_in_range` keeps the panel's own labels, sorted.
 
     RED on both halves at once: the labels came back as `str`, and they came
     back in the panel's own arrival order because this site did not sort at
@@ -2777,7 +2777,7 @@ def _drift_against(tmp_path: Path, name: str, stored: list, pinned: list):
     )
     sentinel = object()
     ledger, asides = dataset._reconcile_new_listings(
-        list(pinned), sentinel, "timestamp", BaseDataset._AUTOMATIC
+        list(pinned), sentinel, "timestamp", RawDataset._AUTOMATIC
     )
     assert ledger is sentinel
     assert asides is None
@@ -2802,7 +2802,7 @@ def test_stored_symbol_axis_keeps_the_stores_own_spelling(
     """
     path = _axis_store(tmp_path, "stored_axis.zarr", symbols)
 
-    stored = BaseDataset._stored_symbol_axis(path)
+    stored = RawDataset._stored_symbol_axis(path)
 
     assert stored == list(symbols)
     assert all(type(value) is element_type for value in stored), stored

@@ -16,7 +16,8 @@ from quantlab.core.config import FrozenConfig
 from quantlab.enums.data import ResampleFrequency
 
 if TYPE_CHECKING:
-    from quantlab.dataset.base import BaseDataset, IndexConstituentDataset, MarketDataset
+    from quantlab.dataset.base import BaseDataset, MarketDataset
+    from quantlab.dataset.raw import IndexConstituentDataset
     from quantlab.factor.base import Factor
 
 

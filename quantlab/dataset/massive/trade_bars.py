@@ -147,6 +147,20 @@ TRADE_BAR_RESAMPLE_HOW = {
 }
 
 
+def no_trade_fills() -> dict[str, float]:
+    """Return the values of a Trade bar column without a trade: 0 volumes and counts.
+
+    Prices are not named: they stay NaN. A column a store adds over its
+    earlier bars, and a permaticker without a ticker on a day, read so.
+
+    Examples
+    --------
+    >>> sorted(no_trade_fills())[:3]
+    ['buy_volume', 'close_auction_volume', 'dollar_volume']
+    """
+    return {name: 0.0 for name in TRADE_BAR_SUMS}
+
+
 def trade_bar_store_name(bar_interval: str) -> str:
     """Return the name of the Trade bar store of one bar interval.
 
@@ -632,4 +646,4 @@ class MassiveTradeBarDataset(StockDataset):
 
     def _widen_fill_values(self) -> dict:
         """Return 0 for the volumes and counts of a ticker added to an existing store; prices stay NaN."""
-        return {name: 0.0 for name in TRADE_BAR_SUMS}
+        return no_trade_fills()

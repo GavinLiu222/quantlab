@@ -586,7 +586,7 @@ def test_a_full_and_incremental_build_agree_bit_for_bit(mock_crsp_session, tmp_p
     Two stores over the SAME raw tier and the SAME `start_date`. One is built
     in a single conversion across `[ANCHOR_START, ANCHOR_END]`. The other is
     built across `[ANCHOR_START, 2019-12-31]` first and then brought up to
-    `ANCHOR_END` by `BaseDataset.update()` -- a real second RUN, against a
+    `ANCHOR_END` by `RawDataset.update()` -- a real second RUN, against a
     store that already exists on disk, through the append path the chunk ledger
     drives.
 

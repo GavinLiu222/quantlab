@@ -19,8 +19,9 @@ mapped one-minute bars are aggregated as the Trade bars are, per session),
 the calendar and the KunQuant export are the Trade bar dataset's, and the
 tradable and delisting bars ``MarketDataset``'s rules over its own panel. Only the ticker columns the map names are read from the store.
 A read records the store (through the Trade bar dataset) and the map's rows
-in an open ``DataRecorder``. The view has no store of its own: the Trade
-bar store and the Ticker map are updated by their own steps.
+in an open ``DataRecorder``. The view has no store of its own and no build
+path: its input is the Trade bar dataset (``inputs()``), and the Trade bar
+store and the Ticker map are updated by their own steps.
 
 Examples
 --------
@@ -47,7 +48,7 @@ from loguru import logger
 from quantlab.dataset.base import MarketDataset
 from quantlab.dataset.config import PermatickerTradeBarsConfig
 from quantlab.dataset.massive.ticker_map import RULES_VERSION, TickerMap
-from quantlab.dataset.massive.trade_bars import TRADE_BAR_RESAMPLE_HOW, MassiveTradeBarDataset
+from quantlab.dataset.massive.trade_bars import TRADE_BAR_RESAMPLE_HOW, MassiveTradeBarDataset, no_trade_fills
 from quantlab.runs.record import record_read
 from quantlab.utils.date_range import as_label, check_range, resample_padding
 from quantlab.utils.symbol_axis import sort_symbol_axis
@@ -194,7 +195,7 @@ class PermatickerTradeBarDataset(MarketDataset):
             if symbols is not None
             else sort_symbol_axis(rows["permaticker"].unique().to_list())
         )
-        fills = self.trade_bars._widen_fill_values()
+        fills = no_trade_fills()
         timestamps = bars["timestamp"].values
         days = pd.DatetimeIndex(self.trade_bars.resample_labels(timestamps, "1d")).date if timestamps.size else []
         by_day = {day: frame for (day,), frame in rows.partition_by("date", as_dict=True).items()}
@@ -382,84 +383,3 @@ class PermatickerTradeBarDataset(MarketDataset):
                 resample_how=self.config.resample_how,
             )
         )
-
-    # -- no store of its own ----------------------------------------------------
-
-    def _refuse(self, method: str):
-        """Raise: the view holds no store of its own."""
-        raise ValueError(
-            f"{self.class_name}.{method}(): the permaticker view reads the Trade bar store and the "
-            f"Ticker map and holds no store of its own; update those instead."
-        )
-
-    def save(self, **kwargs):
-        """Refuse: the view has no store.
-
-        Raises
-        ------
-        ValueError
-            Always.
-
-        Examples
-        --------
-        >>> bars.save()
-        Traceback (most recent call last):
-        ValueError: PermatickerTradeBarDataset.save(): the permaticker view reads ...
-        """
-        self._refuse("save")
-
-    def from_raw_data(self) -> Self:
-        """Refuse: build the Trade bar store and the Ticker map instead.
-
-        Raises
-        ------
-        ValueError
-            Always.
-
-        Examples
-        --------
-        >>> bars.from_raw_data()
-        Traceback (most recent call last):
-        ValueError: PermatickerTradeBarDataset.from_raw_data(): the permaticker view reads ...
-        """
-        self._refuse("from_raw_data")
-
-    def from_raw_data_chunked(self, *args, **kwargs):
-        """Refuse: build the Trade bar store and the Ticker map instead.
-
-        Raises
-        ------
-        ValueError
-            Always.
-
-        Examples
-        --------
-        >>> bars.from_raw_data_chunked()
-        Traceback (most recent call last):
-        ValueError: PermatickerTradeBarDataset.from_raw_data_chunked(): the permaticker view reads ...
-        """
-        self._refuse("from_raw_data_chunked")
-
-    def update(self, *args, **kwargs):
-        """Refuse: update the Trade bar store and the Ticker map instead.
-
-        Raises
-        ------
-        ValueError
-            Always.
-
-        Examples
-        --------
-        >>> bars.update()
-        Traceback (most recent call last):
-        ValueError: PermatickerTradeBarDataset.update(): the permaticker view reads ...
-        """
-        self._refuse("update")
-
-    def _raw_data_to_xr(self) -> xr.Dataset:
-        """Refuse: the view has no raw files."""
-        self._refuse("_raw_data_to_xr")
-
-    def _raw_data_to_xr_window(self, start_date, end_date, symbols=None) -> xr.Dataset:
-        """Refuse: the view has no raw files."""
-        self._refuse("_raw_data_to_xr_window")

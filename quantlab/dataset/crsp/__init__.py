@@ -1625,7 +1625,7 @@ class CrspStockDataset(StockDataset):
     def _raw_data_to_xr(self) -> xr.Dataset:
         """Build the dense panel for the whole window at once and write the sidecars.
 
-        ``BaseDataset.from_raw_data`` calls only this method, so it is the
+        ``RawDataset.from_raw_data`` calls only this method, so it is the
         one-shot conversion's only chance to write the same sidecars that
         ``_raw_axes_in_range`` writes for the chunked conversion. They are
         written after the derivation succeeds and before ``save`` creates the

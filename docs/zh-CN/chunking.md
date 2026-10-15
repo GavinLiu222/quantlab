@@ -2,7 +2,7 @@
 
 [English](../chunking.md) | 简体中文
 
-分块转换把一大段日期范围内的原始文件逐个时间窗口转换成 Zarr store。每个窗口先被转换成稠密的 `(timestamp, symbol)` 面板，再追加到 store，并记入一个小的 JSON 台账（ledger）。因此峰值内存由窗口而不是整个范围决定，中断的运行可以从第一个尚未写入的窗口继续。所有 dataset 都通过 `BaseDataset.from_raw_data_chunked()` 和 `BaseDataset.update()` 使用这个功能。
+分块转换把一大段日期范围内的原始文件逐个时间窗口转换成 Zarr store。每个窗口先被转换成稠密的 `(timestamp, symbol)` 面板，再追加到 store，并记入一个小的 JSON 台账（ledger）。因此峰值内存由窗口而不是整个范围决定，中断的运行可以从第一个尚未写入的窗口继续。凡是把原始文件转换成自己 store 的 dataset，都通过 `RawDataset.from_raw_data_chunked()` 和 `RawDataset.update()`（`quantlab.dataset.raw`）使用这个功能；视图和内存中持有的面板没有构建路径。
 
 ## 前置条件
 
@@ -288,7 +288,7 @@ acquisition 指南。
 
 ## 扩展
 
-Dataset 通过两个方法接入分块路径。`_raw_axes_in_range()` 返回钉死的标的列表和观测到的时间戳；`_raw_data_to_xr_window(start, end, symbols)` 返回一个窗口的稠密面板，并且必须建立在这些标的上。`BaseDataset` 里的默认实现是先转换整个范围再切片，结果正确，但并不减少稠密化所需的内存。能少读数据的 dataset 应该覆写这两个方法。下面的类只读日期列来规划窗口，并且只保留每个窗口内的行。CSV 文件无法跳过行，所以每个窗口仍要解析每个文件，但只有窗口内的行会被保留并稠密化。
+Dataset 通过两个方法接入分块路径。`_raw_axes_in_range()` 返回钉死的标的列表和观测到的时间戳；`_raw_data_to_xr_window(start, end, symbols)` 返回一个窗口的稠密面板，并且必须建立在这些标的上。`RawDataset` 里的默认实现是先转换整个范围再切片，结果正确，但并不减少稠密化所需的内存。能少读数据的 dataset 应该覆写这两个方法。下面的类只读日期列来规划窗口，并且只保留每个窗口内的行。CSV 文件无法跳过行，所以每个窗口仍要解析每个文件，但只有窗口内的行会被保留并稠密化。
 
 ```python
 # csv_windowed.py
@@ -297,11 +297,11 @@ from pathlib import Path
 import pandas as pd
 import xarray as xr
 
-from quantlab.dataset.base import BaseDataset
+from quantlab.dataset.raw import RawDataset
 from quantlab.utils.symbol_axis import sort_symbol_axis
 
 
-class WindowedCsvDataset(BaseDataset):
+class WindowedCsvDataset(RawDataset):
     """每个标的一个 CSV（date,open,high,low,close,volume），按窗口逐个转换。"""
 
     def _files(self):

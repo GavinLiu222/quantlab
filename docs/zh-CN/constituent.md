@@ -4,7 +4,7 @@
 
 指数成分面板记录每一天有哪些标的属于某个指数。它和 quantlab 的其他数据集一样：一个以 `(timestamp, symbol)` 为维度的 `xarray.Dataset`，只有一个布尔变量 `is_member`，以 Zarr 存盘。成分关系以带日期的区间保存，而不是一份"当前名单"，所以多年前被剔除出指数的股票，在它仍是成分的那些日期上依然出现在面板里。
 
-`quantlab.universe` 模块保存标的池目录（一张 parquet 表，字段为 symbol、category 和区间）以及构建它的抓取器。`quantlab.dataset.base` 把区间表变成面板，`quantlab.dataset.constituent` 把具体的指数绑定到这个基类上。
+`quantlab.universe` 模块保存标的池目录（一张 parquet 表，字段为 symbol、category 和区间）以及构建它的抓取器。`quantlab.dataset.raw` 把区间表变成面板（`IndexConstituentDataset`，一个带有共享构建路径的 raw dataset），`quantlab.dataset.constituent` 把具体的指数绑定到这个基类上。
 
 ## 前置条件
 
@@ -21,7 +21,7 @@
 >>> import pandas as pd
 >>> import polars as pl
 >>> from quantlab.dataset.config import ConstituentDatasetConfig
->>> from quantlab.dataset.base import IndexConstituentDataset
+>>> from quantlab.dataset.raw import IndexConstituentDataset
 >>> class DemoPanel(IndexConstituentDataset):
 ...     def _pit_coverage_start(self):
 ...         return "2020-01-01"
@@ -317,7 +317,7 @@ ValueError: Cannot answer sp500_constituent membership before 1976-07-01 -- as_o
 >>> import polars as pl
 >>> from quantlab.dataset.config import ConstituentDatasetConfig
 >>> from quantlab.universe import UniverseConfig
->>> from quantlab.dataset.base import IndexConstituentDataset
+>>> from quantlab.dataset.raw import IndexConstituentDataset
 >>> from quantlab.universe import IndexMembershipFetcher, UniverseCatalog
 >>> class DemoIndexFetcher(IndexMembershipFetcher):
 ...     ANCHOR_URL = CHANGES_URL = "offline"
@@ -435,4 +435,4 @@ ValueError: UniverseMask: the membership panel must carry an 'is_member' variabl
 
 ## 另请参阅
 
-`universe` 指南介绍价格与流动性过滤器，它回答的问题与指数成分不同，二者可以组合使用。`dataset` 指南介绍面板所继承的数据集基类，`wrds_crsp` 介绍 CRSP 参考层，`acquisition` 介绍采集量守卫。类文档字符串：`quantlab.dataset.base.IndexConstituentDataset`、`quantlab.dataset.constituent`、`quantlab.universe.UniverseCatalog`、`quantlab.universe.IndexMembershipFetcher`、`quantlab.dataset._support.masking.UniverseMask`。
+`universe` 指南介绍价格与流动性过滤器，它回答的问题与指数成分不同，二者可以组合使用。`dataset` 指南介绍面板所继承的数据集基类，`wrds_crsp` 介绍 CRSP 参考层，`acquisition` 介绍采集量守卫。类文档字符串：`quantlab.dataset.raw.IndexConstituentDataset`、`quantlab.dataset.constituent`、`quantlab.universe.UniverseCatalog`、`quantlab.universe.IndexMembershipFetcher`、`quantlab.dataset._support.masking.UniverseMask`。

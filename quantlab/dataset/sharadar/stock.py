@@ -80,7 +80,8 @@ import polars as pl
 import xarray as xr
 from loguru import logger
 
-from quantlab.dataset.base import InsufficientHistoryError, MarketDataset
+from quantlab.dataset.base import InsufficientHistoryError
+from quantlab.dataset.raw import RawMarketDataset
 from quantlab.dataset.config import DatasetConfig, SharadarDatasetConfig
 from quantlab.dataset.sharadar.tickers import (
     TICKER_SIDECAR_SUFFIX,
@@ -131,7 +132,7 @@ DIFF_SUFFIX = ".diff.json"
 _ERROR_SAMPLE = 5
 
 
-class SharadarStockDataset(MarketDataset):
+class SharadarStockDataset(RawMarketDataset):
     """Dense daily panel of raw OHLCV from a Sharadar price table, keyed by permaticker.
 
     Parameters
@@ -656,7 +657,7 @@ class SharadarStockDataset(MarketDataset):
     def _continue_store(self, window: xr.Dataset) -> xr.Dataset:
         """Report what the vendor changed in the store, and continue its adjusted chain.
 
-        Called by ``BaseDataset.from_raw_data_chunked`` (and so ``update``)
+        Called by ``RawDataset.from_raw_data_chunked`` (and so ``update``)
         for every window appended after the bars of a store that existed
         before the run.
 
@@ -809,7 +810,7 @@ class SharadarStockDataset(MarketDataset):
         """Count each added permaticker's priced raw bars between ``start`` and ``end``.
 
         Read from the derivation, so no dense window is built; see
-        ``BaseDataset._added_symbols_with_raw_history``.
+        ``RawDataset._added_symbols_with_raw_history``.
         """
         if not added:
             return {}

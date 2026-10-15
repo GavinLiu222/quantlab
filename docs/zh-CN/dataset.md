@@ -2,7 +2,7 @@
 
 [English](../dataset.md) | 简体中文
 
-Dataset 负责把 vendor（数据供应商）交付的原始文件转换成 quantlab 后续各阶段共用的面板：一个以 `(timestamp, symbol)` 为索引的 `xarray.Dataset`，以 Zarr 格式落盘。每个市场或每个 vendor 对应一个 `BaseDataset` 或 `MarketDataset` 的子类。因子、模型和回测只读取面板，不接触原始格式。
+Dataset 负责把 vendor（数据供应商）交付的原始文件转换成 quantlab 后续各阶段共用的面板：一个以 `(timestamp, symbol)` 为索引的 `xarray.Dataset`，以 Zarr 格式落盘。每个市场或每个 vendor 对应一个 `RawDataset` 或 `RawMarketDataset`（`quantlab.dataset.raw`）的子类，由它们负责从原始文件到 store 的构建路径。因子、模型和回测通过所有 dataset 共有的读取接口（`quantlab.dataset.base` 中的 `BaseDataset`、`MarketDataset`）读取面板，不接触原始格式。
 
 ## 前置条件
 
@@ -37,6 +37,23 @@ for month, days in {"2024-01": [2, 3, 4], "2024-02": [1, 2]}.items():
 ### 面板
 
 所有 dataset 产出的对象形状相同：一个 `xarray.Dataset`，全部数据变量都落在 `timestamp` 和 `symbol` 两个维度上。面板是稠密的：某个标的在某个时间戳没有 bar 时，该单元格在所有变量中都是 NaN，而不是缺少一行。变量沿用 vendor 自己的列名（`open`、`close`、`adjClose`、`Volume` 等），清洗步骤会再加一个布尔变量 `anomaly_flag`。
+
+### 读取与构建
+
+每个 dataset 都回答同一套读取接口 `BaseDataset`：`panel(start, end, symbols, variables)`、`calendar`、`bar_before`、`bar_after`、`stored_symbols` 和 `head`。*叶子*读取自己的 store（或内存中持有的面板）；*视图*读取其他 dataset，即它的 `inputs()`，自己不保存 store（`RosterDataset`、`MergedDataset`、按 permaticker 读取的 Trade bar 视图）。只有把原始文件转换成自己的 store 的 dataset 才有构建路径（`from_raw_data`、`save`、`from_raw_data_chunked`、`update`）：它继承 `RawDataset`，价格 bar 则继承 `RawMarketDataset`。视图和 `FrameDataset` 根本没有构建方法。
+
+每个 dataset 都声明自己的面板读取哪些 store：`stores()` 列出它们（叶子自己的 store、读取时重采样的 dataset 的源 store、视图各输入的 store），`leaves()` 列出背后的叶子 dataset，`store_path` 是 dataset 保存自己 bar 的 store，视图为 `None`。实盘日检查这些 store 是否含有要预测的那根 bar，运行的数据指纹记录每次读取来自哪个 store。设 `sep` 是读取 `sep.zarr` 的 `StockDataset`，`members` 是读取成分 store `members.zarr` 的 dataset：
+
+```python
+>>> from quantlab.dataset.roster import RosterDataset
+>>> prices = RosterDataset(sep, members)
+>>> prices.inputs() == (sep, members), prices.store_path
+(True, None)
+>>> [Path(store).name for store in prices.stores()]
+['sep.zarr', 'members.zarr']
+>>> [Path(store).name for store in sep.resample("1d", "last").stores()]  # 尚未保存重采样 store
+['sep.zarr']
+```
 
 ### 配置
 
@@ -175,7 +192,7 @@ timestamp
 2024-01-04  111.0  113.0
 ```
 
-这个包装类本身是一个 `MarketDataset`，因子、标签或回测可以直接用它替换被包装的数据集，其他什么都不用改。它的日历（`calendar`、`bar_before`、`bar_after`）、变量名、KunQuant 导出、`tradable_bars`、`delisting_bars` 和 `ticker_lookup` 都来自被包装的数据集，`get_config()` 可以通过 `rebuild` 重建它。在它上面计算的截面因子在名单内做标准化，结果和在按名单切出的 store 上计算完全一样。被包装的数据集在打开的 `DataRecorder` 里记录每次读取，`symbols` 就是名单，所以运行的数据指纹只覆盖名单内的格子。包装类没有自己的 store：`store_path`、`update`、`save`、`from_raw_data` 和 `resample` 都会抛出 `ValueError`；被包装的 store 由它自己的供应商更新流程负责更新。在它上面延伸（`Factor.extend`）的因子 store，会在一只证券进入名单的那根 bar 起给它加一列；更早的 bar 保留当初计算时的截面，所以名单变大后整段重建的结果，在这些 bar 上和延伸出来的 store 不同。
+这个包装类本身是一个 `MarketDataset`，因子、标签或回测可以直接用它替换被包装的数据集，其他什么都不用改。它的日历（`calendar`、`bar_before`、`bar_after`）、变量名、KunQuant 导出、`tradable_bars`、`delisting_bars` 和 `ticker_lookup` 都来自被包装的数据集，`get_config()` 可以通过 `rebuild` 重建它。在它上面计算的截面因子在名单内做标准化，结果和在按名单切出的 store 上计算完全一样。被包装的数据集在打开的 `DataRecorder` 里记录每次读取，`symbols` 就是名单，所以运行的数据指纹只覆盖名单内的格子。包装类是一个没有 store 的视图：`store_path` 为 `None`，它的 `stores()` 是被包装数据集和名单数据集的 store，它没有构建路径，`resample` 抛出 `ValueError`（先对被包装的数据集重采样，再包装）；被包装的 store 由它自己的供应商更新流程负责更新。在它上面延伸（`Factor.extend`）的因子 store，会在一只证券进入名单的那根 bar 起给它加一列；更早的 bar 保留当初计算时的截面，所以名单变大后整段重建的结果，在这些 bar 上和延伸出来的 store 不同。
 
 ### 读取异常标记
 
@@ -345,16 +362,16 @@ True
 10
 ```
 
-它不读写磁盘，因此构建和保存都会被拒绝：`from_raw_data()`、`from_raw_data_chunked()`、`update()` 和 `save()` 都会报错，建在它上面的 stream 模式因子也会报错。
+它不读写磁盘，因此没有构建路径：没有 `from_raw_data()`、`from_raw_data_chunked()`、`update()` 和 `save()`，建在它上面的 stream 模式因子会报错。
 
 ```python
 >>> mem.save()
 Traceback (most recent call last):
     ...
-ValueError: FrameDataset.save(): the panel is held in memory, handed over at construction; there are no raw files to build it from and no store of its own to write. Build a new FrameDataset from updated data, or write a copy with to_zarr(path).
+AttributeError: 'FrameDataset' object has no attribute 'save'
 ```
 
-`resample(freq, how)` 接受与 Zarr dataset 相同的 `freq` 和 `how`（见[重采样到更粗的 bar](#重采样到更粗的-bar)），切分和聚合 bar 的方式也相同：按 UTC 时钟分桶，以桶的起点为标签。结果是一个新的 `FrameDataset`，在内存中持有重采样后的面板：不写任何文件，`store_path` 为 `None`，并像任何 `FrameDataset` 一样拒绝构建、保存和 stream 模式。源 dataset 不变。
+`resample(freq, how)` 接受与 Zarr dataset 相同的 `freq` 和 `how`（见[重采样到更粗的 bar](#重采样到更粗的-bar)），切分和聚合 bar 的方式也相同：按 UTC 时钟分桶，以桶的起点为标签。结果是一个新的 `FrameDataset`，在内存中持有重采样后的面板：不写任何文件，`store_path` 为 `None`，并像任何 `FrameDataset` 一样没有构建路径、拒绝 stream 模式。源 dataset 不变。
 
 ```python
 >>> hours = pd.DataFrame({
@@ -383,7 +400,7 @@ Traceback (most recent call last):
 ValueError: FrameDataset.update(): the panel is held in memory, handed over at construction; there are no raw files to build it from and no store of its own to write. Build a new FrameDataset from updated data, or write a copy with to_zarr(path).
 ```
 
-`to_zarr(path)` 把持有的面板写入一个新的 Zarr store（重采样后的 dataset 写的是重采样后的 bar），并返回一个从该 store 读回的 `FrameDataset`；已存在的路径会被拒绝。用 `zarr_file_path` 指向某个 store 的 `FrameDatasetConfig` 构造的 `FrameDataset`，会在构造时把该 store 一次性读入内存，之后与任何 `FrameDataset` 行为相同：依旧拒绝构建和保存，其 `resample()` 也留在内存中，`store_path` 为 `None`，不会写入或读取源 store 旁边的任何 store。回测运行目录就是这样保存输入面板的（见回测指南中的“重建一次给定权重的运行”），这种 dataset 的 `get_config()` 可以通过 `rebuild` 重建。这由每个 dataset 都有的三个钩子承担，回测器和加载器因此无需任何特例：`persist_with_run(run_dir, store)` 在运行选定的 store 路径写出运行目录重建所需的内容（默认什么都不写；`FrameDataset` 把面板写到那里，并返回以相对运行目录的路径指向它的配置），类方法 `resolve_run_config(config, run_dir)` 把记录下来的配置还原成可以用来构造的配置（默认原样返回；`FrameDataset` 解析相对路径，没有 `run_dir` 时拒绝），`ticker_lookup()` 给出为标的命名（某一天在用的 ticker 和公司名）的 `TickerLookup`（默认为 `None`，所以 `FrameDataset` 按原样显示标的；CRSP 或 NBBO store 返回读取其 `.crsp_tickers.json` 附属文件的 `CrspTickerLookup`，Sharadar 价格 store 返回读取其 `.sharadar_tickers.json` 附属文件的 `SharadarTickerLookup`（见 `docs/sharadar.md`）；`MergedDataset` 或 `BadPrintMaskedDataset` 对每个标的，交给第一个认得它的输入的查询来命名）。
+`to_zarr(path)` 把持有的面板写入一个新的 Zarr store（重采样后的 dataset 写的是重采样后的 bar），并返回一个从该 store 读回的 `FrameDataset`；已存在的路径会被拒绝。用 `zarr_file_path` 指向某个 store 的 `FrameDatasetConfig` 构造的 `FrameDataset`，会在构造时把该 store 一次性读入内存，之后与任何 `FrameDataset` 行为相同：依旧没有构建路径，其 `resample()` 也留在内存中，`store_path` 为 `None`，不会写入或读取源 store 旁边的任何 store。回测运行目录就是这样保存输入面板的（见回测指南中的“重建一次给定权重的运行”），这种 dataset 的 `get_config()` 可以通过 `rebuild` 重建。这由每个 dataset 都有的三个钩子承担，回测器和加载器因此无需任何特例：`persist_with_run(run_dir, store)` 在运行选定的 store 路径写出运行目录重建所需的内容（默认什么都不写；`FrameDataset` 把面板写到那里，并返回以相对运行目录的路径指向它的配置），类方法 `resolve_run_config(config, run_dir)` 把记录下来的配置还原成可以用来构造的配置（默认原样返回；`FrameDataset` 解析相对路径，没有 `run_dir` 时拒绝），`ticker_lookup()` 给出为标的命名（某一天在用的 ticker 和公司名）的 `TickerLookup`（默认为 `None`，所以 `FrameDataset` 按原样显示标的；CRSP 或 NBBO store 返回读取其 `.crsp_tickers.json` 附属文件的 `CrspTickerLookup`，Sharadar 价格 store 返回读取其 `.sharadar_tickers.json` 附属文件的 `SharadarTickerLookup`（见 `docs/sharadar.md`）；`MergedDataset` 或 `BadPrintMaskedDataset` 对每个标的，交给第一个认得它的输入的查询来命名）。
 
 ```python
 >>> import tempfile
@@ -427,7 +444,7 @@ True
 
 ### 新增一个市场数据源
 
-新增一个数据源只需要一个 `MarketDataset` 子类和一个 config。必须实现三个方法。`_raw_data_to_xr` 返回整个配置范围的面板，已去重，`(timestamp, symbol)` 唯一。`_raw_data_to_xr_window` 返回一个日期窗口，给出 `symbols` 时要 reindex 到这些标的；最简单的写法是对整段结果做切片。`_to_kunquant` 把面板映射成数组；变量名与共享名（`open`、`high`、`low`、`close`、`volume`、`amount`）不同的数据源还要设置 `COLUMN_MAP`，`to_shared_names` 和合并都按它改名。不只市场数据集，任何数据集都可以设置它：SF1 基本面面板把它那份与 DAILY 重名的估值列改名为 `sf1_<name>`，这样与 DAILY 面板合并时两者互不冲突。下面的例子每个标的读一个 CSV，保存为 `csv_daily.py`。
+新增一个数据源只需要一个 `RawMarketDataset`（`quantlab.dataset.raw`）子类和一个 config。必须实现三个方法。`_raw_data_to_xr` 返回整个配置范围的面板，已去重，`(timestamp, symbol)` 唯一。`_raw_data_to_xr_window` 返回一个日期窗口，给出 `symbols` 时要 reindex 到这些标的；最简单的写法是对整段结果做切片。`_to_kunquant` 把面板映射成数组；变量名与共享名（`open`、`high`、`low`、`close`、`volume`、`amount`）不同的数据源还要设置 `COLUMN_MAP`，`to_shared_names` 和合并都按它改名。不只市场数据集，任何数据集都可以设置它：SF1 基本面面板把它那份与 DAILY 重名的估值列改名为 `sf1_<name>`，这样与 DAILY 面板合并时两者互不冲突。下面的例子每个标的读一个 CSV，保存为 `csv_daily.py`。
 
 ```python
 # csv_daily.py
@@ -437,10 +454,10 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from quantlab.dataset.base import MarketDataset
+from quantlab.dataset.raw import RawMarketDataset
 
 
-class CsvDailyDataset(MarketDataset):
+class CsvDailyDataset(RawMarketDataset):
     """每个标的一个 CSV 文件，列为 date,open,high,low,close,volume。"""
 
     def _raw_data_to_xr(self) -> xr.Dataset:
@@ -499,8 +516,8 @@ timestamp
 缺少必需方法的子类无法被构造：
 
 ```python
->>> from quantlab.dataset.base import BaseDataset
->>> class Incomplete(BaseDataset):
+>>> from quantlab.dataset.raw import RawDataset
+>>> class Incomplete(RawDataset):
 ...     pass
 ...
 >>> Incomplete(csv_config)
@@ -513,17 +530,17 @@ TypeError: Can't instantiate abstract class Incomplete without an implementation
 
 如果原始数据源能在加载前按日期过滤，就让 `_raw_data_to_xr_window` 只读取那个窗口。`StockDataset` 通过裁剪 Parquet 分区做到这一点，内存上限由窗口决定；上面的切片写法只限制了写入的量。
 
-bar 不来自自己的 Zarr store 的 dataset（内存中持有的面板、由另一个 dataset 写出的 store）不重写 `panel`，而是重写 `_open_bars(start, end)`，返回从 `start` 到 `end` 的全部标的和变量的 bar；需要 `panel` 把这些 bar 重采样到 `resample_freq` 时再重写 `_resamples_on_read()`。标的和变量的查询、重采样和运行记录都由 `panel` 完成。`FrameDataset` 和 `MappedTradeBarDataset` 就是这样的两个例子。
+不从原始文件构建 store 的 dataset 继承 `BaseDataset` 或 `MarketDataset`，而不是 raw 类，因此没有需要拒绝的构建方法。视图用 `inputs()` 声明它读取的 dataset，`stores()` 和 `leaves()` 随之而来。bar 不来自自己的 Zarr store 的 dataset（内存中持有的面板、由另一个 dataset 写出的 store）不重写 `panel`，而是重写 `_open_bars(start, end)`，返回从 `start` 到 `end` 的全部标的和变量的 bar；需要 `panel` 把这些 bar 重采样到 `resample_freq` 时再重写 `_resamples_on_read()`。标的和变量的查询、重采样和运行记录都由 `panel` 完成。`FrameDataset` 和 `MappedTradeBarDataset` 就是这样的两个例子。
 
 ### 非 OHLCV 的 dataset
 
-没有价格列的面板直接继承 `BaseDataset`，使用 `BaseDatasetConfig`，并覆写 `_clean`。默认的 `_clean` 要求 OHLCV 列，所以布尔型成分面板改用自己的校验函数。`clean_membership_panel` 检查 dtype、维度和时间顺序，并原样返回面板。
+没有价格列的面板直接继承 `RawDataset`，使用 `BaseDatasetConfig`，并覆写 `_clean`。默认的 `_clean` 要求 OHLCV 列，所以布尔型成分面板改用自己的校验函数。`clean_membership_panel` 检查 dtype、维度和时间顺序，并原样返回面板。
 
 ```python
 >>> from quantlab.dataset.config import BaseDatasetConfig
->>> from quantlab.dataset.base import BaseDataset
+>>> from quantlab.dataset.raw import RawDataset
 >>> from quantlab.dataset._support.cleaning import clean_membership_panel
->>> class InIndexDataset(BaseDataset):
+>>> class InIndexDataset(RawDataset):
 ...     def _raw_data_to_xr(self) -> xr.Dataset:
 ...         days = pd.date_range("2024-01-02", periods=3)
 ...         member = np.array([[True, False], [True, True], [True, True]])

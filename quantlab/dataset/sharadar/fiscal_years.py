@@ -56,7 +56,7 @@ import pandas as pd
 import polars as pl
 import xarray as xr
 
-from quantlab.dataset.base import BaseDataset
+from quantlab.dataset.raw import RawDataset
 from quantlab.dataset.config import DatasetConfig, SharadarFiscalYearsConfig
 from quantlab.dataset.sharadar.permatickers import map_raw_table
 from quantlab.dataset.sharadar.tables import (
@@ -88,7 +88,7 @@ def slot_name(name: str, slot: int) -> str:
     return f"{name}_fy{slot}"
 
 
-class SharadarFiscalYearsDataset(BaseDataset):
+class SharadarFiscalYearsDataset(RawDataset):
     """Daily point-in-time panel of each company's latest fiscal years, keyed by permaticker.
 
     Parameters

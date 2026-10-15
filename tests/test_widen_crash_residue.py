@@ -15,9 +15,9 @@ delete it:
 1. a widen that CRASHED between its two renames (or whose closing
    `shutil.rmtree(superseded, ignore_errors=True)` silently failed on
    permissions / NFS, or was killed mid-rmtree); and
-2. a SIGKILLed `on_new_listing="rebuild"`. `BaseDataset.SUPERSEDED_SUFFIX` and
+2. a SIGKILLed `on_new_listing="rebuild"`. `RawDataset.SUPERSEDED_SUFFIX` and
    `XrBackend.SUPERSEDED_SUFFIX` are the SAME string appended to the SAME store
-   path, and `BaseDataset._restore_rebuild_asides` only runs on an exception or
+   path, and `RawDataset._restore_rebuild_asides` only runs on an exception or
    a cancel -- SIGKILL reaches neither. From then on EVERY widen against that
    store pays the full rewrite before failing.
 
@@ -46,8 +46,8 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-import quantlab.dataset.base as base_data_module
-from quantlab.dataset.base import BaseDataset
+import quantlab.dataset.raw as base_data_module
+from quantlab.dataset.raw import RawDataset
 from quantlab.backend.zarr import XrBackend
 
 
@@ -166,7 +166,7 @@ def test_an_empty_superseded_residue_is_self_healed_like_the_widening_one(
 def test_the_two_superseded_suffixes_are_one_definition() -> None:
     """The shared namespace is closed by SINGLE DEFINITION, not by renaming.
 
-    `BaseDataset.SUPERSEDED_SUFFIX` and `XrBackend.SUPERSEDED_SUFFIX` are
+    `RawDataset.SUPERSEDED_SUFFIX` and `XrBackend.SUPERSEDED_SUFFIX` are
     appended to the SAME store path, so a second string literal is a drift
     hazard: change one and the widen guard silently stops recognising the
     rebuild aside it exists to notice. The dataset side must therefore be a
@@ -187,7 +187,7 @@ def test_the_two_superseded_suffixes_are_one_definition() -> None:
     cls = next(
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.ClassDef) and node.name == "BaseDataset"
+        if isinstance(node, ast.ClassDef) and node.name == "RawDataset"
     )
     assignment = next(
         node
@@ -200,7 +200,7 @@ def test_the_two_superseded_suffixes_are_one_definition() -> None:
     )
 
     assert isinstance(assignment.value, ast.Attribute), (
-        "BaseDataset.SUPERSEDED_SUFFIX is a "
+        "RawDataset.SUPERSEDED_SUFFIX is a "
         f"{type(assignment.value).__name__}, not a reference to "
         "XrBackend.SUPERSEDED_SUFFIX -- two literals can drift apart"
     )
@@ -208,5 +208,5 @@ def test_the_two_superseded_suffixes_are_one_definition() -> None:
 
     # Weaker second check: the VALUE is unchanged, so every existing assertion
     # against the literal (tests/test_chunked_ingest.py:2174-2175) stays green.
-    assert BaseDataset.SUPERSEDED_SUFFIX == XrBackend.SUPERSEDED_SUFFIX
-    assert BaseDataset.SUPERSEDED_SUFFIX == ".superseded.tmp"
+    assert RawDataset.SUPERSEDED_SUFFIX == XrBackend.SUPERSEDED_SUFFIX
+    assert RawDataset.SUPERSEDED_SUFFIX == ".superseded.tmp"

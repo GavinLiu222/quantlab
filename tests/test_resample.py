@@ -484,11 +484,11 @@ def test_a_frame_resample_leaves_the_source_unchanged(minute_config: DatasetConf
     ],
     ids=["from_raw_data", "from_raw_data_chunked", "update", "save"],
 )
-def test_a_resampled_frame_dataset_refuses_building_and_saving(
+def test_a_resampled_frame_dataset_has_no_build_path(
     minute_config: DatasetConfig, call
 ):
     daily = _frame_of(minute_config).resample("1d", OHLCV_HOW)
-    with pytest.raises(ValueError, match="FrameDataset.*in memory"):
+    with pytest.raises(AttributeError, match="'FrameDataset' object has no attribute"):
         call(daily)
 
 

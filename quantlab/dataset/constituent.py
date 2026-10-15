@@ -38,7 +38,7 @@ from quantlab.universe import (
     SP500MembershipFetcher,
 )
 from quantlab.dataset.config import ConstituentDatasetConfig
-from quantlab.dataset.base import IndexConstituentDataset
+from quantlab.dataset.raw import IndexConstituentDataset
 from quantlab.dataset.crsp.market import CrspMarketRoster
 from quantlab.dataset.crsp.membership import CrspMembership
 from quantlab.dataset.crsp.reference import CrspReference

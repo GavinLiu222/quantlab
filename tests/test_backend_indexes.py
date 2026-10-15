@@ -7,7 +7,7 @@ nonsense and get the same whole panel back. `PlBackend` on the same interface
 DID use it (`set_index(indexes)` then `Dataset.from_dataframe`), so the two
 implementations of one ABC method meant different things.
 
-The knock-on was `BaseDataset.time_interval`, which is written as "give me
+The knock-on was `RawDataset.time_interval`, which is written as "give me
 just the time axis, then diff it" and therefore did not work at all under
 `XrBackend` -- two errors in a row, both measured on
 `data/data/us_equity/1d/us_all.zarr`:
@@ -38,7 +38,7 @@ import pytest
 import xarray as xr
 
 from quantlab.dataset.config import BaseDatasetConfig
-from quantlab.dataset.base import BaseDataset
+from quantlab.dataset.raw import RawDataset
 from quantlab.backend.parquet import PlBackend
 from quantlab.backend.zarr import XrBackend
 
@@ -51,8 +51,8 @@ GAPPY_TIMES = pd.to_datetime(
 )
 
 
-class PanelDataset(BaseDataset):
-    """The smallest concrete `BaseDataset` that can answer `time_interval`.
+class PanelDataset(RawDataset):
+    """The smallest concrete `RawDataset` that can answer `time_interval`.
 
     Modelled on `tests/test_dataset_hierarchy.py:PanelDataset`: one variable,
     `_clean` overridden to the identity (the inherited default runs the
@@ -244,14 +244,14 @@ def test_plbackend_rejects_a_missing_indexes_argument():
 
 
 # --------------------------------------------------------------------------
-# The knock-on: BaseDataset.time_interval
+# The knock-on: RawDataset.time_interval
 # --------------------------------------------------------------------------
 
 
 def test_time_interval_works_under_xrbackend(tmp_path: Path):
     """The reason defect E mattered.
 
-    `BaseDataset.time_interval` is the only caller that asks for a single
+    `RawDataset.time_interval` is the only caller that asks for a single
     dimension. Under `XrBackend` it raised -- first `TypeError` from diffing
     the bool `anomaly_flag`, then, once that variable was removed,
     `AttributeError: 'Dataset' object has no attribute 'to_series'`.

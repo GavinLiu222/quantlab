@@ -42,10 +42,10 @@ class FrameDataset(MarketDataset):
     wrote, for example), the store is read into memory once, at construction, and
     resampled there when the config carries ``resample_freq``; the store is never
     written. This is the form ``quantlab.core.component.rebuild``
-    rebuilds from ``get_config()``. Either way there are no raw files, so
-    ``from_raw_data``, ``from_raw_data_chunked`` and ``update`` refuse, as does
-    ``save``; a stream-mode factor refuses it too, since a stream is fed live bars
-    rather than a held panel. ``resample()`` returns a dataset holding the resampled
+    rebuilds from ``get_config()``. Either way there are no raw files and no store of
+    its own, so it has no build path (no ``from_raw_data``, ``save`` or ``update``),
+    and a stream-mode factor refuses it, since a stream is fed live bars rather than
+    a held panel. ``resample()`` returns a dataset holding the resampled
     panel, and ``to_zarr(path)`` writes the held panel to a new store.
 
     Parameters
@@ -114,7 +114,7 @@ class FrameDataset(MarketDataset):
             return
         panel = to_panel(data, columns=columns, purpose="FrameDataset").load()
         super().__init__(FrameDatasetConfig())
-        self.data_backend.to_internal(panel)
+        self._panel = XrBackend().to_internal(panel).get_xarray_dataset(["timestamp", "symbol"])
 
     def _init_from_store(
         self, config: FrameDatasetConfig, columns: Mapping[str, str] | None
@@ -142,9 +142,10 @@ class FrameDataset(MarketDataset):
         super().__init__(config)
         panel = XrBackend().read(str(config.zarr_file_path)).get_xarray_dataset(
             ["timestamp", "symbol"]
-        )
-        self.data_backend.to_internal(panel.load())
-        self._apply_resample()
+        ).load()
+        if config.resample_freq is not None:
+            panel = self._resample_panel(panel)
+        self._panel = panel
 
     def __eq__(self, other: object) -> bool:
         """Return whether ``other`` is a ``FrameDataset`` with an equal config and panel.
@@ -168,7 +169,7 @@ class FrameDataset(MarketDataset):
 
     def _held(self) -> xr.Dataset:
         """Return the panel this dataset holds."""
-        return self.data_backend.get_xarray_dataset(["timestamp", "symbol"])
+        return self._panel
 
     def copy(self) -> Self:
         """Return a copy with its own config, holding the same panel.
@@ -187,9 +188,7 @@ class FrameDataset(MarketDataset):
         >>> other == ds, other.config is ds.config
         (True, False)
         """
-        other = super().copy()
-        other.data_backend.to_internal(self._held())
-        return other
+        return super().copy()
 
     @property
     def store_path(self) -> str | None:
@@ -375,9 +374,8 @@ class FrameDataset(MarketDataset):
         labelled at their start, one ``ResampleMethod`` per variable, NaN cells skipped.
         Nothing is written or read: there is no sibling store, not even beside a store
         this dataset was read from, and ``store_path`` is ``None``.
-        The copy is still a ``FrameDataset``, so it refuses ``from_raw_data``,
-        ``from_raw_data_chunked``, ``update``, ``save`` and stream mode. This dataset is
-        not changed.
+        The copy is still a ``FrameDataset``: it has no build path and a stream-mode
+        factor refuses it. This dataset is not changed.
 
         Parameters
         ----------
@@ -418,11 +416,10 @@ class FrameDataset(MarketDataset):
                [2., 2.]])
         >>> daily.store_path is None
         True
-        >>> daily.save()
-        Traceback (most recent call last):
-        ValueError: FrameDataset.save(): the panel is held in memory, ...
         """
-        return super().resample(freq, how)
+        other = super().resample(freq, how)
+        other._panel = other._resample_panel(self._held())
+        return other
 
     def _open_bars(self, start, end) -> xr.Dataset:
         """Return the held bars from ``start`` to ``end``: the read seam's bars (``BaseDataset.panel``)."""
@@ -468,108 +465,3 @@ class FrameDataset(MarketDataset):
     ) -> tuple[dict, np.ndarray, np.ndarray]:
         """Export the columns under their own names."""
         return self._kunquant_arrays(data, data_columns)
-
-    def _refuse(self, method: str):
-        """Raise: a held panel has no raw files and no store."""
-        raise ValueError(
-            f"{self.class_name}.{method}(): the panel is held in memory, handed over at "
-            f"construction; there are no raw files to build it from and no store of its "
-            f"own to write. Build a new FrameDataset from updated data, or write a copy "
-            f"with to_zarr(path)."
-        )
-
-    def save(self, **kwargs):
-        """Refuse: a held panel has no store of its own; ``to_zarr`` writes a copy.
-
-        Raises
-        ------
-        ValueError
-            Always.
-
-        Examples
-        --------
-        >>> import pandas as pd
-        >>> from quantlab.dataset.memory import FrameDataset
-        >>> frame = pd.DataFrame({
-        ...     "timestamp": pd.to_datetime(["2024-01-02", "2024-01-02", "2024-01-03"]),
-        ...     "symbol": ["AAA", "BBB", "AAA"], "close": [10.0, 20.0, 11.0]})
-        >>> ds = FrameDataset(frame)
-        >>> ds.save()
-        Traceback (most recent call last):
-        ValueError: FrameDataset.save(): the panel is held in memory, ...
-        """
-        self._refuse("save")
-
-    def from_raw_data(self) -> Self:
-        """Refuse: a held panel has no raw files.
-
-        Raises
-        ------
-        ValueError
-            Always.
-
-        Examples
-        --------
-        >>> import pandas as pd
-        >>> from quantlab.dataset.memory import FrameDataset
-        >>> frame = pd.DataFrame({
-        ...     "timestamp": pd.to_datetime(["2024-01-02", "2024-01-02", "2024-01-03"]),
-        ...     "symbol": ["AAA", "BBB", "AAA"], "close": [10.0, 20.0, 11.0]})
-        >>> ds = FrameDataset(frame)
-        >>> ds.from_raw_data()
-        Traceback (most recent call last):
-        ValueError: FrameDataset.from_raw_data(): the panel is held in memory, ...
-        """
-        self._refuse("from_raw_data")
-
-    def from_raw_data_chunked(self, *args, **kwargs) -> Self:
-        """Refuse: a held panel has no raw files.
-
-        Raises
-        ------
-        ValueError
-            Always.
-
-        Examples
-        --------
-        >>> import pandas as pd
-        >>> from quantlab.dataset.memory import FrameDataset
-        >>> frame = pd.DataFrame({
-        ...     "timestamp": pd.to_datetime(["2024-01-02", "2024-01-02", "2024-01-03"]),
-        ...     "symbol": ["AAA", "BBB", "AAA"], "close": [10.0, 20.0, 11.0]})
-        >>> ds = FrameDataset(frame)
-        >>> ds.from_raw_data_chunked()
-        Traceback (most recent call last):
-        ValueError: FrameDataset.from_raw_data_chunked(): the panel is held in memory, ...
-        """
-        self._refuse("from_raw_data_chunked")
-
-    def update(self, *args, **kwargs) -> Self:
-        """Refuse: a held panel has no raw files.
-
-        Raises
-        ------
-        ValueError
-            Always.
-
-        Examples
-        --------
-        >>> import pandas as pd
-        >>> from quantlab.dataset.memory import FrameDataset
-        >>> frame = pd.DataFrame({
-        ...     "timestamp": pd.to_datetime(["2024-01-02", "2024-01-02", "2024-01-03"]),
-        ...     "symbol": ["AAA", "BBB", "AAA"], "close": [10.0, 20.0, 11.0]})
-        >>> ds = FrameDataset(frame)
-        >>> ds.update()
-        Traceback (most recent call last):
-        ValueError: FrameDataset.update(): the panel is held in memory, ...
-        """
-        self._refuse("update")
-
-    def _raw_data_to_xr(self) -> xr.Dataset:
-        """Refuse: a held panel has no raw files."""
-        self._refuse("_raw_data_to_xr")
-
-    def _raw_data_to_xr_window(self, start_date, end_date, symbols=None) -> xr.Dataset:
-        """Refuse: a held panel has no raw files."""
-        self._refuse("_raw_data_to_xr_window")

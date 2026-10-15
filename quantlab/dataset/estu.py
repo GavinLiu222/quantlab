@@ -30,7 +30,7 @@ import numpy as np
 import polars as pl
 import xarray as xr
 
-from quantlab.dataset.base import IndexConstituentDataset
+from quantlab.dataset.raw import IndexConstituentDataset
 
 __all__ = ["ESTU_COVERAGE_START", "EstuConstituentDataset"]
 

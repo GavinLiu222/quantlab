@@ -4,7 +4,7 @@ English | [简体中文](zh-CN/constituent.md)
 
 An index constituent panel records which symbols belonged to an index on each date. It is stored like any other quantlab dataset: an `xarray.Dataset` on `(timestamp, symbol)` with a single boolean variable, `is_member`, saved as Zarr. Because membership is stored as dated intervals rather than as a current list, a name that was removed from an index years ago is still present in the panel for the dates on which it was a member.
 
-The module `quantlab.universe` holds the symbol-universe catalog (a parquet table of symbol, category and interval) together with the fetchers that build it. `quantlab.dataset.base` turns an interval table into the panel. `quantlab.dataset.constituent` binds concrete indexes to it.
+The module `quantlab.universe` holds the symbol-universe catalog (a parquet table of symbol, category and interval) together with the fetchers that build it. `quantlab.dataset.raw` turns an interval table into the panel (`IndexConstituentDataset`, a raw dataset with the shared build path). `quantlab.dataset.constituent` binds concrete indexes to it.
 
 ## Prerequisites
 
@@ -21,7 +21,7 @@ The offline examples on this page need only quantlab and its dependencies. The W
 >>> import pandas as pd
 >>> import polars as pl
 >>> from quantlab.dataset.config import ConstituentDatasetConfig
->>> from quantlab.dataset.base import IndexConstituentDataset
+>>> from quantlab.dataset.raw import IndexConstituentDataset
 >>> class DemoPanel(IndexConstituentDataset):
 ...     def _pit_coverage_start(self):
 ...         return "2020-01-01"
@@ -317,7 +317,7 @@ Adding an index to the panel layer needs one subclass of `IndexConstituentDatase
 >>> import polars as pl
 >>> from quantlab.dataset.config import ConstituentDatasetConfig
 >>> from quantlab.universe import UniverseConfig
->>> from quantlab.dataset.base import IndexConstituentDataset
+>>> from quantlab.dataset.raw import IndexConstituentDataset
 >>> from quantlab.universe import IndexMembershipFetcher, UniverseCatalog
 >>> class DemoIndexFetcher(IndexMembershipFetcher):
 ...     ANCHOR_URL = CHANGES_URL = "offline"
@@ -435,4 +435,4 @@ Change-log sources record additions and removals only from a start date onward. 
 
 ## See also
 
-The `universe` guide covers the price and liquidity filter, which answers a different question from index membership and can be combined with it. The `dataset` guide describes the dataset base class the panel extends, `wrds_crsp` describes the CRSP reference tier, and `acquisition` covers downloads. Class docstrings: `quantlab.dataset.base.IndexConstituentDataset`, `quantlab.dataset.constituent`, `quantlab.universe.UniverseCatalog`, `quantlab.universe.IndexMembershipFetcher`, `quantlab.dataset._support.masking.UniverseMask`.
+The `universe` guide covers the price and liquidity filter, which answers a different question from index membership and can be combined with it. The `dataset` guide describes the dataset base class the panel extends, `wrds_crsp` describes the CRSP reference tier, and `acquisition` covers downloads. Class docstrings: `quantlab.dataset.raw.IndexConstituentDataset`, `quantlab.dataset.constituent`, `quantlab.universe.UniverseCatalog`, `quantlab.universe.IndexMembershipFetcher`, `quantlab.dataset._support.masking.UniverseMask`.

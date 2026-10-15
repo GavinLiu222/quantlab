@@ -42,7 +42,7 @@ import pandas as pd
 import polars as pl
 import xarray as xr
 
-from quantlab.dataset.base import BaseDataset
+from quantlab.dataset.raw import RawDataset
 from quantlab.dataset.config import DatasetConfig, SharadarDailyConfig
 from quantlab.dataset.sharadar.tables import (
     DAILY_INDICATORS,
@@ -65,7 +65,7 @@ VENDOR_MILLIONS_UNIT = "USD millions"
 _ERROR_SAMPLE = 5
 
 
-class SharadarDailyDataset(BaseDataset):
+class SharadarDailyDataset(RawDataset):
     """Dense daily panel of Sharadar's DAILY valuations, keyed by permaticker.
 
     Parameters
@@ -271,7 +271,7 @@ class SharadarDailyDataset(BaseDataset):
         """Count each added permaticker's raw rows between ``start`` and ``end``.
 
         Read from the derivation, so no dense window is built; see
-        ``BaseDataset._added_symbols_with_raw_history``.
+        ``RawDataset._added_symbols_with_raw_history``.
         """
         if not added:
             return {}

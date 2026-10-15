@@ -11,7 +11,7 @@ import numpy as np
 import xarray as xr
 
 from quantlab.dataset.config import DatasetConfig
-from quantlab.dataset.base import BaseDataset
+from quantlab.dataset.raw import RawDataset
 from quantlab.dataset.spot import SpotKlineDataset
 
 
@@ -89,7 +89,7 @@ def test_spot_windowed_seam_reproduces_the_inherited_whole_range_densify(
     abstract seam (D-08) -- not a rewrite.
 
     Behaviour-preservation is the whole contract, so it is asserted twice and
-    from two directions: against `BaseDataset`'s own default called unbound on
+    from two directions: against `RawDataset`'s own default called unbound on
     the same instance, and against the whole-range densify sliced to the same
     window by hand. A "helpful" rewrite that returns anything else -- a
     date-pushdown that drops an untraded symbol, say -- reddens this test.
@@ -104,7 +104,7 @@ def test_spot_windowed_seam_reproduces_the_inherited_whole_range_densify(
     start = end = "2024-01-02"
 
     actual = dataset._raw_data_to_xr_window(start, end)
-    inherited = BaseDataset._raw_data_to_xr_window(dataset, start, end)
+    inherited = RawDataset._raw_data_to_xr_window(dataset, start, end)
     expected = dataset._raw_data_to_xr().sel(timestamp=slice(start, end))
 
     xr.testing.assert_identical(actual, inherited)
@@ -134,7 +134,7 @@ def test_spot_windowed_seam_keeps_a_pinned_symbol_absent_from_the_window(
     pinned = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
 
     windowed = dataset._raw_data_to_xr_window(start, end, symbols=pinned)
-    inherited = BaseDataset._raw_data_to_xr_window(
+    inherited = RawDataset._raw_data_to_xr_window(
         dataset, start, end, symbols=pinned
     )
 

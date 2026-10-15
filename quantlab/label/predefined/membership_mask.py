@@ -22,7 +22,7 @@ import xarray as xr
 from quantlab.core.component import Component, component
 
 if TYPE_CHECKING:  # type hints only
-    from quantlab.dataset.base import IndexConstituentDataset
+    from quantlab.dataset.raw import IndexConstituentDataset
     from quantlab.label.forward import Forward
 
 

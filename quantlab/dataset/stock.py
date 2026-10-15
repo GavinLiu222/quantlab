@@ -24,14 +24,14 @@ import polars as pl
 import xarray as xr
 
 from quantlab.dataset.config import DatasetConfig
-from quantlab.dataset.base import MarketDataset
+from quantlab.dataset.raw import RawMarketDataset
 from quantlab.dataset._support.cleaning import dedup_raw_frame
 from quantlab.enums.data import RAW_HIVE_KEYS
 from quantlab.utils.symbol_axis import sort_symbol_axis
 from quantlab.utils.timer import Timer
 
 
-class StockDataset(MarketDataset):
+class StockDataset(RawMarketDataset):
     """US-equity dataset over a single vendor's hive-partitioned raw tree.
 
     The raw root must be the vendor's own directory and hold only that

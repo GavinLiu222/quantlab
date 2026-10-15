@@ -18,7 +18,7 @@ resolver chose to hand it; the "store extent, not config range" invariant
 that does not exist.
 """
 
-from typing import Callable, Optional
+from typing import Callable
 from pathlib import Path
 
 import numpy as np
@@ -28,7 +28,7 @@ import pytest
 import xarray as xr
 
 from quantlab.dataset.config import DatasetConfig
-from quantlab.dataset.base import BaseDataset
+from quantlab.dataset.raw import RawDataset
 from quantlab.dataset.stock import StockDataset
 
 # ---------------------------------------------------------------------------
@@ -128,7 +128,7 @@ def test_the_extent_of_an_absent_store_is_none(tmp_path: Path) -> None:
     RED under: opening the path unconditionally (`FileNotFoundError`/zarr
     error instead of `None`).
     """
-    assert BaseDataset._stored_append_extent(str(tmp_path / "absent.zarr")) is None
+    assert RawDataset._stored_append_extent(str(tmp_path / "absent.zarr")) is None
 
 
 def test_the_extent_of_a_zero_length_append_axis_is_none(tmp_path: Path) -> None:
@@ -154,7 +154,7 @@ def test_the_extent_of_a_zero_length_append_axis_is_none(tmp_path: Path) -> None
     finally:
         store.close()
 
-    assert BaseDataset._stored_append_extent(path) is None
+    assert RawDataset._stored_append_extent(path) is None
 
 
 def test_the_extent_of_a_populated_store_is_its_first_and_last_label(
@@ -169,7 +169,7 @@ def test_the_extent_of_a_populated_store_is_its_first_and_last_label(
     path = str(tmp_path / "populated.zarr")
     _write_store(path, list(_IN_WINDOW_DAYS), ["A", "B"])
 
-    extent = BaseDataset._stored_append_extent(path)
+    extent = RawDataset._stored_append_extent(path)
 
     assert extent is not None
     start, end = extent
@@ -263,7 +263,7 @@ def test_a_subclass_that_did_not_override_the_seam_still_gets_the_answer(
 
     class _InheritsTheDefault(StockDataset):
         def _added_symbols_with_raw_history(self, added, start, end) -> dict:
-            return BaseDataset._added_symbols_with_raw_history(
+            return RawDataset._added_symbols_with_raw_history(
                 self, added, start, end
             )
 
