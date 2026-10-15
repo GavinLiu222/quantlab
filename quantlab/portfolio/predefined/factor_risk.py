@@ -137,7 +137,7 @@ class FactorRiskStoreEstimator(CovarianceEstimator):
         """
         return None
 
-    def estimate_all(self, panel: DecisionPanel) -> LowRankCovariance:
+    def estimate_all(self, panel: DecisionPanel, volatility: np.ndarray | None = None) -> LowRankCovariance:
         """Return every bar's forecast of a decision panel at once, ``B F B' + diag(D)`` per bar.
 
         Built with array operations over all the bars, not by asking
@@ -168,6 +168,8 @@ class FactorRiskStoreEstimator(CovarianceEstimator):
         panel : DecisionPanel
             The bars' decision inputs; its ``risk_exposures`` and
             ``risk_estimates`` hold the model's exposures and estimate rows.
+        volatility : None
+            Refused, as ``estimate`` refuses it.
 
         Returns
         -------
@@ -177,8 +179,9 @@ class FactorRiskStoreEstimator(CovarianceEstimator):
         Raises
         ------
         ValueError
-            If the panel has no ``risk_exposures``, or no estimate row at a
-            bar (the message names the first such bar and the store's range).
+            If ``volatility`` is given, the panel has no ``risk_exposures``,
+            or no estimate row at a bar (the message names the first such
+            bar and the store's range).
 
         Examples
         --------
@@ -189,6 +192,11 @@ class FactorRiskStoreEstimator(CovarianceEstimator):
         >>> covariance.exposures.shape[2] == len(use4.factor_names)
         True
         """
+        if volatility is not None:
+            raise ValueError(
+                f"{type(self).__name__} takes no predicted volatilities: its risk is the "
+                f"factor risk model's; leave the optimiser's volatility_label unset."
+            )
         if panel.risk_exposures is None:
             raise ValueError(
                 f"{type(self).__name__}: the decision panel has no risk exposures; the "

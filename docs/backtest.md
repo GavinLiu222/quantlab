@@ -527,7 +527,7 @@ The account also holds `universe_value`, the equal-weighted universe of a run's 
 ['costs', 'selection', 'total', 'universe']
 ```
 
-`MeanVarianceOptimizer` runs too, long-only with the Grinold calibration, with or without a turnover penalty, over a covariance estimator with a batched estimate (`LedoitWolfEstimator`); see [Mean-variance in the approximate backtest](portfolio.md#mean-variance-in-the-approximate-backtest). On 1,000 synthetic symbols and 137 daily rebalances it took 1.0 s against `run()`'s 76 s, and with `turnover_penalty=1e-3` 8 s (12 to 22 sweeps per chunk) against `run()`'s 185 s on a busier machine.
+`MeanVarianceOptimizer` runs too, long-only or long-short, either calibration, with or without a turnover penalty, `candidate_top_k` or `volatility_label`, over a covariance estimator with a batched estimate (`LedoitWolfEstimator`, `FactorRiskStoreEstimator`); see [Mean-variance in the approximate backtest](portfolio.md#mean-variance-in-the-approximate-backtest). On 1,000 synthetic symbols and 137 daily rebalances it took 1.0 s against `run()`'s 76 s, and with `turnover_penalty=1e-3` 8 s (12 to 22 sweeps per chunk) against `run()`'s 185 s on a busier machine; long-short with that penalty took 18 s against 361 s.
 
 ### Restrict the universe to an index's members
 

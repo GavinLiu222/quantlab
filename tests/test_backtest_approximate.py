@@ -40,6 +40,13 @@ approximate backtest gives up, does not move its holdings) weights within
 weights of one chunk, a sweep limit of one warning and reporting not
 converged; with fees the gap stays within the cash cap's bound.
 
+The remaining mean-variance configurations (#307), each against `run()` to
+the same bounds: long-short without and with a turnover penalty (the
+penalised one also with `candidate_top_k`, ranked by `|mu|`),
+`candidate_top_k` long-only (held names kept in the pool), `volatility_label`
+(a model predicting `fwd_ret_1` and a positive `vol_1`) and
+`calibration="raw"`.
+
 Everything is synthetic, CPU-only and offline.
 """
 
@@ -58,6 +65,11 @@ from quantlab.backtest.predefined.us_equity import (
 )
 from quantlab.core.component import rebuild
 from quantlab.factor.config import PolarsFactorConfig
+from quantlab.factor.polars import FactorPolars
+from quantlab.label.config import ForwardConfig
+from quantlab.label.forward import Forward
+from quantlab.model.config import ModelConfig
+from quantlab.model.library_model import LibraryModel
 from quantlab.portfolio.base import CovarianceEstimate, CovarianceEstimator
 from quantlab.portfolio.config import (
     ActiveRiskConfig,
@@ -72,7 +84,13 @@ from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
 from quantlab.portfolio.predefined.top_n import TopNConstructor
 from quantlab.portfolio.predefined.topk_dropout import TopkDropoutConstructor
 from quantlab.runs.backtest_run import BacktestRun
-from tests.backtest_fixtures import PastReturnFactor, make_model, make_stock_dataset, write_price_store
+from tests.backtest_fixtures import (
+    ForwardReturnLabel,
+    PastReturnFactor,
+    make_model,
+    make_stock_dataset,
+    write_price_store,
+)
 from tests.test_portfolio_active_risk import _benchmark
 
 N_BARS = 130
@@ -934,3 +952,159 @@ def test_with_fees_the_penalised_gap_is_the_runs_cash_cap(mvo_store):
     assert account.metrics["converged"] is True
     assert _weights_gap(result, account).max() <= FEE_GAP_L1
     np.testing.assert_allclose(account.value.values, run_value, rtol=VALUE_TOLERANCE, atol=0)
+
+
+# --------------------------------------------------------------------------
+# Long-short, candidate_top_k, volatility_label and raw calibration (#307)
+# --------------------------------------------------------------------------
+#
+# Each case runs on the mean-variance store, without fees where a turnover
+# penalty or the pool's held names make the holdings matter, so the run's
+# cash cap does not move them (see the #306 cases).
+
+
+class _TrailingAbsReturn(FactorPolars):
+    """`vol_{n}` before the shift: |adjClose / adjClose n bars earlier - 1| + 0.005, positive."""
+
+    @property
+    def n(self) -> int:
+        return int((self.config.kwargs or {})["n_forward_periods"])
+
+    def _get_factor_lazyframe(self, lf):
+        import polars as pl
+
+        name = f"vol_{self.n}"
+        close = pl.col("adjClose")
+        return (
+            lf.sort(["symbol", "timestamp"])
+            .with_columns(((close / close.shift(self.n).over("symbol") - 1.0).abs() + 0.005).alias(name))
+            .select(["timestamp", "symbol", name])
+        )
+
+
+class VolatilityLabel(Forward):
+    """`vol_{n}`: a Forward label (span n, delay 1) over `_TrailingAbsReturn`, rebuilt like `ForwardReturnLabel`."""
+
+    config_cls = PolarsFactorConfig
+
+    def __init__(self, factor_config: PolarsFactorConfig):
+        factor = _TrailingAbsReturn(factor_config)
+        super().__init__(ForwardConfig(factor=factor, span=factor.n, delay=1))
+
+    def get_config(self) -> dict:
+        return {**self.config.factor.get_config(), "name": self.import_path}
+
+
+class ReturnAndVolatilityHead(LibraryModel):
+    """Predicts feature 0 for the return label and ``|feature 0| + 0.01`` for the volatility label."""
+
+    def _init_model(self, num_features, num_labels, hyperparameters):
+        return {"num_labels": num_labels}
+
+    def _fit_model(self, train_rows, val_rows):
+        pass
+
+    def _forward(self, x):
+        x0 = x[..., :1]
+        return np.concatenate([x0, np.abs(x0) + 0.01], axis=-1)
+
+
+def _volatility_model(store, tag):
+    root, dataset_config, bars = store
+    labels = dict(warmup_bars=0, kwargs={"n_forward_periods": 1})
+    return ReturnAndVolatilityHead(
+        ModelConfig(
+            factors=[
+                PastReturnFactor(
+                    PolarsFactorConfig(warmup_bars=5, dataset=make_stock_dataset(dataset_config), kwargs={"n": 1})
+                )
+            ],
+            labels=[
+                ForwardReturnLabel(PolarsFactorConfig(dataset=make_stock_dataset(dataset_config), **labels)),
+                VolatilityLabel(PolarsFactorConfig(dataset=make_stock_dataset(dataset_config), **labels)),
+            ],
+            model_save_dir=str(root / f"model_{tag}" / "models"),
+            factor_data_strategy="cal",
+            label_data_strategy="cal",
+            start_date=_day(bars[0]),
+            end_date=_day(bars[59]),
+            val_size=0.0,
+            train_start=_day(bars[0]),
+            train_end=_day(bars[49]),
+            test_start=_day(bars[50]),
+            test_end=_day(bars[59]),
+        )
+    )
+
+
+def _tight_run(store, constructor, tag, fees, model=None):
+    """``run()`` rebalancing every bar, solved tightly; with ``model`` the predictor, else the mean-variance cases'."""
+    import cvxpy
+
+    root, dataset_config, bars = store
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(cvxpy.Problem, "solve", _tightly_solved(cvxpy.Problem.solve))
+        if model is None:
+            return _mvo_run(store, constructor, 1, tag, 1, fees=fees)
+        return USEquityCrossectionSelectStockVectorBt(
+            CrossSectionBacktestConfig(
+                price_dataset=make_stock_dataset(dataset_config),
+                model=model,
+                model_mode="train",
+                start_date=_day(bars[WINDOW[0]]),
+                end_date=_day(bars[WINDOW[1]]),
+                output_dir=str(root / f"runs_{tag}"),
+                rebalance_periods=1,
+                constructor=constructor,
+                fees=fees,
+                slippage=0.0,
+            )
+        ).run()
+
+
+#: Rule overrides, the run's fees and whether the predictor also predicts a volatility.
+CONFIGURATION_CASES = {
+    "long_short": (dict(direction="long_short", weight_cap=0.15, risk_aversion=2.0), FEES, False),
+    "long_short_penalty_top_k": (
+        dict(direction="long_short", weight_cap=0.15, risk_aversion=2.0, turnover_penalty=PENALTY, candidate_top_k=8),
+        0.0,
+        False,
+    ),
+    "candidate_top_k": (dict(candidate_top_k=6), 0.0, False),
+    "volatility_label": (dict(volatility_label="vol_1"), FEES, True),
+    "raw_calibration": (dict(calibration="raw", ic=None, risk_aversion=20.0), FEES, False),
+}
+
+
+@pytest.fixture(scope="module", params=sorted(CONFIGURATION_CASES))
+def configuration_case(request, mvo_store):
+    overrides, fees, volatility = CONFIGURATION_CASES[request.param]
+    model = _volatility_model(mvo_store, request.param) if volatility else None
+    result = _tight_run(mvo_store, _mvo(**overrides), request.param, fees, model=model)
+    predictions = BacktestRun.open(result.run_dir).predictions()
+    account = _approximate(mvo_store, 1, cost=fees).run(predictions, _mvo(**overrides))
+    return request.param, result, account
+
+
+def test_each_configuration_s_weights_are_within_the_bound_of_the_runs(configuration_case):
+    _, result, account = configuration_case
+
+    assert _weights_gap(result, account).max() <= WEIGHTS_L1
+    assert account.metrics["converged"] is True
+
+
+def test_each_configuration_s_value_is_within_the_tolerance_of_the_runs(configuration_case):
+    _, result, account = configuration_case
+    run_value = result.simulation.value.values / result.simulation.value.values[0]
+
+    np.testing.assert_allclose(account.value.values, run_value, rtol=VALUE_TOLERANCE, atol=0)
+
+
+def test_a_long_short_book_is_dollar_neutral_within_a_gross_of_one(configuration_case):
+    name, _, account = configuration_case
+    if not name.startswith("long_short"):
+        pytest.skip("long-short only")
+
+    np.testing.assert_allclose(account.weights.sum("symbol").values, 0.0, atol=1e-9)
+    assert (np.abs(account.weights).sum("symbol").values <= 1.0 + 1e-9).all()
+    assert (np.abs(account.weights).values <= 0.15 + 1e-12).all()

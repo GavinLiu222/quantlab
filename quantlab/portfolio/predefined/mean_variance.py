@@ -252,6 +252,120 @@ def _project_penalised_rows(
     return at(tau)[0], tau
 
 
+def _prox_entries(
+    values: np.ndarray,
+    weight: np.ndarray,
+    cap: np.ndarray,
+    anchor: np.ndarray | None,
+    threshold: np.ndarray | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Entrywise ``argmin 1/2 (w - values)^2 + weight |w| + threshold |w - anchor|`` over ``[-cap, cap]``, and where it moves with ``values``.
+
+    ``weight`` and ``threshold`` are ``[rows, 1]``. Without an anchor it is
+    the soft-threshold. With one, cut at ``lo = min(0, anchor)`` and ``hi =
+    max(0, anchor)``, the minimiser is piecewise linear in ``values``:
+    ``values - weight - threshold`` above ``hi + weight + threshold``,
+    ``values + weight + threshold`` below ``lo - weight - threshold``, and
+    ``clip(values - m, lo, hi)`` between, ``m = sign(anchor) * (weight -
+    threshold)`` the slope of the two terms between the cuts. Clipping a
+    one-dimensional convex minimiser to ``[-cap, cap]`` minimises it there.
+    The second array marks the entries on a piece of slope one strictly
+    inside the cap, where the minimiser moves one for one with ``values``.
+    """
+    if anchor is None:
+        weights = np.sign(values) * np.maximum(np.abs(values) - weight, 0.0)
+        moving = np.abs(values) > weight
+    else:
+        low, high = np.minimum(0.0, anchor), np.maximum(0.0, anchor)
+        pulled = weight + threshold
+        middle = values - np.sign(anchor) * (weight - threshold)
+        above, below = values > high + pulled, values < low - pulled
+        weights = np.where(above, values - pulled, np.where(below, values + pulled, np.clip(middle, low, high)))
+        moving = above | below | ((middle > low) & (middle < high))
+    moving = moving & (np.abs(weights) < cap)
+    return np.clip(weights, -cap, cap), moving
+
+
+def _project_long_short_rows(
+    values: np.ndarray,
+    cap: np.ndarray,
+    gross: float,
+    anchor: np.ndarray | None = None,
+    threshold: np.ndarray | None = None,
+    state: tuple[np.ndarray, np.ndarray] | None = None,
+) -> tuple[np.ndarray, tuple[np.ndarray, np.ndarray]]:
+    """Row by row, the prox over ``{sum(w) = 0, |w|_1 <= gross, |w| <= cap}``, with an L1 pull toward ``anchor``; and each row's multipliers.
+
+    The minimiser is ``_prox_entries(values - tau, weight)``: ``tau`` the
+    shift that makes a row sum to 0 and ``weight`` the multiplier of the
+    gross ceiling, 0 where the ceiling does not bind. For a ``weight`` the
+    shift is found as ``_project_penalised_rows`` finds its own (the sum
+    falls with ``tau``, its slope minus the entries moving with it). The
+    gross falls as ``weight`` grows, piecewise linearly with ``tau``
+    re-solved: on the entries ``M`` moving with ``values`` at signs ``s``
+    its slope is ``-(|M| - sum(s)^2 / |M|)``, so ``weight`` is found by
+    Newton steps from the last call's (``state`` carries ``(tau,
+    weight)``, which a proximal-gradient iteration barely moves), each
+    kept inside a bracket that bisection narrows when a step leaves it.
+    """
+    rows = len(values)
+    exact = 4 * np.finfo(np.float64).eps * max(gross, 1.0)
+    reach = np.abs(values).max(axis=1, initial=0.0) + cap.max(axis=1, initial=0.0) + 1.0
+    if threshold is not None:
+        reach = reach + threshold[:, 0] + np.abs(anchor).max(axis=1, initial=0.0)
+
+    def shifted(weight: np.ndarray, tau: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Every row at ``weight``, its shift solved from ``tau``; the weights, the shifts and the moving entries."""
+        span = reach + weight
+        low, high = -span, span
+        shift = np.clip(tau, low, high)
+        lam = weight[:, None]
+        for _ in range(200):
+            weights, moving = _prox_entries(values - shift[:, None], lam, cap, anchor, threshold)
+            excess = weights.sum(axis=1)
+            done = np.abs(excess) <= exact
+            if done.all():
+                return weights, shift, moving
+            slope = moving.sum(axis=1)
+            low = np.where(~done & (excess > 0), shift, low)
+            high = np.where(~done & (excess < 0), shift, high)
+            newton = shift + excess / np.where(slope > 0, slope, 1)
+            inside = (slope > 0) & (low < newton) & (newton < high)
+            stalled = (low >= high) | ((low + high) / 2 == low) | ((low + high) / 2 == high)
+            shift = np.where(done | stalled, shift, np.where(inside, newton, (low + high) / 2))
+            if (done | stalled).all():
+                break
+        weights, moving = _prox_entries(values - shift[:, None], lam, cap, anchor, threshold)
+        return weights, shift, moving
+
+    tau = np.zeros(rows) if state is None else state[0].copy()
+    weight = np.zeros(rows) if state is None else state[1].copy()
+    # A known weight above the root (the gross over the ceiling) and below it.
+    low = np.zeros(rows)
+    high = np.full(rows, np.inf)
+    for _ in range(200):
+        weights, tau, moving = shifted(weight, tau)
+        excess = np.abs(weights).sum(axis=1) - gross
+        done = (np.abs(excess) <= 1e3 * exact) | ((weight == 0) & (excess <= 0))
+        if done.all():
+            break
+        low = np.where(~done & (excess > 0), weight, low)
+        high = np.where(~done & (excess < 0), weight, high)
+        signs = np.where(moving, np.sign(weights), 0.0)
+        count = moving.sum(axis=1)
+        slope = count - signs.sum(axis=1) ** 2 / np.where(count > 0, count, 1)
+        newton = np.maximum(weight + excess / np.where(slope > 0, slope, 1), 0.0)
+        inside = (slope > 0) & (newton >= low) & (newton <= high) & (newton != weight)
+        fallback = np.where(np.isfinite(high), (low + high) / 2, 2.0 * np.maximum(weight, reach))
+        stalled = np.isfinite(high) & (((low + high) / 2 == low) | ((low + high) / 2 == high))
+        weight = np.where(done | stalled, weight, np.where(inside, newton, fallback))
+        if (done | stalled).all():
+            break
+    # Never over the ceiling: a last ulp of gross is taken off both sides alike.
+    total = np.abs(weights).sum(axis=1)
+    weights = np.where((total > gross)[:, None], weights * (gross / np.where(total > 0, total, 1.0))[:, None], weights)
+    return weights, (tau, weight)
+
 def _maximise_rows(
     expected: np.ndarray,
     cap: np.ndarray,
@@ -261,24 +375,43 @@ def _maximise_rows(
     *,
     penalty: float = 0.0,
     anchor: np.ndarray | None = None,
+    gross: float | None = None,
     tolerance: float = 1e-10,
     iterations: int = 50_000,
 ) -> np.ndarray:
-    """Maximise ``mu' w - risk_aversion / 2 * w' Sigma w - penalty * |w - anchor|_1`` over each row's capped simplex.
+    """Maximise ``mu' w - risk_aversion / 2 * w' Sigma w - penalty * |w - anchor|_1`` over each row's feasible set.
 
     All rows at once, by accelerated proximal gradient (FISTA) with
     adaptive restart: the step is one over ``risk_aversion`` times each
-    row's largest eigenvalue (an upper bound), the prox
-    ``_project_capped_simplex_rows``, or ``_project_penalised_rows`` with
-    a penalty and an anchor (the holdings). It stops when no row's weights
-    move by more than ``tolerance`` (L1) in one step.
+    row's largest eigenvalue (an upper bound). Long-only (``gross`` None)
+    the set is the capped simplex and the prox
+    ``_project_capped_simplex_rows``, or ``_project_penalised_rows`` with a
+    penalty and an anchor (the holdings); long-short it is ``{sum(w) = 0,
+    |w|_1 <= gross, |w| <= cap}`` and the prox ``_project_long_short_rows``.
+    It stops when no row's weights move by more than ``tolerance`` (L1) in
+    one step.
     """
     curvature = risk_aversion * low_rank.largest_eigenvalue()
     scale = np.abs(expected).max(axis=1, initial=0.0)
     # Without curvature the problem is linear: a long step lands on its vertex.
     step = np.where(curvature > 0, 1.0 / np.where(curvature > 0, curvature, 1.0), 1e12 / np.maximum(scale, 1e-300))
-    if penalty and anchor is not None:
-        threshold = penalty * step
+    penalised = bool(penalty) and anchor is not None
+    threshold = penalty * step if penalised else None
+    if gross is not None:
+        state = None
+
+        def project(values: np.ndarray) -> np.ndarray:
+            nonlocal state
+            weights, state = _project_long_short_rows(
+                values,
+                cap,
+                gross,
+                anchor if penalised else None,
+                None if threshold is None else threshold[:, None],
+                state,
+            )
+            return weights
+    elif penalised:
         shift = None
 
         def project(values: np.ndarray) -> np.ndarray:
@@ -290,7 +423,7 @@ def _maximise_rows(
         def project(values: np.ndarray) -> np.ndarray:
             return _project_capped_simplex_rows(values, cap)
 
-    w = _project_capped_simplex_rows(start, cap)
+    w = project(start) if gross is not None else _project_capped_simplex_rows(start, cap)
     y, t = w, np.ones(len(w))
     for _ in range(iterations):
         gradient = expected - risk_aversion * low_rank.times(y)
@@ -975,12 +1108,11 @@ class MeanVarianceOptimizer(PortfolioConstructor):
     def panel_refusal(self) -> str | None:
         """Return why the optimiser cannot decide a panel at once, or ``None`` when it can.
 
-        The panel decision handles the long-only Grinold problem, with or
-        without a turnover penalty, with a covariance estimator that has a
-        batched estimate. Refused, the message naming the field: a
-        tracking-error cap, exposure bounds, a long-short book,
-        ``candidate_top_k``, ``volatility_label`` and ``calibration="raw"``;
-        a rule overriding ``reference_weights`` without
+        The panel decision handles both directions, both calibrations,
+        ``candidate_top_k``, ``volatility_label`` and a turnover penalty,
+        with a covariance estimator that has a batched estimate. Refused,
+        the message naming the field: a tracking-error cap and exposure
+        bounds; a rule overriding ``reference_weights`` without
         ``panel_reference_weights``, or whose ``risk_constraints`` returns
         any constraint; an estimator without ``estimate_all``.
         ``min_trade`` and ``solver`` are not read.
@@ -996,18 +1128,6 @@ class MeanVarianceOptimizer(PortfolioConstructor):
             return f"{name}'s tracking_error (a tracking-error cap) is not handled in a panel decision"
         if config.exposure_bounds:
             return f"{name}'s exposure_bounds are not handled in a panel decision"
-        unsupported = {
-            "direction": config.direction != "long_only",
-            "candidate_top_k": config.candidate_top_k is not None,
-            "volatility_label": config.volatility_label is not None,
-            "calibration": config.calibration != "grinold",
-        }
-        for field_name, refused in unsupported.items():
-            if refused:
-                return (
-                    f"{name}'s {field_name}={getattr(config, field_name)!r} is not handled in a "
-                    f"panel decision yet"
-                )
         base = MeanVarianceOptimizer
         if (
             type(self).reference_weights is not base.reference_weights
@@ -1029,9 +1149,12 @@ class MeanVarianceOptimizer(PortfolioConstructor):
 
         As ``problem_inputs`` computes them on each bar's context with
         nothing locked: the covariance estimator's ``estimate_all`` scaled
-        to the expected-return label's span, a symbol selectable when it is
-        tradable and covered, and ``mu = ic * sigma * z`` on the selectable
-        symbols with a prediction (``z`` their cross-sectional z-score).
+        to the expected-return label's span (with ``volatility_label``, its
+        one-bar volatilities the prediction over ``sqrt(span)``, a symbol
+        without a finite positive one not covered), a symbol selectable
+        when it is tradable and covered, and on the selectable symbols with
+        a prediction ``mu = ic * sigma * z`` (``z`` their cross-sectional
+        z-score) or, with ``calibration="raw"``, the prediction itself.
 
         Parameters
         ----------
@@ -1065,39 +1188,66 @@ class MeanVarianceOptimizer(PortfolioConstructor):
                 "MeanVarianceOptimizer is not bound to label specs; call bind() first"
             )
         config = self.config
-        low_rank = config.covariance.estimate_all(panel).scaled(self._span)
-        prediction = np.asarray(
-            panel.predictions[config.expected_return_label]
-            .transpose("timestamp", "symbol")
-            .sel(symbol=panel.symbols)
-            .values,
-            dtype=np.float64,
-        )
+        if config.volatility_label is None:
+            low_rank = config.covariance.estimate_all(panel)
+        else:
+            # The label is on the span; the covariance estimator takes one-bar volatilities.
+            volatility = self._panel_prediction(panel, config.volatility_label) / np.sqrt(self._span)
+            low_rank = config.covariance.estimate_all(panel, volatility)
+        low_rank = low_rank.scaled(self._span)
+        prediction = self._panel_prediction(panel, config.expected_return_label)
         selectable = np.asarray(panel.tradable, dtype=bool) & low_rank.covered
         predicted = selectable & np.isfinite(prediction)
-        z = np.nan_to_num(cross_sectional_zscore(np.where(predicted, prediction, np.nan)), nan=0.0)
-        expected = np.where(predicted, config.ic * np.sqrt(low_rank.variance) * z, 0.0)
+        if config.calibration == "raw":
+            expected = np.where(predicted, prediction, 0.0)
+        else:
+            z = np.nan_to_num(cross_sectional_zscore(np.where(predicted, prediction, np.nan)), nan=0.0)
+            expected = np.where(predicted, config.ic * np.sqrt(low_rank.variance) * z, 0.0)
         reference = self.panel_reference_weights(panel)
         if reference is not None:
             reference = np.nan_to_num(np.asarray(reference, dtype=np.float64))
         return _PanelProblem(low_rank, expected, selectable, predicted, reference)
 
+    @staticmethod
+    def _panel_prediction(panel: DecisionPanel, label: str) -> np.ndarray:
+        """``[bars, symbols]``: the panel's prediction of ``label``, in its symbol order."""
+        return np.asarray(
+            panel.predictions[label].transpose("timestamp", "symbol").sel(symbol=panel.symbols).values,
+            dtype=np.float64,
+        )
+
+    def _pool(self, expected: np.ndarray, candidate: np.ndarray, held: np.ndarray | None) -> np.ndarray:
+        """The candidates kept by ``candidate_top_k``: each bar's top ``mu`` (``|mu|`` long-short) and the held ones.
+
+        Ranked with a stable sort, so ties keep the symbol order, as the
+        per-bar rule ranks them.
+        """
+        strength = expected if self.config.direction == "long_only" else np.abs(expected)
+        order = np.argsort(np.where(candidate, -strength, np.inf), axis=1, kind="stable")
+        rank = np.empty_like(order)
+        np.put_along_axis(rank, order, np.arange(order.shape[1])[None, :].repeat(len(order), axis=0), axis=1)
+        pool = candidate & (rank < self.config.candidate_top_k)
+        return pool if held is None else pool | held
+
     def solve(
         self, problem: _PanelProblem, holdings: np.ndarray | None, warm_start: np.ndarray | None = None
     ) -> np.ndarray:
-        """Return every bar's long-only mean-variance weights, given the holdings at each bar.
+        """Return every bar's mean-variance weights, given the holdings at each bar.
 
         The candidates are the bars' predicted symbols and, with
         ``holdings``, the selectable symbols held (at ``mu = 0``), as the
-        per-bar rule takes them. A bar with no candidate, or too few to hold
-        the book under ``weight_cap``, holds (an all-NaN row), as a backtest
-        run holds it. The rest are solved together by accelerated proximal
-        gradient (``_maximise_rows``), from ``warm_start`` where it is
-        finite. With ``holdings`` and a ``turnover_penalty`` the objective
-        loses ``turnover_penalty * |w - holdings|_1``, the per-bar rule's
-        term, which enters the projection as soft-thresholding toward the
-        holdings; without ``holdings`` the penalty is left out (the
-        approximate backtest's first, unpenalised solve).
+        per-bar rule takes them; with ``candidate_top_k`` only the top
+        ``candidate_top_k`` by ``mu`` (``|mu|`` long-short) and the held
+        ones are kept. A bar with no candidate, or long-only too few to
+        hold the book under ``weight_cap``, holds (an all-NaN row), as a
+        backtest run holds it. The rest are solved together by accelerated
+        proximal gradient (``_maximise_rows``), from ``warm_start`` where it
+        is finite: long-only on the capped simplex, long-short on ``sum(w)
+        = 0``, ``|w|_1 <= 1``, ``|w| <= weight_cap``. With ``holdings`` and
+        a ``turnover_penalty`` the objective loses ``turnover_penalty * |w -
+        holdings|_1``, the per-bar rule's term, which enters the projection
+        as an L1 pull toward the holdings; without ``holdings`` the penalty
+        is left out (the approximate backtest's first, unpenalised solve).
 
         Parameters
         ----------
@@ -1132,11 +1282,18 @@ class MeanVarianceOptimizer(PortfolioConstructor):
                [0.24 , 0.4  , 0.36 ]])
         """
         config = self.config
+        long_only = config.direction == "long_only"
         candidate = problem.predicted.copy()
+        held = None
         if holdings is not None:
-            candidate |= problem.selectable & (holdings != 0)
+            held = problem.selectable & (holdings != 0)
+            candidate |= held
+        if config.candidate_top_k is not None:
+            candidate = self._pool(problem.expected_return, candidate, held)
         count = candidate.sum(axis=1)
-        solvable = (count > 0) & (count * config.weight_cap >= 1.0 - 1e-12)
+        solvable = count > 0
+        if long_only:
+            solvable &= count * config.weight_cap >= 1.0 - 1e-12
         weights = np.full(candidate.shape, np.nan)
         if not solvable.any():
             return weights
@@ -1159,7 +1316,8 @@ class MeanVarianceOptimizer(PortfolioConstructor):
             config.risk_aversion,
             start,
             penalty=config.turnover_penalty if penalised else 0.0,
-            anchor=np.clip(holdings[solvable], 0.0, None) if penalised else None,
+            anchor=None if not penalised else (np.clip(holdings[solvable], 0.0, None) if long_only else holdings[solvable]),
+            gross=None if long_only else 1.0,
         )
         return weights
 

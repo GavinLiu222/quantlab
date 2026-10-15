@@ -192,7 +192,7 @@ class LedoitWolfEstimator(CovarianceEstimator):
         """
         return None
 
-    def estimate_all(self, panel: DecisionPanel) -> LowRankCovariance:
+    def estimate_all(self, panel: DecisionPanel, volatility: np.ndarray | None = None) -> LowRankCovariance:
         """Estimate every bar's covariance of a decision panel at once, in Woodbury form.
 
         Bar ``k``'s estimate is ``estimate``'s on that bar's context, over
@@ -203,12 +203,18 @@ class LedoitWolfEstimator(CovarianceEstimator):
         - shrinkage) / lookback_bars)``, the ``[symbols, symbols]`` matrix
         never built. The coefficient is ``sklearn.covariance.ledoit_wolf``'s,
         computed for all bars at once. The bars are read in batches, so the
-        windows held at once stay bounded.
+        windows held at once stay bounded. With ``volatility`` a symbol
+        without a finite positive one is left out before the shrinkage, as
+        ``estimate`` leaves it out, and the covered symbols' volatilities
+        are replaced (``LowRankCovariance.with_volatility``): ``D C D``.
 
         Parameters
         ----------
         panel : DecisionPanel
             The bars' decision inputs, their valuation prices included.
+        volatility : np.ndarray, optional
+            ``[bars, symbols]`` one-bar volatilities in place of the
+            historical ones.
 
         Returns
         -------
@@ -244,14 +250,17 @@ class LedoitWolfEstimator(CovarianceEstimator):
             )
             stale = staleness[part]
             ok = finite & moving & np.isfinite(stale) & (stale <= self.config.max_stale_bars)
+            if volatility is not None:
+                ok &= np.isfinite(volatility[part]) & (volatility[part] > 0)
             covered[part] = ok
             shift[part], exposures[part] = _batched_ledoit_wolf(window, ok)
-        return LowRankCovariance(
+        low_rank = LowRankCovariance(
             covered=covered,
             exposures=exposures,
             factor_covariance=None,
             specific_variance=np.where(covered, shift[:, None], 0.0),
         )
+        return low_rank if volatility is None else low_rank.with_volatility(volatility)
 
 
 #: Window values one batch of ``estimate_all`` holds at most (about 128 MB each array).

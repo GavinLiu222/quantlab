@@ -527,7 +527,7 @@ ValueError: USEquityApproximateBacktest cannot run TopkDropoutConstructor: TopkD
 ['costs', 'selection', 'total', 'universe']
 ```
 
-`MeanVarianceOptimizer` 也能运行：只做多、Grinold 校准、有无换手惩罚均可，协方差估计器要有批量估计（`LedoitWolfEstimator`）；见[近似回测中的均值-方差](portfolio.md#近似回测中的均值-方差)。在 1,000 只合成标的、137 次日度调仓上，它用时 1.0 秒，`run()` 用时 76 秒；`turnover_penalty=1e-3` 时用时 8 秒（每块 12 到 22 轮扫描），`run()` 在一台更忙的机器上用时 185 秒。
+`MeanVarianceOptimizer` 也能运行：只做多或多空、两种校准、有无换手惩罚、`candidate_top_k` 和 `volatility_label` 均可，协方差估计器要有批量估计（`LedoitWolfEstimator`、`FactorRiskStoreEstimator`）；见[近似回测中的均值-方差](portfolio.md#近似回测中的均值-方差)。在 1,000 只合成标的、137 次日度调仓上，它用时 1.0 秒，`run()` 用时 76 秒；`turnover_penalty=1e-3` 时用时 8 秒（每块 12 到 22 轮扫描），`run()` 在一台更忙的机器上用时 185 秒；多空加同样的惩罚用时 18 秒，`run()` 361 秒。
 
 ### 限定为指数成分股
 

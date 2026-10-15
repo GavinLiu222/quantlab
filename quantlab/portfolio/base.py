@@ -737,6 +737,35 @@ class LowRankCovariance:
             load = np.einsum("bkl,bl->bk", self.factor_covariance, load)
         return np.einsum("bsk,bk->bs", self.exposures, load) + self.specific_variance * weights
 
+    def with_volatility(self, volatility: np.ndarray) -> Self:
+        """Return the covariance with each covered symbol's volatility replaced, the correlations kept.
+
+        ``S Sigma S`` with ``S = diag(volatility / sqrt(variance))``: the
+        rows of ``B`` scaled by ``S`` and ``D`` by ``S^2``. A symbol without
+        a finite positive ``volatility`` is no longer covered, its row and
+        specific variance zeroed.
+
+        Parameters
+        ----------
+        volatility : np.ndarray
+            ``[bars, symbols]`` volatilities.
+
+        Examples
+        --------
+        >>> np.sqrt(covariance.with_volatility(np.array([[0.2, np.nan]])).variance).round(6)
+        array([[0.2, 0. ]])
+        """
+        covered = self.covered & np.isfinite(volatility) & (volatility > 0)
+        current = self.variance
+        with np.errstate(divide="ignore", invalid="ignore"):
+            scale = np.where(covered & (current > 0), volatility / np.sqrt(current), 0.0)
+        return LowRankCovariance(
+            covered=covered,
+            exposures=self.exposures * scale[..., None],
+            factor_covariance=self.factor_covariance,
+            specific_variance=self.specific_variance * scale**2,
+        )
+
     def largest_eigenvalue(self) -> np.ndarray:
         """``[bars]``: an upper bound of each bar's largest eigenvalue, at most ``max(D) + |F^1/2 B' B F^1/2|``.
 
@@ -853,7 +882,7 @@ class CovarianceEstimator(_Configured, ABC):
         """
         return f"{type(self).__name__} has no batched estimate (estimate_all)"
 
-    def estimate_all(self, panel: DecisionPanel) -> LowRankCovariance:
+    def estimate_all(self, panel: DecisionPanel, volatility: np.ndarray | None = None) -> LowRankCovariance:
         """Estimate the covariance of one-bar returns at every bar of a decision panel.
 
         The panel counterpart of ``estimate``: bar ``k``'s covariance is the
@@ -864,6 +893,10 @@ class CovarianceEstimator(_Configured, ABC):
         ----------
         panel : DecisionPanel
             The bars' decision inputs, their valuation prices included.
+        volatility : np.ndarray, optional
+            ``[bars, symbols]`` one-bar volatilities to use in place of the
+            historical ones, as ``estimate``'s ``volatility``; a symbol
+            without a finite positive one is not covered.
 
         Returns
         -------
