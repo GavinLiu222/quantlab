@@ -50,7 +50,8 @@ from quantlab.dataset.config import PermatickerTradeBarsConfig
 from quantlab.dataset.massive.ticker_map import RULES_VERSION, TickerMap
 from quantlab.dataset.massive.trade_bars import TRADE_BAR_RESAMPLE_HOW, MassiveTradeBarDataset, no_trade_fills
 from quantlab.runs.record import record_read
-from quantlab.utils.date_range import as_label, check_range, resample_padding
+from quantlab.backend.resample import resample_on_read
+from quantlab.utils.date_range import check_range
 from quantlab.utils.symbol_axis import sort_symbol_axis
 
 
@@ -317,10 +318,11 @@ class PermatickerTradeBarDataset(MarketDataset):
         freq = self.config.resample_freq
         if freq is None:
             return self._mapped_panel(start, end, symbols, variables)
-        first, last = check_range(start, end, f"{self.class_name}.panel()")
-        pad = resample_padding(freq)
-        source = self._mapped_panel(first - pad, last + pad, symbols, None)
-        data = self._resample_panel(source).sel(timestamp=slice(as_label(start), as_label(end)))
+        check_range(start, end, f"{self.class_name}.panel()")
+        _, data = resample_on_read(
+            lambda first, last: self._mapped_panel(first, last, symbols, None),
+            start, end, freq, self._resample_how(), self.resample_labels, self.class_name,
+        )
         return data if variables is None else data[list(variables)]
 
     def resample(self, freq: str, how: dict[str, str] | None = None) -> Self:

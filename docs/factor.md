@@ -316,7 +316,7 @@ timestamp
 (None, '1d')
 ```
 
-The copy has its own dataset object and an empty compiled state. `build()` writes to `store_path`, beside the source store, and `read()` on a copy opens that store when it exists and otherwise resamples the source factor's store. The request round-trips through `get_config()` and `rebuild`.
+The copy has its own dataset object and an empty compiled state. `build()` writes to `store_path`, beside the source store, and `read()` on a copy opens that store when it exists and otherwise resamples the source factor's store on read, as a resampled dataset's `panel` does (`quantlab.backend.resample.resample_on_read`): the source bars the range needs, cut to the requested symbols first, are aggregated, and inside a `DataRecorder` those source bars are what is recorded and fingerprinted (keyed by the source store when the factor is not mapped), since the resampled panel is computed, not stored. The request round-trips through `get_config()` and `rebuild`.
 
 ```python
 >>> daily.store_path

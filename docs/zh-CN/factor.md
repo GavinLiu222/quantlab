@@ -316,7 +316,7 @@ timestamp
 (None, '1d')
 ```
 
-副本有自己的 dataset 对象和空的编译状态。`build()` 写到 `store_path`，即源 store 旁边的那个 store；副本上的 `read()` 在该 store 存在时直接打开它，否则对源因子的 store 做重采样。这次请求能经 `get_config()` 和 `rebuild` 往返重建。
+副本有自己的 dataset 对象和空的编译状态。`build()` 写到 `store_path`，即源 store 旁边的那个 store；副本上的 `read()` 在该 store 存在时直接打开它，否则像重采样数据集的 `panel` 一样在读取时对源因子的 store 做重采样（`quantlab.backend.resample.resample_on_read`）：先把区间所需的源 bar 切到请求的标的，再聚合；在 `DataRecorder` 中记录并计算指纹的是这些源 bar（因子未映射键名时以源 store 为键），因为重采样面板是算出来的，不是存下来的。这次请求能经 `get_config()` 和 `rebuild` 往返重建。
 
 ```python
 >>> daily.store_path

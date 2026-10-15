@@ -31,7 +31,6 @@ from pathlib import Path
 
 from typing import TYPE_CHECKING, Literal, Self
 
-import numpy as np
 import pandas as pd
 import xarray as xr
 
@@ -47,14 +46,12 @@ from quantlab.utils.date_range import (
     check_range,
     resample_padding,
 )
+from quantlab.backend.resample import resample_on_read, resample_panel
 from quantlab.runs.record import record_read
 from quantlab.utils.resample import (
-    assert_coarser,
     resample_store_path,
-    resolve_resample_how,
     validate_resample_config,
 )
-from quantlab.utils.timer import Timer
 
 if TYPE_CHECKING:
     from quantlab.analysis.factor_report import FactorAnalysis
@@ -318,7 +315,10 @@ class Factor(Component, ABC):
         afterwards. The range must lie inside the one recorded beside the
         store by ``build`` and ``extend`` (see ``store_range``). A resampled
         factor reads its own store when one has been built, otherwise it
-        resamples the part of the source factor's store the range needs.
+        resamples on read as a resampled dataset's ``panel`` does
+        (``quantlab.backend.resample.resample_on_read``): the part of the
+        source factor's store the range needs, cut to ``symbols`` first, is
+        aggregated, and those source bars are what is recorded.
 
         Only the factor's own outputs (``get_factor_names()``) are returned,
         so a factor pinned to some outputs of a store shared with a factor
@@ -329,7 +329,9 @@ class Factor(Component, ABC):
         This is the factor read seam: inside an open
         ``quantlab.runs.record.DataRecorder`` the request, its symbols
         included, is logged and fingerprinted, over every returned
-        variable, when the recorder closes.
+        variable, when the recorder closes (over the source bars, keyed by
+        the source store when the factor is not mapped, for a resample on
+        read).
 
         Parameters
         ----------
@@ -365,26 +367,50 @@ class Factor(Component, ABC):
         Traceback (most recent call last):
         ValueError: Momentum.read(): the store at ... covers 2024-01-01 to 2024-03-31, ...
         """
-        first, last = check_range(start, end, f"{self.class_name}.read()")
-        window = slice(as_label(start), as_label(end))
+        check_range(start, end, f"{self.class_name}.read()")
         if self.config.resample_freq is None or Path(self.store_path).exists():
             self._ranged_store().check_covers(start, end)
-            data = XrBackend().read(self.store_path).data.sel(timestamp=window)
-        else:
-            self._ranged_store(self.config.file_path).check_covers(start, end)
-            pad = resample_padding(self.config.resample_freq)
-            source = XrBackend().read(self.config.file_path).data.sel(
-                timestamp=slice(first - pad, last + pad)
+            data = XrBackend().read(self.store_path).data.sel(
+                timestamp=slice(as_label(start), as_label(end))
             )
-            data = self._resample_panel(source).sel(timestamp=window)
-        data = self._own_outputs(data, "read")
-        if symbols is not None:
-            data = data.sel(symbol=self._check_symbols(data, symbols, "read"))
-        panel = _on_panel_axes(data)
-        record_read(
-            self, panel, symbols=symbols, reread=lambda: self.read(start, end, symbols)
+            data = self._own_outputs(data, "read")
+            if symbols is not None:
+                data = data.sel(symbol=self._check_symbols(data, symbols, "read"))
+            panel = _on_panel_axes(data)
+            record_read(
+                self, panel, symbols=symbols, reread=lambda: self.read(start, end, symbols)
+            )
+            return panel
+        source_path = self.config.file_path
+        self._ranged_store(source_path).check_covers(start, end)
+        # Symbols are cut before the aggregation; resample_how names every
+        # stored variable, so the outputs are taken afterwards.
+        source, data = resample_on_read(
+            lambda first, last: self._open_store(source_path, symbols).sel(
+                timestamp=slice(first, last)
+            ),
+            start, end, self.config.resample_freq, self.config.resample_how,
+            self.config.dataset.resample_labels, self.class_name,
         )
-        return panel
+        read = _on_panel_axes(self._own_outputs(source, "read"))
+        # The resampled panel is computed, not stored: the source bars are the read.
+        record_read(
+            self, read, symbols=symbols, store=source_path, reread=lambda: read
+        )
+        return _on_panel_axes(self._own_outputs(data, "read"))
+
+    def _open_store(self, path: str, symbols: "Sequence | None") -> xr.Dataset:
+        """Return the store at ``path``, opened lazily and cut to ``symbols``.
+
+        Raises
+        ------
+        ValueError
+            If the store lacks one of ``symbols``.
+        """
+        data = XrBackend().read(path).data
+        if symbols is None:
+            return data
+        return data.sel(symbol=self._check_symbols(data, symbols, "read", path))
 
     @property
     def warmup_bars(self) -> int:
@@ -451,7 +477,10 @@ class Factor(Component, ABC):
         )
         panel = self._compute_panel(inputs)
         if self.config.resample_freq is not None:
-            panel = self._resample_panel(panel)
+            panel = resample_panel(
+                panel, self.config.resample_freq, self.config.resample_how,
+                self.config.dataset.resample_labels, self.class_name,
+            )
         return _on_panel_axes(
             self._own_outputs(panel, "compute").sel(
                 timestamp=slice(as_label(start), as_label(end))
@@ -480,8 +509,13 @@ class Factor(Component, ABC):
             )
         return data[names]
 
-    def _check_symbols(self, data: xr.Dataset, symbols: Sequence, method: str) -> list:
+    def _check_symbols(
+        self, data: xr.Dataset, symbols: Sequence, method: str, path: str | None = None
+    ) -> list:
         """Return ``symbols`` as a list, checked against ``data``'s symbol axis.
+
+        ``path`` is the store ``data`` was read from, quoted in the message;
+        ``store_path`` by default.
 
         Raises
         ------
@@ -492,7 +526,7 @@ class Factor(Component, ABC):
         missing = pd.Index(wanted).difference(pd.Index(data["symbol"].values))
         if len(missing):
             raise ValueError(
-                f"{self.class_name}.{method}(): the store at {self.store_path} lacks "
+                f"{self.class_name}.{method}(): the store at {path or self.store_path} lacks "
                 f"symbol(s) {missing.tolist()}."
             )
         return wanted
@@ -878,25 +912,6 @@ class Factor(Component, ABC):
                 f"its source panel and does not support {method}. Compute "
                 f"or update the source factor, then resample it."
             )
-
-    def _resample_labels(self, timestamps: np.ndarray, freq: str) -> np.ndarray:
-        """Return the bar each timestamp belongs to, as the dataset cuts bars."""
-        return self.config.dataset.resample_labels(timestamps, freq)
-
-    def _resample_panel(self, data: xr.Dataset) -> xr.Dataset:
-        """Return ``data`` aggregated onto ``config.resample_freq`` bars.
-
-        ``data`` is not changed; the grouping runs in a backend of its own.
-        """
-        freq = self.config.resample_freq
-        timestamps = data["timestamp"].values
-        assert_coarser(timestamps, freq, self.class_name)
-        how = resolve_resample_how(
-            self.config.resample_how, list(data.data_vars), self.class_name
-        )
-        labels = pd.Series(self._resample_labels(timestamps, freq), index=timestamps)
-        with Timer(f"{self.__class__.__name__}: resample to {freq}"):
-            return XrBackend().to_internal(data).resample(labels, how).data
 
     def _widen_fill_values(self) -> dict:
         """Return per-variable fill values for cells that widening creates.

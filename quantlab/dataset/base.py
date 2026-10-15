@@ -44,18 +44,16 @@ import xarray as xr
 
 from quantlab.core.component import Component
 from quantlab.dataset.config import BaseDatasetConfig, DatasetConfig
+from quantlab.backend.resample import resample_on_read, resample_panel
 from quantlab.backend.zarr import XrBackend
 from quantlab.enums.constant import Date
-from quantlab.utils.date_range import as_label, check_range, resample_padding
+from quantlab.utils.date_range import as_label, check_range
 from quantlab.runs.record import record_read
 from quantlab.utils.resample import (
-    assert_coarser,
     clock_labels,
     resample_store_path,
-    resolve_resample_how,
     validate_resample_config,
 )
-from quantlab.utils.timer import Timer
 
 
 class InsufficientHistoryError(ValueError):
@@ -669,16 +667,14 @@ class BaseDataset(Component, ABC):
         A config without ``resample_how`` aggregates as
         ``DEFAULT_RESAMPLE_HOW`` says.
         """
-        freq = self.config.resample_freq
-        timestamps = data["timestamp"].values
-        assert_coarser(timestamps, freq, self.class_name)
-        how = resolve_resample_how(
-            self.config.resample_how or dict(self.DEFAULT_RESAMPLE_HOW or {}),
-            list(data.data_vars), self.class_name,
+        return resample_panel(
+            data, self.config.resample_freq, self._resample_how(),
+            self.resample_labels, self.class_name,
         )
-        labels = pd.Series(self.resample_labels(timestamps, freq), index=timestamps)
-        with Timer(f"{self.__class__.__name__}: resample to {freq}"):
-            return XrBackend().to_internal(data).resample(labels, how).data
+
+    def _resample_how(self) -> "dict[str, str] | str":
+        """Return ``config.resample_how``, or ``DEFAULT_RESAMPLE_HOW`` without one."""
+        return self.config.resample_how or dict(self.DEFAULT_RESAMPLE_HOW or {})
 
     def _resamples_on_read(self) -> bool:
         """Return whether ``panel`` resamples the bars ``_open_bars`` opens.
@@ -825,7 +821,7 @@ class BaseDataset(Component, ABC):
         Traceback (most recent call last):
         KeyError: "DemoDataset.panel(): symbol(s) ['ZZZ'] are not in the store (1 of 1 requested)."
         """
-        first, last = check_range(start, end, f"{self.class_name}.panel()")
+        check_range(start, end, f"{self.class_name}.panel()")
         window = slice(as_label(start), as_label(end))
         if not self._resamples_on_read():
             data = self._query(self._open_bars(window.start, window.stop), symbols, variables)
@@ -837,10 +833,14 @@ class BaseDataset(Component, ABC):
                 settings=self._build_settings(),
             )
             return panel
-        pad = resample_padding(self.config.resample_freq)
-        source = self._query(self._open_bars(first - pad, last + pad), symbols, None)
-        # resample_how names every source variable, so narrow afterwards.
-        data = self._query(self._resample_panel(source).sel(timestamp=window), None, variables)
+        # Symbols are cut before the aggregation; resample_how names every
+        # source variable, so the variables are cut afterwards.
+        source, data = resample_on_read(
+            lambda first, last: self._query(self._open_bars(first, last), symbols, None),
+            start, end, self.config.resample_freq, self._resample_how(),
+            self.resample_labels, self.class_name,
+        )
+        data = self._query(data, None, variables)
         read = self._query(source, None, variables)
         # The resampled panel is computed, not stored: the source bars are the read.
         record_read(
