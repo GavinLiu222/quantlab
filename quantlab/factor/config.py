@@ -216,7 +216,33 @@ class NeutralizedConfig(BaseFactorConfig):
 
 
 @dataclass(kw_only=True, frozen=True)
-class RosterConfig(BaseFactorConfig):
+class FactorViewConfig(BaseFactorConfig):
+    """Fields every ``quantlab.factor.view.FactorView`` shares.
+
+    ``factor`` is the wrapped factor; it keeps its own config, warm-up and
+    store, which the view reads. ``dataset`` is filled with the wrapped
+    factor's dataset by the view's config setter, so a model counts warm-up
+    bars on the wrapped factor's calendar. A view has no store of its own,
+    no warm-up and no resampling, and outputs the wrapped factor's names;
+    ``FactorView`` refuses anything else.
+
+    Examples
+    --------
+    >>> cfg = FactorViewConfig(factor=alpha)
+    >>> cfg.warmup_bars, cfg.dataset, cfg.file_path
+    (0, None, None)
+    """
+
+    #: The wrapped factor warms itself up; anything but 0 is refused.
+    warmup_bars: int = 0
+    #: Filled with the wrapped factor's dataset by the view's config setter.
+    dataset: "MarketDataset | None" = component(default=None)
+    #: The wrapped factor, whose store the view reads.
+    factor: "Factor" = component()
+
+
+@dataclass(kw_only=True, frozen=True)
+class RosterConfig(FactorViewConfig):
     """Config of ``quantlab.factor.predefined.roster.RosterFactor``.
 
     ``factor`` is the factor read on the roster; it keeps its own config,
@@ -236,18 +262,12 @@ class RosterConfig(BaseFactorConfig):
     (0, None)
     """
 
-    #: The wrapped factor warms itself up; anything but 0 is refused.
-    warmup_bars: int = 0
-    #: Filled with the wrapped factor's dataset by the factor's config setter.
-    dataset: "MarketDataset | None" = component(default=None)
-    #: The factor read on the roster.
-    factor: "Factor" = component()
     #: The dataset whose store's symbol axis is the roster.
     roster: "BaseDataset" = component()
 
 
 @dataclass(kw_only=True, frozen=True)
-class MembershipMaskedFactorConfig(BaseFactorConfig):
+class MembershipMaskedFactorConfig(FactorViewConfig):
     """Config of ``quantlab.factor.predefined.membership_mask.MembershipMaskedFactor``.
 
     ``factor`` is the factor masked; it keeps its own config, warm-up and
@@ -268,18 +288,12 @@ class MembershipMaskedFactorConfig(BaseFactorConfig):
     (0, None)
     """
 
-    #: The wrapped factor warms itself up; anything but 0 is refused.
-    warmup_bars: int = 0
-    #: Filled with the wrapped factor's dataset by the factor's config setter.
-    dataset: "MarketDataset | None" = component(default=None)
-    #: The factor masked.
-    factor: "Factor" = component()
     #: The point-in-time membership the cells are judged by.
     membership: "IndexConstituentDataset" = component()
 
 
 @dataclass(kw_only=True, frozen=True)
-class ChunkedConfig(BaseFactorConfig):
+class ChunkedConfig(FactorViewConfig):
     """Config of ``quantlab.factor.predefined.chunked.ChunkedFactor``.
 
     ``factor`` is the factor computed one chunk at a time; it keeps its own
@@ -298,12 +312,6 @@ class ChunkedConfig(BaseFactorConfig):
     (0, None, 8)
     """
 
-    #: The wrapped factor warms itself up; anything but 0 is refused.
-    warmup_bars: int = 0
-    #: Filled with the wrapped factor's dataset by the factor's config setter.
-    dataset: "MarketDataset | None" = component(default=None)
-    #: The factor computed one chunk at a time.
-    factor: "Factor" = component()
     #: One ``TimeChunkPlanner`` granularity for every chunk; ``None`` chooses
     #: the coarsest one whose chunks fit in memory.
     granularity: str | None = None

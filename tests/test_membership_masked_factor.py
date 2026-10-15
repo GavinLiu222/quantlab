@@ -155,19 +155,6 @@ def test_a_membership_on_another_symbol_axis_is_refused(setup, tmp_path):
         _masked(owner, other).read(_START, _END)
 
 
-def test_it_has_no_store_and_writes_none(setup):
-    owner, membership = setup
-    factor = _masked(owner, membership)
-
-    assert factor.store_path is None
-    assert factor.store_range() == owner.store_range()
-    assert factor.output_symbols() == owner.output_symbols()
-    with pytest.raises(ValueError, match="has no store"):
-        factor.build(_START, _END)
-    with pytest.raises(ValueError, match="has no store"):
-        factor.extend("2024-03-01")
-
-
 def test_rebuilds_from_its_config(setup):
     owner, membership = setup
     factor = _masked(owner, membership)

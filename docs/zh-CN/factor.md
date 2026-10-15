@@ -504,9 +504,23 @@ alpha158_neutral = NeutralizedFactor(NeutralizedConfig(
 ))
 ```
 
+### 因子视图
+
+因子视图（`quantlab.factor.view.FactorView`）包装另一个因子，读取那个因子的存储：`RosterFactor`、`MembershipMaskedFactor` 和 `ChunkedFactor` 都是视图。它的配置（`FactorViewConfig`）持有被包装的 `factor`；`dataset` 填为被包装因子的数据集，`warmup_bars` 为 0，设置 `file_path`、重采样，或 `factor_names` 与被包装因子不同，都会被拒绝。每个视图按同一套规则回答存储查询，所以视图可以嵌套：套在成员屏蔽因子外面的名单视图，在名单上读取屏蔽后的存储。
+
+| 查询 | 视图的回答 |
+|---|---|
+| `store_path`、`store_range()` | 被包装因子的，即 `read` 读取的存储 |
+| `owns_store()` | `False`：只有拥有者写存储（ADR 0029） |
+| `stored_symbols()`、`output_symbols()` | 被包装因子的标的中视图保留的那些 |
+| `read`、`compute` | 被包装因子在保留标的上的结果，再经视图变换 |
+| `build`、`extend` | 拒绝 |
+
+视图只写它改变的部分：保留哪些标的（`_kept_symbols`），以及对面板做什么（`_view_panel`）。`NeutralizedFactor` 和 `IntradayAverage` 不是视图：它们计算新的输出，写进自己的存储。
+
 ### 按名单读取共享存储
 
-`RosterFactor`（`quantlab.factor.predefined.roster`）按名单读取另一个因子。名单（roster）是一份不带日期的标的列表，即为某个 universe 构建的模型能看到的标的。它的配置是 `RosterConfig`：`factor` 是被包装的因子，通常用 `factor_names` 钉住模型用到的输出；`roster` 是一个数据集，其存储的整条 symbol 轴就是名单，每次调用都重新读取。名单会转换成被包装面板的标签类型（整数 permaticker 轴对文本轴）；被包装面板没有的名单标的会被略去，并记录数量。`read` 只在保留的标的上读取被包装的存储；`compute` 先在被包装因子的整个数据集上计算再切，因为截面因子要在全市场上标准化。输出沿用被包装因子的名字，所以包装类可以直接替换模型 `factors` 里的因子。它没有自己的存储：`store_path` 为 `None`，`build` 和 `extend` 抛出异常，`store_range()` 就是被包装因子的。某个日期谁是成员，交给预测器的成员掩码决定。下面是 `examples/sharadar_us_equity/us3000_h1_mvo.py` 里的 us3000 模型，按名单读取全市场 BarraStyle 存储的 12 个风格输出；存储本身由拥有它、未钉输出的 `BarraStyle` 扩充。
+`RosterFactor`（`quantlab.factor.predefined.roster`）按名单读取另一个因子。名单（roster）是一份不带日期的标的列表，即为某个 universe 构建的模型能看到的标的。它的配置是 `RosterConfig`：`factor` 是被包装的因子，通常用 `factor_names` 钉住模型用到的输出；`roster` 是一个数据集，其存储的整条 symbol 轴就是名单，每次调用都重新读取。名单会转换成被包装面板的标签类型（整数 permaticker 轴对文本轴）；被包装面板没有的名单标的会被略去，并记录数量。`read` 只在保留的标的上读取被包装的存储；`compute` 先在被包装因子的整个数据集上计算再切，因为截面因子要在全市场上标准化。输出沿用被包装因子的名字，所以包装类可以直接替换模型 `factors` 里的因子。它是一个因子视图：`store_path` 和 `store_range()` 是被包装因子的，`stored_symbols()` 是被包装存储上的名单标的，`build` 和 `extend` 抛出异常。某个日期谁是成员，交给预测器的成员掩码决定。下面是 `examples/sharadar_us_equity/us3000_h1_mvo.py` 里的 us3000 模型，按名单读取全市场 BarraStyle 存储的 12 个风格输出；存储本身由拥有它、未钉输出的 `BarraStyle` 扩充。
 
 ```python
 from quantlab.factor.config import FactorConfig, RosterConfig
@@ -524,7 +538,7 @@ style_features = RosterFactor(RosterConfig(factor=styles, roster=membership))
 
 ### 按指数成员资格屏蔽因子
 
-名单包含所有曾经的成员，所以按名单读到的特征，在 t 时对当时不是成员的标的也有值，其中包括以后才进指数的标的。截面模型（GATs、MASTER）把 t 时所有特征有限的标的都当作上下文，所以只按名单读时，它在 t 的截面里会有未来成员，这是用未来信息做的选择。`MembershipMaskedFactor`（`quantlab.factor.predefined.membership_mask`）包装任意因子，凡是标的在该 bar 当天不是成员的格子都设为 NaN（`IndexConstituentDataset.is_member_at`），与 `MembershipMaskedLabel`、`MembershipMaskedPredictor` 的规则相同；非成员在 t 没有有限特征，就不进该 bar 的截面。它的配置是 `MembershipMaskedFactorConfig`：`factor` 是被包装的因子，`membership` 是点时成员资格。屏蔽的是算好的因子，绝不是价格：被包装因子在未屏蔽的价格上计算，所以在 t 进指数的标的，t 的值来自它完整的价格历史，从 t 起就在截面里。对进指数不满一个窗口的标的，模型的特征窗口里进指数之前的 bar 是 NaN。成员资格面板不覆盖的日期会抛出异常，warm-up 的 bar 也算在内；面板的标的全都不在成员资格存储的 symbol 轴上（整数 permaticker 轴对文本轴）时也会抛出异常，否则整个面板都会被屏蔽。输出沿用被包装因子的名字；和 `RosterFactor` 一样没有自己的存储，`build` 和 `extend` 抛出异常。表格模型只拟合标签经成员屏蔽后有值的格子，所以对它们没有影响。
+名单包含所有曾经的成员，所以按名单读到的特征，在 t 时对当时不是成员的标的也有值，其中包括以后才进指数的标的。截面模型（GATs、MASTER）把 t 时所有特征有限的标的都当作上下文，所以只按名单读时，它在 t 的截面里会有未来成员，这是用未来信息做的选择。`MembershipMaskedFactor`（`quantlab.factor.predefined.membership_mask`）包装任意因子，凡是标的在该 bar 当天不是成员的格子都设为 NaN（`IndexConstituentDataset.is_member_at`），与 `MembershipMaskedLabel`、`MembershipMaskedPredictor` 的规则相同；非成员在 t 没有有限特征，就不进该 bar 的截面。它的配置是 `MembershipMaskedFactorConfig`：`factor` 是被包装的因子，`membership` 是点时成员资格。屏蔽的是算好的因子，绝不是价格：被包装因子在未屏蔽的价格上计算，所以在 t 进指数的标的，t 的值来自它完整的价格历史，从 t 起就在截面里。对进指数不满一个窗口的标的，模型的特征窗口里进指数之前的 bar 是 NaN。成员资格面板不覆盖的日期会抛出异常，warm-up 的 bar 也算在内；面板的标的全都不在成员资格存储的 symbol 轴上（整数 permaticker 轴对文本轴）时也会抛出异常，否则整个面板都会被屏蔽。输出沿用被包装因子的名字；和 `RosterFactor` 一样是因子视图，保留被包装因子的所有标的，`build` 和 `extend` 抛出异常。表格模型只拟合标签经成员屏蔽后有值的格子，所以对它们没有影响。
 
 ```python
 from quantlab.factor.config import MembershipMaskedFactorConfig

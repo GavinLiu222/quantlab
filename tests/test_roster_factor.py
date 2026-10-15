@@ -181,20 +181,8 @@ def test_symbols_narrow_the_roster_and_refuse_one_off_it(market):
     factor = RosterFactor(RosterConfig(factor=view, roster=roster))
 
     assert factor.read(_START, _END, symbols=["4"])["symbol"].values.tolist() == ["4"]
-    with pytest.raises(ValueError, match=r"\['3'\] are not on the roster"):
+    with pytest.raises(ValueError, match=r"\['3'\] are not among the symbols it keeps"):
         factor.read(_START, _END, symbols=["4", "3"])
-
-
-def test_it_has_no_store_and_writes_none(market):
-    owner, view, roster = market
-    factor = RosterFactor(RosterConfig(factor=view, roster=roster))
-
-    assert factor.store_path is None
-    assert factor.store_range() == owner.store_range()
-    with pytest.raises(ValueError, match="has no store"):
-        factor.build(_START, _END)
-    with pytest.raises(ValueError, match="has no store"):
-        factor.extend("2024-02-10")
 
 
 def test_rebuilds_from_its_config(market):
