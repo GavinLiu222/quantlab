@@ -16,6 +16,7 @@ symbols it covers, the ``[symbols, symbols]`` matrix never built.
 """
 
 import dataclasses
+import functools
 from dataclasses import dataclass
 from typing import Self
 
@@ -70,20 +71,20 @@ class LowRankCovariance:
     factor_covariance: np.ndarray | None
     specific_variance: np.ndarray
 
-    @property
+    @functools.cached_property
     def variance(self) -> np.ndarray:
         """``[bars, symbols]``: each covered symbol's variance, the diagonal; 0 where not covered.
+
+        Computed once per covariance, by a batched matrix product (``B F``
+        per bar) and a row sum, never a loop over the factor pairs.
 
         Examples
         --------
         >>> covariance.variance
         array([[0.02, 0.06]])
         """
-        if self.factor_covariance is None:
-            factor = np.einsum("bsk,bsk->bs", self.exposures, self.exposures)
-        else:
-            factor = np.einsum("bsk,bkl,bsl->bs", self.exposures, self.factor_covariance, self.exposures)
-        return factor + self.specific_variance
+        loaded = self.exposures if self.factor_covariance is None else self.exposures @ self.factor_covariance
+        return (loaded * self.exposures).sum(axis=2) + self.specific_variance
 
     def scaled(self, factor: float) -> Self:
         """Return the covariance with every entry multiplied by ``factor``, the span scaling.
@@ -113,10 +114,10 @@ class LowRankCovariance:
         >>> covariance.times(np.array([[1.0, 0.0]]))
         array([[0.02, 0.02]])
         """
-        load = np.einsum("bsk,bs->bk", self.exposures, weights)
+        load = (weights[:, None, :] @ self.exposures)[:, 0, :]
         if self.factor_covariance is not None:
-            load = np.einsum("bkl,bl->bk", self.factor_covariance, load)
-        return np.einsum("bsk,bk->bs", self.exposures, load) + self.specific_variance * weights
+            load = (self.factor_covariance @ load[:, :, None])[:, :, 0]
+        return (self.exposures @ load[:, :, None])[:, :, 0] + self.specific_variance * weights
 
     def with_volatility(self, volatility: np.ndarray) -> Self:
         """Return the covariance with each covered symbol's volatility replaced, the correlations kept.
@@ -327,10 +328,14 @@ def _factor_risk(model, panel: DecisionPanel) -> LowRankCovariance:
         rows["specific_risk"].reindex(symbol=panel.symbols).transpose("timestamp", "symbol").values,
         dtype=np.float64,
     )
+    finite = np.isfinite(matrix)
+    dropped = ~kept[:, None, :]
     covered &= np.isfinite(specific)
-    covered &= (np.isfinite(matrix) | ~kept[:, None, :]).all(axis=2)
-    covered &= ~((np.nan_to_num(matrix, nan=1.0) != 0) & ~kept[:, None, :]).any(axis=2)
-    exposures = np.where(covered[..., None] & kept[:, None, :], np.nan_to_num(matrix), 0.0)
+    covered &= (finite | dropped).all(axis=2)
+    # Exposed to a dropped factor: a non-zero or missing exposure on it.
+    covered &= ~((~finite | (matrix != 0)) & dropped).any(axis=2)
+    # A covered symbol's exposures on the kept factors are finite.
+    exposures = np.where(covered[..., None] & ~dropped, matrix, 0.0)
     return LowRankCovariance(
         covered=covered,
         exposures=exposures,

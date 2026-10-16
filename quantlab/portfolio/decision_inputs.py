@@ -31,10 +31,10 @@ a run's rebalances (turnover, win rates, attribution, the report) takes them
 from that record.
 
 ``panel`` gives a block of decision bars' inputs at once (a
-``DecisionPanel``: their predictions and tradability, and a declared risk
-model's exposures and estimate rows, read as the per-bar context reads
-them, the latter once over many blocks with ``risk_inputs``) for the
-approximate backtest (``quantlab.backtest.approximate``); ``scheduled``
+``DecisionPanel``: their predictions, tradability, declared factors and a
+declared risk model's exposures and estimate rows, read as the per-bar
+context reads them; all but the predictions once over many blocks with
+``panel_reads``) for the approximate backtest (``quantlab.backtest.approximate``); ``scheduled``
 names the scheduled bars of many timestamps at once.
 
 ``DecisionInputs.from_run`` rebuilds the inputs of a recorded backtest run,
@@ -61,6 +61,7 @@ label layers.
 
 import time
 import warnings
+from dataclasses import dataclass
 from collections.abc import Iterator
 from contextlib import contextmanager
 from os import PathLike
@@ -80,6 +81,38 @@ from quantlab.utils.date_range import last_moment
 from quantlab.utils.returns import one_bar_returns
 
 _DIMS = ("timestamp", "symbol")
+
+
+@dataclass(frozen=True)
+class PanelReads:
+    """What ``DecisionInputs.panel`` reads besides the predictions and prices, for a range of bars.
+
+    ``DecisionInputs.panel_reads`` reads it once over many blocks; each
+    ``panel`` call slices its block's bars from it.
+
+    Attributes
+    ----------
+    tradable : xr.DataArray
+        Booleans on ``(timestamp, symbol)``: the dataset's ``tradable_bars``.
+    factors : xr.Dataset or None
+        The rule's declared factors on ``(timestamp, symbol)``, ``None``
+        when it declares none.
+    risk_exposures, risk_estimates : xr.Dataset or None
+        A declared factor risk model's exposures and its estimate store's
+        rows (``None`` when the store has none in the range); both ``None``
+        without a declared risk model.
+
+    Examples
+    --------
+    >>> reads = inputs.panel_reads(ts[0], ts[3])
+    >>> reads.tradable.dims
+    ('timestamp', 'symbol')
+    """
+
+    tradable: xr.DataArray
+    factors: xr.Dataset | None = None
+    risk_exposures: xr.Dataset | None = None
+    risk_estimates: xr.Dataset | None = None
 
 
 def _price_window(
@@ -459,7 +492,7 @@ class DecisionInputs:
         predictions: xr.Dataset,
         *,
         prices: xr.Dataset | None = None,
-        risk: tuple[xr.Dataset | None, xr.Dataset | None] | None = None,
+        reads: "PanelReads | None" = None,
     ) -> DecisionPanel:
         """Return the decision inputs of a block of decision bars at once, for the approximate backtest.
 
@@ -473,7 +506,7 @@ class DecisionInputs:
         ``DecisionPanel.staleness`` give each bar's window and staleness as
         its context holds them. With a declared factor risk model, its
         exposures at the bars and its estimate store's rows there, as
-        ``risk_inputs`` reads them. No holdings: a rule's ``solve`` is
+        ``panel_reads`` reads them. No holdings: a rule's ``solve`` is
         handed those.
 
         Parameters
@@ -486,11 +519,11 @@ class DecisionInputs:
             the first bar's warm-up (``history_prices``) to the last bar or
             beyond, already read (an approximate backtest reads its window
             once); read from the dataset when omitted.
-        risk : tuple of (xr.Dataset or None, xr.Dataset or None), optional
-            The risk model's exposures and estimate rows covering the bars,
-            already read (``risk_inputs`` over a longer span, read once);
-            read over the bars when omitted. Ignored without a declared risk
-            model.
+        reads : PanelReads, optional
+            The tradability, declared factors and risk model's exposures and
+            estimate rows covering the bars, already read (``panel_reads``
+            over a longer span, read once for many blocks); read over the
+            bars when omitted.
 
         Returns
         -------
@@ -531,19 +564,17 @@ class DecisionInputs:
                 "every decision bar must be a bar of the prices; missing "
                 f"{[str(t) for t in timestamps[rows < 0][:5]]}"
             )
-        tradable = (
-            self.dataset.tradable_bars(prices.isel(timestamp=rows), self.fill_column)
-            .transpose(*_DIMS)
-            .reindex(symbol=symbols, fill_value=False)
-        )
+        if reads is None:
+            reads = self.panel_reads(first, last, prices=prices)
+        tradable = reads.tradable.reindex(timestamp=timestamps, symbol=symbols, fill_value=False)
         valuation = prices[self.valuation_column].transpose(*_DIMS).reindex(symbol=symbols)
-        factors = self._factor_panels(first, last, symbols)
-        if factors is not None:
-            factors = factors.reindex(timestamp=timestamps).load()
+        factors = None
+        if reads.factors is not None:
+            factors = reads.factors.reindex(timestamp=timestamps, symbol=symbols)
         exposures = estimates = None
         if self.declared.risk_model is not None:
-            exposures, estimates = self.risk_inputs(first, last) if risk is None else risk
-            exposures = exposures.reindex(timestamp=timestamps, symbol=symbols)
+            exposures = reads.risk_exposures.reindex(timestamp=timestamps, symbol=symbols)
+            estimates = reads.risk_estimates
             if estimates is not None:
                 at_bars = np.isin(estimates.timestamp.values, timestamps.values)
                 estimates = estimates.isel(timestamp=at_bars) if at_bars.any() else None
@@ -560,26 +591,29 @@ class DecisionInputs:
             risk_estimates=estimates,
         )
 
-    def risk_inputs(self, first, last) -> tuple[xr.Dataset | None, xr.Dataset | None]:
-        """Return the declared factor risk model's exposures and estimate rows from ``first`` to ``last``.
+    def panel_reads(self, first, last, *, prices: xr.Dataset | None = None) -> "PanelReads":
+        """Read what ``panel`` takes for any block of the bars from ``first`` to ``last``, once.
 
         Each in one request, as ``weights`` reads them over its panel: the
-        exposures from the model (``FactorRiskModel.exposures``, read or
-        computed per its ``exposure_data_strategy``), on every symbol, and
-        the estimate store's rows over the part of the range it covers;
-        what ``panel`` takes as ``risk`` for any block of those bars.
-        ``(None, None)`` without a declared risk model.
+        tradability of every bar of the range (``tradable_bars``, judged from
+        nothing later than the bar), the rule's declared factors (one
+        ``Factor.compute`` each over the range, with its own warm-up), and a
+        declared factor risk model's exposures (``FactorRiskModel.exposures``,
+        read or computed per its ``exposure_data_strategy``) and its
+        estimate store's rows over the part of the range it covers. All on
+        every symbol.
 
         Parameters
         ----------
         first, last : pd.Timestamp or datetime-like
             The first and last bar.
+        prices : xr.Dataset, optional
+            The fill and valuation prices covering the range, already read
+            (``history_prices``); read from the dataset when omitted.
 
         Returns
         -------
-        tuple of (xr.Dataset or None, xr.Dataset or None)
-            The exposures on ``(timestamp, symbol)`` and the estimate rows
-            (``None`` when the store has none in the range).
+        PanelReads
 
         Raises
         ------
@@ -589,22 +623,35 @@ class DecisionInputs:
 
         Examples
         --------
-        >>> inputs.risk_inputs(ts[1], ts[3])  # top-n declares no risk model
-        (None, None)
+        >>> reads = inputs.panel_reads(ts[1], ts[3])  # top-n declares no factor or risk model
+        >>> reads.tradable.values
+        array([[ True,  True,  True],
+               [ True, False,  True],
+               [ True,  True,  True]])
+        >>> reads.factors is None, reads.risk_exposures is None
+        (True, True)
         """
         first, last = pd.Timestamp(first), pd.Timestamp(last)
+        if prices is None:
+            prices = self._prices(first, last, None, warn=False)
+        window = prices.sel(timestamp=slice(first, last))
+        tradable = self.dataset.tradable_bars(window, self.fill_column).transpose(*_DIMS).load()
+        factors = self._factor_panels(first, last, None)
         exposures = self._risk_exposures(first, last, None)
-        if exposures is None:
-            return None, None
-        return exposures.load(), self._risk_estimates(first, last, None)
+        return PanelReads(
+            tradable=tradable,
+            factors=None if factors is None else factors.load(),
+            risk_exposures=None if exposures is None else exposures.load(),
+            risk_estimates=None if exposures is None else self._risk_estimates(first, last, None),
+        )
 
     def history_prices(self, first, last) -> xr.Dataset:
         """Return the fill and valuation prices the bars from ``first`` to ``last`` read, warm-up included.
 
         From ``history_bars - 1`` bars before ``first`` (a warning names the
         shortfall when the dataset holds fewer, as ``weights`` warns) to
-        ``last``, on every symbol, in one request: what ``panel`` takes as
-        ``prices`` for any block of those bars.
+        ``last``, on every symbol, in one request: what ``panel`` and
+        ``panel_reads`` take as ``prices`` for any block of those bars.
 
         Parameters
         ----------

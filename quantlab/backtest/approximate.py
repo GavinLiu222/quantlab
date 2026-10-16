@@ -330,8 +330,13 @@ class ApproximateBacktest(Component):
         fill = np.asarray(prices[market.fill_price_column].values, dtype=np.float64)
         close = _ffill(np.asarray(prices[market.valuation_price_column].values, dtype=np.float64))
 
-        # A declared risk model's exposures and estimate rows, one request each over the decision bars.
-        risk = inputs.risk_inputs(timestamps[decisions[0]], timestamps[decisions[-1]]) if len(decisions) else None
+        # Tradability, declared factors and a risk model's inputs, one request each over the decision bars.
+        history = self._history_prices(inputs)
+        reads = (
+            inputs.panel_reads(timestamps[decisions[0]], timestamps[decisions[-1]], prices=history)
+            if len(decisions)
+            else None
+        )
         targets = np.full((len(decisions), len(symbols)), np.nan)
         iterations = np.zeros(len(decisions), dtype=np.int64)
         converged = np.ones(len(decisions), dtype=bool)
@@ -341,9 +346,7 @@ class ApproximateBacktest(Component):
             members = np.flatnonzero(decisions // config.chunk_bars == chunk)
             problem = rule.prepare(
                 constructor,
-                inputs.panel(
-                    panel.isel(timestamp=decisions[members]), prices=self._history_prices(inputs), risk=risk
-                )
+                inputs.panel(panel.isel(timestamp=decisions[members]), prices=history, reads=reads)
             )
             # The chunk starts from the last book filled before it (none at the window's start).
             earlier = np.flatnonzero(np.isfinite(targets[: members[0]]).all(axis=1))

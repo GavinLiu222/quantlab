@@ -53,13 +53,14 @@ def _contiguous(values) -> np.ndarray:
     return np.ascontiguousarray(values, dtype=np.float64)
 
 
-def _factor_roots(low_rank: LowRankCovariance) -> np.ndarray:
-    """``[bars, symbols, k]``: ``U = B F^1/2`` per bar, so each bar's covariance is ``U U' + diag(D)``."""
+def _factor_roots(low_rank: LowRankCovariance, columns: np.ndarray) -> np.ndarray:
+    """``[bars, columns, k]``: ``U = B F^1/2`` per bar on ``columns``, so each bar's covariance there is ``U U' + diag(D)``."""
+    exposures = low_rank.exposures[:, columns]
     if low_rank.factor_covariance is None:
-        return low_rank.exposures
+        return exposures
     values, vectors = np.linalg.eigh(low_rank.factor_covariance)
     root = vectors * np.sqrt(np.clip(values, 0.0, None))[:, None, :]
-    return low_rank.exposures @ root
+    return exposures @ root
 
 
 def _tangent_curvature(roots: np.ndarray, specific: np.ndarray, columns: np.ndarray) -> np.ndarray:
@@ -249,7 +250,7 @@ def solve(rule, problem: _Problem, prices: PanelPrices | None = None, stopping: 
     pool = problem.predicted
     selectable = problem.selectable if forward else pool
     columns = selectable.any(axis=0)
-    roots = _factor_roots(problem.low_rank)[:, columns]
+    roots = _factor_roots(problem.low_rank, columns)
     specific = _contiguous(problem.low_rank.specific_variance[:, columns])
     bound = _contiguous(_tangent_curvature(roots, specific, selectable[:, columns]))
     transposed = _contiguous(np.swapaxes(roots, 1, 2))
