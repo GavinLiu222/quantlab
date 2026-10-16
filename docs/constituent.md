@@ -186,6 +186,34 @@ array([10])
 
 `CompustatNasdaq100ConstituentDataset` refuses a membership spell that has no PERMNO link. Passing `kwargs={"allow_unlinked": True}` in the config keeps the linked days instead, and the option is recorded in the run's saved config. `CrspMarketConstituentDataset` answers "was this security listed" for every security and reads the security filter from `kwargs["security_filter"]`, default `"equity_common"`.
 
+### Build the common-stock market membership from a price store
+
+`CommonStockConstituentDataset` (`quantlab.dataset.common_stock`) reads a whole-market price store as an index: every security of the store is a member from its first to its last bar with a finite `close`, both ends included, one interval per security. A halt inside the interval (bars without a price) stays a member, and a delisted security stops being one the day after its last priced bar. On the Sharadar SEP store (`market/sharadar/sharadar_sep_1d`, built with its default `category_filter`: domestic common stocks, primary and secondary share classes, no ADRs, Canadian companies or preferred shares) this is the **common-stock membership**, the market portfolio of the Black-Litterman equilibrium; feed it to `MembershipCapWeight` unchanged for the market's cap weights (see [factor.md](factor.md)). The store path goes in `kwargs["price_store"]`; the coverage starts at the store's first bar, and the panel ends on its last bar and follows it on `update()`. With a store of two securities, `202` halted on the middle bar and `303` delisted after it:
+
+```python
+>>> import numpy as np, pandas as pd, xarray as xr
+>>> from quantlab.dataset.config import ConstituentDatasetConfig
+>>> from quantlab.dataset.common_stock import CommonStockConstituentDataset
+>>> days = pd.bdate_range("2024-01-02", periods=3)
+>>> _ = xr.Dataset(
+...     {"close": (("timestamp", "symbol"), [[1.0, 2.0], [np.nan, 2.0], [1.0, np.nan]])},
+...     coords={"timestamp": days, "symbol": np.array([202, 303])},
+... ).to_zarr("data/sep.zarr", mode="w")
+>>> members = CommonStockConstituentDataset(ConstituentDatasetConfig(
+...     zarr_file_path="data/common_stock.zarr",
+...     cache_dir="data",
+...     kwargs={"price_store": "data/sep.zarr"},
+... ))
+>>> members.from_raw_data().get_xarray_dataset()["is_member"].to_pandas()
+symbol       202    303
+timestamp
+2024-01-02  True   True
+2024-01-03  True   True
+2024-01-04  True  False
+```
+
+Whether a security without a price on the store's last bars is halted or delisted is not known yet: its interval ends on its last priced bar until it trades again, and the `update()` after that rewrites the halt's days in the window it rebuilds (the current year) to member. The shared store is `universe/sharadar/sharadar_common_stock_membership`, brought up by the daily data update (see [data_update.md](data_update.md)).
+
 ### Mask a panel to the members of each bar
 
 `mask(panel)` on a membership dataset (`IndexConstituentDataset.mask`) sets every cell of a `(timestamp, symbol)` panel to NaN where the symbol is not a member on its bar's own date, and keeps the panel's bars and symbols. It is the rule `MembershipMaskedFactor`, `MembershipMaskedLabel` and `MembershipMaskedPredictor` apply. A symbol the membership has never held is never a member. With `membership` a stored panel in which AAA is a member from 2024-01-01 on and BBB from 2024-01-01 to 2024-01-02, saved with `as_of="2024-01-05"`:

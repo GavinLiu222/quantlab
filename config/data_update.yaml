@@ -60,6 +60,9 @@ stages:
   - name: universe
     steps:
       - update: universe/us3000/membership_estu
+      # Every common stock of the whole-market SEP store, first to last priced bar (the market
+      # portfolio of the Black-Litterman equilibrium); no strategy reads it yet.
+      - update: {store: universe/sharadar/sharadar_common_stock_membership, allow_failure: true}
   - name: factors
     steps:
       - extend: factors/us3000/alpha101

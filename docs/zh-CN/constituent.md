@@ -186,6 +186,34 @@ array([10])
 
 `CompustatNasdaq100ConstituentDataset` 会拒绝没有 PERMNO 链接的成分区间。在配置里传 `kwargs={"allow_unlinked": True}` 则改为保留有链接的那些天，该选项会记录在这次运行保存的配置里。`CrspMarketConstituentDataset` 回答的是"这只证券当天是否在市"，覆盖所有证券，证券过滤条件读自 `kwargs["security_filter"]`，默认 `"equity_common"`。
 
+### 用价格 store 构建普通股全市场成分
+
+`CommonStockConstituentDataset`（`quantlab.dataset.common_stock`）把一个全市场价格 store 读成指数：store 里的每只证券从第一根到最后一根 `close` 有限的 bar 都是成员，两端都包含，每只证券一个区间。区间内的停牌（没有价格的 bar）仍是成员，退市的证券从最后一根有价格的 bar 的次日起不再是成员。在 Sharadar SEP store（`market/sharadar/sharadar_sep_1d`，按默认 `category_filter` 建立：美国本土普通股，含主类/次类股份，排除 ADR、加拿大公司和优先股）上，这就是**普通股成分**，即 Black-Litterman 均衡的市场组合；原样交给 `MembershipCapWeight` 即得到市场的市值权重（见 [factor.md](factor.md)）。store 路径写在 `kwargs["price_store"]`；覆盖起点是 store 的第一根 bar，面板止于 store 的最后一根 bar，`update()` 时跟着它走。以一个两只证券的 store 为例，`202` 在中间那根 bar 停牌，`303` 在其后退市：
+
+```python
+>>> import numpy as np, pandas as pd, xarray as xr
+>>> from quantlab.dataset.config import ConstituentDatasetConfig
+>>> from quantlab.dataset.common_stock import CommonStockConstituentDataset
+>>> days = pd.bdate_range("2024-01-02", periods=3)
+>>> _ = xr.Dataset(
+...     {"close": (("timestamp", "symbol"), [[1.0, 2.0], [np.nan, 2.0], [1.0, np.nan]])},
+...     coords={"timestamp": days, "symbol": np.array([202, 303])},
+... ).to_zarr("data/sep.zarr", mode="w")
+>>> members = CommonStockConstituentDataset(ConstituentDatasetConfig(
+...     zarr_file_path="data/common_stock.zarr",
+...     cache_dir="data",
+...     kwargs={"price_store": "data/sep.zarr"},
+... ))
+>>> members.from_raw_data().get_xarray_dataset()["is_member"].to_pandas()
+symbol       202    303
+timestamp
+2024-01-02  True   True
+2024-01-03  True   True
+2024-01-04  True  False
+```
+
+store 最后几根 bar 上没有价格的证券，此时还不知道是停牌还是退市：它的区间先止于最后一根有价格的 bar，等它重新交易后，下一次 `update()` 会把它重建的窗口（当年）里停牌的那些天改写为成员。共享 store 是 `universe/sharadar/sharadar_common_stock_membership`，由每日数据更新维护（见 [data_update.md](../data_update.md)）。
+
 ### 把面板屏蔽到每根 bar 的成员
 
 成员资格数据集上的 `mask(panel)`（`IndexConstituentDataset.mask`）把 `(timestamp, symbol)` 面板中、标的在该 bar 当天不是成员的格子置为 NaN，面板的 bar 和标的保持不变。`MembershipMaskedFactor`、`MembershipMaskedLabel`、`MembershipMaskedPredictor` 用的都是这条规则。成员资格从未包含的标的永远不是成员。下面的 `membership` 是一个已存储的面板，其中 AAA 从 2024-01-01 起是成员，BBB 从 2024-01-01 到 2024-01-02 是成员，以 `as_of="2024-01-05"` 保存：

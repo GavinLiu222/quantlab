@@ -50,7 +50,10 @@ table, the FRED 3-month T-bill rate, the price-return benchmarks, the Barra expo
 membership, the us3000 alphas and the USE4 risk stores. The us3000 alphas read Sharadar SEP on
 the membership's roster (`RosterDataset`, see the [dataset guide](dataset.md)), so the update keeps
 no price copy cut to the roster: SEP is brought up by the raw stage and the membership by the
-`universe` stage, both before the `factors` stage. WRDS data is not in the
+`universe` stage, both before the `factors` stage. The `universe` stage also brings up the
+common-stock membership (`universe/sharadar/sharadar_common_stock_membership`, every security of SEP from
+its first to its last priced bar, `CommonStockConstituentDataset`, see the
+[constituent guide](constituent.md)), allowed to fail. WRDS data is not in the
 daily update; run `scripts/wrds/*.py` when the vendor publishes.
 
 The last stage, `intraday`, runs once `done` is written (`after_done: true`: its steps are added
