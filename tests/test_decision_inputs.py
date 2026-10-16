@@ -334,6 +334,30 @@ def test_rebalances_is_the_schedule_weights_follows():
     assert not _inputs(rule, end=TS[WARMUP + 3]).rebalances(TS[WARMUP + 3])
 
 
+def test_every_decided_bar_is_logged_with_its_count_names_and_seconds():
+    from loguru import logger
+
+    rule = _rule("top_n")
+    inputs = _inputs(rule)
+    messages: list[str] = []
+    handler_id = logger.add(messages.append, level="INFO", format="{message}",
+                            filter=lambda r: r["name"] == "quantlab.portfolio.decision_inputs")
+    try:
+        panel = inputs.weights(_predictions())
+    finally:
+        logger.remove(handler_id)
+
+    scheduled = np.flatnonzero(panel["scheduled"].values)
+    lines = [m.strip() for m in messages if " bar " in m]
+    assert len(lines) == len(scheduled)
+    for k, (t, line) in enumerate(zip(scheduled, lines), start=1):
+        row = panel["weight"].values[t]
+        names = int((np.abs(row) > 0).sum())
+        bar = pd.Timestamp(panel.timestamp.values[t]).isoformat()
+        assert line.startswith(f"{type(rule).__name__}: bar {k}/{len(scheduled)} {bar}: {names} names, ")
+        assert line.endswith(" s")
+
+
 def test_rebalances_reads_the_calendar_once_over_a_replay(monkeypatch):
     dataset = _dataset()
     reads = []

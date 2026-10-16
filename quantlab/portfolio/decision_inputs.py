@@ -59,6 +59,7 @@ module and the backtest-run reader, never the backtest, model, factor or
 label layers.
 """
 
+import time
 import warnings
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -68,6 +69,7 @@ from typing import Self
 import numpy as np
 import pandas as pd
 import xarray as xr
+from loguru import logger
 
 from quantlab.dataset.base import InsufficientHistoryError, MarketDataset
 from quantlab.portfolio.base import DecisionPanel, PortfolioConstructor, PortfolioContext
@@ -753,7 +755,10 @@ class DecisionInputs:
         decided = np.zeros(len(timestamps), dtype=bool)
         failed = []
         events: dict[str, list[dict]] = {}
-        for t in np.flatnonzero(scheduled):
+        rule = type(self.constructor).__name__
+        bars = np.flatnonzero(scheduled)
+        for k, t in enumerate(bars, start=1):
+            started = time.perf_counter()
             position = int(positions[t])
             bar = pd.Timestamp(timestamps[t])
             context = self._context(
@@ -768,10 +773,16 @@ class DecisionInputs:
             )
             decision = self.constructor.decide(context)
             label = pd.Timestamp(timestamps[t]).isoformat()
+            row = decision.weights.values
+            outcome = (
+                "held (construction failed)" if decision.failure is not None
+                else "held" if np.isnan(row).all()
+                else f"{int((np.abs(row) > 0).sum())} names"
+            )
+            logger.info(f"{rule}: bar {k}/{len(bars)} {label}: {outcome}, {time.perf_counter() - started:.2f} s")
             if decision.failure is not None:
                 failed.append(label)
                 continue
-            row = decision.weights.values
             for name, value in decision.events.items():
                 record = {"bar": label}
                 if isinstance(value, (int, np.integer)):
