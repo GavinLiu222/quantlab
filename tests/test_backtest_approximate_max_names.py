@@ -229,3 +229,38 @@ def test_the_objective_is_within_the_bound_of_the_exact_books(exact_case, reques
         gaps.append((best - found) / abs(best))
 
     assert np.median(gaps) <= OBJECTIVE_BOUND
+
+
+#: Zero-risk cases (#332): direction and turnover penalty. Without a penalty the books are the
+#: linear program's vertex (4 names at the 25% cap), so the cap of 5 does not bind; with one, the
+#: uncapped books keep up to 14 names in the no-trade band and the cap binds.
+ZERO_RISK_CASES = {
+    "long_only": ("long_only", 0.0),
+    "long_only_penalty": ("long_only", 2e-3),
+    "long_short": ("long_short", 0.0),
+    "long_short_penalty": ("long_short", 2e-3),
+}
+
+
+@pytest.mark.parametrize("name", sorted(ZERO_RISK_CASES))
+def test_zero_risk_books_under_a_name_cap_are_on_their_budget(mvo_store, predictions, name):  # noqa: F811
+    direction, penalty = ZERO_RISK_CASES[name]
+    rule = dict(direction=direction, weight_cap=CAP, risk_aversion=0.0, turnover_penalty=penalty)
+    capped = _approximate(mvo_store, 1, cost=0.0).run(
+        predictions, _mvo(max_names=NAMES, solver=SOLVER or "MOSEK", **rule)
+    )
+    uncapped = _approximate(mvo_store, 1, cost=0.0).run(predictions, _mvo(**rule))
+
+    weights = capped.weights.values
+    assert (_names(capped.weights) <= NAMES).all()
+    budget = 1.0 if direction == "long_only" else 0.0
+    np.testing.assert_allclose(weights.sum(axis=1), budget, atol=1e-9)
+    assert (np.abs(weights).sum(axis=1) <= 1.0 + 1e-9).all()
+    assert (np.abs(weights) <= CAP + 1e-12).all()
+    assert capped.metrics["converged"] is True
+    if penalty == 0.0:
+        # The vertex holds fewer names than the cap: the capped books are the uncapped ones.
+        assert (_names(uncapped.weights) < NAMES).all()
+        np.testing.assert_allclose(weights, uncapped.weights.values, atol=1e-12)
+    else:
+        assert (_names(uncapped.weights) > NAMES).any()

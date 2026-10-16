@@ -1364,3 +1364,51 @@ def test_each_rule_names_the_label_it_ranks_by():
         == "fwd_ret_1"
     )
     assert TopkDropoutConstructor(TopkDropoutConfig(direction="long_only", topk=2, n_drop=1)).ranking_label(names) == "vol_1"
+
+
+# --------------------------------------------------------------------------
+# Mean-variance without the risk term (#332): risk_aversion 0 makes each bar a
+# linear program over the caps, the turnover penalty a no-trade band around
+# the holdings. The step's curvature has no risk term to take its scale from,
+# so a solve at zero curvature must still land every book on its budget and
+# on the run's linear-program optimum.
+# --------------------------------------------------------------------------
+
+#: Rule overrides of each zero-risk case; no fees, so the run's cash cap is out.
+ZERO_RISK_CASES = {
+    "zero_risk_penalty_long_only": dict(risk_aversion=0.0, turnover_penalty=0.002),
+    "zero_risk_long_only": dict(risk_aversion=0.0),
+    "zero_risk_penalty_long_short": dict(
+        risk_aversion=0.0, turnover_penalty=0.002, direction="long_short", weight_cap=0.15
+    ),
+}
+
+
+@pytest.fixture(scope="module", params=sorted(ZERO_RISK_CASES))
+def zero_risk_case(request, mvo_store):
+    overrides = ZERO_RISK_CASES[request.param]
+    result = _tight_mvo_run(mvo_store, overrides, 1, request.param, 1, fees=0.0)
+    predictions = BacktestRun.open(result.run_dir).predictions()
+    account = _approximate(mvo_store, 1, cost=0.0).run(predictions, _mvo(**overrides))
+    return request.param, result, account
+
+
+def test_a_zero_risk_book_is_on_its_budget(zero_risk_case):
+    name, _, account = zero_risk_case
+    books = account.weights.values
+
+    if name.endswith("long_short"):
+        np.testing.assert_allclose(books.sum(axis=1), 0.0, atol=1e-9)
+        assert (np.abs(books).sum(axis=1) <= 1.0 + 1e-9).all()
+    else:
+        np.testing.assert_allclose(books.sum(axis=1), 1.0, rtol=0, atol=1e-9)
+        assert (books >= -1e-12).all() and (books <= 0.2 + 1e-12).all()
+
+
+def test_zero_risk_weights_and_value_are_within_the_bounds_of_the_runs(zero_risk_case):
+    _, result, account = zero_risk_case
+    run_value = result.simulation.value.values / result.simulation.value.values[0]
+
+    assert _weights_gap(result, account).max() <= WEIGHTS_L1
+    np.testing.assert_allclose(account.value.values, run_value, rtol=VALUE_TOLERANCE, atol=0)
+    assert account.metrics["converged"] is True

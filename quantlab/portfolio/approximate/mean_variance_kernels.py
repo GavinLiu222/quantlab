@@ -44,6 +44,8 @@ from quantlab.execution.approximate import mark_book
 
 #: Below this relative excess a long-only shift or a long-short sum is exact.
 _SUM_TOLERANCE = 4 * np.finfo(np.float64).eps
+#: A long-only book further than this from its budget after its shift's search is brought back to it.
+_BUDGET_REPAIR = 1e-9
 
 
 @njit(cache=True)
@@ -103,10 +105,40 @@ def _project_long_only(values, cap, anchor, threshold, shift, out):
             high = tau
         middle = (low + high) / 2
         if low >= high or middle == low or middle == high:
-            return tau
+            break
         newton = tau + excess / slope if slope > 0 else middle
         tau = newton if (slope > 0 and low < newton < high) else middle
+    _restore_budget(cap, out)
     return tau
+
+
+@njit(cache=True)
+def _restore_budget(cap, out):
+    """Bring a long-only book back to a sum of 1 when the shift's bracket collapsed before it got there.
+
+    An excess is taken off every holding in proportion (a smaller weight
+    stays within its cap), a shortfall spread over the room below the caps
+    in proportion to it; a book within ``_BUDGET_REPAIR`` of its budget (the
+    last bits of a collapsed bracket) is left as it is.
+    """
+    m = out.shape[0]
+    total = 0.0
+    for i in range(m):
+        total += out[i]
+    if abs(total - 1.0) <= _BUDGET_REPAIR:
+        return
+    if total > 1.0:
+        for i in range(m):
+            out[i] /= total
+        return
+    room = 0.0
+    for i in range(m):
+        room += cap[i] - out[i]
+    if room <= 0.0:
+        return
+    share = min((1.0 - total) / room, 1.0)
+    for i in range(m):
+        out[i] += share * (cap[i] - out[i])
 
 
 @njit(cache=True)
@@ -299,6 +331,24 @@ def _prox(values, cap, anchor, threshold, long_only, gross, multipliers, out, mo
 
 
 @njit(cache=True)
+def _linear_floor(mu, cap, penalty):
+    """The lowest curvature a bar's step takes: a millionth of its linear terms per unit of cap.
+
+    ``mu`` and the turnover penalty are in return per unit of weight and a
+    curvature in return per unit of weight squared, so the floor makes the
+    longest step move a weight by about a million times its largest cap.
+    """
+    scale = penalty
+    widest = 0.0
+    for i in range(mu.shape[0]):
+        scale = max(scale, abs(mu[i]))
+        widest = max(widest, cap[i])
+    if scale == 0.0 or widest == 0.0:
+        return 1.0
+    return 1e-6 * scale / widest
+
+
+@njit(cache=True)
 def _objective(mu, weights, covariance_weights, risk_aversion):
     """``-mu' w + risk_aversion / 2 * w' Sigma w`` from ``Sigma w``."""
     value = 0.0
@@ -326,7 +376,16 @@ def _solve_bar(mu, cap, ut, specific, bound, start, anchor, settings, out):
     m = mu.shape[0]
     k = ut.shape[0]
     load = np.empty(k)
-    ceiling = max(risk_aversion * bound, 1e-300)
+    ceiling = risk_aversion * bound
+    lowest = ceiling * 1e-9
+    floor = _linear_floor(mu, cap, penalty)
+    if ceiling < floor:
+        # Next to no risk: the bar is (nearly) a linear program, with no
+        # curvature to scale the step. A step of the floor's curvature moves
+        # a weight by about a million caps, so one prox lands on the
+        # program's optimum while the prox's numbers stay far from overflow.
+        ceiling = floor
+        lowest = floor
     curvature = ceiling / 8.0
     # The prox's state; [2:4] the sparse prox's second projection (_project_sparse).
     multipliers = np.zeros(4)
@@ -372,7 +431,7 @@ def _solve_bar(mu, cap, ut, specific, bound, start, anchor, settings, out):
             extrapolated_product[i] = current_product[i] + momentum * (current_product[i] - previous_product[i])
             gradient[i] = risk_aversion * extrapolated_product[i] - mu[i]
         extrapolated_value = _objective(mu, extrapolated, extrapolated_product, risk_aversion)
-        curvature = max(curvature * 0.5, ceiling * 1e-9)
+        curvature = max(curvature * 0.5, lowest)
         while True:
             for i in range(m):
                 trial_point[i] = extrapolated[i] - gradient[i] / curvature
