@@ -22,9 +22,11 @@ the bound, so a bar whose binding caps leave little curvature takes long
 steps. The covariance products are reused through their linearity (one per
 trial step). The prox is the capped simplex (long-only) or ``{sum(w) = 0,
 |w|_1 <= gross, |w| <= cap}`` (long-short), with the L1 pull toward the
-holdings; both are found by safeguarded Newton steps on their multipliers. A
-bar stops when its gradient-mapping residual is at most ``tolerance`` times
-the largest entry of its starting gradient, or after ``max_iterations``.
+holdings; both are found by safeguarded Newton steps on their multipliers.
+With a name-count cap (long-only) the prox keeps the names whose zeroing
+costs it most and the momentum is off (``_solve_bar``). A bar stops when
+its gradient-mapping residual is at most ``tolerance`` times the largest
+entry of its starting gradient, or after ``max_iterations``.
 
 The parallel driver uses numba's thread pool: ``numba.set_num_threads(n)``
 or ``NUMBA_NUM_THREADS`` caps it (on the training server, keep it within the
@@ -227,9 +229,56 @@ def _project_long_short(values, cap, anchor, threshold, gross, multipliers, out,
 
 
 @njit(cache=True)
-def _prox(values, cap, anchor, threshold, long_only, gross, multipliers, out, moving):
-    """The rule's prox: long-only on the capped simplex, long-short on the gross ball; ``multipliers`` carries their state."""
-    if long_only:
+def _project_sparse_long_only(values, cap, anchor, threshold, slots, multipliers, out, kept, keys):
+    """The long-only prox kept on at most ``slots`` names: those whose zeroing costs the prox most.
+
+    The capped-simplex prox is found first; when it holds more than
+    ``slots`` names, each candidate's cost of zeroing is the prox's
+    objective ``1/2 (w - u)^2 + threshold |w - anchor|`` (``u`` the values
+    at the prox's shift) at 0 less at its prox weight, the ``slots``
+    costliest are kept (a stable sort, so ties keep the column order), and
+    the prox runs again with the others' caps at 0 (``kept`` and ``keys``
+    are scratch for those caps and the costs). ``multipliers`` holds the two
+    projections' shifts. Keeping the costliest names at the first shift is
+    not the exact projection onto the sparse set, so a step need not lower
+    the objective and the kept names may swap back and forth; such a bar
+    stops at ``max_iterations``, reported unconverged.
+    """
+    m = values.shape[0]
+    multipliers[0] = _project_long_only(values, cap, anchor, threshold, multipliers[0], out)
+    count = 0
+    for i in range(m):
+        if out[i] > 0.0:
+            count += 1
+    if count <= slots:
+        return
+    tau = multipliers[0]
+    for i in range(m):
+        if cap[i] > 0.0:
+            u = values[i] - tau
+            at_zero = 0.5 * u * u + threshold * abs(anchor[i])
+            gap = out[i] - u
+            at_prox = 0.5 * gap * gap + threshold * abs(out[i] - anchor[i])
+            keys[i] = at_prox - at_zero
+        else:
+            keys[i] = np.inf
+    order = np.argsort(keys, kind="mergesort")
+    kept[:] = 0.0
+    for n in range(slots):
+        kept[order[n]] = cap[order[n]]
+    multipliers[1] = _project_long_only(values, kept, anchor, threshold, multipliers[1], out)
+
+
+@njit(cache=True)
+def _prox(values, cap, anchor, threshold, long_only, gross, multipliers, out, moving, slots, kept, keys):
+    """The rule's prox: long-only on the capped simplex, long-short on the gross ball; ``multipliers`` carries their state.
+
+    With ``slots > 0`` (long-only only) on the capped simplex's books of at
+    most ``slots`` names (``_project_sparse_long_only``).
+    """
+    if long_only and slots > 0:
+        _project_sparse_long_only(values, cap, anchor, threshold, slots, multipliers, out, kept, keys)
+    elif long_only:
         multipliers[0] = _project_long_only(values, cap, anchor, threshold, multipliers[0], out)
     else:
         _project_long_short(values, cap, anchor, threshold, gross, multipliers, out, moving)
@@ -250,9 +299,16 @@ def _solve_bar(mu, cap, ut, specific, bound, start, anchor, settings, out):
 
     ``bound`` is the curvature bound on the budget's tangent space;
     ``settings`` is ``(risk_aversion, penalty, long_only, gross, tolerance,
-    max_iterations)``.
+    max_iterations, max_names)``, ``max_names`` 0 for no name-count cap.
+
+    With ``max_names`` (long-only) every prox is the sparse one, the first
+    iterate is a projected gradient step from ``start`` (so a start of
+    equal entries, such as cash, ranks the names by its gradient rather than
+    by column order), and there is no momentum: on the non-convex set
+    acceleration oscillates, so the iteration is plain projected gradient
+    with the same backtracking, a local optimum.
     """
-    risk_aversion, penalty, long_only, gross, tolerance, max_iterations = settings
+    risk_aversion, penalty, long_only, gross, tolerance, max_iterations, max_names = settings
     m = mu.shape[0]
     k = ut.shape[0]
     load = np.empty(k)
@@ -260,11 +316,25 @@ def _solve_bar(mu, cap, ut, specific, bound, start, anchor, settings, out):
     curvature = ceiling / 8.0
     multipliers = np.zeros(2)
     multipliers[0] = np.nan if long_only else 0.0
+    if long_only:
+        multipliers[1] = np.nan
     moving = np.zeros(m, dtype=np.bool_)
+    kept = np.empty(m)
+    keys = np.empty(m)
 
     current = np.empty(m)
-    _prox(start, cap, anchor, penalty / curvature, long_only, gross, multipliers, current, moving)
     current_product = np.empty(m)
+    if max_names > 0:
+        stepped = np.empty(m)
+        _covariance_times(ut, specific, start, load, current_product)
+        for i in range(m):
+            stepped[i] = start[i] - (risk_aversion * current_product[i] - mu[i]) / curvature
+        _prox(
+            stepped, cap, anchor, penalty / curvature, long_only, gross, multipliers, current, moving,
+            max_names, kept, keys,
+        )
+    else:
+        _prox(start, cap, anchor, penalty / curvature, long_only, gross, multipliers, current, moving, 0, kept, keys)
     _covariance_times(ut, specific, current, load, current_product)
     previous = current.copy()
     previous_product = current_product.copy()
@@ -291,7 +361,10 @@ def _solve_bar(mu, cap, ut, specific, bound, start, anchor, settings, out):
         while True:
             for i in range(m):
                 trial_point[i] = extrapolated[i] - gradient[i] / curvature
-            _prox(trial_point, cap, anchor, penalty / curvature, long_only, gross, multipliers, candidate, moving)
+            _prox(
+                trial_point, cap, anchor, penalty / curvature, long_only, gross, multipliers, candidate, moving,
+                max_names, kept, keys,
+            )
             _covariance_times(ut, specific, candidate, load, candidate_product)
             model = extrapolated_value
             for i in range(m):
@@ -307,7 +380,7 @@ def _solve_bar(mu, cap, ut, specific, bound, start, anchor, settings, out):
             residual = max(residual, abs(extrapolated[i] - candidate[i]))
             inner += (extrapolated[i] - candidate[i]) * (candidate[i] - current[i])
         residual *= curvature
-        if inner > 0:  # restart: the step went against the momentum
+        if inner > 0 or max_names > 0:  # restart: the step went against the momentum; none under a cap
             t = 1.0
             momentum = 0.0
         else:
@@ -365,14 +438,15 @@ def solve_forward(problem, book, rule, stopping):
     tangent-space curvature bound per bar); ``book`` is ``(previous,
     previous_entry, close, entry, columns)`` on the full axis, ``columns``
     the solved columns' positions there; ``rule`` is ``(weight_cap,
-    risk_aversion, penalty, long_only, gross, top_k)`` and ``stopping``
-    ``(tolerance, max_iterations)``. A held bar is a NaN row.
+    risk_aversion, penalty, long_only, gross, top_k, max_names)``
+    (``max_names`` 0 for none) and ``stopping`` ``(tolerance,
+    max_iterations)``. A held bar is a NaN row.
     """
     mu, pool, selectable, strength, ut, specific, bound = problem
     previous, previous_entry, close, entry, columns = book
-    weight_cap, risk_aversion, penalty, long_only, gross, top_k = rule
+    weight_cap, risk_aversion, penalty, long_only, gross, top_k, max_names = rule
     tolerance, max_iterations = stopping
-    settings = (risk_aversion, penalty, long_only, gross, tolerance, max_iterations)
+    settings = (risk_aversion, penalty, long_only, gross, tolerance, max_iterations, max_names)
     bars, m = mu.shape
     symbols = previous.shape[0]
     weights = np.full((bars, m), np.nan)
@@ -404,7 +478,7 @@ def solve_forward(problem, book, rule, stopping):
 def _solve_independent_bar(b, problem, rule, stopping, weights, iterations):
     """Bar ``b`` from its caps, without holdings, into ``weights[b]`` and ``iterations[b]``."""
     mu, pool, ut, specific, bound = problem
-    weight_cap, risk_aversion, long_only, gross = rule
+    weight_cap, risk_aversion, long_only, gross, max_names = rule
     tolerance, max_iterations = stopping
     m = mu.shape[1]
     cap = np.empty(m)
@@ -412,8 +486,10 @@ def _solve_independent_bar(b, problem, rule, stopping, weights, iterations):
     if not _caps(pool[b], pool[b], no_holdings, mu[b], 0, weight_cap, long_only, cap):
         return
     row = np.empty(m)
-    settings = (risk_aversion, 0.0, long_only, gross, tolerance, max_iterations)
-    iterations[b] = _solve_bar(mu[b], cap, ut[b], specific[b], bound[b], cap, no_holdings, settings, row)
+    settings = (risk_aversion, 0.0, long_only, gross, tolerance, max_iterations, max_names)
+    # Under a cap from cash, whose first step ranks the names by mu; otherwise from the caps.
+    start = no_holdings if max_names > 0 else cap
+    iterations[b] = _solve_bar(mu[b], cap, ut[b], specific[b], bound[b], start, no_holdings, settings, row)
     weights[b] = row
 
 
@@ -443,7 +519,7 @@ def solve_independent(problem, rule, stopping):
     """Every bar on its own from its caps, without holdings; ``(weights, iterations)``.
 
     ``problem`` is ``(mu, pool, ut, specific, bound)``, ``rule``
-    ``(weight_cap, risk_aversion, long_only, gross)`` and ``stopping``
+    ``(weight_cap, risk_aversion, long_only, gross, max_names)`` and ``stopping``
     ``(tolerance, max_iterations)``. In parallel over the bars, except on
     macOS: there torch and xgboost each load an OpenMP runtime that a third
     thread pool must not meet (see ``tests/conftest.py``).

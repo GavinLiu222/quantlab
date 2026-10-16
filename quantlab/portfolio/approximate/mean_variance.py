@@ -174,6 +174,13 @@ def solve(rule, problem: _Problem, prices: PanelPrices | None = None, stopping: 
     ``stopping``. Long-only on the capped simplex, long-short on ``sum(w) =
     0``, ``|w|_1 <= 1``, ``|w| <= weight_cap``.
 
+    With ``max_names`` (long-only) every bar's book holds at most that many
+    names: each projection keeps the names whose zeroing costs it most and
+    projects onto the capped simplex on them, the first step ranks the
+    names by the gradient at the start (the holdings, or cash for bars
+    solved at once), and the steps have no momentum. That is a local
+    optimum of the mixed-integer program a backtest run solves exactly.
+
     With a ``turnover_penalty`` or ``candidate_top_k`` the bars are solved
     forward in time, each once: its holdings are its book (the last decided
     bar's weights, or ``prices.previous``, at their fill prices) marked at
@@ -248,6 +255,7 @@ def solve(rule, problem: _Problem, prices: PanelPrices | None = None, stopping: 
     transposed = _contiguous(np.swapaxes(roots, 1, 2))
     mu = _contiguous(expected[:, columns])
     tolerance, max_iterations = float(stopping.tolerance), int(stopping.max_iterations)
+    max_names = int(config.max_names or 0)
     if forward:
         strength = problem.expected_return if long_only else np.abs(problem.expected_return)
         if prices is None:
@@ -279,13 +287,14 @@ def solve(rule, problem: _Problem, prices: PanelPrices | None = None, stopping: 
                 long_only,
                 1.0,
                 int(config.candidate_top_k or 0),
+                max_names,
             ),
             (tolerance, max_iterations),
         )
     else:
         solved, iterations = mean_variance_kernels.solve_independent(
             (mu, np.ascontiguousarray(pool[:, columns]), transposed, specific, bound),
-            (float(config.weight_cap), float(config.risk_aversion), long_only, 1.0),
+            (float(config.weight_cap), float(config.risk_aversion), long_only, 1.0, max_names),
             (tolerance, max_iterations),
         )
     weights = np.full((bars, symbols), np.nan)
