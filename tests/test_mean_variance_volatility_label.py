@@ -31,6 +31,8 @@ import xarray as xr
 
 from quantlab.backtest.predefined.us_equity import USEquityCrossectionSelectStockVectorBt
 from quantlab.backtest.config import CrossSectionBacktestConfig
+from quantlab.portfolio.config import GrinoldExpectedReturnConfig
+from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
 from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig
 from quantlab.model.config import ModelConfig
 from quantlab.factor.config import FactorConfig, PolarsFactorConfig
@@ -92,7 +94,7 @@ def _optimizer(specs=None, **overrides) -> MeanVarianceOptimizer:
         expected_return_label="ret_5",
         volatility_label="vol_5",
         covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=LOOKBACK)),
-        ic=0.05,
+        expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
         risk_aversion=5.0,
         weight_cap=0.4,
     )
@@ -245,7 +247,7 @@ def test_an_ensemble_of_a_return_and_a_volatility_model_backtests_and_rebuilds(t
             expected_return_label=f"ret_{HORIZON}",
             volatility_label=f"vol_{HORIZON}",
             covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=20)),
-            ic=0.05,
+            expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
             risk_aversion=5.0,
             turnover_penalty=0.001,
             weight_cap=0.4,
@@ -308,7 +310,7 @@ def test_a_backtest_whose_labels_differ_in_span_is_refused_when_it_is_built(tmp_
             expected_return_label=f"ret_{HORIZON}",
             volatility_label="vol_5",
             covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=20)),
-            ic=0.05,
+            expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
             risk_aversion=5.0,
         )
     )

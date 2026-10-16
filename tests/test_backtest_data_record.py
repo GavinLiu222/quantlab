@@ -19,6 +19,8 @@ import xarray as xr
 
 from quantlab.backtest.predefined.us_equity import USEquityCrossectionSelectStockVectorBt
 from quantlab.backtest.config import CrossSectionBacktestConfig
+from quantlab.portfolio.config import GrinoldExpectedReturnConfig
+from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
 from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig, TopNConfig
 from quantlab.dataset.merged import MergedDataset
 from quantlab.dataset.stock import StockDataset
@@ -83,7 +85,7 @@ def test_the_rules_price_history_before_the_window_is_recorded(tmp_path):
         MeanVarianceConfig(
             expected_return_label="fwd_ret_1",
             covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=LOOKBACK)),
-            ic=0.05,
+            expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
             risk_aversion=5.0,
         )
     )

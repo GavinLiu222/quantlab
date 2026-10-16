@@ -107,6 +107,8 @@ from quantlab.label.predefined.membership_mask import MembershipMaskedLabel
 from quantlab.model.config import ModelConfig
 from quantlab.model.predefined.membership_mask import MembershipMaskedPredictor
 from quantlab.model.predefined.xgb import XGBoostRegressor
+from quantlab.portfolio.config import GrinoldExpectedReturnConfig
+from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
 from quantlab.portfolio.config import FactorRiskStoreEstimatorConfig, MeanVarianceConfig
 from quantlab.portfolio.predefined.factor_risk import FactorRiskStoreEstimator
 from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
@@ -403,7 +405,7 @@ def live_run(
     optimiser = MeanVarianceOptimizer(MeanVarianceConfig(
         expected_return_label=f"ret_{HORIZON}",
         covariance=FactorRiskStoreEstimator(FactorRiskStoreEstimatorConfig(risk_model=risk_model())),
-        ic=max(float(cv_record()["cv_mean"]["cv_mean_val_ic"]), 0.01), direction="long_only",
+        expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=max(float(cv_record()["cv_mean"]["cv_mean_val_ic"]), 0.01))), direction="long_only",
         **{**OPTIMISER, "candidate_top_k": candidate_top_k, "exposure_bounds": bounds},
     ))
     result = USEquityCrossectionSelectStockVectorBt(CrossSectionBacktestConfig(

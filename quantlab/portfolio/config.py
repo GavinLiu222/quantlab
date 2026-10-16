@@ -13,7 +13,7 @@ from quantlab.core.config import FrozenConfig
 
 if TYPE_CHECKING:
     from quantlab.factor.base import Factor
-    from quantlab.portfolio.base import CovarianceEstimator
+    from quantlab.portfolio.base import CovarianceEstimator, ExpectedReturnModel
     from quantlab.risk.base import FactorRiskModel
 
 
@@ -98,6 +98,57 @@ class FactorRiskStoreEstimatorConfig(FrozenConfig):
     risk_model: "FactorRiskModel" = component()
 
 
+@dataclass(frozen=True)
+class GrinoldExpectedReturnConfig(FrozenConfig):
+    """Config of ``GrinoldExpectedReturn``: ``mu = ic * sigma * z``.
+
+    Examples
+    --------
+    >>> GrinoldExpectedReturnConfig(ic=0.05).ic
+    0.05
+    """
+
+    #: Information coefficient of the predictions, for example a CV run's
+    #: mean IC; positive.
+    ic: float
+
+
+@dataclass(frozen=True)
+class ZScoreExpectedReturnConfig(FrozenConfig):
+    """Config of ``ZScoreExpectedReturn``: ``mu = ic * median(sigma) * z``.
+
+    Examples
+    --------
+    >>> ZScoreExpectedReturnConfig(ic=0.05).ic
+    0.05
+    """
+
+    #: Information coefficient of the predictions; positive.
+    ic: float
+
+
+@dataclass(frozen=True)
+class RawExpectedReturnConfig(FrozenConfig):
+    """Config of ``RawExpectedReturn``: ``mu`` is the prediction, in return units; no parameters.
+
+    Examples
+    --------
+    >>> RawExpectedReturnConfig()
+    RawExpectedReturnConfig()
+    """
+
+
+@dataclass(frozen=True)
+class PredictionExpectedReturnConfig(FrozenConfig):
+    """Config of ``PredictionExpectedReturn``: ``mu`` is the prediction as it is; no parameters.
+
+    Examples
+    --------
+    >>> PredictionExpectedReturnConfig()
+    PredictionExpectedReturnConfig()
+    """
+
+
 @dataclass(frozen=True, kw_only=True)
 class MeanVarianceConfig(FrozenConfig):
     """Config of ``MeanVarianceOptimizer``: Markowitz weights with a turnover penalty.
@@ -111,10 +162,11 @@ class MeanVarianceConfig(FrozenConfig):
     >>> cfg = MeanVarianceConfig(
     ...     expected_return_label="ret_5",
     ...     covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=252)),
-    ...     ic=0.05, risk_aversion=10.0, weight_cap=0.05,
+    ...     expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
+    ...     risk_aversion=10.0, weight_cap=0.05,
     ... )
-    >>> cfg.direction, cfg.calibration, cfg.turnover_penalty, cfg.candidate_top_k
-    ('long_only', 'grinold', 0.0, None)
+    >>> cfg.direction, cfg.turnover_penalty, cfg.candidate_top_k
+    ('long_only', 0.0, None)
     >>> cfg.volatility_label is None
     True
     """
@@ -126,15 +178,13 @@ class MeanVarianceConfig(FrozenConfig):
     covariance: "CovarianceEstimator" = component()
     #: Risk aversion ``lambda`` of the variance penalty.
     risk_aversion: float
-    #: How the prediction becomes the expected return ``mu``.
-    #: ``"grinold"``: ``mu = ic * sigma * z``, ``z`` the prediction's
-    #: cross-sectional z-score, so any score will do. ``"raw"``: ``mu`` is
-    #: the prediction itself, which must be in the label's own units (the
-    #: predictor reports the label as ``"raw"`` in ``label_scales``).
-    calibration: Literal["grinold", "raw"] = "grinold"
-    #: Information coefficient of the Grinold calibration, for example a CV
-    #: run's mean IC; required by ``"grinold"``, unused by ``"raw"``.
-    ic: float | None = None
+    #: How ``expected_return_label``'s prediction becomes the expected
+    #: return ``mu`` (an ``ExpectedReturnModel``, ADR 0046):
+    #: ``GrinoldExpectedReturn`` (``ic * sigma * z``),
+    #: ``ZScoreExpectedReturn`` (``ic * median(sigma) * z``),
+    #: ``RawExpectedReturn`` (the prediction, in return units) or
+    #: ``PredictionExpectedReturn`` (the prediction as it is).
+    expected_return: "ExpectedReturnModel" = component()
     #: Penalty ``kappa`` per unit of one-way turnover against the current
     #: weights; 0 trades freely.
     turnover_penalty: float = 0.0
@@ -182,9 +232,10 @@ class MeanVarianceConfig(FrozenConfig):
     #: The label whose prediction gives each symbol's volatility over the
     #: span, such as ``Volatility``; it must have the expected-return
     #: label's span and a ``"raw"`` scale. The covariance is then these
-    #: volatilities around the covariance estimator's correlations, and the Grinold
-    #: ``sigma`` is the prediction. ``None`` keeps the covariance estimator's own
-    #: (historical) volatilities.
+    #: volatilities around the covariance estimator's correlations, and the
+    #: ``sigma`` an ``expected_return`` model reads is the prediction.
+    #: ``None`` keeps the covariance estimator's own (historical)
+    #: volatilities.
     volatility_label: str | None = None
     #: Factors whose outputs ``exposure_bounds`` bounds, such as a
     #: ``BenchmarkBeta``; the rule declares them in ``declared_inputs()``,
@@ -245,7 +296,8 @@ class ActiveRiskConfig(MeanVarianceConfig):
     >>> cfg = ActiveRiskConfig(
     ...     expected_return_label="ret_5",
     ...     covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=252)),
-    ...     ic=0.05, risk_aversion=10.0, weight_cap=0.05,
+    ...     expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
+    ...     risk_aversion=10.0, weight_cap=0.05,
     ...     benchmark=index_weight, tracking_error=0.02,
     ... )
     >>> cfg.benchmark_weight, cfg.tracking_error

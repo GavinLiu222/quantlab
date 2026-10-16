@@ -47,8 +47,8 @@ _MEAN_VARIANCE_FIELDS = {
     "expected_return_label": SUPPORTED,
     "covariance": SUPPORTED,
     "risk_aversion": SUPPORTED,
-    "calibration": SUPPORTED,
-    "ic": SUPPORTED,
+    # Any ExpectedReturnModel: its array code is the per-bar rule's own.
+    "expected_return": SUPPORTED,
     "turnover_penalty": SUPPORTED,
     "min_trade": IGNORED,
     "weight_cap": SUPPORTED,

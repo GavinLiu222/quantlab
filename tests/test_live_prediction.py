@@ -46,6 +46,8 @@ from quantlab.factor.config import BaseFactorConfig, PolarsFactorConfig, RosterC
 from quantlab.factor.predefined.roster import RosterFactor
 from quantlab.model.config import ModelConfig
 from quantlab.model.predefined.membership_mask import MembershipMaskedPredictor
+from quantlab.portfolio.config import GrinoldExpectedReturnConfig
+from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
 from quantlab.portfolio.config import FactorRiskStoreEstimatorConfig, MeanVarianceConfig, TopNConfig
 from quantlab.portfolio.predefined.factor_risk import FactorRiskStoreEstimator
 from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
@@ -192,7 +194,7 @@ class Fixture:
             covariance=FactorRiskStoreEstimator(
                 FactorRiskStoreEstimatorConfig(risk_model=self.risk_model())
             ),
-            ic=0.05, risk_aversion=5.0, turnover_penalty=0.001, weight_cap=0.4,
+            expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)), risk_aversion=5.0, turnover_penalty=0.001, weight_cap=0.4,
             exposure_bounds={"style_a": (-0.3, 0.3)},
         ))
 

@@ -19,6 +19,8 @@ import pandas as pd
 import pytest
 import xarray as xr
 
+from quantlab.portfolio.config import GrinoldExpectedReturnConfig
+from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
 from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig, TopNConfig
 from quantlab.portfolio.base import PortfolioConstructor
 from quantlab.runs.prediction_panel import LabelSpec
@@ -85,7 +87,7 @@ def _build(rule, prices, t, start):
 
 def test_history_bars_is_declared_by_the_rule():
     risk = LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=LOOKBACK, max_stale_bars=MAX_STALE))
-    optimizer = MeanVarianceOptimizer(MeanVarianceConfig(expected_return_label="ret", covariance=risk, risk_aversion=5.0, ic=0.05))
+    optimizer = MeanVarianceOptimizer(MeanVarianceConfig(expected_return_label="ret", covariance=risk, risk_aversion=5.0, expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05))))
 
     assert TopNConstructor(TopNConfig(direction="long_only", top_n=2)).declared_inputs().history_bars == 1
     assert risk.declared_inputs().history_bars == LOOKBACK + 1 + MAX_STALE
@@ -153,7 +155,7 @@ def test_the_return_window_is_forward_filled_only_inside_the_bounded_window():
 
 def test_mean_variance_reads_its_covariance_estimators_window():
     risk = LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=LOOKBACK, max_stale_bars=MAX_STALE))
-    rule = MeanVarianceOptimizer(MeanVarianceConfig(expected_return_label="ret_5", covariance=risk, risk_aversion=5.0, ic=0.05))
+    rule = MeanVarianceOptimizer(MeanVarianceConfig(expected_return_label="ret_5", covariance=risk, risk_aversion=5.0, expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05))))
     rule.bind([LabelSpec(name="ret_5", scale="raw", delay=1, span=5)])
     prices = _prices()
     t = 60

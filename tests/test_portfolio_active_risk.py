@@ -24,6 +24,8 @@ import xarray as xr
 from quantlab.dataset.memory import FrameDataset
 from quantlab.factor.base import Factor
 from quantlab.factor.config import BaseFactorConfig
+from quantlab.portfolio.config import GrinoldExpectedReturnConfig
+from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
 from quantlab.portfolio.config import (
     ActiveRiskConfig,
     FactorRiskStoreEstimatorConfig,
@@ -67,7 +69,7 @@ def _hand_rule(**overrides):
     params = dict(
         expected_return_label="ret_5",
         covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=LOOKBACK)),
-        ic=0.05, risk_aversion=5.0, weight_cap=0.5, benchmark=_benchmark(weights),
+        expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)), risk_aversion=5.0, weight_cap=0.5, benchmark=_benchmark(weights),
     )
     params.update(overrides)
     rule = ActiveRiskOptimizer(ActiveRiskConfig(**params))
@@ -111,8 +113,8 @@ def test_a_large_risk_aversion_holds_the_benchmark():
 
 def test_the_tracking_error_cap_holds():
     context = _with_benchmark(_context(seed=2, prediction=np.array([3.0, -2.0, 2.5, -1.0, 1.0, 2.0])))
-    free = _hand_rule(risk_aversion=0.01, ic=0.5)
-    capped = _hand_rule(risk_aversion=0.0, ic=0.5, tracking_error=0.01)
+    free = _hand_rule(risk_aversion=0.01, expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.5)))
+    capped = _hand_rule(risk_aversion=0.0, expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.5)), tracking_error=0.01)
     assert _active_volatility(free, context, free.construct(context)) > 0.01
     assert _active_volatility(capped, context, capped.construct(context)) <= 0.01 + 1e-6
 
@@ -138,7 +140,7 @@ def test_an_active_risk_backtest_on_a_factor_risk_model_holds_its_cap_and_rebuil
         return ActiveRiskOptimizer(ActiveRiskConfig(
             expected_return_label="fwd_ret_1",
             covariance=FactorRiskStoreEstimator(FactorRiskStoreEstimatorConfig(risk_model=model)),
-            ic=0.5, risk_aversion=0.0, weight_cap=0.6, tracking_error=tracking_error,
+            expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.5)), risk_aversion=0.0, weight_cap=0.6, tracking_error=tracking_error,
             benchmark=_benchmark(benchmark, tmp_path / "benchmark.zarr"),
         ))
 

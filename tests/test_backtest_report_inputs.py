@@ -36,6 +36,8 @@ import plotly.io as pio
 import pytest
 import xarray as xr
 
+from quantlab.portfolio.config import GrinoldExpectedReturnConfig
+from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
 from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig, TopNConfig
 from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
 from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
@@ -113,7 +115,7 @@ def test_a_nested_rule_is_named_as_its_repr(tmp_path):
             expected_return_label="ret_5",
             covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=60)),
             risk_aversion=2.0,
-            ic=0.05,
+            expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
         )
     )
     page = _page(tmp_path, metrics={"out_of_sample_ranges": []}, config=_config(constructor=rule.get_config()))

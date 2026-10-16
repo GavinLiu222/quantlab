@@ -49,6 +49,8 @@ from loguru import logger
 from quantlab.runs.backtest_run import BacktestRun
 from quantlab.backtest.predefined.us_equity import USEquityCrossectionSelectStockVectorBt
 from quantlab.backtest.config import CrossSectionBacktestConfig
+from quantlab.portfolio.config import GrinoldExpectedReturnConfig, RawExpectedReturnConfig
+from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn, RawExpectedReturn
 from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig
 from quantlab.portfolio.base import InputDeclaration, PortfolioConstructionError, PortfolioConstructor
 from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
@@ -273,7 +275,7 @@ def _optimizer(**overrides):
     params = dict(
         expected_return_label="fwd_ret_1",
         covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=LOOKBACK)),
-        ic=0.05,
+        expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
         risk_aversion=5.0,
         turnover_penalty=0.001,
         weight_cap=0.4,
@@ -311,7 +313,7 @@ def test_a_predictor_without_the_expected_return_label_is_refused_at_constructio
         MeanVarianceConfig(
             expected_return_label="fwd_ret_5",
             covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=LOOKBACK)),
-            ic=0.05,
+            expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
             risk_aversion=5.0,
         )
     )
@@ -397,7 +399,7 @@ class _RankedTargetHead(FirstFeatureHead):
         return y, None
 
 
-def test_raw_calibration_on_a_standardized_label_is_refused_when_the_backtest_is_built(tmp_path):
+def test_raw_expected_return_on_a_standardized_label_is_refused_when_the_backtest_is_built(tmp_path):
     dataset_config = write_price_store(tmp_path, n_bars=N_BARS, seed=11)
     bars = xr.open_zarr(dataset_config.zarr_file_path).timestamp.values
     model = make_model(
@@ -412,7 +414,7 @@ def test_raw_calibration_on_a_standardized_label_is_refused_when_the_backtest_is
         head=_RankedTargetHead,
     )
     assert model.label_scales == {"fwd_ret_1": "standardized"}
-    optimizer = _optimizer(calibration="raw", ic=None)
+    optimizer = _optimizer(expected_return=RawExpectedReturn(RawExpectedReturnConfig()))
 
     with pytest.raises(ValueError, match="'fwd_ret_1'.*standardized"):
         USEquityCrossectionSelectStockVectorBt(

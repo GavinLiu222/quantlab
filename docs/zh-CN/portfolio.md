@@ -221,10 +221,13 @@ array([0.55, 0.  , 0.45, 0.  ])
 
 ### 第一次优化
 
-优化器需要知道它读取的标签的 span 和尺度，回测会通过 `bind` 以标签规格的形式交给它。这里的规格描述 5 根 bar 的收益 `ret_5` 和 5 根 bar 的波动率 `vol_5`，两者都以标签自身的单位预测（`"raw"`，见[校准](#校准)）。
+优化器需要知道它读取的标签的 span 和尺度，回测会通过 `bind` 以标签规格的形式交给它。这里的规格描述 5 根 bar 的收益 `ret_5` 和 5 根 bar 的波动率 `vol_5`，两者都以标签自身的单位预测（`"raw"`，见[预期收益模型](#预期收益模型)）。
 
 ```python
->>> from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig
+>>> from quantlab.portfolio.config import (
+...     GrinoldExpectedReturnConfig, LedoitWolfEstimatorConfig, MeanVarianceConfig,
+... )
+>>> from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
 >>> from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
 >>> from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
 >>> from quantlab.runs.prediction_panel import LabelSpec
@@ -248,7 +251,7 @@ array([0.55, 0.  , 0.45, 0.  ])
 >>> optimizer = MeanVarianceOptimizer(MeanVarianceConfig(
 ...     expected_return_label="ret_5",
 ...     covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=60)),
-...     ic=0.05, risk_aversion=5.0, weight_cap=0.4,
+...     expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)), risk_aversion=5.0, weight_cap=0.4,
 ... ))
 >>> optimizer.bind(specs)
 >>> optimizer.declared_inputs().lookback_bars, optimizer.span
@@ -261,26 +264,32 @@ array([0.4  , 0.4  , 0.009, 0.191])
 
 组合满仓且不超过权重上限。预期收益这么小时，组合偏向低波动的 `AAA` 和 `BBB`。`optimizer.problem_inputs(context)` 返回候选标的及其 `mu`、`Sigma` 和当前权重，可以用来查看优化器为什么这样选。
 
-### 校准
+### 预期收益模型
 
-模型的预测通常是一个分数而不是收益：它能给标的排序，但尺度取决于模型本身，以及训练目标做过什么变换。`calibration` 决定预测如何变成预期收益 `mu`：
+模型的预测通常是一个分数而不是收益：它能给标的排序，但尺度取决于模型本身，以及训练目标做过什么变换。优化器的 `expected_return` 字段持有一个预期收益模型（`ExpectedReturnModel`，`quantlab.portfolio.predefined.expected_return`，ADR 0046），决定 `expected_return_label` 的预测如何变成预期收益 `mu`：
 
-- `"grinold"`（默认）令 `mu = ic * sigma * z`。其中 `z` 是预测在候选标的上的截面 z-score，`sigma` 是每个标的在 span 内的波动率（取自协方差矩阵的对角线），`ic` 是模型的信息系数，例如一次滚动交叉验证的平均 IC。任何模型的输出都能接入，并且换模型时 `risk_aversion` 的含义不变。
-- `"raw"` 直接把预测当作 `mu`，只适合预测值本身就是收益单位的模型。
+- `GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=...))` 令 `mu = ic * sigma * z`。其中 `z` 是预测在候选标的上的截面 z-score，`sigma` 是每个标的在 span 内的波动率（取自协方差矩阵的对角线），`ic` 是模型的信息系数，例如一次滚动交叉验证的平均 IC。任何模型的输出都能用，`risk_aversion` 的含义在不同模型间保持一致。波动越大的标的 `mu` 越大，所以没有风险项时组合会偏向高波动标的。
+- `ZScoreExpectedReturn(ZScoreExpectedReturnConfig(ic=...))` 令 `mu = ic * median(sigma) * z`，中位数取当天候选标的的：尺度与 Grinold 相同，同样的 `risk_aversion` 和 `turnover_penalty` 含义不变，但没有向高波动标的的倾斜；同一 bar 内 `mu` 的排序与预测完全相同。
+- `RawExpectedReturn(RawExpectedReturnConfig())` 直接把预测当作 `mu`，只适用于以收益本身为单位做预测的模型。
+- `PredictionExpectedReturn(PredictionExpectedReturnConfig())` 把预测原样当作 `mu`，不管单位（例如 ensemble 的标准化分数）。此时 `risk_aversion` 和 `turnover_penalty` 以预测的单位与 `mu` 权衡，不能和 Grinold 规则的取值直接比较。
 
-每个预测器都会按标签报告预测是否用标签自身的单位：`label_scales` 把每个标签映射为 `"raw"` 或 `"standardized"`，标签规格以 `scale` 携带它。模型在未经变换的标签上训练时报告 `"raw"`。ensemble 对多个成员平均的标签报告 `"standardized"`，因为它会先对每个成员做 z-score。`bind` 会拒绝在 `"standardized"` 标签上使用 `"raw"` 校准：
+模型按 `[bars, symbols]` 数组计算（`expected_returns(predictions, sigma, candidates)`），所以逐 bar 规则和近似回测调用的是同一份代码。自己写一个时，继承 `ExpectedReturnModel`，设置 `config_cls` 和 `needs_sigma`，实现 `expected_returns`，需要拒绝某些标签时重写 `bind`。
+
+每个预测器都会按标签报告其预测是否使用标签本身的单位：`label_scales` 把每个标签映射为 `"raw"` 或 `"standardized"`，标签的 spec 以 `scale` 字段携带它。直接在标签上拟合的模型是 `"raw"`；ensemble 对多个成员取平均的标签报告 `"standardized"`，因为它先对每个成员做 z-score。`bind` 拒绝在 `"standardized"` 标签上使用 `RawExpectedReturn`：
 
 ```python
 >>> import dataclasses
+>>> from quantlab.portfolio.config import RawExpectedReturnConfig
+>>> from quantlab.portfolio.predefined.expected_return import RawExpectedReturn
 >>> ranked = [dataclasses.replace(specs[0], scale="standardized"), specs[1]]
 >>> MeanVarianceOptimizer(MeanVarianceConfig(
-...     expected_return_label="ret_5", calibration="raw",
+...     expected_return_label="ret_5", expected_return=RawExpectedReturn(RawExpectedReturnConfig()),
 ...     covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=60)),
 ...     risk_aversion=5.0,
 ... )).bind(ranked)
 Traceback (most recent call last):
     ...
-ValueError: calibration='raw' reads the prediction of 'ret_5' as a return, but its label spec reports its scale as 'standardized', not 'raw' (a model fitted on a transformed target, or a label an ensemble averages); use calibration='grinold'
+ValueError: RawExpectedReturn reads the prediction of 'ret_5' as a return, but its label spec reports its scale as 'standardized', not 'raw' (a model fitted on a transformed target, or a label an ensemble averages); use PredictionExpectedReturn to take it as it is, or GrinoldExpectedReturn
 
 ```
 
@@ -311,7 +320,7 @@ True
 >>> with_volatility = MeanVarianceOptimizer(MeanVarianceConfig(
 ...     expected_return_label="ret_5", volatility_label="vol_5",
 ...     covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=60)),
-...     ic=0.05, risk_aversion=5.0, weight_cap=0.4,
+...     expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)), risk_aversion=5.0, weight_cap=0.4,
 ... ))
 >>> with_volatility.bind(specs)
 >>> covariance = with_volatility.problem_inputs(context).covariance
@@ -336,7 +345,7 @@ array([0.4  , 0.399, 0.   , 0.201])
 >>> long_short = MeanVarianceOptimizer(MeanVarianceConfig(
 ...     expected_return_label="ret_5",
 ...     covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=60)),
-...     ic=0.05, risk_aversion=5.0, weight_cap=0.4, direction="long_short",
+...     expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)), risk_aversion=5.0, weight_cap=0.4, direction="long_short",
 ... ))
 >>> long_short.bind(specs)
 >>> weights = long_short.construct(context)
@@ -352,7 +361,7 @@ array([ 0.4  , -0.212, -0.261,  0.073])
 - `mu` 最大的 `candidate_top_k` 个标的（多空时按 `abs(mu)` 取最大）；
 - 加上当前持有的所有标的，这样跌出前列的持仓仍能按换手成本平仓。
 
-候选池以外的标的权重为 0.0。Grinold 校准的 z-score 在截取候选池之前、对全部候选标的计算，所以 `mu` 不受 `candidate_top_k` 影响。
+候选池以外的标的权重为 0.0。预期收益模型的 z-score 在截取候选池之前、对全部候选标的计算，所以 `mu` 不受 `candidate_top_k` 影响。
 
 ### 最小交易量
 
@@ -379,7 +388,7 @@ array([ 0.4  , -0.212, -0.261,  0.073])
 >>> capped = MeanVarianceOptimizer(MeanVarianceConfig(
 ...     expected_return_label="ret_5",
 ...     covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=60)),
-...     ic=0.05, risk_aversion=5.0, weight_cap=0.6, max_names=2, solver="MOSEK",
+...     expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)), risk_aversion=5.0, weight_cap=0.6, max_names=2, solver="MOSEK",
 ... ))
 >>> capped.bind(specs)
 >>> capped.construct(context).values.round(3)
@@ -398,7 +407,7 @@ array([0.6, 0.4, 0. , 0. ])
 
 近似回测（见[用近似回测做参数扫描](backtest.md#用近似回测做参数扫描)）读取优化器的配置，用自己的均值-方差实现（`quantlab/portfolio/predefined/approximate/mean_variance.py` 的 `decide`）决定一个分块里的 bar；`MeanVarianceOptimizer` 本身只逐 bar 决策。它以低秩形式构造每个 bar 的协方差（`quantlab/portfolio/predefined/approximate/covariance.py`，一个 `quantlab.portfolio.approximate` 的 `LowRankCovariance`：每个 bar 为 `B F B' + diag(D)`），按预期收益标签的 span 缩放，并像逐 bar 规则一样计算 `mu`：可交易且被估计覆盖的标的为可选，有预测的可选标的上 `mu = ic * sigma * z`。然后在每个 bar 的候选上、预算和单只上限之下最大化 `w @ mu - risk_aversion / 2 * w @ Sigma @ w - turnover_penalty * |w - w_held|_1`，用编译代码完成（numba，`quantlab/portfolio/predefined/approximate/_support/mean_variance_kernels.py`，只在这条路径上导入），且只在分块中某个 bar 可选的列上计算。每个 bar 用带回溯的加速近端梯度（带自适应重启的 FISTA）求解：步长对应的曲率从预算切空间 `{sum(dw) = 0}` 上的一个上界以下开始（所有标的在市场因子上的载荷相近，它在切空间上大部分抵消），每接受一步就调低，充分下降检验不通过时加倍，但不超过上界，所以上限大量起作用、剩余曲率很小的 bar 能走长步。近端算子是到带上限单纯形的精确投影，换手惩罚表现为向持仓的软阈值，平移量用带保护的牛顿步求得。一个 bar 的梯度映射残差不超过回测的 `tolerance`（默认 1e-5）乘以起点梯度的最大分量时视为收敛，此时目标值离最优不超过约两倍于此。有换手惩罚或 `candidate_top_k`（它把持有的标的保留在候选池里）时，按时间顺序求解，每个 bar 只解一次：它的持仓是它的账户（上一个已决定 bar 的权重按成交价计，按本 bar 收盘价估值；`quantlab.execution.approximate`），可选的持仓标的加入候选（无预测时 `mu = 0`），并从持仓出发求解；保持仓位的 bar 不改变账户。两者都没有时，各 bar 相互独立，一次解完，除 macOS 外按 bar 并行（`numba.set_num_threads` 限制线程数），此时无预测的持仓标的不是候选。在 3,000 个候选、61 个因子、最大特征值约为特定方差中位数 4,300 倍的问题上，一个 bar 从上限出发约需 20 次迭代，从漂移后的持仓出发约需 4 次，原来的求解器分别要 2,600 次和 50 次。候选太少的 bar 保持仓位，与回测运行相同。在合成数据上，权重与以严格容差求解的回测运行相差在 1e-5（L1）以内，净值相差在 2e-4 以内；CLARABEL 用默认容差时，运行自己的解在目标函数接近平坦的 bar 上可能离最优约 2e-3，两种回测在那里可能相差这么多。有换手惩罚时，不交易区内的权重停在持仓上，所以两种回测交给规则的持仓会直接进入权重：有手续费时，回测运行会把成交的最后几笔买入削减到手续费剩下的现金（现金上限，近似回测放弃了它），带惩罚的权重于是相差约为成本乘以换手（合成数据上 5 bp 手续费时为 7.8e-4）。`candidate_top_k` 把任何非零权重都算作持有，所以当运行的求解器把某只标的留在 1e-9、近似求解给出 0 时，那个 bar 的候选池会差这一只标的。
 
-支持：两个方向、两种校准、任意 `turnover_penalty`、`candidate_top_k` 和 `volatility_label`，以及 `max_names`，协方差估计器为 `LedoitWolfEstimator` 或 `FactorRiskStoreEstimator`。多空时，求解在 `sum(w) = 0`、`|w|_1 <= 1`、`|w| <= weight_cap` 上求最大，投影是 L1 项（总敞口上限的乘子，以及换手惩罚向持仓的拉力）的逐元素近端算子，再加一个使总和为零的平移量；总敞口上限的乘子用牛顿步求得，因为总敞口是它的分段线性函数。`candidate_top_k` 在每个 bar 有预测和持有的候选中，按 `mu`（多空时按 `|mu|`）保留前 `candidate_top_k` 个，与逐 bar 规则一样用稳定排序，再加上持有的候选。`volatility_label` 把预测除以 `sqrt(span)` 作为单 bar 波动率交给协方差估计：没有有限正值的标的不被覆盖，被覆盖的标的保留估计的相关性、换成预测的波动率（`LowRankCovariance.with_volatility`）；使用 `FactorRiskStoreEstimator` 时，优化器在构造时就拒绝 `volatility_label`。`calibration="raw"` 直接以预测作为 `mu`。`max_names` 把每一步投影到持仓数至多 `max_names` 的组合上（多头和空头合起来计数）：先按方向做近端投影（带上限单纯形，或上文的多空集合；多空时置零代价还包括总敞口上限的乘子乘 `|w|`），若持仓数超过上限，就保留置零代价最大（`1/2 (w - u)^2` 加换手拉力，置零时与近端权重时之差）的 `max_names` 只标的，再在它们上重做投影；迭代不带动量（加速在这个非凸集合上会振荡），第一步是从起点出发的梯度步，所以从现金出发时按梯度而不是按列顺序挑选标的。结果是 `run()` 精确求解的那个规划的局部最优。速度（#319）：在 us3000 规模的合成数据上（价格轴 10,000 只标的，3,000 只有价格，60 个因子，特征值最大约为特定方差的 4,500 倍），模拟盘配置（风险厌恶 20、`weight_cap` 0.05、`turnover_penalty` 0.002、ic 0.0122）在 67 次日度调仓、10 bp 成本下用时 1.0 秒，`run()` 用时 532 秒；净值相差在 5e-4 以内，年化收益相差在 0.25 个百分点以内，权重相差在 2.4e-3（L1，即现金上限造成的差距）以内。在读任何数据之前拒绝、并在消息中写明的有：跟踪误差上限（`tracking_error`）、`exposure_bounds`、优化器或受支持估计器的子类（例如重写了 `reference_weights` 或 `risk_constraints` 的规则）、其他协方差估计器。不读取 `solver`；不模拟 `min_trade`：只在 `min_trade` 上不同的配置，近似结果相同。
+支持：两个方向、任意预期收益模型、任意 `turnover_penalty`、`candidate_top_k` 和 `volatility_label`，以及 `max_names`，协方差估计器为 `LedoitWolfEstimator` 或 `FactorRiskStoreEstimator`。多空时，求解在 `sum(w) = 0`、`|w|_1 <= 1`、`|w| <= weight_cap` 上求最大，投影是 L1 项（总敞口上限的乘子，以及换手惩罚向持仓的拉力）的逐元素近端算子，再加一个使总和为零的平移量；总敞口上限的乘子用牛顿步求得，因为总敞口是它的分段线性函数。`candidate_top_k` 在每个 bar 有预测和持有的候选中，按 `mu`（多空时按 `|mu|`）保留前 `candidate_top_k` 个，与逐 bar 规则一样用稳定排序，再加上持有的候选。`volatility_label` 把预测除以 `sqrt(span)` 作为单 bar 波动率交给协方差估计：没有有限正值的标的不被覆盖，被覆盖的标的保留估计的相关性、换成预测的波动率（`LowRankCovariance.with_volatility`）；使用 `FactorRiskStoreEstimator` 时，优化器在构造时就拒绝 `volatility_label`。每个预期收益模型用的都是逐 bar 规则的同一份数组代码（例如 `RawExpectedReturn` 直接以预测作为 `mu`）。`max_names` 把每一步投影到持仓数至多 `max_names` 的组合上（多头和空头合起来计数）：先按方向做近端投影（带上限单纯形，或上文的多空集合；多空时置零代价还包括总敞口上限的乘子乘 `|w|`），若持仓数超过上限，就保留置零代价最大（`1/2 (w - u)^2` 加换手拉力，置零时与近端权重时之差）的 `max_names` 只标的，再在它们上重做投影；迭代不带动量（加速在这个非凸集合上会振荡），第一步是从起点出发的梯度步，所以从现金出发时按梯度而不是按列顺序挑选标的。结果是 `run()` 精确求解的那个规划的局部最优。速度（#319）：在 us3000 规模的合成数据上（价格轴 10,000 只标的，3,000 只有价格，60 个因子，特征值最大约为特定方差的 4,500 倍），模拟盘配置（风险厌恶 20、`weight_cap` 0.05、`turnover_penalty` 0.002、ic 0.0122）在 67 次日度调仓、10 bp 成本下用时 1.0 秒，`run()` 用时 532 秒；净值相差在 5e-4 以内，年化收益相差在 0.25 个百分点以内，权重相差在 2.4e-3（L1，即现金上限造成的差距）以内。在读任何数据之前拒绝、并在消息中写明的有：跟踪误差上限（`tracking_error`）、`exposure_bounds`、优化器或受支持估计器的子类（例如重写了 `reference_weights` 或 `risk_constraints` 的规则）、其他协方差估计器。不读取 `solver`；不模拟 `min_trade`：只在 `min_trade` 上不同的配置，近似结果相同。
 
 主动风险规则也能运行，但不能设 `tracking_error`。`DecisionInputs.panel` 带上规则声明的因子在各 bar 的值（`DecisionPanel.factors`），近似回测从中读取基准权重（它的 `benchmark_weight` 输出），与逐 bar 规则的 `reference_weights` 读每个 bar 的方式相同。于是在每个 bar 上计价 `(w - b)' Sigma (w - b)`，`b` 只取该 bar 被覆盖的标的：估计未覆盖的基准标的被剔除，与逐 bar 规则相同，但不记录事件。在合成数据上，它的权重与以严格容差求解的回测运行相差在 6e-7（L1）以内，净值相差在 1.5e-4 以内。
 
@@ -417,7 +426,7 @@ array([0.6, 0.4, 0. , 0. ])
 >>> bounded = MeanVarianceOptimizer(MeanVarianceConfig(
 ...     expected_return_label="ret_5",
 ...     covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=60)),
-...     ic=0.05, risk_aversion=5.0, weight_cap=0.4,
+...     expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)), risk_aversion=5.0, weight_cap=0.4,
 ...     exposure_factors=(beta,), exposure_bounds={"beta": (0.95, 1.05)},
 ... ))
 >>> bounded.bind(specs)
@@ -524,14 +533,17 @@ array([0.4, 0.4, 0. , 0.2])
 ```python
 from quantlab.factor.config import MembershipCapWeightConfig
 from quantlab.factor.predefined.membership_cap_weight import MembershipCapWeight
-from quantlab.portfolio.config import ActiveRiskConfig, FactorRiskStoreEstimatorConfig
+from quantlab.portfolio.config import (
+    ActiveRiskConfig, FactorRiskStoreEstimatorConfig, GrinoldExpectedReturnConfig,
+)
+from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
 from quantlab.portfolio.predefined.active_risk import ActiveRiskOptimizer
 from quantlab.portfolio.predefined.factor_risk import FactorRiskStoreEstimator
 
 rule = ActiveRiskOptimizer(ActiveRiskConfig(
     expected_return_label="ret_1",
     covariance=FactorRiskStoreEstimator(FactorRiskStoreEstimatorConfig(risk_model=use4)),
-    ic=0.0122, risk_aversion=20.0, turnover_penalty=0.002, weight_cap=0.05,
+    expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.0122)), risk_aversion=20.0, turnover_penalty=0.002, weight_cap=0.05,
     benchmark=MembershipCapWeight(MembershipCapWeightConfig(dataset=daily, membership=us3000)),
     tracking_error=0.06 / 252**0.5,
 ))

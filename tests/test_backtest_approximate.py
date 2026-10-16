@@ -53,7 +53,8 @@ the same bounds: long-short without and with a turnover penalty (the
 penalised one also with `candidate_top_k`, ranked by `|mu|`),
 `candidate_top_k` long-only (held names kept in the pool), `volatility_label`
 (a model predicting `fwd_ret_1` and a positive `vol_1`) and
-`calibration="raw"`.
+`RawExpectedReturn`, and since #334 `ZScoreExpectedReturn` and
+`PredictionExpectedReturn`.
 
 What the approximation gives up (#310), as a specification: a store with
 delistings (S02 at bar 85, S05 at 104), a listing inside the window (S09 at
@@ -93,6 +94,18 @@ from quantlab.label.config import ForwardConfig
 from quantlab.label.forward import Forward
 from quantlab.model.config import ModelConfig
 from quantlab.model.library_model import LibraryModel
+from quantlab.portfolio.config import (
+    GrinoldExpectedReturnConfig,
+    PredictionExpectedReturnConfig,
+    RawExpectedReturnConfig,
+    ZScoreExpectedReturnConfig,
+)
+from quantlab.portfolio.predefined.expected_return import (
+    GrinoldExpectedReturn,
+    PredictionExpectedReturn,
+    RawExpectedReturn,
+    ZScoreExpectedReturn,
+)
 from quantlab.portfolio.base import CovarianceEstimate, CovarianceEstimator
 from quantlab.portfolio.config import (
     ActiveRiskConfig,
@@ -543,7 +556,7 @@ def _mvo(**overrides):
     params = dict(
         expected_return_label="fwd_ret_1",
         covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=MVO_LOOKBACK)),
-        ic=0.05,
+        expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
         risk_aversion=5.0,
         weight_cap=0.2,
     )
@@ -665,7 +678,7 @@ def _refused_rule(store, named):
             ActiveRiskConfig(
                 expected_return_label="fwd_ret_1",
                 covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=MVO_LOOKBACK)),
-                ic=0.05, risk_aversion=5.0, weight_cap=0.2,
+                expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)), risk_aversion=5.0, weight_cap=0.2,
                 benchmark=_benchmark(weights), tracking_error=0.01,
             )
         )
@@ -714,7 +727,7 @@ def _active(bars, **overrides):
     params = dict(
         expected_return_label="fwd_ret_1",
         covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=MVO_LOOKBACK)),
-        ic=0.05,
+        expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
         risk_aversion=5.0,
         weight_cap=0.2,
         benchmark=_benchmark(_benchmark_weights(bars)),
@@ -1061,7 +1074,7 @@ def test_with_fees_the_penalised_gap_is_the_runs_cash_cap(mvo_store):
 
 
 # --------------------------------------------------------------------------
-# Long-short, candidate_top_k, volatility_label and raw calibration (#307)
+# Long-short, candidate_top_k, volatility_label and RawExpectedReturn (#307)
 # --------------------------------------------------------------------------
 #
 # Each case runs on the mean-variance store, without fees where a turnover
@@ -1178,7 +1191,16 @@ CONFIGURATION_CASES = {
     ),
     "candidate_top_k": (dict(candidate_top_k=6), 0.0, False),
     "volatility_label": (dict(volatility_label="vol_1"), FEES, True),
-    "raw_calibration": (dict(calibration="raw", ic=None, risk_aversion=20.0), FEES, False),
+    "raw_expected_return": (dict(expected_return=RawExpectedReturn(RawExpectedReturnConfig()), risk_aversion=20.0), FEES, False),
+    # The expected return models of #334: the same array code in both backtests.
+    "z_score_expected_return": (
+        dict(expected_return=ZScoreExpectedReturn(ZScoreExpectedReturnConfig(ic=0.05))), FEES, False
+    ),
+    "prediction_expected_return": (
+        dict(expected_return=PredictionExpectedReturn(PredictionExpectedReturnConfig()), risk_aversion=20.0),
+        FEES,
+        False,
+    ),
 }
 
 

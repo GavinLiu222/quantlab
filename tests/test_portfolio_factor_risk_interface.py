@@ -20,6 +20,8 @@ import pandas as pd
 import pytest
 import xarray as xr
 
+from quantlab.portfolio.config import GrinoldExpectedReturnConfig
+from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
 from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig, TopNConfig
 from quantlab.portfolio.base import (
     CovarianceEstimate,
@@ -100,7 +102,7 @@ def _optimizer(*, factor_form, **overrides):
     params = dict(
         expected_return_label="ret_5",
         covariance=_FixedRisk(LedoitWolfEstimatorConfig(lookback_bars=2), factor_form=factor_form),
-        ic=0.05,
+        expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
         risk_aversion=20.0,
         weight_cap=0.35,
     )
@@ -178,7 +180,7 @@ def test_declarations_are_empty_by_default_and_the_optimizer_declares_its_covari
         MeanVarianceConfig(
             expected_return_label="ret_5",
             covariance=_WithRiskModel(LedoitWolfEstimatorConfig(lookback_bars=10)),
-            ic=0.05,
+            expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
             risk_aversion=5.0,
         )
     )

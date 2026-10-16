@@ -84,6 +84,8 @@ from quantlab.label.predefined.membership_mask import MembershipMaskedLabel
 from quantlab.model.config import ModelConfig
 from quantlab.model.predefined.membership_mask import MembershipMaskedPredictor
 from quantlab.model.predefined.xgb import XGBoostRegressor
+from quantlab.portfolio.config import GrinoldExpectedReturnConfig
+from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
 from quantlab.portfolio.config import (
     FactorRiskStoreEstimatorConfig,
     LedoitWolfEstimatorConfig,
@@ -375,7 +377,7 @@ def backtest(checkpoint: Path, covariance: str):
         covariance=COVARIANCES[covariance](),
         # mu = ic * sigma * z, sigma each symbol's volatility under the
         # covariance: the information coefficient of the return model.
-        ic=0.02,
+        expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.02)),
         risk_aversion=10.0,
         # Per unit of one-way turnover, about the fees plus slippage below.
         turnover_penalty=0.001,

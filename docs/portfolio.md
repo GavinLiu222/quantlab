@@ -221,10 +221,13 @@ A held candidate without a prediction gets an expected return of 0.0, so its tur
 
 ### A first optimisation
 
-The optimiser needs to know the span and scale of the labels it reads, which a backtest hands it through `bind` as label specs. Here the specs describe a 5-bar return `ret_5` and a 5-bar volatility `vol_5`, both predicted in the labels' own units (`"raw"`, see [Calibration](#calibration)).
+The optimiser needs to know the span and scale of the labels it reads, which a backtest hands it through `bind` as label specs. Here the specs describe a 5-bar return `ret_5` and a 5-bar volatility `vol_5`, both predicted in the labels' own units (`"raw"`, see [Expected return models](#expected-return-models)).
 
 ```python
->>> from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig
+>>> from quantlab.portfolio.config import (
+...     GrinoldExpectedReturnConfig, LedoitWolfEstimatorConfig, MeanVarianceConfig,
+... )
+>>> from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
 >>> from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
 >>> from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
 >>> from quantlab.runs.prediction_panel import LabelSpec
@@ -248,7 +251,7 @@ The optimiser needs to know the span and scale of the labels it reads, which a b
 >>> optimizer = MeanVarianceOptimizer(MeanVarianceConfig(
 ...     expected_return_label="ret_5",
 ...     covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=60)),
-...     ic=0.05, risk_aversion=5.0, weight_cap=0.4,
+...     expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)), risk_aversion=5.0, weight_cap=0.4,
 ... ))
 >>> optimizer.bind(specs)
 >>> optimizer.declared_inputs().lookback_bars, optimizer.span
@@ -261,26 +264,32 @@ array([0.4  , 0.4  , 0.009, 0.191])
 
 The book is fully invested and within the cap. With so small an expected return it leans toward the low-volatility symbols `AAA` and `BBB`. `optimizer.problem_inputs(context)` returns the candidates with their `mu`, `Sigma` and current weights, which is useful to see why the optimiser chose what it did.
 
-### Calibration
+### Expected return models
 
-A model's prediction is usually a score, not a return. It ranks symbols, but its scale depends on the model and on how its training target was transformed. `calibration` says how the prediction becomes the expected return `mu`:
+A model's prediction is usually a score, not a return. It ranks symbols, but its scale depends on the model and on how its training target was transformed. The optimiser's `expected_return` field holds an expected return model (`ExpectedReturnModel`, `quantlab.portfolio.predefined.expected_return`, ADR 0046) that says how `expected_return_label`'s prediction becomes the expected return `mu`:
 
-- `"grinold"` (the default) sets `mu = ic * sigma * z`. Here `z` is the prediction's cross-sectional z-score over the candidates, `sigma` each symbol's volatility over the span (from the covariance's diagonal), and `ic` the model's information coefficient, for example the mean IC of a walk-forward cross-validation run. Any model's output can feed it, and `risk_aversion` keeps its meaning from one model to the next.
-- `"raw"` takes the prediction itself as `mu`. It only makes sense for a model that predicts returns in their own units.
+- `GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=...))` sets `mu = ic * sigma * z`. Here `z` is the prediction's cross-sectional z-score over the candidates, `sigma` each symbol's volatility over the span (from the covariance's diagonal), and `ic` the model's information coefficient, for example the mean IC of a walk-forward cross-validation run. Any model's output can feed it, and `risk_aversion` keeps its meaning from one model to the next. A riskier name gets a larger `mu`, so without a risk term the book leans to volatile names.
+- `ZScoreExpectedReturn(ZScoreExpectedReturnConfig(ic=...))` sets `mu = ic * median(sigma) * z`, the median over the bar's candidates: Grinold's scale, so the same `risk_aversion` and `turnover_penalty` mean the same, without the tilt; within a bar `mu` ranks exactly as the prediction.
+- `RawExpectedReturn(RawExpectedReturnConfig())` takes the prediction itself as `mu`. It only makes sense for a model that predicts returns in their own units.
+- `PredictionExpectedReturn(PredictionExpectedReturnConfig())` takes the prediction as it is, whatever its units (an ensemble's standardized score, say). `risk_aversion` and `turnover_penalty` then weigh against `mu` in the prediction's units, so they are not comparable with a Grinold rule's.
 
-Every predictor reports, per label, whether its prediction is in the label's own units: `label_scales` maps each label to `"raw"` or `"standardized"`, and the label's spec carries it as `scale`. A model is `"raw"` when it was fitted on the label unchanged. An ensemble reports `"standardized"` for a label it averages over several members, because it z-scores each member first. `bind` refuses `"raw"` calibration on a `"standardized"` label:
+A model works on `[bars, symbols]` arrays (`expected_returns(predictions, sigma, candidates)`), so the per-bar rule and the approximate backtest call the same code. To write one, subclass `ExpectedReturnModel`, set `config_cls` and `needs_sigma`, implement `expected_returns`, and override `bind` to refuse a label it cannot read.
+
+Every predictor reports, per label, whether its prediction is in the label's own units: `label_scales` maps each label to `"raw"` or `"standardized"`, and the label's spec carries it as `scale`. A model is `"raw"` when it was fitted on the label unchanged. An ensemble reports `"standardized"` for a label it averages over several members, because it z-scores each member first. `bind` refuses `RawExpectedReturn` on a `"standardized"` label:
 
 ```python
 >>> import dataclasses
+>>> from quantlab.portfolio.config import RawExpectedReturnConfig
+>>> from quantlab.portfolio.predefined.expected_return import RawExpectedReturn
 >>> ranked = [dataclasses.replace(specs[0], scale="standardized"), specs[1]]
 >>> MeanVarianceOptimizer(MeanVarianceConfig(
-...     expected_return_label="ret_5", calibration="raw",
+...     expected_return_label="ret_5", expected_return=RawExpectedReturn(RawExpectedReturnConfig()),
 ...     covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=60)),
 ...     risk_aversion=5.0,
 ... )).bind(ranked)
 Traceback (most recent call last):
     ...
-ValueError: calibration='raw' reads the prediction of 'ret_5' as a return, but its label spec reports its scale as 'standardized', not 'raw' (a model fitted on a transformed target, or a label an ensemble averages); use calibration='grinold'
+ValueError: RawExpectedReturn reads the prediction of 'ret_5' as a return, but its label spec reports its scale as 'standardized', not 'raw' (a model fitted on a transformed target, or a label an ensemble averages); use PredictionExpectedReturn to take it as it is, or GrinoldExpectedReturn
 
 ```
 
@@ -311,7 +320,7 @@ The volatility label, such as `Volatility`, is a span-scale volatility. It must 
 >>> with_volatility = MeanVarianceOptimizer(MeanVarianceConfig(
 ...     expected_return_label="ret_5", volatility_label="vol_5",
 ...     covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=60)),
-...     ic=0.05, risk_aversion=5.0, weight_cap=0.4,
+...     expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)), risk_aversion=5.0, weight_cap=0.4,
 ... ))
 >>> with_volatility.bind(specs)
 >>> covariance = with_volatility.problem_inputs(context).covariance
@@ -336,7 +345,7 @@ With `direction="long_short"` the book is dollar-neutral:
 >>> long_short = MeanVarianceOptimizer(MeanVarianceConfig(
 ...     expected_return_label="ret_5",
 ...     covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=60)),
-...     ic=0.05, risk_aversion=5.0, weight_cap=0.4, direction="long_short",
+...     expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)), risk_aversion=5.0, weight_cap=0.4, direction="long_short",
 ... ))
 >>> long_short.bind(specs)
 >>> weights = long_short.construct(context)
@@ -352,7 +361,7 @@ A universe of thousands of symbols is slow to optimise at every rebalance. `cand
 - the `candidate_top_k` symbols with the largest `mu` (largest `abs(mu)` long-short);
 - plus every symbol currently held, so that a holding that fell out of the top can still be closed at its turnover cost.
 
-Symbols outside the pool get 0.0. The z-score of the Grinold calibration is taken over every candidate before the pool is cut, so `mu` does not depend on `candidate_top_k`.
+Symbols outside the pool get 0.0. The z-score of the expected return model is taken over every candidate before the pool is cut, so `mu` does not depend on `candidate_top_k`.
 
 ### Minimum trade
 
@@ -379,7 +388,7 @@ Each bar's problem is solved by the cvxpy solver `solver` names: `"CLARABEL"` by
 >>> capped = MeanVarianceOptimizer(MeanVarianceConfig(
 ...     expected_return_label="ret_5",
 ...     covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=60)),
-...     ic=0.05, risk_aversion=5.0, weight_cap=0.6, max_names=2, solver="MOSEK",
+...     expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)), risk_aversion=5.0, weight_cap=0.6, max_names=2, solver="MOSEK",
 ... ))
 >>> capped.bind(specs)
 >>> capped.construct(context).values.round(3)
@@ -398,7 +407,7 @@ array([0.6, 0.4, 0. , 0. ])
 
 The approximate backtest (see [Sweep with the approximate backtest](backtest.md#sweep-with-the-approximate-backtest)) reads the optimiser's config and decides a chunk of bars with its own mean-variance implementation (`quantlab/portfolio/predefined/approximate/mean_variance.py`, its `decide`); `MeanVarianceOptimizer` itself only decides one bar at a time. It builds every bar's covariance in low-rank form (`quantlab/portfolio/predefined/approximate/covariance.py`, a `LowRankCovariance` of `quantlab.portfolio.approximate`: `B F B' + diag(D)` per bar) scaled to the expected-return label's span, and computes `mu` as the per-bar rule does: a symbol tradable and covered by the estimate is selectable, and `mu = ic * sigma * z` on the selectable symbols with a prediction. It then maximises `w @ mu - risk_aversion / 2 * w @ Sigma @ w - turnover_penalty * |w - w_held|_1` under the budget and the cap on each bar's candidates, in compiled code (numba, `quantlab/portfolio/predefined/approximate/_support/mean_variance_kernels.py`, imported only by this path), only on the columns some bar of the chunk can select. Each bar is solved by accelerated proximal gradient (FISTA with adaptive restart) with backtracking: the step's curvature starts below a bound on the budget's tangent space, `{sum(dw) = 0}`, where the market factor, on which every symbol loads alike, mostly cancels, and is lowered after every accepted step and doubled when the sufficient-decrease test fails, never past the bound, so a bar whose binding caps leave little curvature takes long steps. The prox is the exact projection onto the capped simplex, with the turnover penalty as soft-thresholding toward the holdings, its shift found by safeguarded Newton steps. A bar has converged when its gradient-mapping residual is at most the backtest's `tolerance` (default 1e-5) times its starting gradient's largest entry, its objective then within about twice that of the optimum. With a turnover penalty, or `candidate_top_k` (which keeps the held names in its pool), the bars are solved forward in time, each once: its holdings are its book (the last decided bar's weights at their fill prices, marked at its close; `quantlab.execution.approximate`), the selectable ones joining the candidates (at `mu = 0` when unpredicted), and its solve starts from them; a held bar leaves the book as it was. Without either, the bars are independent and solved at once, in parallel over the bars except on macOS (`numba.set_num_threads` caps the threads), a held name without a prediction then not a candidate. On a problem of 3,000 candidates and 61 factors whose largest eigenvalue is about 4,300 times the median specific variance, a bar takes about 20 iterations from its caps and 4 from its drifted holdings, against 2,600 and 50 for the previous solver. A bar with too few candidates holds, as in a backtest run. On synthetic stores the weights are within 1e-5 (L1) of a backtest run solved to tight tolerances and the value within 2e-4; at CLARABEL's default tolerances a run's own solution can stop about 2e-3 from the optimum on a bar whose objective is nearly flat, so the two backtests can differ by that much there. With a turnover penalty a weight inside the no-trade band stays at its holding, so the holdings each backtest hands the rule enter its weights: with fees, a backtest run cuts a fill's last buys to the cash the fees leave (the cash cap, which the approximate backtest gives up), and the penalised weights then differ by up to about the cost times the turnover (7.8e-4 with 5 bp fees on the synthetic store). `candidate_top_k` counts any nonzero weight as held, so where the run's solver leaves a name at 1e-9 and the approximate one at 0, a bar's pools differ by that name.
 
-Supported: both directions, both calibrations, any `turnover_penalty`, `candidate_top_k` and `volatility_label`, and `max_names`, with `LedoitWolfEstimator` or `FactorRiskStoreEstimator`. Long-short, the solve maximises over `sum(w) = 0`, `|w|_1 <= 1` and `|w| <= weight_cap`, the projection being the entrywise prox of the L1 terms (the gross ceiling's multiplier, and the turnover penalty's pull toward the holdings) with a shift meeting the zero sum; the ceiling's multiplier is found by Newton steps, the gross being piecewise linear in it. `candidate_top_k` keeps each bar's top `candidate_top_k` by `mu` (`|mu|` long-short) among its predicted and held candidates, ranked with a stable sort as per bar, and the held ones. `volatility_label` hands the covariance estimate the prediction over `sqrt(span)` as one-bar volatilities: a symbol without a finite positive one is not covered, and the covered ones keep the estimate's correlations at the predicted volatilities (`LowRankCovariance.with_volatility`); with `FactorRiskStoreEstimator` the optimiser refuses `volatility_label` when it is constructed. `calibration="raw"` takes the prediction as `mu`. `max_names` projects each step onto the books of at most `max_names` names, long and short counted together: the direction's prox first (the capped simplex, or the long-short set above), then, when it holds more names, the `max_names` names whose zeroing costs the prox most (`1/2 (w - u)^2` plus the turnover pull and, long-short, the gross ceiling's multiplier times `|w|`, at 0 against at the prox's weight) kept, on either side, and the prox run again on them; the steps have no momentum (acceleration oscillates on that non-convex set) and the first one is a gradient step from the start, so a start from cash ranks the names by the gradient rather than by column order. The result is a local optimum of the program `run()` solves exactly. Speed (#319): on a us3000-shaped synthetic store (10,000 symbols on the axis, 3,000 priced, 60 factors with eigenvalues up to about 4,500 times the specific variance) the paper-trading configuration (risk aversion 20, `weight_cap` 0.05, `turnover_penalty` 0.002, ic 0.0122) over 67 daily rebalances at 10 bp took 1.0 s against `run()`'s 532 s, the value within 5e-4, the annualised return within 0.25 percentage points and the weights within 2.4e-3 (L1, the cash cap's gap). Refused before any data is read, the message naming it: a tracking-error cap (`tracking_error`), `exposure_bounds`, a subclass of the optimiser or of a supported estimator (one overriding `reference_weights` or `risk_constraints`, say), any other covariance estimator. `solver` is not read, and `min_trade` is not modelled: configs that differ only in `min_trade` give the same approximate result.
+Supported: both directions, any expected return model, any `turnover_penalty`, `candidate_top_k` and `volatility_label`, and `max_names`, with `LedoitWolfEstimator` or `FactorRiskStoreEstimator`. Long-short, the solve maximises over `sum(w) = 0`, `|w|_1 <= 1` and `|w| <= weight_cap`, the projection being the entrywise prox of the L1 terms (the gross ceiling's multiplier, and the turnover penalty's pull toward the holdings) with a shift meeting the zero sum; the ceiling's multiplier is found by Newton steps, the gross being piecewise linear in it. `candidate_top_k` keeps each bar's top `candidate_top_k` by `mu` (`|mu|` long-short) among its predicted and held candidates, ranked with a stable sort as per bar, and the held ones. `volatility_label` hands the covariance estimate the prediction over `sqrt(span)` as one-bar volatilities: a symbol without a finite positive one is not covered, and the covered ones keep the estimate's correlations at the predicted volatilities (`LowRankCovariance.with_volatility`); with `FactorRiskStoreEstimator` the optimiser refuses `volatility_label` when it is constructed. Every expected return model is the per-bar rule's own array code (`RawExpectedReturn` takes the prediction as `mu`, for example). `max_names` projects each step onto the books of at most `max_names` names, long and short counted together: the direction's prox first (the capped simplex, or the long-short set above), then, when it holds more names, the `max_names` names whose zeroing costs the prox most (`1/2 (w - u)^2` plus the turnover pull and, long-short, the gross ceiling's multiplier times `|w|`, at 0 against at the prox's weight) kept, on either side, and the prox run again on them; the steps have no momentum (acceleration oscillates on that non-convex set) and the first one is a gradient step from the start, so a start from cash ranks the names by the gradient rather than by column order. The result is a local optimum of the program `run()` solves exactly. Speed (#319): on a us3000-shaped synthetic store (10,000 symbols on the axis, 3,000 priced, 60 factors with eigenvalues up to about 4,500 times the specific variance) the paper-trading configuration (risk aversion 20, `weight_cap` 0.05, `turnover_penalty` 0.002, ic 0.0122) over 67 daily rebalances at 10 bp took 1.0 s against `run()`'s 532 s, the value within 5e-4, the annualised return within 0.25 percentage points and the weights within 2.4e-3 (L1, the cash cap's gap). Refused before any data is read, the message naming it: a tracking-error cap (`tracking_error`), `exposure_bounds`, a subclass of the optimiser or of a supported estimator (one overriding `reference_weights` or `risk_constraints`, say), any other covariance estimator. `solver` is not read, and `min_trade` is not modelled: configs that differ only in `min_trade` give the same approximate result.
 
 The active-risk rule runs too, without a `tracking_error`. `DecisionInputs.panel` holds the values of the factors a rule declares (`DecisionPanel.factors`), and the approximate backtest reads the benchmark's weights there (its `benchmark_weight` output), as the per-bar rule's `reference_weights` reads each bar's. It then prices `(w - b)' Sigma (w - b)` at every bar, `b` on the bar's covered symbols: a benchmark symbol the estimate does not cover drops out, as in the per-bar rule, and no event is recorded. On a synthetic store its weights equal those of a tightly solved backtest run to 6e-7 (L1), and its value to 1.5e-4.
 
@@ -417,7 +426,7 @@ The common use is a beta near 1, so that a long-only book keeps the benchmark's 
 >>> bounded = MeanVarianceOptimizer(MeanVarianceConfig(
 ...     expected_return_label="ret_5",
 ...     covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=60)),
-...     ic=0.05, risk_aversion=5.0, weight_cap=0.4,
+...     expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)), risk_aversion=5.0, weight_cap=0.4,
 ...     exposure_factors=(beta,), exposure_bounds={"beta": (0.95, 1.05)},
 ... ))
 >>> bounded.bind(specs)
@@ -524,14 +533,17 @@ Subclass `PortfolioConstructor`:
 ```python
 from quantlab.factor.config import MembershipCapWeightConfig
 from quantlab.factor.predefined.membership_cap_weight import MembershipCapWeight
-from quantlab.portfolio.config import ActiveRiskConfig, FactorRiskStoreEstimatorConfig
+from quantlab.portfolio.config import (
+    ActiveRiskConfig, FactorRiskStoreEstimatorConfig, GrinoldExpectedReturnConfig,
+)
+from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
 from quantlab.portfolio.predefined.active_risk import ActiveRiskOptimizer
 from quantlab.portfolio.predefined.factor_risk import FactorRiskStoreEstimator
 
 rule = ActiveRiskOptimizer(ActiveRiskConfig(
     expected_return_label="ret_1",
     covariance=FactorRiskStoreEstimator(FactorRiskStoreEstimatorConfig(risk_model=use4)),
-    ic=0.0122, risk_aversion=20.0, turnover_penalty=0.002, weight_cap=0.05,
+    expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.0122)), risk_aversion=20.0, turnover_penalty=0.002, weight_cap=0.05,
     benchmark=MembershipCapWeight(MembershipCapWeightConfig(dataset=daily, membership=us3000)),
     tracking_error=0.06 / 252**0.5,
 ))

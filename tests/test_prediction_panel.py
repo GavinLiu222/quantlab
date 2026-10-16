@@ -28,6 +28,8 @@ import pandas as pd
 import pytest
 import xarray as xr
 
+from quantlab.portfolio.config import GrinoldExpectedReturnConfig
+from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
 from quantlab.runs.prediction_panel import LabelSpec, PredictionPanel
 from quantlab.runs.backtest_run import BacktestRun
 
@@ -109,7 +111,7 @@ def _optimizer(label: str):
         MeanVarianceConfig(
             expected_return_label=label,
             covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=20)),
-            ic=0.05,
+            expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
             risk_aversion=5.0,
         )
     )

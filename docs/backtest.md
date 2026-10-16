@@ -529,7 +529,7 @@ Measured on synthetic stores (`tests/test_backtest_approximate.py`): with none o
 The approximate backtest is its own module: it reads the rule's config and decides with its own implementation of the rule, which it chooses by the rule's exact class (ADR 0045): the implementations are the portfolio layer's `quantlab/portfolio/predefined/approximate/` (one module per rule, each offering `decide(rule, panel, prices, stopping)`), chosen through `quantlab.portfolio.approximate` (`implementation(rule)` returns a rule's module or raises with the reason, before any data is read; the field tables, the panel types and `LowRankCovariance` live there too), the simulation the execution layer's `quantlab.execution.approximate`, and `quantlab.backtest.approximate` holds only the backtest (prices, schedule, account, statistics). The rules' classes decide one bar at a time for a backtest run and know nothing of it. It runs:
 
 - `TopNConstructor`, long-only and long-short;
-- `MeanVarianceOptimizer`, long-only or long-short, either calibration, with or without a turnover penalty, `candidate_top_k`, `volatility_label` and `max_names`, over `LedoitWolfEstimator` or `FactorRiskStoreEstimator` (see [Mean-variance in the approximate backtest](portfolio.md#mean-variance-in-the-approximate-backtest));
+- `MeanVarianceOptimizer`, long-only or long-short, any expected return model, with or without a turnover penalty, `candidate_top_k`, `volatility_label` and `max_names`, over `LedoitWolfEstimator` or `FactorRiskStoreEstimator` (see [Mean-variance in the approximate backtest](portfolio.md#mean-variance-in-the-approximate-backtest));
 - `ActiveRiskOptimizer` without a tracking-error cap.
 
 Each config field is read, ignored, or must keep its default. Ignored: `solver`, `min_trade` (not modelled, see above), `exposure_factors` (read only through `exposure_bounds`) and `mip_gap` (a mixed-integer solver's gap; the approximate backtest solves no mixed-integer program). Refused before any data is read, the message naming the rule, estimator or field: any other rule (`TopkDropoutConstructor`, a custom rule), a subclass of a supported rule or estimator (it may decide differently), any other covariance estimator, a tracking-error cap, `exposure_bounds`, and a field the approximate backtest does not know when it is not at its default (a field added to a rule's config later is never silently approximated).
@@ -549,14 +549,17 @@ On a us3000-shaped synthetic store (10,000 symbols on the axis, 3,000 of them pr
 The window is cut into chunks of `chunk_bars` bars (default 63), each decided once (`decide`), which bounds the memory a chunk's decision inputs take (a mean-variance rule's covariance estimates), in time order: the rule is handed the book filled before the chunk and each decision bar's valuation and fill prices (`PanelPrices`), with which it drifts the book itself, as the simulation does (`quantlab.execution.approximate`: the last filled weights at their fill prices, marked at each close; a bar the rule holds leaves the book as it was). A rule whose decision reads the holdings (a turnover penalty, or `candidate_top_k`, which keeps the held names) solves its bars forward, each once from the previous bar's weights, in one compiled loop; a rule that does not solves them all at once (mean-variance in parallel over the bars, except on macOS, where torch and xgboost each bring an OpenMP runtime and the bars run in turn; `numba.set_num_threads` or `NUMBA_NUM_THREADS` caps the threads). The chunk size changes memory, not the result. A mean-variance bar has converged when its gradient-mapping residual is at most `tolerance` (default 1e-5) times its starting gradient's largest entry, which keeps its objective within about twice that of the optimum; after `max_iterations` (default 20,000) a warning names the bars and `converged` is `False`. Top-n does not iterate. Continuing the session:
 
 ```python
->>> from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig
+>>> from quantlab.portfolio.config import (
+...     GrinoldExpectedReturnConfig, LedoitWolfEstimatorConfig, MeanVarianceConfig,
+... )
+>>> from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
 >>> from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
 >>> from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
 >>> for penalty in (0.0, 0.002):
 ...     rule = MeanVarianceOptimizer(MeanVarianceConfig(
 ...         expected_return_label="open_ret_1",
 ...         covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=10)),
-...         ic=0.05, risk_aversion=5.0, weight_cap=0.5, turnover_penalty=penalty,
+...         expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)), risk_aversion=5.0, weight_cap=0.5, turnover_penalty=penalty,
 ...     ))
 ...     solved = approximate.run(predictions, rule)
 ...     print(penalty, round(solved.metrics["Turnover per Rebalance [%]"], 1), solved.metrics["iterations"]["max"])

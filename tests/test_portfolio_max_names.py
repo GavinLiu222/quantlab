@@ -19,6 +19,8 @@ import pytest
 import xarray as xr
 
 from quantlab.core.component import rebuild
+from quantlab.portfolio.config import GrinoldExpectedReturnConfig
+from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
 from quantlab.portfolio.approximate import implementation
 from quantlab.portfolio.base import PortfolioConstructionError, PortfolioContext
 from quantlab.portfolio.config import ActiveRiskConfig, LedoitWolfEstimatorConfig, MeanVarianceConfig
@@ -83,7 +85,7 @@ def _params(**overrides) -> dict:
     params = dict(
         expected_return_label="ret_5",
         covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=LOOKBACK)),
-        ic=0.05, risk_aversion=5.0, weight_cap=CAP, max_names=NAMES, solver=SOLVER or "MOSEK",
+        expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)), risk_aversion=5.0, weight_cap=CAP, max_names=NAMES, solver=SOLVER or "MOSEK",
     )
     params.update(overrides)
     return params

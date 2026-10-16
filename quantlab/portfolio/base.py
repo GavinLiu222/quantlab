@@ -724,6 +724,92 @@ class CovarianceEstimator(_Configured, ABC):
         """
 
 
+class ExpectedReturnModel(_Configured, ABC):
+    """Base class of every expected return model: one prediction column to the ``mu`` a mean-variance rule maximises.
+
+    A mean-variance rule (``MeanVarianceOptimizer``) holds one as
+    ``expected_return`` and reads ``expected_return_label``'s prediction,
+    each candidate's volatility on the label's span and the candidates; the
+    model decides how they become the expected return (ADR 0046). It works
+    on ``[bars, symbols]`` arrays, so the same model serves the per-bar rule
+    (one row) and the approximate backtest. Shipped models live in
+    ``quantlab.portfolio.predefined.expected_return``.
+
+    Subclass it, set ``config_cls`` to a frozen dataclass of its parameters,
+    set ``needs_sigma`` and implement ``expected_returns``; override
+    ``bind`` to refuse a label it cannot read.
+
+    Parameters
+    ----------
+    config : dataclass instance
+        An instance of ``config_cls``.
+
+    Examples
+    --------
+    >>> from quantlab.portfolio.config import GrinoldExpectedReturnConfig
+    >>> from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
+    >>> model = GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05))
+    >>> isinstance(model, ExpectedReturnModel), model.needs_sigma
+    (True, True)
+    """
+
+    #: Whether ``expected_returns`` reads ``sigma``; a rule prepares none for
+    #: a model that does not.
+    needs_sigma: bool = True
+
+    def bind(self, spec: LabelSpec) -> None:
+        """Check the expected-return label's spec before any data is read; the default accepts any.
+
+        Parameters
+        ----------
+        spec : LabelSpec
+            The spec of the rule's ``expected_return_label``.
+
+        Raises
+        ------
+        ValueError
+            If the model cannot read the label (``RawExpectedReturn``: a
+            scale other than ``"raw"``).
+
+        Examples
+        --------
+        >>> model.bind(LabelSpec(name="ret_5", scale="standardized", delay=1, span=5)) is None
+        True
+        """
+
+    @abstractmethod
+    def expected_returns(
+        self, predictions: np.ndarray, sigma: np.ndarray | None, candidates: np.ndarray
+    ) -> np.ndarray:
+        """Return the expected return of every symbol at every bar.
+
+        Parameters
+        ----------
+        predictions : np.ndarray
+            ``[bars, symbols]``: the expected-return label's prediction, NaN
+            where there is none.
+        sigma : np.ndarray or None
+            ``[bars, symbols]``: each symbol's volatility on the label's
+            span (the covariance's diagonal, or ``volatility_label``'s
+            prediction); ``None`` when ``needs_sigma`` is False.
+        candidates : np.ndarray
+            ``[bars, symbols]`` booleans: the symbols whose prediction sets
+            ``mu`` at the bar (tradable, covered, with a finite prediction).
+
+        Returns
+        -------
+        np.ndarray
+            ``[bars, symbols]``: ``mu`` on the candidates, 0.0 elsewhere.
+
+        Examples
+        --------
+        >>> model.expected_returns(
+        ...     np.array([[1.0, 3.0]]), np.array([[0.01, 0.01]]), np.ones((1, 2), dtype=bool)
+        ... ).round(4)
+        array([[-0.0004,  0.0004]])
+        """
+
+
 class PortfolioConstructor(_Configured, ABC):
     """Base class of every rule that turns one bar's scores into target weights.
 

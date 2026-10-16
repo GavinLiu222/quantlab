@@ -21,6 +21,8 @@ import pandas as pd
 import pytest
 import xarray as xr
 
+from quantlab.portfolio.config import GrinoldExpectedReturnConfig
+from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
 from quantlab.portfolio.base import InputDeclaration, PortfolioContext
 from quantlab.portfolio.config import FactorRiskStoreEstimatorConfig, MeanVarianceConfig
 from quantlab.portfolio.predefined.factor_risk import FactorRiskStoreEstimator
@@ -206,7 +208,7 @@ def test_the_reader_declares_its_risk_model_and_no_factor(built):
     reader = FactorRiskStoreEstimator(FactorRiskStoreEstimatorConfig(risk_model=built))
     assert reader.declared_inputs() == InputDeclaration(risk_model=built)
     optimizer = MeanVarianceOptimizer(MeanVarianceConfig(
-        expected_return_label="ret_1", covariance=reader, ic=0.05,
+        expected_return_label="ret_1", covariance=reader, expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
         risk_aversion=5.0, turnover_penalty=0.0, weight_cap=0.5,
     ))
     assert optimizer.declared_inputs().factors == ()
@@ -256,7 +258,7 @@ def test_a_locked_position_is_priced_for_risk(built):
     reader = FactorRiskStoreEstimator(FactorRiskStoreEstimatorConfig(risk_model=built))
     assert locked in reader.estimate(context).symbols.tolist()
     optimizer = MeanVarianceOptimizer(MeanVarianceConfig(
-        expected_return_label="ret_1", covariance=reader, ic=0.05,
+        expected_return_label="ret_1", covariance=reader, expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
         risk_aversion=5.0, turnover_penalty=0.0, weight_cap=0.5,
     ))
     optimizer.bind([LabelSpec(name="ret_1", scale="raw", delay=1, span=1)])
@@ -296,7 +298,7 @@ def test_a_bound_named_by_a_factor_and_the_risk_model_is_refused(built):
     reader = FactorRiskStoreEstimator(FactorRiskStoreEstimatorConfig(risk_model=built))
     with pytest.raises(ValueError, match="both an output"):
         MeanVarianceOptimizer(MeanVarianceConfig(
-            expected_return_label="ret_1", covariance=reader, ic=0.05,
+            expected_return_label="ret_1", covariance=reader, expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
             risk_aversion=5.0, turnover_penalty=0.0, weight_cap=0.5,
             exposure_factors=(built.config.exposures,),
             exposure_bounds={_STYLES[0]: (-0.1, 0.1)},

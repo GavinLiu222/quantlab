@@ -34,13 +34,13 @@ except ImportError as exc:
 
 from quantlab.portfolio.config import MeanVarianceConfig
 from quantlab.portfolio.base import (
+    ExpectedReturnModel,
     InputDeclaration,
     PortfolioConstructionError,
     PortfolioConstructor,
     PortfolioContext,
 )
 from quantlab.runs.prediction_panel import LabelSpec
-from quantlab.utils.cross_section import cross_sectional_zscore
 
 if TYPE_CHECKING:
     from quantlab.risk.base import ReturnCovariance
@@ -146,16 +146,6 @@ def _bounded_exposure(
     if context.factors is not None and name in context.factors:
         return np.asarray(context.factors[name].sel(symbol=symbols).values, dtype=np.float64)
     return estimate.factor_exposure(name, symbols)
-
-
-def _zscore(values: np.ndarray) -> np.ndarray:
-    """Cross-sectional z-score with ``ddof=1``; all 0.0 when it is undefined.
-
-    ``cross_sectional_zscore``, which also treats fewer than two values or
-    a constant cross-section (a one-ulp residue in the standard deviation
-    included) as undefined.
-    """
-    return np.nan_to_num(cross_sectional_zscore(values), nan=0.0)
 
 
 def _project_capped_simplex(values: np.ndarray, cap: float, total: float = 1.0) -> np.ndarray:
@@ -273,24 +263,25 @@ class MeanVarianceOptimizer(PortfolioConstructor):
     ``expected_return_label`` (variance is linear in time). When the risk
     model's estimate has a factor form (``B F B' + diag(D)``), the risk term
     is built as ``|F^(1/2) B' w|^2 + w' diag(D) w`` and the dense matrix is
-    never formed. ``mu`` depends on ``calibration``: ``"grinold"`` (the
-    default) gives ``mu = ic * sigma * z``, ``sigma`` the square root of
-    ``Sigma``'s diagonal and ``z`` the candidates' cross-sectional z-score
-    (``ddof=1``) of the prediction over the predicted candidates, so the
-    prediction only ranks and any
-    model's output can feed the optimiser; ``"raw"`` takes the prediction
-    itself as ``mu``, which ``bind`` allows only when the label's spec
-    reports its scale as ``"raw"``. ``w_current`` is the context's current
-    weights.
+    never formed. ``mu`` is the ``expected_return`` model's (an
+    ``ExpectedReturnModel``, ADR 0046) on the prediction of the predicted
+    candidates, handed ``sigma``, the square root of ``Sigma``'s diagonal,
+    when the model needs it: ``GrinoldExpectedReturn`` gives ``ic * sigma *
+    z``, ``z`` the candidates' cross-sectional z-score (``ddof=1``), so the
+    prediction only ranks and any model's output can feed the optimiser;
+    ``ZScoreExpectedReturn`` drops the tilt to risky names,
+    ``RawExpectedReturn`` takes a prediction in return units and
+    ``PredictionExpectedReturn`` one in any units. ``w_current`` is the
+    context's current weights.
 
     With ``volatility_label`` set (a ``Volatility`` label, say), the
     volatilities come from a model: the label's prediction at the bar,
     divided by ``sqrt(n)``, is handed to the covariance estimator as the one-bar
     volatilities, so ``Sigma`` is the predicted volatilities around the risk
     model's historical correlations, its diagonal the squared predictions,
-    and the Grinold ``sigma`` is the prediction itself. A symbol without a
-    finite positive volatility prediction has no risk estimate, like one
-    without enough history. ``bind`` requires the label to have the span of
+    and the ``sigma`` the expected return model reads is the prediction
+    itself. A symbol without a finite positive volatility prediction has no
+    risk estimate, like one without enough history. ``bind`` requires the label to have the span of
     ``expected_return_label`` and a ``"raw"`` scale.
 
     With ``candidate_top_k`` set, only a pool is optimised: the
@@ -341,16 +332,17 @@ class MeanVarianceOptimizer(PortfolioConstructor):
     ----------
     config : MeanVarianceConfig
         ``expected_return_label``, ``covariance``, ``risk_aversion``,
-        ``calibration``, ``ic``, ``turnover_penalty``, ``weight_cap``,
+        ``expected_return``, ``turnover_penalty``, ``weight_cap``,
         ``direction``, ``candidate_top_k``, ``volatility_label``,
         ``exposure_factors``, ``exposure_bounds``, ``max_names``, ``mip_gap``
         and ``solver``.
 
     Raises
     ------
+    TypeError
+        If ``expected_return`` is not an ``ExpectedReturnModel``.
     ValueError
-        If ``direction`` or ``calibration`` is unknown, ``ic`` is missing
-        for ``"grinold"``, ``weight_cap`` is not in ``(0, 1]``,
+        If ``direction`` is unknown, ``weight_cap`` is not in ``(0, 1]``,
         ``risk_aversion`` or ``turnover_penalty`` is negative,
         ``candidate_top_k`` is not a positive integer, ``volatility_label``
         is set with a covariance estimator that does not take volatilities
@@ -370,12 +362,16 @@ class MeanVarianceOptimizer(PortfolioConstructor):
     predictions 0.8, -0.1, -0.3 and 0.2. With a risk aversion of 5 on so small
     an expected return the book leans toward the low-volatility symbols:
 
-    >>> from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig
+    >>> from quantlab.portfolio.config import (
+    ...     GrinoldExpectedReturnConfig, LedoitWolfEstimatorConfig, MeanVarianceConfig,
+    ... )
+    >>> from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
     >>> from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
     >>> optimizer = MeanVarianceOptimizer(MeanVarianceConfig(
     ...     expected_return_label="ret_5",
     ...     covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=60)),
-    ...     ic=0.05, risk_aversion=5.0, weight_cap=0.4,
+    ...     expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
+    ...     risk_aversion=5.0, weight_cap=0.4,
     ... ))
     >>> optimizer.declared_inputs().lookback_bars
     60
@@ -390,7 +386,8 @@ class MeanVarianceOptimizer(PortfolioConstructor):
     >>> long_short = MeanVarianceOptimizer(MeanVarianceConfig(
     ...     expected_return_label="ret_5",
     ...     covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=60)),
-    ...     ic=0.05, risk_aversion=5.0, weight_cap=0.4, direction="long_short",
+    ...     expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
+    ...     risk_aversion=5.0, weight_cap=0.4, direction="long_short",
     ... ))
     >>> long_short.bind(specs)
     >>> weights = long_short.construct(context)
@@ -419,12 +416,11 @@ class MeanVarianceOptimizer(PortfolioConstructor):
             raise ValueError(
                 f"direction must be 'long_only' or 'long_short', got {config.direction!r}"
             )
-        if config.calibration not in ("grinold", "raw"):
-            raise ValueError(
-                f"calibration must be 'grinold' or 'raw', got {config.calibration!r}"
+        if not isinstance(config.expected_return, ExpectedReturnModel):
+            raise TypeError(
+                f"expected_return must be an ExpectedReturnModel, got "
+                f"{type(config.expected_return).__name__}"
             )
-        if config.calibration == "grinold" and config.ic is None:
-            raise ValueError("calibration='grinold' needs an ic")
         if not 0 < config.weight_cap <= 1:
             raise ValueError(f"weight_cap must be in (0, 1], got {config.weight_cap}")
         for name in ("risk_aversion", "turnover_penalty", "min_trade"):
@@ -618,8 +614,9 @@ class MeanVarianceOptimizer(PortfolioConstructor):
             If ``expected_return_label`` or ``volatility_label`` is not one
             of the specs, either has no span (it is not a ``Forward``
             label), their spans differ, ``volatility_label``'s scale is not
-            ``"raw"``, or ``calibration="raw"`` and
-            ``expected_return_label``'s scale is not ``"raw"``.
+            ``"raw"``, or the ``expected_return`` model refuses
+            ``expected_return_label``'s spec (``RawExpectedReturn``: a
+            scale other than ``"raw"``).
 
         Examples
         --------
@@ -632,14 +629,7 @@ class MeanVarianceOptimizer(PortfolioConstructor):
         specs = {spec.name: spec for spec in labels}
         name = config.expected_return_label
         span = self._label_span(specs, "expected_return_label", name)
-        scale = specs[name].scale
-        if config.calibration == "raw" and scale != "raw":
-            raise ValueError(
-                f"calibration='raw' reads the prediction of {name!r} as a return, "
-                f"but its label spec reports its scale as {scale!r}, not 'raw' "
-                f"(a model fitted on a transformed target, or a label an ensemble "
-                f"averages); use calibration='grinold'"
-            )
+        config.expected_return.bind(specs[name])
         volatility = config.volatility_label
         if volatility is not None:
             volatility_span = self._label_span(specs, "volatility_label", volatility)
@@ -742,13 +732,17 @@ class MeanVarianceOptimizer(PortfolioConstructor):
         current = current_all[index]
         predicted = np.isfinite(prediction[index])
         expected = np.zeros(len(index))
-        if config.calibration == "raw":
-            expected[predicted] = prediction[index][predicted]
-        elif predicted.any():
-            sigma = np.sqrt(estimate.subset(position[index]).variance)
-            expected[predicted] = (
-                config.ic * sigma[predicted] * _zscore(prediction[index][predicted])
+        if predicted.any():
+            model = config.expected_return
+            sigma = (
+                np.sqrt(estimate.subset(position[index]).variance)[predicted][None]
+                if model.needs_sigma
+                else None
             )
+            values = prediction[index][predicted][None]
+            expected[predicted] = model.expected_returns(
+                values, sigma, np.ones(values.shape, dtype=bool)
+            )[0]
 
         if config.candidate_top_k is not None and config.candidate_top_k < len(index):
             strength = expected if config.direction == "long_only" else np.abs(expected)

@@ -22,6 +22,8 @@ import pytest
 import xarray as xr
 
 from quantlab.core.component import rebuild
+from quantlab.portfolio.config import GrinoldExpectedReturnConfig
+from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
 from quantlab.portfolio.base import PortfolioContext
 from quantlab.portfolio.config import FactorRiskStoreEstimatorConfig
 from quantlab.portfolio.predefined.factor_risk import FactorRiskStoreEstimator
@@ -243,7 +245,7 @@ def test_an_optimiser_asking_the_store_estimator_for_a_volatility_is_refused_at_
     from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
     from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
 
-    params = dict(expected_return_label="ret_1", volatility_label="vol_1", ic=0.05, risk_aversion=5.0, weight_cap=0.2)
+    params = dict(expected_return_label="ret_1", volatility_label="vol_1", expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)), risk_aversion=5.0, weight_cap=0.2)
     with pytest.raises(ValueError, match="volatility_label.*FactorRiskStoreEstimator"):
         MeanVarianceOptimizer(MeanVarianceConfig(
             covariance=FactorRiskStoreEstimator(FactorRiskStoreEstimatorConfig(risk_model=model)), **params

@@ -19,7 +19,7 @@ What is locked here, and what turns it red (no store, no model, no vectorbt):
 - With `candidate_top_k` (#80) only the pool (top k by mu, by |mu|
   long-short, plus every held symbol) gets weight, and a held symbol outside
   the top k can be closed, its turnover cost priced.
-- `raw` calibration (#80) uses the prediction as mu unchanged, and is
+- `RawExpectedReturn` (#80, #334) uses the prediction as mu unchanged, and is
   refused by `bind` for a label the predictor reports as `standardized`.
 """
 
@@ -30,6 +30,8 @@ import pandas as pd
 import pytest
 import xarray as xr
 
+from quantlab.portfolio.config import GrinoldExpectedReturnConfig, RawExpectedReturnConfig
+from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn, RawExpectedReturn
 from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig
 from quantlab.portfolio.base import PortfolioConstructionError, PortfolioContext
 from quantlab.runs.prediction_panel import LabelSpec
@@ -77,7 +79,7 @@ def _optimizer(**overrides) -> MeanVarianceOptimizer:
     params = dict(
         expected_return_label="ret_5",
         covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=LOOKBACK)),
-        ic=0.05,
+        expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
         risk_aversion=5.0,
         weight_cap=0.3,
     )
@@ -177,7 +179,7 @@ def test_bind_checks_the_label_and_reads_its_span():
         MeanVarianceConfig(
             expected_return_label="ret_5",
             covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=LOOKBACK)),
-            ic=0.05,
+            expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
             risk_aversion=5.0,
         )
     )
@@ -194,8 +196,6 @@ def test_bind_checks_the_label_and_reads_its_span():
     "overrides, match",
     [
         ({"direction": "sideways"}, "direction"),
-        ({"calibration": "rank"}, "calibration"),
-        ({"ic": None}, "ic"),
         ({"candidate_top_k": 0}, "candidate_top_k"),
         ({"candidate_top_k": 2.5}, "candidate_top_k"),
         ({"weight_cap": 0.0}, "weight_cap"),
@@ -209,7 +209,7 @@ def test_bad_parameters_are_refused_at_construction(overrides, match):
     params = dict(
         expected_return_label="ret_5",
         covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=LOOKBACK)),
-        ic=0.05,
+        expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
         risk_aversion=5.0,
     )
     params.update(overrides)
@@ -358,13 +358,13 @@ def test_a_held_symbol_outside_the_top_k_stays_in_the_pool_and_is_closed_at_its_
     np.testing.assert_allclose(sticky.values, current, atol=1e-5)  # the cost keeps it held
 
 
-def test_raw_calibration_uses_the_prediction_unchanged():
+def test_raw_expected_return_uses_the_prediction_unchanged():
     context = _context(seed=11)
     optimizer = MeanVarianceOptimizer(
         MeanVarianceConfig(
             expected_return_label="ret_5",
             covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=LOOKBACK)),
-            calibration="raw",
+            expected_return=RawExpectedReturn(RawExpectedReturnConfig()),
             risk_aversion=5.0,
             weight_cap=0.3,
         )
@@ -376,12 +376,12 @@ def test_raw_calibration_uses_the_prediction_unchanged():
     np.testing.assert_array_equal(inputs.expected_return, context.predictions["ret_5"].values)
 
 
-def test_raw_calibration_on_a_standardized_label_is_refused_at_bind_naming_the_label():
+def test_raw_expected_return_on_a_standardized_label_is_refused_at_bind_naming_the_label():
     optimizer = MeanVarianceOptimizer(
         MeanVarianceConfig(
             expected_return_label="ret_5",
             covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=LOOKBACK)),
-            calibration="raw",
+            expected_return=RawExpectedReturn(RawExpectedReturnConfig()),
             risk_aversion=5.0,
         )
     )

@@ -16,9 +16,10 @@ each bar's context with nothing locked: the covariance estimator's
 (``quantlab.portfolio.approximate.estimate_all``) scaled to the expected-return label's span,
 with ``volatility_label`` its volatilities the prediction over
 ``sqrt(span)``; a symbol selectable when it is tradable and covered; and on
-the selectable symbols with a prediction ``mu = ic * sigma * z`` (``z`` their
-cross-sectional z-score) or, with ``calibration="raw"``, the prediction
-itself.
+the selectable symbols with a prediction ``mu`` the rule's
+``expected_return`` model (``ExpectedReturnModel``) gives, the same array
+code the per-bar rule calls, handed ``sigma`` (the covariance's diagonal on
+the span) when it needs it.
 """
 
 from dataclasses import dataclass
@@ -34,7 +35,6 @@ from quantlab.portfolio.approximate import (
     estimate_all,
 )
 from quantlab.portfolio.base import DecisionPanel
-from quantlab.utils.cross_section import cross_sectional_zscore
 
 
 @dataclass(frozen=True)
@@ -119,11 +119,9 @@ def _problem(rule, panel: DecisionPanel) -> _Problem:
     prediction = _prediction(panel, config.expected_return_label)
     selectable = np.asarray(panel.tradable, dtype=bool) & low_rank.covered
     predicted = selectable & np.isfinite(prediction)
-    if config.calibration == "raw":
-        expected = np.where(predicted, prediction, 0.0)
-    else:
-        z = np.nan_to_num(cross_sectional_zscore(np.where(predicted, prediction, np.nan)), nan=0.0)
-        expected = np.where(predicted, config.ic * np.sqrt(low_rank.variance) * z, 0.0)
+    model = config.expected_return
+    sigma = np.sqrt(low_rank.variance) if model.needs_sigma else None
+    expected = model.expected_returns(prediction, sigma, predicted)
     reference = None
     if rule.import_path == ACTIVE_RISK:
         # The benchmark's weights at each bar, as the per-bar rule's reference_weights reads them.
@@ -278,12 +276,16 @@ def decide(
     ``quantlab.portfolio.approximate.estimate_all`` example (``CCC`` not
     covered):
 
-    >>> from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig
+    >>> from quantlab.portfolio.config import (
+    ...     GrinoldExpectedReturnConfig, LedoitWolfEstimatorConfig, MeanVarianceConfig,
+    ... )
+    >>> from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
     >>> from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
     >>> from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
     >>> from quantlab.runs.prediction_panel import LabelSpec
     >>> optimizer = MeanVarianceOptimizer(MeanVarianceConfig(
-    ...     expected_return_label="ret_5", ic=0.05, risk_aversion=10.0, weight_cap=0.8,
+    ...     expected_return_label="ret_5", risk_aversion=10.0, weight_cap=0.8,
+    ...     expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
     ...     covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=20)),
     ... ))
     >>> optimizer.bind([LabelSpec(name="ret_5", scale="raw", delay=1, span=5)])

@@ -36,6 +36,8 @@ from loguru import logger
 
 from quantlab.backtest.predefined.us_equity import USEquityCrossectionSelectStockVectorBt
 from quantlab.backtest.config import CrossSectionBacktestConfig
+from quantlab.portfolio.config import GrinoldExpectedReturnConfig
+from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
 from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig
 from quantlab.model.config import ModelConfig
 from quantlab.factor.config import FactorConfig
@@ -279,7 +281,7 @@ def backtest(checkpoint: Path):
         covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=126)),
         # mu = ic * sigma * z: the information coefficient of the return
         # model, for example the mean IC of a walk-forward CV run.
-        ic=0.02,
+        expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.02)),
         risk_aversion=10.0,
         # Per unit of one-way turnover, about the fees plus slippage below.
         turnover_penalty=0.001,

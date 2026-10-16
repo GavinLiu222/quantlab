@@ -54,13 +54,17 @@ class ActiveRiskOptimizer(MeanVarianceOptimizer):
     With ``use4`` a built ``Use4RiskModel`` and ``index_weight`` a factor with
     the output ``benchmark_weight``::
 
-        from quantlab.portfolio.config import ActiveRiskConfig, FactorRiskStoreEstimatorConfig
+        from quantlab.portfolio.config import (
+            ActiveRiskConfig, FactorRiskStoreEstimatorConfig, GrinoldExpectedReturnConfig,
+        )
+        from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
         from quantlab.portfolio.predefined.factor_risk import FactorRiskStoreEstimator
 
         rule = ActiveRiskOptimizer(ActiveRiskConfig(
             expected_return_label="ret_5",
             covariance=FactorRiskStoreEstimator(FactorRiskStoreEstimatorConfig(risk_model=use4)),
-            ic=0.02, risk_aversion=10.0, weight_cap=0.05,
+            expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.02)),
+            risk_aversion=10.0, weight_cap=0.05,
             benchmark=index_weight, tracking_error=0.02,
         ))
     """

@@ -345,6 +345,8 @@ def test_a_model_sharing_a_dataset_through_a_flattened_label_rebuilds_shared(sto
 from quantlab.backtest.predefined.us_equity import USEquityCrossectionSelectStockVectorBt
 from quantlab.backtest.predefined.weights import WeightsVectorBt
 from quantlab.backtest.config import CrossSectionBacktestConfig, WeightsBacktestConfig
+from quantlab.portfolio.config import GrinoldExpectedReturnConfig
+from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
 from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig, TopNConfig
 from quantlab.portfolio.base import _Configured
 from quantlab.tracking.base import NullTracker
@@ -383,7 +385,7 @@ def _mean_variance():
             expected_return_label="fwd_ret_1",
             covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=20)),
             risk_aversion=1.0,
-            ic=0.05,
+            expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
         )
     )
 
