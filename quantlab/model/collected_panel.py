@@ -157,14 +157,22 @@ class CollectedPanel:
     """
 
     @classmethod
-    def assemble(cls, features: xr.Dataset, labels: xr.Dataset, source: dict | None = None) -> "CollectedPanel":
+    def assemble(
+        cls,
+        features: xr.Dataset,
+        labels: xr.Dataset,
+        source: dict | None = None,
+        feature_names: list[str] | None = None,
+    ) -> "CollectedPanel":
         """Join a model's features and labels into one panel on the features' bars and symbols.
 
         The features decide the axes: the labels are reindexed onto them, so
         a label's symbol or bar without features is dropped (nothing can be
         fitted or predicted on it) and a feature's warm-up bar has NaN
-        labels. The features are sorted only when they are not, so sorted
-        features are not copied; only the labels are.
+        labels. The features are held once: they are stacked into one
+        ``[T, S, F]`` ``FEATURE_DTYPE`` array in ``feature_names`` order,
+        the array ``array(feature_names, FEATURE_DTYPE)`` returns, and the
+        panel's feature variables are views of it.
 
         Parameters
         ----------
@@ -174,6 +182,9 @@ class CollectedPanel:
             The label panels on ``(timestamp, symbol)``.
         source : dict, optional
             What the panel was read for (see the class).
+        feature_names : list[str], optional
+            The feature variables in the order the model reads them; the
+            order of ``features``' variables when not given.
 
         Returns
         -------
@@ -204,8 +215,17 @@ class CollectedPanel:
                 f"{label_symbols.dtype} against {symbols[:3].tolist()} of type {symbols.dtype}); "
                 f"every label would be NaN. Check that both are on the same axis."
             )
+        names = list(features.data_vars) if feature_names is None else list(feature_names)
+        x = to_array(features, names, FEATURE_DTYPE)
+        dims = ("timestamp", "symbol")
+        data = xr.Dataset(
+            {name: (dims, x[..., i]) for i, name in enumerate(names)},
+            coords={axis: features.indexes[axis] for axis in dims},
+        )
         labels = labels.reindex(timestamp=features.indexes["timestamp"], symbol=symbols)
-        return cls(features.assign(labels.data_vars), source=source)
+        panel = cls(data.assign(labels.data_vars), source=source)
+        panel._arrays[(tuple(names), FEATURE_DTYPE.str)] = x
+        return panel
 
     def __init__(self, data: xr.Dataset, record: dict | None = None, source: dict | None = None):
         """Hold ``data`` sorted; see the class docstring for parameters."""
@@ -248,7 +268,7 @@ class CollectedPanel:
         return self._source
 
     def with_record(self, record: dict) -> "CollectedPanel":
-        """Return this panel with ``record`` as its read record, its data shared.
+        """Return this panel with ``record`` as its read record, its data and arrays shared.
 
         Parameters
         ----------
@@ -258,14 +278,16 @@ class CollectedPanel:
         Returns
         -------
         CollectedPanel
-            A new panel on the same data and source, with no array built yet.
+            A new panel on the same data, source and built arrays.
 
         Examples
         --------
         >>> panel.with_record({"factors.0.dataset": "r"}).record
         {'factors.0.dataset': 'r'}
         """
-        return CollectedPanel(self._data, record, self._source)
+        panel = CollectedPanel(self._data, record, self._source)
+        panel._arrays = self._arrays
+        return panel
 
     def array(
         self, names: list[str], dtype: "np.typing.DTypeLike | None" = None

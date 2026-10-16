@@ -117,11 +117,12 @@ class TabkitRegressor(LibraryModel):
         return dict(self._params)
 
     def _transform_feature(self, x: np.ndarray) -> np.ndarray:
-        """Return a copy of ``x`` with every non-finite value replaced by ``0.0``.
+        """Return ``x`` with every non-finite value replaced by ``0.0``, in place.
 
-        Factors are normally z-scored, so ``0.0`` is the column mean.
+        Factors are normally z-scored, so ``0.0`` is the column mean. ``x``
+        is the caller's own copy of the rows (``LibraryModel._transform_feature``).
         """
-        return np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
+        return np.nan_to_num(x, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
 
     def _warn_without_validation(self, val_rows: Rows | None) -> None:
         """Warn when early stopping is on but there are no validation rows.

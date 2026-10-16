@@ -1044,7 +1044,7 @@ A `LibraryModel` head is fed rows, which the base builds. `_fit_model(train_rows
 
 | Hook | Default |
 |---|---|
-| `_transform_feature(x)`: raw `[n, F]` rows to the library's input, same shape, never in place | infinities to NaN |
+| `_transform_feature(x)`: raw `[n, F]` rows to the library's input, same shape; `x` is the caller's own copy, so it may be changed in place | infinities to NaN, in place |
 | `_transform_target(y, training)`: one bar's raw `[S_t, L]` labels (a float32 tensor, NaN where missing) to `(target, keep)`, computed once per bar before the fit, `training=True` on the training bars only; the same hook as a torch head's | the raw label |
 | `_loss(target, pred)`: one bar's `[n, L]` rows to a number; its per-bar mean is `{split}_loss` | MSE |
 

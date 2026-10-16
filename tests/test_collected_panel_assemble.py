@@ -8,9 +8,11 @@ on a roster) widened every feature to it: on us3000 326 features grew from
 the collection peaked at 422 GB and had to be stopped. Now the panel is the
 features' bars and symbols: the labels are reindexed onto them (a label's
 symbol or bar without features is dropped, a feature's warm-up bar has NaN
-labels), the features are sorted only when they are not, so already sorted
-features are not copied, and labels sharing no symbol with the features are
-refused. ``BaseModel.collect`` assembles its panel this way.
+labels), and labels sharing no symbol with the features are refused. The
+features are held once: one ``[T, S, F]`` float32 array, the one the fit
+reads, of which the panel's feature variables are views (a panel and the fit's
+array apart held the us3000 features twice, 177 GB resident).
+``BaseModel.collect`` assembles its panel this way.
 
 Everything is synthetic, CPU-only and offline.
 """
@@ -44,13 +46,13 @@ def test_the_panel_is_on_the_features_bars_and_symbols():
     assert (data["ret"].sel(timestamp=BARS[2:]).values == 2.0).all()
 
 
-def test_sorted_features_are_not_copied():
+def test_the_labels_are_on_the_features_axes():
     features = _panel("f", BARS, ["A", "B"])
 
     data = CollectedPanel.assemble(features, _panel("ret", BARS, ["B", "A", "C"])).data
 
-    assert np.shares_memory(data["f"].values, features["f"].values)
     assert data["ret"].dims == ("timestamp", "symbol")
+    assert data["ret"]["symbol"].values.tolist() == ["A", "B"]
 
 
 def test_unsorted_features_are_sorted():
@@ -90,3 +92,45 @@ def test_a_model_collects_on_the_features_symbols(tmp_path):
 
     features = FakePanel(["f_a", "f_b"], seed=1).compute(None, None)
     assert model.collected_panel.data["symbol"].values.tolist() == features["symbol"].values.tolist()
+
+
+# One copy of the features: the panel's feature variables are views of the [T, S, F] array the fit reads.
+
+
+def test_the_feature_variables_are_views_of_the_one_feature_array():
+    features = xr.merge([_panel("f_a", BARS, ["A", "B"], 1.0), _panel("f_b", BARS, ["A", "B"], 2.0)])
+
+    panel = CollectedPanel.assemble(features, _panel("ret", BARS, ["A", "B"]), feature_names=["f_b", "f_a"])
+
+    x, _, _ = panel.array(["f_b", "f_a"], np.float32)
+    assert x.shape == (len(BARS), 2, 2)
+    assert np.shares_memory(panel.data["f_b"].values, x) and np.shares_memory(panel.data["f_a"].values, x)
+    assert (panel.data["f_a"].values == 1.0).all() and (x[..., 1] == 1.0).all()
+
+
+def test_a_panel_with_its_record_keeps_the_feature_array():
+    features = _panel("f", BARS, ["A"])
+    panel = CollectedPanel.assemble(features, _panel("ret", BARS, ["A"]), feature_names=["f"])
+
+    recorded = panel.with_record({"factors.0": "r"})
+
+    assert recorded.array(["f"], np.float32)[0] is panel.array(["f"], np.float32)[0]
+
+
+def test_a_model_builds_its_feature_array_once_when_it_collects(tmp_path, monkeypatch):
+    import quantlab.model.collected_panel as collected_panel_module
+
+    built = []
+    real = collected_panel_module.to_array
+
+    def spy(data, variables, dtype=None):
+        built.append(tuple(variables))
+        return real(data, variables, dtype)
+
+    monkeypatch.setattr(collected_panel_module, "to_array", spy)
+    model = StubLibraryHead(_config(tmp_path)).collect()
+    model.train()
+
+    names = tuple(model.get_factor_names())
+    assert built.count(names) == 1
+    assert np.shares_memory(model.collected_panel.data[names[0]].values, model.collected_panel.array(list(names), np.float32)[0])

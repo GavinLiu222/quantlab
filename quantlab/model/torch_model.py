@@ -783,7 +783,7 @@ class TorchModel(TrainingTargetMixin, BaseModel):
         segments = self._fit_segments(data)
         stamps = data.timestamp.values
         train_bars, val_bars, test_bars = [
-            np.searchsorted(stamps, part.timestamp.values) for part in segments
+            np.searchsorted(stamps, part) for part in segments
         ]
 
         panel = self._training_panel()

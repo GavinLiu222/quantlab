@@ -1044,7 +1044,7 @@ MLflow 3 打开本地 `file:` 存储时要求设置 `MLFLOW_ALLOW_FILE_STORE=tru
 
 | 钩子 | 默认 |
 |---|---|
-| `_transform_feature(x)`：把原始的 `[n, F]` 行变成库的输入，形状不变，不能原地修改 | 把无穷大换成 NaN |
+| `_transform_feature(x)`：把原始的 `[n, F]` 行变成库的输入，形状不变；`x` 是调用方自己的副本，可以原地修改 | 原地把无穷大换成 NaN |
 | `_transform_target(y, training)`：把一个 bar 的原始 `[S_t, L]` 标签（float32 张量，缺失处为 NaN）变成 `(target, keep)`，在拟合前对每个 bar 算一次，只有训练段的 bar 上 `training=True`；与 torch 模型头的是同一个钩子 | 原始标签 |
 | `_loss(target, pred)`：把一个 bar 的 `[n, L]` 行变成一个数；它在各 bar 上的均值就是 `{split}_loss` | MSE |
 

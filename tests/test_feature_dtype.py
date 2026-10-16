@@ -33,19 +33,6 @@ def _wide_config(tmp_path, labels=None):
                    labels=labels)
 
 
-def _feature_arrays_built(model, monkeypatch) -> list:
-    built = []
-    real = collected_panel_module.to_array
-
-    def spy(data, variables, dtype=None):
-        built.append((tuple(variables), np.dtype(dtype) if dtype is not None else None))
-        return real(data, variables, dtype)
-
-    monkeypatch.setattr(collected_panel_module, "to_array", spy)
-    model.train()
-    return [dtype for names, dtype in built if names == tuple(model.get_factor_names())]
-
-
 def test_every_feature_is_collected_as_float32(tmp_path):
     model = StubLibraryHead(_wide_config(tmp_path)).collect()
 
@@ -59,10 +46,19 @@ def test_the_labels_keep_their_own_type(tmp_path):
     assert model.collected_panel.data["ret_a"].dtype == np.float64
 
 
-def test_the_fit_and_the_evaluation_build_one_feature_array(tmp_path, monkeypatch):
-    model = StubLibraryHead(_wide_config(tmp_path)).collect()
+def test_the_collection_the_fit_and_the_evaluation_build_one_feature_array(tmp_path, monkeypatch):
+    built = []
+    real = collected_panel_module.to_array
 
-    assert _feature_arrays_built(model, monkeypatch) == [np.dtype(np.float32)]
+    def spy(data, variables, dtype=None):
+        built.append((tuple(variables), np.dtype(dtype) if dtype is not None else None))
+        return real(data, variables, dtype)
+
+    monkeypatch.setattr(collected_panel_module, "to_array", spy)
+    model = StubLibraryHead(_wide_config(tmp_path)).collect()
+    model.train()
+
+    assert [dtype for names, dtype in built if names == tuple(model.get_factor_names())] == [np.dtype(np.float32)]
 
 
 def test_a_later_prediction_reads_the_features_as_the_fit_did(tmp_path):

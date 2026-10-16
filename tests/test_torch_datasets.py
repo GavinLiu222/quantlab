@@ -202,3 +202,20 @@ def test_a_one_bar_window_gives_row_samples():
     batch = Batch(*next(iter(DataLoader(dataset, batch_size=len(dataset)))))
     assert batch.x.shape == (4, 1, F)
     torch.testing.assert_close(batch.x[:, 0], panel.x[5, batch.where[1]])
+
+
+def test_present_is_computed_bar_block_by_bar_block_as_on_the_whole_array(monkeypatch):
+    # torch.isfinite on the whole [T, S, F] array held a float32 copy of it and three
+    # [T, S, F] boolean temporaries: about 150 GB beside the us3000 features.
+    import quantlab.model.torch_data as torch_data_module
+
+    rng = np.random.default_rng(7)
+    x = rng.standard_normal((11, 5, 3)).astype(np.float32)
+    x[2, 1, :] = np.nan
+    x[3, 0, :] = [np.inf, np.nan, -np.inf]
+    x[4, 4, 0] = np.nan  # one finite value left: present
+    monkeypatch.setattr(torch_data_module, "PRESENT_BLOCK_BARS", 4)
+
+    panel = TrainingPanel.from_arrays(x, timestamps=np.arange(11), symbols=np.arange(5))
+
+    assert panel.present.numpy().tolist() == np.isfinite(x).any(axis=-1).tolist()

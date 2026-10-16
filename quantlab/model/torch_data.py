@@ -33,6 +33,22 @@ from torch.utils.data import Dataset
 
 from quantlab.model.collected_panel import FEATURE_DTYPE
 
+#: ``TrainingPanel.from_arrays`` marks the present cells this many bars at a
+#: time, so the temporaries are a block's, not the whole ``[T, S, F]`` array's.
+PRESENT_BLOCK_BARS = 64
+
+
+def _present(x: np.ndarray) -> np.ndarray:
+    """Return ``[T, S]`` booleans, True where a ``[T, S, F]`` cell has a finite feature.
+
+    Computed ``PRESENT_BLOCK_BARS`` bars at a time.
+    """
+    present = np.empty(x.shape[:2], dtype=bool)
+    for start in range(0, x.shape[0], PRESENT_BLOCK_BARS):
+        stop = start + PRESENT_BLOCK_BARS
+        present[start:stop] = np.isfinite(x[start:stop]).any(axis=-1)
+    return present
+
 
 @dataclass
 class TrainingPanel:
@@ -131,7 +147,7 @@ class TrainingPanel:
             target=torch.zeros_like(labels),
             mask=torch.zeros(x.shape[:2], dtype=torch.bool),
             y_raw=labels,
-            present=torch.isfinite(features).any(dim=-1),
+            present=torch.from_numpy(_present(features.numpy())),
             timestamps=np.asarray(timestamps),
             symbols=np.asarray(symbols),
         )

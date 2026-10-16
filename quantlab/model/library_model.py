@@ -238,13 +238,15 @@ class LibraryModel(TrainingTargetMixin, BaseModel):
     def _transform_feature(self, x: np.ndarray) -> np.ndarray:
         """Turn raw ``[n, F]`` float32 feature rows into the library's input.
 
-        The result must keep the shape. The default returns a copy with
-        infinities replaced by NaN, which tree libraries read as missing; a
-        library that refuses NaN overrides this to impute. Applied to the
-        training and validation rows and at prediction alike; never modify
-        ``x`` in place.
+        The result must keep the shape. ``x`` is the caller's own copy of
+        the rows, never a view of the collected panel's feature array, so the
+        hook may change it in place and return it; the default replaces
+        infinities by NaN in place, which tree libraries read as missing, and
+        a library that refuses NaN overrides this to impute. Applied to the
+        training and validation rows and at prediction alike.
         """
-        return np.where(np.isinf(x), np.float32(np.nan), x)
+        x[np.isinf(x)] = np.nan
+        return x
 
     def _loss(self, target: np.ndarray, pred: np.ndarray) -> float:
         """Return the MSE over every label of one bar's ``[n, L]`` rows.
@@ -357,7 +359,7 @@ class LibraryModel(TrainingTargetMixin, BaseModel):
         segments = self._fit_segments(data)
         stamps = data.timestamp.values
         train_bars, val_bars, test_bars = [
-            np.searchsorted(stamps, part.timestamp.values) for part in segments
+            np.searchsorted(stamps, part) for part in segments
         ]
         panel = self._training_panel()
         self._fill_target(panel, train_bars, training=True)

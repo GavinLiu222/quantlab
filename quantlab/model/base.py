@@ -719,7 +719,9 @@ class BaseModel(Component, ABC):
         feature = self._collect_all_features()
         label = self._collect_all_labels()
         with Timer(f"{self.class_name}: collect merge"):
-            self.collected_panel = CollectedPanel.assemble(feature, label, source=self._panel_source())
+            self.collected_panel = CollectedPanel.assemble(
+                feature, label, source=self._panel_source(), feature_names=list(self.get_factor_names())
+            )
 
     @staticmethod
     def _variable_names(obj) -> tuple[str, ...]:
@@ -1474,7 +1476,7 @@ class BaseModel(Component, ABC):
         ['train', 'test']
         """
         data = self._panel_data()
-        parts = zip(SPLITS, (part.timestamp.values for part in self._fit_segments(data)))
+        parts = zip(SPLITS, self._fit_segments(data))
         return Segments(**{
             split: stamps if split in self.config.metric_splits else stamps[:0]
             for split, stamps in parts
@@ -1514,8 +1516,8 @@ class BaseModel(Component, ABC):
 
     def _fit_segments(
         self, data: xr.Dataset
-    ) -> tuple[xr.Dataset, xr.Dataset, xr.Dataset]:
-        """Split the collected panel into purged train, validation and test panels.
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Split the collected panel's bars into purged train, validation and test bars.
 
         The training window ``[train_start, train_end]`` is cut by position:
         its first ``1 - val_size`` share of bars trains, the rest validates.
@@ -1526,9 +1528,10 @@ class BaseModel(Component, ABC):
 
         Returns
         -------
-        tuple of xr.Dataset
-            The train, validation and test panels. The validation panel has
-            no timestamps when ``val_size`` is 0 or the purge empties it.
+        tuple of np.ndarray
+            The train, validation and test timestamps, each sorted. The
+            validation bars are empty when ``val_size`` is 0 or the purge
+            empties them.
 
         Raises
         ------
@@ -1560,11 +1563,7 @@ class BaseModel(Component, ABC):
             )
         train, test = parts[0], parts[-1]
         val = parts[1] if len(parts) == 3 else timestamps[:0]
-        return (
-            data.sel(timestamp=train),
-            data.sel(timestamp=val),
-            data.sel(timestamp=test),
-        )
+        return np.asarray(train), np.asarray(val), np.asarray(test)
 
     @property
     def model_save_dir(self) -> Path:

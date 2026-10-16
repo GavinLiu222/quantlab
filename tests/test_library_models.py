@@ -808,3 +808,26 @@ def test_alpha158_pinned_to_three_features_trains(spot_kline_zarr, tmp_path):
     assert model.get_factor_names() == PINNED
     model.train()
     assert model.fit_calls[0]["train"].x.shape[-1] == len(PINNED)
+
+
+def test_the_feature_hook_gets_a_copy_it_may_change_in_place(tmp_path):
+    """`_transform_feature` is handed the caller's own copy of the rows (never a view of
+    the collected panel's feature array), so the default replaces infinities in place
+    and returns the same array."""
+    seen = []
+
+    class SeeingHead(StubLibraryHead):
+        def _transform_feature(self, x):
+            seen.append(x)
+            return super()._transform_feature(x)
+
+    factor = FakePanel(["f_a", "f_b"], seed=1)
+    factor._ds["f_a"][5, 2] = np.inf
+    model = SeeingHead(_config(tmp_path, factors=[factor])).collect()
+    model.train()
+
+    shared, _, _ = model.collected_panel.array(model.get_factor_names(), np.float32)
+    assert seen and not any(np.shares_memory(x, shared) for x in seen)
+    assert np.isinf(shared).any()  # the panel's array still holds the infinity
+    rows = np.array([1.0, np.inf, np.nan], dtype=np.float32)
+    assert StubLibraryHead._transform_feature(model, rows) is rows and np.isnan(rows[1])
