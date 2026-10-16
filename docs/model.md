@@ -574,6 +574,10 @@ True
 ['test']
 ```
 
+### Feature type
+
+A model reads every feature as float32 (`FEATURE_DTYPE` in `quantlab.model.collected_panel`): `collect()` and `predict_window` cast each factor's panel to it as they read it, before the merge, and the fit, the evaluation and `predict_panel` read their arrays in it, so they share one array of one type. Labels keep their own type. A float64 factor, such as the market features, therefore takes half the memory in the collected panel. `panel_dtype` is a different setting: the precision a torch head stores its training panel in on its device, after the features were read.
+
 ### Share one collected panel between models
 
 Models configured to read the same factors and labels over the same `start_date` and `end_date`, such as several hyperparameter settings of one head, can hold one collected panel: `use_panel(panel)` hands a model another model's `collected_panel`. They then share the data, its record and every array built from it, so the panel is read and converted once for all of them. A model reading other factors, labels or dates refuses the panel with `ValueError`.

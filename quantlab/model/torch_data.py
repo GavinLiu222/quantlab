@@ -31,6 +31,8 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from quantlab.model.collected_panel import FEATURE_DTYPE
+
 
 @dataclass
 class TrainingPanel:
@@ -122,7 +124,7 @@ class TrainingPanel:
             raise ValueError(
                 f"labels of shape {y_raw.shape} do not match features of shape {x.shape}"
             )
-        features = torch.from_numpy(np.asarray(x, dtype=np.float32))
+        features = torch.from_numpy(np.asarray(x, dtype=FEATURE_DTYPE))
         labels = torch.from_numpy(np.asarray(y_raw, dtype=np.float32))
         return cls(
             x=features,

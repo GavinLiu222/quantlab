@@ -574,6 +574,10 @@ True
 ['test']
 ```
 
+### 特征的类型
+
+模型把所有特征都按 float32 读（`quantlab.model.collected_panel` 的 `FEATURE_DTYPE`）：`collect()` 和 `predict_window` 读每个因子的面板时就转成这个类型，在合并之前；拟合、评估和 `predict_panel` 也按它取数组，所以共用同一个类型的同一份数组。标签保留自己的类型。因此 float64 的因子（比如市场特征）在收集面板里只占一半内存。`panel_dtype` 是另一回事：它是 torch 模型头在特征读进来之后、把训练面板放到设备上时的存储精度。
+
 ### 在多个模型间共用一个收集面板
 
 配置为在相同的 `start_date`、`end_date` 上读取相同因子和标签的模型（例如同一个模型头的几组超参数）可以持有同一个收集面板：`use_panel(panel)` 把另一个模型的 `collected_panel` 交给这个模型。之后它们共用数据、读取记录以及由它生成的每个数组，所以面板对它们全体只读取、转换一次。读取其他因子、标签或日期的模型会以 `ValueError` 拒绝这个面板。

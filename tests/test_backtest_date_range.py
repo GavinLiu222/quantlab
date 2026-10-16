@@ -24,6 +24,7 @@ from quantlab.backtest.config import CrossSectionBacktestConfig
 from quantlab.portfolio.config import TopNConfig
 from quantlab.backtest.predefined.us_equity import USEquityCrossectionSelectStockVectorBt
 from quantlab.portfolio.predefined.top_n import TopNConstructor
+from quantlab.model.collected_panel import FEATURE_DTYPE
 from tests.backtest_fixtures import (
     make_model,
     make_stock_dataset,
@@ -147,6 +148,7 @@ def test_the_first_backtest_bar_matches_a_standalone_compute(tmp_path):
     # computation over the whole history, so neither is under-warmed.
     for panel in (factor.compute(start, end), factor.compute(_day(bars[0]), end)):
         expected = panel[list(panel.data_vars)[0]].sel(timestamp=bars[30])
+        # The model reads its features as FEATURE_DTYPE.
         np.testing.assert_array_equal(
-            first.sel(symbol=expected.symbol.values).values, expected.values
+            first.sel(symbol=expected.symbol.values).values, expected.values.astype(FEATURE_DTYPE)
         )

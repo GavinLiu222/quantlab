@@ -74,11 +74,12 @@ class TrainingTargetMixin:
         """Return the collected panel as a float32 ``TrainingPanel`` with no target yet.
 
         Its float32 feature and label arrays are the ``collected_panel``'s,
-        built once and shared by every fit on it (and by the evaluation when
-        the panel is float32), so a fit reads them and never writes into them.
+        built once and shared by every fit on it and, for the features, by
+        the evaluation (``_feature_array``), so a fit reads them and never
+        writes into them.
         """
         with Timer(f"{self.class_name}: to_array"):
-            x, timestamps, symbols = self.collected_panel.array(self.get_factor_names(), np.float32)
+            x, timestamps, symbols = self._feature_array()
             y_raw, _, _ = self.collected_panel.array(self.get_label_names(), np.float32)
         return TrainingPanel.from_arrays(x, timestamps=timestamps, symbols=symbols, y_raw=y_raw)
 

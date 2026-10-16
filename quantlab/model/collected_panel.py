@@ -51,6 +51,41 @@ def _array_dtype(data: xr.Dataset, variables: list[str], dtype) -> np.dtype:
     return np.dtype(dtype)
 
 
+#: The type every model reads its features as: its fit, its evaluation and
+#: its predictions (``TrainingPanel.from_arrays`` included), so they all
+#: read one array of one type.
+FEATURE_DTYPE = np.dtype(np.float32)
+
+
+def as_feature_dtype(data: xr.Dataset) -> xr.Dataset:
+    """Return ``data`` with every variable cast to ``FEATURE_DTYPE``.
+
+    A variable already of that type is kept as it is, not copied. Every
+    variable is cast, integer ones included: the fit reads its features as
+    ``FEATURE_DTYPE`` whatever their type.
+
+    Parameters
+    ----------
+    data : xr.Dataset
+        A feature panel.
+
+    Returns
+    -------
+    xr.Dataset
+        ``data`` with every variable of ``FEATURE_DTYPE``; ``data`` itself
+        when every variable already is.
+
+    Examples
+    --------
+    >>> wide = panel.assign(f_a=panel["f_a"].astype(np.float64))
+    >>> as_feature_dtype(wide)["f_a"].dtype
+    dtype('float32')
+    """
+    cast = {name: data[name].astype(FEATURE_DTYPE)
+            for name in data.data_vars if data[name].dtype != FEATURE_DTYPE}
+    return data.assign(cast) if cast else data
+
+
 def to_array(data: xr.Dataset, variables: list[str], dtype: "np.typing.DTypeLike | None" = None) -> np.ndarray:
     """Convert a panel to a ``[num_times, num_symbols, len(variables)]`` array.
 

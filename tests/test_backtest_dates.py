@@ -51,6 +51,7 @@ from quantlab.model.config import ModelConfig, ModelConfig
 from quantlab.factor.config import PolarsFactorConfig
 from quantlab.backtest.predefined.us_equity import USEquityCrossectionSelectStockVectorBt
 from quantlab.portfolio.predefined.top_n import TopNConstructor
+from quantlab.model.collected_panel import FEATURE_DTYPE
 from tests.torch_heads import MeanContextHead
 from tests.backtest_fixtures import (
     SYMBOLS,
@@ -404,7 +405,7 @@ def test_predictions_align_to_price_symbols_by_label_not_position(tmp_path):
             result.predictions["fwd_ret_1"]
             .isel(timestamp=0)
             .sel(symbol=symbol)
-        ) == pytest.approx(float(past_return.sel(symbol=symbol)), rel=1e-12)
+        ) == pytest.approx(float(past_return.sel(symbol=symbol).astype(FEATURE_DTYPE)), rel=1e-12)
 
     expected_top = set(past_return.to_series().nlargest(TOP_N).index)
     first_row = result.weights["weight"].isel(timestamp=0)

@@ -55,7 +55,7 @@ from quantlab.model.split import purge_segments
 from quantlab.utils.jsonable import to_jsonable
 from quantlab.utils.timer import Timer
 from quantlab.model.split import Fold
-from quantlab.model.collected_panel import CollectedPanel, sorted_panel, to_array
+from quantlab.model.collected_panel import FEATURE_DTYPE, CollectedPanel, as_feature_dtype, sorted_panel, to_array
 from quantlab.model.walk_forward_training import fold_config, train_walk_forward
 
 from quantlab.model.config import ModelConfig
@@ -515,7 +515,8 @@ class BaseModel(Component, ABC):
         ``config.factor_data_strategy``. It starts ``warmup_bars`` bars
         before ``start`` (by default the model's ``start_date``), counted on
         the factor's own dataset calendar (see ``_feature_start``), so the
-        panel may begin before ``start``.
+        panel may begin before ``start``. Each factor's panel is cast to
+        ``FEATURE_DTYPE`` before the merge.
 
         Raises
         ------
@@ -526,9 +527,9 @@ class BaseModel(Component, ABC):
         end = self.config.end_date if end is None else end
         strategy = self.config.factor_data_strategy
         panels = [
-            self._request_panel(
+            as_feature_dtype(self._request_panel(
                 factor, strategy, self._feature_start(factor, strategy, start), end
-            )
+            ))
             for factor in self.config.factors
         ]
         return xr.combine_by_coords(panels)  # type: ignore
@@ -1204,8 +1205,16 @@ class BaseModel(Component, ABC):
 
         data = sorted_panel(features[factors])
         return self._predict_arrays(
-            to_array(data, factors), data.timestamp.values, data.symbol.values
+            to_array(data, factors, FEATURE_DTYPE), data.timestamp.values, data.symbol.values
         )
+
+    def _feature_array(self) -> tuple:
+        """Return the collected panel's ``FEATURE_DTYPE`` feature array, its timestamps and symbols.
+
+        The fit and the evaluation both read it, so they read one array,
+        built once by the collected panel.
+        """
+        return self.collected_panel.array(self.get_factor_names(), FEATURE_DTYPE)
 
     def predict_scored(self) -> xr.Dataset:
         """Predict the bars of the collected panel the model is scored on, from the panel's feature array.
@@ -1231,7 +1240,7 @@ class BaseModel(Component, ABC):
         10
         """
         self._panel_data()
-        x, timestamps, symbols = self.collected_panel.array(self.get_factor_names())
+        x, timestamps, symbols = self._feature_array()
         scored = [stamps for _, stamps in self.evaluation_segments().splits()]
         if scored:
             bars = np.concatenate(scored)
