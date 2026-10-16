@@ -1,4 +1,4 @@
-"""``BlackLittermanOptimizer``: the equilibrium prior, model views, He-Litterman Omega, the posterior (#340).
+"""``BlackLittermanOptimizer``: the equilibrium prior, model views, their Omega, the posterior (#340, #341).
 
 What is locked here, and what turns it red:
 
@@ -8,19 +8,28 @@ What is locked here, and what turns it red:
   = tau diag(P Sigma P')``, ``M = ((tau Sigma)^-1 + P' Omega^-1 P)^-1``,
   ``pi = delta (Sigma + M) w``), and the decided book equals a dense cvxpy
   solve on them.
+- Each ``Omega`` (He-Litterman, Idzorek's closed form ``tau (1 - C)/C
+  Sigma_jj``, ``tau D_j``) and both view types (a total return, an alpha
+  added to the equilibrium return) equal the same reference; Idzorek at
+  ``C = 1`` puts the posterior on the views and a small ``C`` leaves it at
+  the prior.
+- An IC-scaled expected return model (Grinold, z-score) used as total-return
+  views warns, and nothing else does.
 - With no views, the decided book is the market's weights.
 - A view on one name moves a correlated name's posterior, by the
   reference's amount, and leaves an uncorrelated one at its prior.
 - Every candidate the covariance covers is priced, with or without a
   prediction.
 - Each refusal (covariance estimator, market, its output, tau, no views,
-  an active-risk reference) raises at construction, naming the field.
+  Omega, confidence, an active-risk reference) raises at construction,
+  naming the field.
 - A backtest run on a factor risk model completes and rebuilds identically.
 
 Everything is synthetic, CPU-only and offline.
 """
 
 import dataclasses
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -32,10 +41,17 @@ from quantlab.portfolio.config import (
     FactorRiskStoreEstimatorConfig,
     GrinoldExpectedReturnConfig,
     LedoitWolfEstimatorConfig,
+    PredictionExpectedReturnConfig,
     RawExpectedReturnConfig,
+    ZScoreExpectedReturnConfig,
 )
 from quantlab.portfolio.predefined.black_litterman import BlackLittermanOptimizer
-from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn, RawExpectedReturn
+from quantlab.portfolio.predefined.expected_return import (
+    GrinoldExpectedReturn,
+    PredictionExpectedReturn,
+    RawExpectedReturn,
+    ZScoreExpectedReturn,
+)
 from quantlab.portfolio.predefined.factor_risk import FactorRiskStoreEstimator
 from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
 from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
@@ -108,17 +124,28 @@ def _bar(prediction, market=MARKET, **kwargs):
     return dataclasses.replace(context, factors=factors)
 
 
-def _reference(prediction, market=MARKET):
+def _omega(sigma, viewed, omega="he_litterman", confidence=None):
+    """The views' variances: He-Litterman, Idzorek's closed form or the specific variance, all times ``tau``."""
+    if omega == "he_litterman":
+        return TAU * np.diag(sigma)[viewed]
+    if omega == "idzorek":
+        return TAU * (1 - confidence) / confidence * np.diag(sigma)[viewed]
+    if omega == "specific":
+        return TAU * _forecast().specific_variance[viewed] * SPAN
+    raise ValueError(omega)
+
+
+def _reference(prediction, market=MARKET, omega="he_litterman", confidence=None, relative=False):
     """The dense stock-space Black-Litterman: ``(posterior mean, posterior covariance, prior)``."""
     sigma = _forecast().covariance * SPAN
     viewed = np.flatnonzero(np.isfinite(prediction))
     p = np.eye(len(SYMBOLS))[viewed]
-    q = np.asarray(prediction, dtype=float)[viewed]
-    omega = np.diag(TAU * np.diag(p @ sigma @ p.T))
+    omega = np.diag(_omega(sigma, viewed, omega, confidence))
     prior_precision = np.linalg.inv(TAU * sigma)
     m = np.linalg.inv(prior_precision + p.T @ np.linalg.inv(omega) @ p)
     w = market / market.sum()
     pi = DELTA * (sigma + m) @ w
+    q = np.asarray(prediction, dtype=float)[viewed] + (pi[viewed] if relative else 0.0)
     mean = m @ (prior_precision @ pi + p.T @ np.linalg.inv(omega) @ q)
     return mean, sigma + m, pi
 
@@ -202,6 +229,66 @@ def test_the_market_is_renormalised_over_the_covered_symbols():
     np.testing.assert_allclose(weights, MARKET, atol=1e-4)
 
 
+# --- Omega and the view type --------------------------------------------------------
+
+
+@pytest.mark.parametrize("relative", [False, True])
+@pytest.mark.parametrize(
+    "omega, confidence", [("he_litterman", None), ("idzorek", 0.3), ("idzorek", 0.9), ("specific", None)]
+)
+def test_each_omega_and_view_type_equals_the_dense_reference(omega, confidence, relative):
+    rule = _rule(omega=omega, confidence=confidence, views_relative_to_prior=relative)
+    inputs = rule.problem_inputs(_bar(PREDICTION))
+    mean, covariance, _ = _reference(PREDICTION, omega=omega, confidence=confidence, relative=relative)
+    np.testing.assert_allclose(inputs.expected_return, mean, rtol=1e-9, atol=1e-14)
+    np.testing.assert_allclose(inputs.covariance, covariance, rtol=1e-9, atol=1e-14)
+
+
+def test_idzorek_at_full_confidence_puts_the_posterior_on_the_views():
+    viewed = np.isfinite(PREDICTION)
+    total = _rule(omega="idzorek", confidence=1.0).problem_inputs(_bar(PREDICTION))
+    np.testing.assert_allclose(total.expected_return[viewed], PREDICTION[viewed], rtol=1e-12, atol=1e-15)
+    # A viewed mean is known exactly: the posterior adds no uncertainty to it.
+    sigma = _forecast().covariance * SPAN
+    np.testing.assert_allclose(np.diag(total.covariance)[viewed], np.diag(sigma)[viewed], rtol=1e-9)
+    # An alpha view lands on the equilibrium return plus the alpha.
+    relative = _rule(omega="idzorek", confidence=1.0, views_relative_to_prior=True)
+    # The dense reference inverts Omega, singular at C = 1: its pi comes from C just below.
+    _, _, pi = _reference(PREDICTION, omega="idzorek", confidence=1 - 1e-12)
+    np.testing.assert_allclose(
+        relative.problem_inputs(_bar(PREDICTION)).expected_return[viewed],
+        pi[viewed] + PREDICTION[viewed], rtol=1e-6,
+    )
+
+
+def test_idzorek_at_a_small_confidence_leaves_the_posterior_at_the_prior():
+    no_views = _rule().problem_inputs(_bar(np.full(len(SYMBOLS), np.nan)))
+    doubtful = _rule(omega="idzorek", confidence=1e-9).problem_inputs(_bar(PREDICTION))
+    # The views are 1e-2 away from the prior; a 1e-9 confidence moves it by about 1e-11.
+    np.testing.assert_allclose(doubtful.expected_return, no_views.expected_return, rtol=0, atol=1e-9)
+    np.testing.assert_allclose(doubtful.covariance, no_views.covariance, rtol=1e-6)
+
+
+@pytest.mark.parametrize(
+    "model, relative, warns",
+    [
+        (GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)), False, True),
+        (ZScoreExpectedReturn(ZScoreExpectedReturnConfig(ic=0.05)), False, True),
+        (GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)), True, False),
+        (ZScoreExpectedReturn(ZScoreExpectedReturnConfig(ic=0.05)), True, False),
+        (RawExpectedReturn(RawExpectedReturnConfig()), False, False),
+        (PredictionExpectedReturn(PredictionExpectedReturnConfig()), False, False),
+    ],
+)
+def test_an_ic_scaled_model_as_total_return_views_warns(model, relative, warns):
+    params = _params(expected_return=model, views_relative_to_prior=relative)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        BlackLittermanOptimizer(BlackLittermanConfig(**params))
+    messages = [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
+    assert any("views_relative_to_prior" in m for m in messages) == warns
+
+
 # --- refusals ----------------------------------------------------------------------
 
 
@@ -214,6 +301,14 @@ def test_the_market_is_renormalised_over_the_covered_symbols():
         (dict(tau=0.0), "tau"),
         (dict(tau=-0.1), "tau"),
         (dict(expected_return=None), "expected_return"),
+        (dict(omega="meucci"), "omega"),
+        (dict(omega="idzorek"), "confidence"),
+        (dict(omega="idzorek", confidence=0.0), "confidence"),
+        (dict(omega="idzorek", confidence=-0.2), "confidence"),
+        (dict(omega="idzorek", confidence=1.5), "confidence"),
+        (dict(omega="idzorek", confidence=float("nan")), "confidence"),
+        (dict(omega="he_litterman", confidence=0.5), "confidence"),
+        (dict(omega="specific", confidence=0.5), "confidence"),
     ],
 )
 def test_a_misconfigured_rule_is_refused_naming_the_field(overrides, field):
@@ -249,6 +344,7 @@ def test_a_black_litterman_backtest_runs_on_a_factor_risk_model_and_rebuilds(tmp
             covariance=FactorRiskStoreEstimator(FactorRiskStoreEstimatorConfig(risk_model=model)),
             expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
             risk_aversion=3.0, weight_cap=0.6, tau=0.05,
+            omega="idzorek", confidence=0.5, views_relative_to_prior=True,
             market=_benchmark(market, tmp_path / "market.zarr"),
         ))
 

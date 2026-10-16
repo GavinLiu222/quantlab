@@ -333,13 +333,14 @@ class BlackLittermanConfig(MeanVarianceConfig):
     ...     expected_return=RawExpectedReturn(RawExpectedReturnConfig()),
     ...     risk_aversion=10.0, weight_cap=0.05, market=cap_weight, tau=0.05,
     ... )
-    >>> cfg.market_weight, cfg.tau
-    ('benchmark_weight', 0.05)
+    >>> cfg.market_weight, cfg.tau, cfg.omega, cfg.views_relative_to_prior
+    ('benchmark_weight', 0.05, 'he_litterman', False)
     """
 
     #: How ``expected_return_label``'s prediction becomes the symbol views,
-    #: one per predicted candidate, each a total return over the span.
-    #: Required: a rule without views is refused.
+    #: one per predicted candidate, over the span (a total return or an
+    #: alpha, ``views_relative_to_prior``). Required: a rule without views
+    #: is refused.
     expected_return: "ExpectedReturnModel" = component(default=None)
     #: The factor giving the market portfolio's weights, the equilibrium's
     #: ``w`` (``MembershipCapWeight`` over the roster's membership, say).
@@ -351,3 +352,15 @@ class BlackLittermanConfig(MeanVarianceConfig):
     #: the window the covariance is estimated from, or 0.025 to 0.05 by
     #: convention; positive.
     tau: float
+    #: The symbol views' uncertainty ``omega_j``: ``"he_litterman"``
+    #: (``tau * Sigma_jj``), ``"idzorek"`` (``tau * (1 - C) / C *
+    #: Sigma_jj``, Walters' closed form of Idzorek's confidence ``C =
+    #: confidence``) or ``"specific"`` (``tau * D_j``, the specific variance).
+    omega: Literal["he_litterman", "idzorek", "specific"] = "he_litterman"
+    #: Idzorek's confidence ``C`` in ``(0, 1]``: 1 puts the posterior on the
+    #: views, near 0 leaves it at the prior. Required with
+    #: ``omega="idzorek"``, refused otherwise.
+    confidence: float | None = None
+    #: True: a symbol view is an alpha added to the symbol's equilibrium
+    #: return. False: it is the total return over the span.
+    views_relative_to_prior: bool = False
