@@ -1,6 +1,7 @@
 """The approximate backtest's top-n: every decision bar's equal-weight book at once.
 
-Reads a ``TopNConstructor``'s config. Each bar's book is the one
+The implementation ``quantlab.portfolio.approximate.implementation`` chooses
+for a ``TopNConstructor``; it reads the rule's config. Each bar's book is the one
 ``TopNConstructor.construct`` gives the bar with nothing locked: the same
 picks (a stable sort, ties resolved by symbol order), ``top_n`` reduced where
 fewer symbols can be picked (one warning names those bars), and ``1 / k``
@@ -11,12 +12,12 @@ counted. The books do not read the holdings.
 import numpy as np
 from loguru import logger
 
-from quantlab.portfolio.approximate.rules import PanelPrices, PanelSolution, Stopping
+from quantlab.portfolio.approximate import PanelPrices, PanelSolution, Stopping
 from quantlab.portfolio.base import DecisionPanel
 
 
-def prepare(rule, panel: DecisionPanel) -> np.ndarray:
-    """Return every bar's book, the problem ``solve`` returns.
+def decide(rule, panel: DecisionPanel, prices: PanelPrices | None = None, stopping: Stopping = Stopping()) -> PanelSolution:
+    """Return every bar's top-n book; top-n reads neither the holdings nor a stopping rule.
 
     Parameters
     ----------
@@ -26,11 +27,15 @@ def prepare(rule, panel: DecisionPanel) -> np.ndarray:
         predicted label).
     panel : DecisionPanel
         The bars' predictions and tradability.
+    prices : PanelPrices, optional
+        Not read.
+    stopping : Stopping
+        Not read.
 
     Returns
     -------
-    np.ndarray
-        ``[bars, symbols]`` weights.
+    PanelSolution
+        ``[bars, symbols]`` weights, no iterations, every bar converged.
 
     Examples
     --------
@@ -48,7 +53,7 @@ def prepare(rule, panel: DecisionPanel) -> np.ndarray:
     ...     ),
     ...     tradable=np.ones((2, 4), dtype=bool),
     ... )
-    >>> prepare(TopNConstructor(TopNConfig(direction="long_only", top_n=2)), panel)
+    >>> decide(TopNConstructor(TopNConfig(direction="long_only", top_n=2)), panel).weights
     array([[0.5, 0. , 0. , 0.5],
            [0.5, 0. , 0.5, 0. ]])
     """
@@ -82,23 +87,7 @@ def prepare(rule, panel: DecisionPanel) -> np.ndarray:
         bottom = (rank >= (count - k)[:, None]) & (rank < count[:, None])
         picked = np.where(bottom, -0.5 / size, picked)
         np.put_along_axis(weights, order, picked, axis=1)
-    return weights
-
-
-def solve(rule, problem: np.ndarray, prices: PanelPrices | None = None, stopping: Stopping = Stopping()) -> PanelSolution:
-    """Return the prepared books; top-n reads neither the holdings nor a stopping rule.
-
-    Examples
-    --------
-    With ``panel`` the decision panel of the ``prepare`` example:
-
-    >>> from quantlab.portfolio.config import TopNConfig
-    >>> from quantlab.portfolio.predefined.top_n import TopNConstructor
-    >>> rule = TopNConstructor(TopNConfig(direction="long_only", top_n=2))
-    >>> solve(rule, prepare(rule, panel)).weights[1]
-    array([0.5, 0. , 0.5, 0. ])
-    """
-    bars = len(problem)
+    bars = len(weights)
     return PanelSolution(
-        weights=problem.copy(), iterations=np.zeros(bars, dtype=np.int64), converged=np.ones(bars, dtype=bool)
+        weights=weights, iterations=np.zeros(bars, dtype=np.int64), converged=np.ones(bars, dtype=bool)
     )

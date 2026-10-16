@@ -19,7 +19,7 @@ import pytest
 import xarray as xr
 
 from quantlab.core.component import rebuild
-from quantlab.portfolio.approximate.rules import refusal
+from quantlab.portfolio.approximate import implementation
 from quantlab.portfolio.base import PortfolioConstructionError, PortfolioContext
 from quantlab.portfolio.config import ActiveRiskConfig, LedoitWolfEstimatorConfig, MeanVarianceConfig
 from quantlab.portfolio.predefined.active_risk import ActiveRiskOptimizer
@@ -222,8 +222,9 @@ def test_mip_gap_without_max_names_is_refused():
 
 
 def test_the_approximate_backtest_takes_max_names_in_both_directions():
-    assert refusal(MeanVarianceOptimizer(MeanVarianceConfig(**_params()))) is None
-    assert refusal(MeanVarianceOptimizer(MeanVarianceConfig(**_params(direction="long_short")))) is None
+    for direction in ("long_only", "long_short"):
+        found = implementation(MeanVarianceOptimizer(MeanVarianceConfig(**_params(direction=direction))))
+        assert found.__name__ == "quantlab.portfolio.predefined.approximate.mean_variance"
 
 
 def test_max_names_and_mip_gap_round_trip_through_the_config():

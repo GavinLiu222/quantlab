@@ -1,198 +1,34 @@
-"""Every decision bar's covariance at once, in low-rank form, for the approximate mean-variance solve.
+"""The approximate backtest's batched covariance estimates: every decision bar's at once, in low-rank form.
 
-``estimate_all(estimator, panel, volatility)`` reads the rule's covariance
-estimator's config (``rules`` chose it by its exact class) and returns a
-``LowRankCovariance``: bar ``k``'s covariance ``B F B' + diag(D)`` over the
-symbols it covers, the ``[symbols, symbols]`` matrix never built.
+``quantlab.portfolio.approximate.estimate_all`` chooses one of these by the
+rule's covariance estimator's exact class and passes it the estimator's
+config; each returns a ``LowRankCovariance``: bar ``k``'s covariance ``B F B'
++ diag(D)`` over the symbols it covers, the ``[symbols, symbols]`` matrix
+never built.
 
-- ``LedoitWolfEstimator``: the per-bar estimator's coverage rule on each
-  bar's return window and staleness (``DecisionPanel.return_windows``,
-  ``staleness``) and ``sklearn.covariance.ledoit_wolf``'s shrinkage computed
-  for all bars at once, in Woodbury form (``a I + U U'``).
-- ``FactorRiskStoreEstimator``: the factor risk model's ``exposure_matrix``
-  of every bar's exposures (one call), the estimate rows' factor covariance
-  and specific risks, with a coverage rule simpler than
-  ``FactorRiskModel.forecast``'s (see ``_factor_risk``).
+- ``ledoit_wolf`` (``LedoitWolfEstimator``): the per-bar estimator's coverage
+  rule on each bar's return window and staleness
+  (``DecisionPanel.return_windows``, ``staleness``) and
+  ``sklearn.covariance.ledoit_wolf``'s shrinkage computed for all bars at
+  once, in Woodbury form (``a I + U U'``).
+- ``factor_risk`` (``FactorRiskStoreEstimator``): the factor risk model's
+  ``exposure_matrix`` of every bar's exposures (one call), the estimate
+  rows' factor covariance and specific risks, with a coverage rule simpler
+  than ``FactorRiskModel.forecast``'s.
 """
-
-import dataclasses
-import functools
-from dataclasses import dataclass
-from typing import Self
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 
-from quantlab.portfolio.approximate.rules import FACTOR_RISK, LEDOIT_WOLF
+from quantlab.portfolio.approximate import LowRankCovariance
 from quantlab.portfolio.base import DecisionPanel
 
 #: Window values one batch of the Ledoit-Wolf estimate holds at most (about 128 MB each array).
 _BATCH_VALUES = 1 << 24
 
 
-@dataclass(frozen=True)
-class LowRankCovariance:
-    """Every bar's covariance of a decision panel, in low-rank form: ``estimate_all``'s result.
-
-    Bar ``k``'s covariance over its covered symbols is ``B F B' +
-    diag(D)``, with ``B = exposures[k]``, ``F = factor_covariance[k]`` (the
-    identity when ``None``) and ``D = specific_variance[k]``; the dense
-    ``[symbols, symbols]`` matrix is never built. A symbol a bar does not
-    cover has zero exposures and specific variance there.
-
-    Attributes
-    ----------
-    covered : np.ndarray
-        Booleans ``[bars, symbols]``: the symbols each bar's estimate covers.
-    exposures : np.ndarray
-        ``[bars, symbols, k]``: ``B`` per bar.
-    factor_covariance : np.ndarray or None
-        ``[bars, k, k]``: ``F`` per bar, or ``None`` for the identity.
-    specific_variance : np.ndarray
-        ``[bars, symbols]``: ``D`` per bar.
-
-    Examples
-    --------
-    >>> covariance = LowRankCovariance(
-    ...     covered=np.array([[True, True]]),
-    ...     exposures=np.array([[[0.1], [0.2]]]),
-    ...     factor_covariance=None,
-    ...     specific_variance=np.array([[0.01, 0.02]]),
-    ... )
-    >>> covariance.variance
-    array([[0.02, 0.06]])
-    >>> covariance.times(np.array([[1.0, 0.0]]))
-    array([[0.02, 0.02]])
-    """
-
-    covered: np.ndarray
-    exposures: np.ndarray
-    factor_covariance: np.ndarray | None
-    specific_variance: np.ndarray
-
-    @functools.cached_property
-    def variance(self) -> np.ndarray:
-        """``[bars, symbols]``: each covered symbol's variance, the diagonal; 0 where not covered.
-
-        Computed once per covariance, by a batched matrix product (``B F``
-        per bar) and a row sum, never a loop over the factor pairs.
-
-        Examples
-        --------
-        >>> covariance.variance
-        array([[0.02, 0.06]])
-        """
-        loaded = self.exposures if self.factor_covariance is None else self.exposures @ self.factor_covariance
-        return (loaded * self.exposures).sum(axis=2) + self.specific_variance
-
-    def scaled(self, factor: float) -> Self:
-        """Return the covariance with every entry multiplied by ``factor``, the span scaling.
-
-        Examples
-        --------
-        >>> covariance.scaled(5).variance
-        array([[0.1, 0.3]])
-        """
-        if self.factor_covariance is None:
-            return dataclasses.replace(
-                self,
-                exposures=self.exposures * np.sqrt(factor),
-                specific_variance=self.specific_variance * factor,
-            )
-        return dataclasses.replace(
-            self,
-            factor_covariance=self.factor_covariance * factor,
-            specific_variance=self.specific_variance * factor,
-        )
-
-    def times(self, weights: np.ndarray) -> np.ndarray:
-        """``[bars, symbols]``: each bar's covariance times its row of ``weights``.
-
-        Examples
-        --------
-        >>> covariance.times(np.array([[1.0, 0.0]]))
-        array([[0.02, 0.02]])
-        """
-        load = (weights[:, None, :] @ self.exposures)[:, 0, :]
-        if self.factor_covariance is not None:
-            load = (self.factor_covariance @ load[:, :, None])[:, :, 0]
-        return (self.exposures @ load[:, :, None])[:, :, 0] + self.specific_variance * weights
-
-    def with_volatility(self, volatility: np.ndarray) -> Self:
-        """Return the covariance with each covered symbol's volatility replaced, the correlations kept.
-
-        ``S Sigma S`` with ``S = diag(volatility / sqrt(variance))``: the
-        rows of ``B`` scaled by ``S`` and ``D`` by ``S^2``. A symbol without
-        a finite positive ``volatility`` is no longer covered, its row and
-        specific variance zeroed.
-
-        Parameters
-        ----------
-        volatility : np.ndarray
-            ``[bars, symbols]`` volatilities.
-
-        Examples
-        --------
-        >>> np.sqrt(covariance.with_volatility(np.array([[0.2, np.nan]])).variance).round(6)
-        array([[0.2, 0. ]])
-        """
-        covered = self.covered & np.isfinite(volatility) & (volatility > 0)
-        current = self.variance
-        with np.errstate(divide="ignore", invalid="ignore"):
-            scale = np.where(covered & (current > 0), volatility / np.sqrt(current), 0.0)
-        return LowRankCovariance(
-            covered=covered,
-            exposures=self.exposures * scale[..., None],
-            factor_covariance=self.factor_covariance,
-            specific_variance=self.specific_variance * scale**2,
-        )
-
-
-def estimate_all(estimator, panel: DecisionPanel, volatility: np.ndarray | None = None) -> LowRankCovariance:
-    """Estimate the covariance of one-bar returns at every bar of a decision panel.
-
-    Parameters
-    ----------
-    estimator : CovarianceEstimator
-        The rule's covariance estimator, a ``LedoitWolfEstimator`` or a
-        ``FactorRiskStoreEstimator`` (``rules.refusal`` has checked it).
-    panel : DecisionPanel
-        The bars' decision inputs, their valuation prices (Ledoit-Wolf) or
-        the risk model's exposures and estimate rows (factor risk) included.
-    volatility : np.ndarray, optional
-        ``[bars, symbols]`` one-bar volatilities in place of the historical
-        ones (Ledoit-Wolf only); a symbol without a finite positive one is
-        not covered.
-
-    Returns
-    -------
-    LowRankCovariance
-
-    Raises
-    ------
-    ValueError
-        If a factor risk panel has no exposures, or no estimate row at a bar
-        (the message names the first such bar and the store's range).
-
-    Examples
-    --------
-    With ``risk`` a ``LedoitWolfEstimator`` over 20 bars and ``panel`` a
-    decision panel of 2 bars over ``AAA``, ``BBB`` and ``CCC``, CCC listed
-    too late for the window:
-
-    >>> estimate_all(risk, panel).covered
-    array([[ True,  True, False],
-           [ True,  True, False]])
-    """
-    if estimator.import_path == LEDOIT_WOLF:
-        return _ledoit_wolf(estimator.config, panel, volatility)
-    if estimator.import_path == FACTOR_RISK:
-        return _factor_risk(estimator.config.risk_model, panel)
-    raise ValueError(f"{type(estimator).__name__} has no batched estimate")
-
-
-def _ledoit_wolf(config, panel: DecisionPanel, volatility: np.ndarray | None) -> LowRankCovariance:
+def ledoit_wolf(config, panel: DecisionPanel, volatility: np.ndarray | None = None) -> LowRankCovariance:
     """Every bar's Ledoit-Wolf estimate, as ``LedoitWolfEstimator.estimate`` gives it on the bar's context.
 
     The same coverage rule (every return of the window finite, not all
@@ -267,7 +103,7 @@ def _batched_ledoit_wolf(window: np.ndarray, covered: np.ndarray) -> tuple[np.nd
     return shift, exposures
 
 
-def _factor_risk(model, panel: DecisionPanel) -> LowRankCovariance:
+def factor_risk(config, panel: DecisionPanel, volatility: np.ndarray | None = None) -> LowRankCovariance:
     """Every bar's factor risk forecast, ``B F B' + diag(D)`` per bar, with array operations over all bars.
 
     ``B`` is the model's ``exposure_matrix`` of every bar's exposures on the
@@ -287,8 +123,12 @@ def _factor_risk(model, panel: DecisionPanel) -> LowRankCovariance:
       ``forecast``.
 
     A bar the estimate store has no row at is refused, as the per-bar
-    estimator refuses it.
+    estimator refuses it. ``volatility`` is refused: the optimiser refuses
+    ``volatility_label`` with a factor risk model when it is constructed.
     """
+    if volatility is not None:
+        raise ValueError("a factor risk model's estimate takes no volatilities in place of its own")
+    model = config.risk_model
     if panel.risk_exposures is None:
         raise ValueError(
             "the decision panel has no risk exposures; the decision inputs take them "

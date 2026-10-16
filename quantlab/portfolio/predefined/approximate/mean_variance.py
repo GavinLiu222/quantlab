@@ -1,18 +1,19 @@
 """The approximate backtest's mean-variance: every decision bar's Markowitz weights in compiled code.
 
-Reads a ``MeanVarianceOptimizer``'s (or an ``ActiveRiskOptimizer``'s)
-config and the span its ``bind`` read, and maximises the per-bar rule's
+The implementation ``quantlab.portfolio.approximate.implementation``
+chooses for a ``MeanVarianceOptimizer`` or an ``ActiveRiskOptimizer``:
+``decide`` reads the rule's config and the span its ``bind`` read, and maximises the per-bar rule's
 objective
 
     w @ mu - risk_aversion / 2 * (w - b) @ Sigma @ (w - b) - turnover_penalty * |w - holdings|_1
 
 (``b`` the active-risk rule's benchmark weights, zero otherwise) by
-accelerated proximal gradient (``mean_variance_kernels``, numba) rather than
+accelerated proximal gradient (``_support.mean_variance_kernels``, numba) rather than
 cvxpy: forward in time when the decision reads the holdings (the turnover
 penalty, or ``candidate_top_k`` keeping held names), in parallel over the
 bars otherwise. ``mu`` and ``Sigma`` are those the per-bar rule computes on
 each bar's context with nothing locked: the covariance estimator's
-(``covariance.estimate_all``) scaled to the expected-return label's span,
+(``quantlab.portfolio.approximate.estimate_all``) scaled to the expected-return label's span,
 with ``volatility_label`` its volatilities the prediction over
 ``sqrt(span)``; a symbol selectable when it is tradable and covered; and on
 the selectable symbols with a prediction ``mu = ic * sigma * z`` (``z`` their
@@ -24,16 +25,21 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from quantlab.portfolio.approximate import covariance as covariances
-from quantlab.portfolio.approximate.covariance import LowRankCovariance
-from quantlab.portfolio.approximate.rules import ACTIVE_RISK, PanelPrices, PanelSolution, Stopping
+from quantlab.portfolio.approximate import (
+    ACTIVE_RISK,
+    LowRankCovariance,
+    PanelPrices,
+    PanelSolution,
+    Stopping,
+    estimate_all,
+)
 from quantlab.portfolio.base import DecisionPanel
 from quantlab.utils.cross_section import cross_sectional_zscore
 
 
 @dataclass(frozen=True)
 class _Problem:
-    """``prepare``'s problem: what every bar's decision reads but its holdings."""
+    """``_problem``'s result: what every bar's decision reads but its holdings."""
 
     #: Each bar's covariance on the expected-return label's span.
     low_rank: LowRankCovariance
@@ -91,52 +97,24 @@ def _prediction(panel: DecisionPanel, label: str) -> np.ndarray:
     )
 
 
-def prepare(rule, panel: DecisionPanel) -> _Problem:
-    """Turn every bar's inputs into its problem but the holdings: ``mu``, the covariance and the candidates.
-
-    Parameters
-    ----------
-    rule : MeanVarianceOptimizer
-        The rule, bound to the predicted labels (its ``span`` read).
-    panel : DecisionPanel
-        The bars' decision inputs.
-
-    Returns
-    -------
-    object
-        The problem ``solve`` answers.
+def _problem(rule, panel: DecisionPanel) -> _Problem:
+    """Every bar's inputs but the holdings: ``mu``, the covariance and the candidates (see the module docstring).
 
     Raises
     ------
     RuntimeError
         If the rule has not been bound to label specs.
-
-    Examples
-    --------
-    With ``panel`` the two-bar decision panel of the ``covariance.estimate_all``
-    example (``CCC`` not covered):
-
-    >>> from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig
-    >>> from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
-    >>> from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
-    >>> from quantlab.runs.prediction_panel import LabelSpec
-    >>> optimizer = MeanVarianceOptimizer(MeanVarianceConfig(
-    ...     expected_return_label="ret_5", ic=0.05, risk_aversion=10.0, weight_cap=0.8,
-    ...     covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=20)),
-    ... ))
-    >>> optimizer.bind([LabelSpec(name="ret_5", scale="raw", delay=1, span=5)])
-    >>> problem = prepare(optimizer, panel)
     """
     span = rule.span
     if span is None:
         raise RuntimeError(f"{type(rule).__name__} is not bound to label specs; call bind() first")
     config = rule.config
     if config.volatility_label is None:
-        low_rank = covariances.estimate_all(config.covariance, panel)
+        low_rank = estimate_all(config.covariance, panel)
     else:
         # The label is on the span; the covariance estimator takes one-bar volatilities.
         volatility = _prediction(panel, config.volatility_label) / np.sqrt(span)
-        low_rank = covariances.estimate_all(config.covariance, panel, volatility)
+        low_rank = estimate_all(config.covariance, panel, volatility)
     low_rank = low_rank.scaled(span)
     prediction = _prediction(panel, config.expected_return_label)
     selectable = np.asarray(panel.tradable, dtype=bool) & low_rank.covered
@@ -159,83 +137,9 @@ def _factor(panel: DecisionPanel, name: str) -> np.ndarray:
     return np.asarray(values.sel(symbol=panel.symbols).values, dtype=np.float64)
 
 
-def solve(rule, problem: _Problem, prices: PanelPrices | None = None, stopping: Stopping = Stopping()) -> PanelSolution:
-    """Return every bar's mean-variance weights: in time order when they read the holdings, at once otherwise.
-
-    The candidates are each bar's predicted symbols, with
-    ``candidate_top_k`` only the top ``candidate_top_k`` by ``mu``
-    (``|mu|`` long-short), and with a turnover penalty or
-    ``candidate_top_k`` also the selectable symbols held. A bar with no
-    candidate, or long-only too few to hold the book under ``weight_cap``,
-    holds (an all-NaN row), as a backtest run holds it. Each bar maximises
-    the per-bar rule's objective on its candidates in compiled code
-    (``mean_variance_kernels``), only on the columns some bar of the panel
-    can select: accelerated proximal gradient whose step backtracks below
-    the curvature on the budget's tangent space, until the residual meets
-    ``stopping``. Long-only on the capped simplex, long-short on ``sum(w) =
-    0``, ``|w|_1 <= 1``, ``|w| <= weight_cap``.
-
-    With ``max_names`` every bar's book holds at most that many names, long
-    and short counted together: each projection keeps the names whose
-    zeroing costs it most and projects again on them, the first step ranks
-    the names by the gradient at the start (the holdings, or cash for bars
-    solved at once), and the steps have no momentum. That is a local
-    optimum of the mixed-integer program a backtest run solves exactly.
-
-    With a ``turnover_penalty`` or ``candidate_top_k`` the bars are solved
-    forward in time, each once: its holdings are its book (the last decided
-    bar's weights, or ``prices.previous``, at their fill prices) marked at
-    its close over the book's value, cash included; the objective loses
-    ``turnover_penalty * |w - holdings|_1``, which enters the projection as
-    an L1 pull toward the holdings, and the solve starts from the holdings. A
-    held bar leaves the book as it was. Otherwise the bars are independent
-    and solved at once, in parallel except on macOS; a held symbol without a
-    prediction is then not a candidate (the per-bar rule keeps it at ``mu =
-    0``).
-
-    Parameters
-    ----------
-    rule : MeanVarianceOptimizer
-        The rule.
-    problem : object
-        What ``prepare`` returned.
-    prices : PanelPrices, optional
-        The book before the first bar and the prices it drifts with;
-        ``None`` for no book.
-    stopping : Stopping
-        The residual at which a bar has converged, and the iterations after
-        which it stops unconverged.
-
-    Returns
-    -------
-    PanelSolution
-        ``[bars, symbols]`` weights, each bar's iterations and whether it
-        converged.
-
-    Examples
-    --------
-    With ``optimizer`` and ``problem`` as in ``prepare`` (two bars of
-    ``AAA``, ``BBB`` and ``CCC``, CCC listed too late for the window):
-
-    >>> solve(optimizer, problem).weights.round(3)
-    array([[0.578, 0.422, 0.   ],
-           [0.577, 0.423, 0.   ]])
-
-    With a turnover penalty, a book of 0.2 AAA and 0.8 BBB held before the
-    first bar, prices unchanged, pulls both bars toward it:
-
-    >>> import dataclasses
-    >>> penalised = MeanVarianceOptimizer(dataclasses.replace(optimizer.config, turnover_penalty=0.002))
-    >>> penalised.bind([LabelSpec(name="ret_5", scale="raw", delay=1, span=5)])
-    >>> book = PanelPrices(
-    ...     previous=np.array([0.2, 0.8, 0.0]), previous_entry=np.ones(3),
-    ...     close=np.ones((2, 3)), entry=np.ones((2, 3)),
-    ... )
-    >>> solve(penalised, prepare(penalised, panel), book).weights.round(3)
-    array([[0.481, 0.519, 0.   ],
-           [0.482, 0.518, 0.   ]])
-    """
-    from quantlab.portfolio.approximate import mean_variance_kernels
+def _solve(rule, problem: _Problem, prices: PanelPrices | None, stopping: Stopping) -> PanelSolution:
+    """Every bar's weights of ``problem`` (see ``decide``)."""
+    from quantlab.portfolio.predefined.approximate._support import mean_variance_kernels
 
     config = rule.config
     long_only = config.direction == "long_only"
@@ -303,3 +207,102 @@ def solve(rule, problem: _Problem, prices: PanelPrices | None = None, stopping: 
     weights[decided] = 0.0
     weights[np.ix_(decided, columns)] = solved[decided]
     return PanelSolution(weights=weights, iterations=np.abs(iterations), converged=iterations >= 0)
+
+
+def decide(
+    rule, panel: DecisionPanel, prices: PanelPrices | None = None, stopping: Stopping = Stopping()
+) -> PanelSolution:
+    """Return every bar's mean-variance weights of a decision panel: in time order when they read the holdings, at once otherwise.
+
+    ``mu`` and the covariance are the per-bar rule's (see the module
+    docstring).
+
+    The candidates are each bar's predicted symbols, with
+    ``candidate_top_k`` only the top ``candidate_top_k`` by ``mu``
+    (``|mu|`` long-short), and with a turnover penalty or
+    ``candidate_top_k`` also the selectable symbols held. A bar with no
+    candidate, or long-only too few to hold the book under ``weight_cap``,
+    holds (an all-NaN row), as a backtest run holds it. Each bar maximises
+    the per-bar rule's objective on its candidates in compiled code
+    (``_support.mean_variance_kernels``), only on the columns some bar of the panel
+    can select: accelerated proximal gradient whose step backtracks below
+    the curvature on the budget's tangent space, until the residual meets
+    ``stopping``. Long-only on the capped simplex, long-short on ``sum(w) =
+    0``, ``|w|_1 <= 1``, ``|w| <= weight_cap``.
+
+    With ``max_names`` every bar's book holds at most that many names, long
+    and short counted together: each projection keeps the names whose
+    zeroing costs it most and projects again on them, the first step ranks
+    the names by the gradient at the start (the holdings, or cash for bars
+    solved at once), and the steps have no momentum. That is a local
+    optimum of the mixed-integer program a backtest run solves exactly.
+
+    With a ``turnover_penalty`` or ``candidate_top_k`` the bars are solved
+    forward in time, each once: its holdings are its book (the last decided
+    bar's weights, or ``prices.previous``, at their fill prices) marked at
+    its close over the book's value, cash included; the objective loses
+    ``turnover_penalty * |w - holdings|_1``, which enters the projection as
+    an L1 pull toward the holdings, and the solve starts from the holdings. A
+    held bar leaves the book as it was. Otherwise the bars are independent
+    and solved at once, in parallel except on macOS; a held symbol without a
+    prediction is then not a candidate (the per-bar rule keeps it at ``mu =
+    0``).
+
+    Parameters
+    ----------
+    rule : MeanVarianceOptimizer
+        The rule, bound to the predicted labels (its ``span`` read).
+    panel : DecisionPanel
+        The bars' decision inputs.
+    prices : PanelPrices, optional
+        The book before the first bar and the prices it drifts with;
+        ``None`` for no book.
+    stopping : Stopping
+        The residual at which a bar has converged, and the iterations after
+        which it stops unconverged.
+
+    Returns
+    -------
+    PanelSolution
+        ``[bars, symbols]`` weights, each bar's iterations and whether it
+        converged.
+
+    Raises
+    ------
+    RuntimeError
+        If the rule has not been bound to label specs.
+
+    Examples
+    --------
+    With ``panel`` the two-bar decision panel of the
+    ``quantlab.portfolio.approximate.estimate_all`` example (``CCC`` not
+    covered):
+
+    >>> from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig
+    >>> from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
+    >>> from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
+    >>> from quantlab.runs.prediction_panel import LabelSpec
+    >>> optimizer = MeanVarianceOptimizer(MeanVarianceConfig(
+    ...     expected_return_label="ret_5", ic=0.05, risk_aversion=10.0, weight_cap=0.8,
+    ...     covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=20)),
+    ... ))
+    >>> optimizer.bind([LabelSpec(name="ret_5", scale="raw", delay=1, span=5)])
+    >>> decide(optimizer, panel).weights.round(3)
+    array([[0.578, 0.422, 0.   ],
+           [0.577, 0.423, 0.   ]])
+
+    With a turnover penalty, a book of 0.2 AAA and 0.8 BBB held before the
+    first bar, prices unchanged, pulls both bars toward it:
+
+    >>> import dataclasses
+    >>> penalised = MeanVarianceOptimizer(dataclasses.replace(optimizer.config, turnover_penalty=0.002))
+    >>> penalised.bind([LabelSpec(name="ret_5", scale="raw", delay=1, span=5)])
+    >>> book = PanelPrices(
+    ...     previous=np.array([0.2, 0.8, 0.0]), previous_entry=np.ones(3),
+    ...     close=np.ones((2, 3)), entry=np.ones((2, 3)),
+    ... )
+    >>> decide(penalised, panel, book).weights.round(3)
+    array([[0.481, 0.519, 0.   ],
+           [0.482, 0.518, 0.   ]])
+    """
+    return _solve(rule, _problem(rule, panel), prices, stopping)

@@ -526,7 +526,7 @@ np.True_
 
 #### 规则与配置
 
-近似回测是一个独立的模块：它读取规则的配置，用自己的规则实现做决策，按规则的确切类选择实现：这些实现在组合层的 `quantlab/portfolio/approximate/`，模拟在执行层的 `quantlab.execution.approximate`，`quantlab.backtest.approximate` 只负责回测本身（价格、调仓日程、账户和统计）。规则类本身只为回测运行逐 bar 决策，对近似回测一无所知。它能运行：
+近似回测是一个独立的模块：它读取规则的配置，用自己的规则实现做决策，按规则的确切类选择实现（ADR 0045）：这些实现在组合层的 `quantlab/portfolio/predefined/approximate/`（每条规则一个模块，各提供 `decide(rule, panel, prices, stopping)`），经由 `quantlab.portfolio.approximate` 选择（`implementation(rule)` 返回规则的模块，不能运行时在读取任何数据之前抛出带原因的异常；字段表、面板类型和 `LowRankCovariance` 也在那里），模拟在执行层的 `quantlab.execution.approximate`，`quantlab.backtest.approximate` 只负责回测本身（价格、调仓日程、账户和统计）。规则类本身只为回测运行逐 bar 决策，对近似回测一无所知。它能运行：
 
 - `TopNConstructor`，只做多和多空；
 - `MeanVarianceOptimizer`，只做多或多空、两种校准、有无换手惩罚、`candidate_top_k`、`volatility_label` 和 `max_names`，协方差估计器为 `LedoitWolfEstimator` 或 `FactorRiskStoreEstimator`（见[近似回测中的均值-方差](portfolio.md#近似回测中的均值-方差)）；
@@ -546,7 +546,7 @@ ValueError: USEquityApproximateBacktest cannot run TopkDropoutConstructor: TopkD
 
 #### 分块与求解
 
-窗口按 `chunk_bars` 个 bar 分块（默认 63），每块只准备一次问题，以此限制一块决策输入（均值-方差规则的协方差估计）占用的内存，并按时间顺序求解：规则拿到本块之前成交的账户，以及每个决策 bar 的估值价和成交价（`PanelPrices`），并像模拟一样自己漂移账户（`quantlab.execution.approximate`：最后一次成交的权重按成交价计，按每个收盘价估值；规则保持仓位的 bar 不改变账户）。决策要读持仓的规则（换手惩罚，或保留持仓标的的 `candidate_top_k`）在一个编译好的循环里按时间顺序求解，每个 bar 从上一个 bar 的权重出发只解一次；不读持仓的规则一次解完所有 bar（均值-方差按 bar 并行；macOS 上 torch 和 xgboost 各自带一个 OpenMP 运行时，所以按顺序逐个求解；`numba.set_num_threads` 或 `NUMBA_NUM_THREADS` 限制线程数）。分块大小只影响内存，不影响结果。均值-方差的一个 bar 在梯度映射残差不超过 `tolerance`（默认 1e-5）乘以起点梯度最大分量时视为收敛，此时目标值离最优不超过约两倍于此；达到 `max_iterations`（默认 20,000）时，会记录一条写明 bar 的警告，并把 `converged` 设为 `False`。top-n 不迭代。接着会话：
+窗口按 `chunk_bars` 个 bar 分块（默认 63），每块只决策一次（`decide`），以此限制一块决策输入（均值-方差规则的协方差估计）占用的内存，并按时间顺序进行：规则拿到本块之前成交的账户，以及每个决策 bar 的估值价和成交价（`PanelPrices`），并像模拟一样自己漂移账户（`quantlab.execution.approximate`：最后一次成交的权重按成交价计，按每个收盘价估值；规则保持仓位的 bar 不改变账户）。决策要读持仓的规则（换手惩罚，或保留持仓标的的 `candidate_top_k`）在一个编译好的循环里按时间顺序求解，每个 bar 从上一个 bar 的权重出发只解一次；不读持仓的规则一次解完所有 bar（均值-方差按 bar 并行；macOS 上 torch 和 xgboost 各自带一个 OpenMP 运行时，所以按顺序逐个求解；`numba.set_num_threads` 或 `NUMBA_NUM_THREADS` 限制线程数）。分块大小只影响内存，不影响结果。均值-方差的一个 bar 在梯度映射残差不超过 `tolerance`（默认 1e-5）乘以起点梯度最大分量时视为收敛，此时目标值离最优不超过约两倍于此；达到 `max_iterations`（默认 20,000）时，会记录一条写明 bar 的警告，并把 `converged` 设为 `False`。top-n 不迭代。接着会话：
 
 ```python
 >>> from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig

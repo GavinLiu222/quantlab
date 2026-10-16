@@ -12,7 +12,7 @@ Everything is synthetic, CPU-only and offline.
 import numpy as np
 import pytest
 
-from quantlab.portfolio.approximate.covariance import LowRankCovariance
+from quantlab.portfolio.approximate import LowRankCovariance
 
 
 def _covariance(identity: bool) -> LowRankCovariance:

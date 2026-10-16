@@ -506,8 +506,8 @@ class DecisionInputs:
         ``DecisionPanel.staleness`` give each bar's window and staleness as
         its context holds them. With a declared factor risk model, its
         exposures at the bars and its estimate store's rows there, as
-        ``panel_reads`` reads them. No holdings: a rule's ``solve`` is
-        handed those.
+        ``panel_reads`` reads them. No holdings: an approximate rule's
+        ``decide`` is handed those.
 
         Parameters
         ----------

@@ -22,7 +22,8 @@ instead.
 
 The approximate backtest (``quantlab.backtest.approximate``, ADR 0045) reads
 the same rules' configs and decides a block of bars at once with its own
-implementations (``quantlab.portfolio.approximate``); a rule here knows
+implementations (``quantlab.portfolio.predefined.approximate``, chosen by
+``quantlab.portfolio.approximate``); a rule here knows
 nothing of them. ``DecisionPanel`` is what
 ``DecisionInputs.panel`` reads for it: a block of bars' decision inputs.
 

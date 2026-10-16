@@ -73,24 +73,37 @@ def test_framework_modules_never_import_their_predefined_package(layer):
     assert {name: found for name, found in offenders.items() if found} == {}
 
 
-def test_the_approximate_rule_implementations_import_no_predefined_module():
-    # They are chosen by the rules' import paths, so no rule module (nor cvxpy) loads before use.
-    root = REPO_ROOT / "quantlab/portfolio/approximate"
-    # Positive control: the package and its dispatch are seen.
-    assert (root / "rules.py").is_file()
+def test_the_approximate_interface_imports_no_predefined_module_and_no_solver():
+    # The framework module chooses the implementations by the rules' import paths, so
+    # neither a rule module nor an implementation (nor cvxpy) loads before use.
+    path = REPO_ROOT / "quantlab/portfolio/approximate.py"
+    # Positive control: the module and its imports are seen.
+    assert path.is_file() and _resolved_imports(path)
+    offenders = sorted(
+        name
+        for name in _resolved_imports(path)
+        if _is_or_under(name, "quantlab.portfolio.predefined") or _is_or_under(name, "cvxpy")
+    )
+    assert offenders == []
+
+
+def test_the_approximate_rule_implementations_import_no_solver():
+    root = REPO_ROOT / "quantlab/portfolio/predefined/approximate"
+    files = sorted(root.rglob("*.py"))
+    # Positive control: the implementations and the kernels are seen.
+    assert {path.name for path in files} >= {"top_n.py", "mean_variance.py", "covariance.py", "mean_variance_kernels.py"}
     offenders = {
-        path.name: sorted(
-            name
-            for name in _resolved_imports(path)
-            if _is_or_under(name, "quantlab.portfolio.predefined") or _is_or_under(name, "cvxpy")
+        str(path.relative_to(root)): sorted(
+            name for name in _resolved_imports(path) if _is_or_under(name, "cvxpy")
         )
-        for path in sorted(root.glob("*.py"))
+        for path in files
     }
     assert {name: found for name, found in offenders.items() if found} == {}
 
 
 def test_importing_the_portfolio_root_and_rules_loads_no_numba():
-    # numba is the approximate backtest's (quantlab.portfolio.approximate, quantlab.execution.approximate),
+    # numba is the approximate backtest's (its kernels in quantlab.portfolio.predefined.approximate,
+    # quantlab.execution.approximate),
     # imported where it is used; a per-bar rule, run by a backtest run and the live trader, never pays it.
     code = (
         "import sys\n"
@@ -98,7 +111,10 @@ def test_importing_the_portfolio_root_and_rules_loads_no_numba():
         "import quantlab.portfolio.predefined.top_n, quantlab.portfolio.predefined.mean_variance\n"
         "import quantlab.portfolio.predefined.active_risk, quantlab.portfolio.predefined.ledoit_wolf\n"
         "import quantlab.portfolio.predefined.factor_risk\n"
-        "import quantlab.portfolio.approximate.rules, quantlab.backtest.approximate\n"
+        "import quantlab.portfolio.predefined.approximate.top_n\n"
+        "import quantlab.portfolio.predefined.approximate.mean_variance\n"
+        "import quantlab.portfolio.predefined.approximate.covariance\n"
+        "import quantlab.portfolio.approximate, quantlab.backtest.approximate\n"
         "print('numba' in sys.modules)\n"
     )
     result = subprocess.run(

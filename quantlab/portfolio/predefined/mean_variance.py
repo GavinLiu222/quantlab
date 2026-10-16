@@ -13,7 +13,7 @@ label's prediction, and all are on the span of the expected-return label.
 This is the only quantlab module that imports cvxpy. The approximate
 backtest (``quantlab.backtest.approximate``) reads the same config and
 solves a panel of bars with its own implementation
-(``quantlab.portfolio.approximate.mean_variance``).
+(``quantlab.portfolio.predefined.approximate.mean_variance``).
 """
 
 from collections.abc import Sequence

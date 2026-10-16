@@ -4,7 +4,7 @@ The approximate backtest (``quantlab.backtest.approximate``) gives up most of
 the Execution rules (``quantlab.execution.rules``) for speed. What it keeps is
 here, once, for the backtest's simulation and for the mean-variance solve
 that drifts its own holdings forward in time with a turnover penalty
-(``quantlab.portfolio.approximate.mean_variance_kernels.solve_forward``):
+(``quantlab.portfolio.predefined.approximate._support.mean_variance_kernels.solve_forward``):
 
 - a weight decided at bar t fills at bar t + 1's fill price, or the previous
   bar's valuation price where it has none (``entry_prices``);

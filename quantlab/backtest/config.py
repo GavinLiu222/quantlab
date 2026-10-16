@@ -301,18 +301,18 @@ class ApproximateBacktestConfig(FrozenConfig):
     #: ``benchmark_dataset`` is; the account then reports its curve, its
     #: return statistics and the excess over it. ``None`` for none.
     benchmark_dataset: "MarketDataset | None" = component(default=None)
-    #: Bars of the window prepared together: a chunk's decision inputs (its
+    #: Bars of the window decided together: a chunk's decision inputs (its
     #: covariance estimates, for a mean-variance rule) are held in memory at
-    #: once. The chunks are solved in time order, each from the weights
+    #: once. The chunks are decided in time order, each from the weights
     #: decided before it, so the size changes memory, not the result.
     chunk_bars: int = 63
     #: An iterative rule's iterations per decision bar before the bar is
-    #: reported as not converged (``quantlab.portfolio.approximate.rules.Stopping``).
+    #: reported as not converged (``quantlab.portfolio.approximate.Stopping``).
     max_iterations: int = 20_000
     #: An iterative rule's bar has converged when its gradient-mapping
     #: residual is at most this times the largest entry of its starting
     #: gradient: its objective is then within about twice that of the optimum
-    #: (``quantlab.portfolio.approximate.rules.Stopping``).
+    #: (``quantlab.portfolio.approximate.Stopping``).
     tolerance: float = 1e-5
 
     def __post_init__(self):
