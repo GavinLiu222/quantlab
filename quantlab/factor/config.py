@@ -320,6 +320,24 @@ class MembershipMaskedFactorConfig(FactorViewConfig):
 
 
 @dataclass(kw_only=True, frozen=True)
+class StartClippedConfig(FactorViewConfig):
+    """Config of ``quantlab.factor.predefined.start_clipped.StartClippedFactor``.
+
+    ``factor`` is the factor read from its store's first bar on; it keeps
+    its own config, warm-up and store. The view adds no field of its own.
+
+    Examples
+    --------
+    With ``hf`` a factor of the one-minute bars, whose store starts on
+    2016-10-11:
+
+    >>> cfg = StartClippedConfig(factor=hf)
+    >>> cfg.warmup_bars, cfg.file_path
+    (0, None)
+    """
+
+
+@dataclass(kw_only=True, frozen=True)
 class IntradayAverageConfig(BaseFactorConfig):
     """Config of ``quantlab.factor.predefined.intraday.IntradayAverage``.
 

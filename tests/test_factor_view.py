@@ -29,10 +29,12 @@ from quantlab.factor.config import (
     FactorConfig,
     MembershipMaskedFactorConfig,
     RosterConfig,
+    StartClippedConfig,
 )
 from quantlab.factor.chunking import ChunkedBuilder
 from quantlab.factor.predefined.membership_mask import MembershipMaskedFactor
 from quantlab.factor.predefined.roster import RosterFactor
+from quantlab.factor.predefined.start_clipped import StartClippedFactor
 from tests.test_membership_mask import COVERAGE_START, _membership
 from tests.test_membership_masked_factor import BARS, JOIN, CloseAndMean, _day, _prices
 
@@ -102,6 +104,9 @@ VIEWS = {
     "masked": lambda owner, roster, membership: _masked(owner, membership),
     "roster over masked": lambda owner, roster, membership: _roster(_masked(owner, membership), roster),
     "masked over roster": lambda owner, roster, membership: _masked(_roster(owner, roster), membership),
+    "start clipped": lambda owner, roster, membership: StartClippedFactor(StartClippedConfig(factor=owner)),
+    "masked roster over start clipped": lambda owner, roster, membership: _masked(
+        _roster(StartClippedFactor(StartClippedConfig(factor=owner)), roster), membership),
 }
 # The symbols each view keeps of the owner's 1..5.
 KEPT = {
@@ -109,6 +114,8 @@ KEPT = {
     "masked": ["1", "2", "3", "4", "5"],
     "roster over masked": ["2", "3", "4"],
     "masked over roster": ["2", "3", "4"],
+    "start clipped": ["1", "2", "3", "4", "5"],
+    "masked roster over start clipped": ["2", "3", "4"],
 }
 
 
