@@ -302,10 +302,11 @@ class MeanVarianceOptimizer(PortfolioConstructor):
     With ``max_names`` set, at most that many symbols hold a weight, long
     and short together, locked positions included: each bar is solved
     exactly as a mixed-integer program (one boolean per candidate, ``|w| <=
-    weight_cap * z``, ``sum(z) <= max_names`` less the locked names), names it leaves out
-    get exactly 0, and a held one is closed whatever ``min_trade``. A bar
-    whose locked positions leave no room, or whose solve is not optimal,
-    raises ``PortfolioConstructionError``.
+    weight_cap * z``, ``sum(z) <= max_names`` less the locked names), names
+    it leaves out get exactly 0, and a held one is closed whatever
+    ``min_trade``. A bar whose locked positions exceed the cap (long-only,
+    or fill it while budget is left), or whose solve is not optimal, raises
+    ``PortfolioConstructionError``.
 
     The solver's solution is cleaned of its round-off: projected onto the
     feasible set long-only (the nearest weights summing to one within
@@ -825,16 +826,15 @@ class MeanVarianceOptimizer(PortfolioConstructor):
         locked_sum = float(inputs.locked_weights.sum())
         if long_only:
             total = 1.0 - locked_sum
-            slots = self._free_slots(inputs, total)
-            reach = n if slots is None else min(n, slots)
+            slots = self._free_slots(inputs, needs=total)
+            usable, note = self._usable_names(n, slots)
             excluded = np.zeros(n, dtype=bool)
             if total <= 1e-12:
                 solution = np.zeros(n)
-            elif n == 0 or reach * config.weight_cap < total - 1e-12:
+            elif n == 0 or usable * config.weight_cap < total - 1e-12:
                 raise PortfolioConstructionError(
-                    f"infeasible: {reach} candidate symbol(s) cannot hold {total:.4g} of the "
-                    f"book under weight_cap={config.weight_cap}"
-                    + ("" if slots is None else f" and max_names={config.max_names}")
+                    f"infeasible: {usable} candidate symbol(s) cannot hold {total:.4g} of the "
+                    f"book under weight_cap={config.weight_cap}{note}"
                 )
             else:
                 solution, excluded = self._solve(inputs, total, slots=slots)
@@ -847,15 +847,16 @@ class MeanVarianceOptimizer(PortfolioConstructor):
                     f"the locked positions {inputs.locked_symbols.tolist()[:5]} have a "
                     f"gross exposure of {1.0 - gross:.4g}, above one"
                 )
-            # The gross is a ceiling: the locked names alone may fill the cap.
-            slots = self._free_slots(inputs, 0.0)
-            reach = min(max(gross, 0.0), (n if slots is None else min(n, slots)) * config.weight_cap)
+            # The gross is a ceiling, so the free names need hold nothing: the locked
+            # names alone may fill the cap.
+            slots = self._free_slots(inputs)
+            usable, note = self._usable_names(n, slots)
+            reach = min(max(gross, 0.0), usable * config.weight_cap)
             if n == 0 or abs(locked_sum) > reach + 1e-12:
                 raise PortfolioConstructionError(
-                    f"infeasible: {n} candidate symbol(s) cannot offset a locked net "
+                    f"infeasible: {usable} candidate symbol(s) cannot offset a locked net "
                     f"exposure of {locked_sum:.4g} within a gross of {max(gross, 0.0):.4g} "
-                    f"and weight_cap={config.weight_cap}"
-                    + ("" if slots is None else f" and max_names={config.max_names}")
+                    f"and weight_cap={config.weight_cap}{note}"
                 )
             solution, _ = self._solve(inputs, -locked_sum, max(gross, 0.0), slots=slots)
 
@@ -874,8 +875,19 @@ class MeanVarianceOptimizer(PortfolioConstructor):
             weights.attrs["events"] = events
         return weights
 
-    def _free_slots(self, inputs: MeanVarianceInputs, total: float) -> int | None:
-        """The names ``max_names`` leaves the candidates once the locked positions take theirs; ``None`` without a cap."""
+    def _usable_names(self, n: int, slots: int | None) -> tuple[int, str]:
+        """How many of the ``n`` candidates may hold a weight, and the error messages' note on the cap."""
+        if slots is None:
+            return n, ""
+        return min(n, slots), f" and max_names={self.config.max_names}"
+
+    def _free_slots(self, inputs: MeanVarianceInputs, needs: float = 0.0) -> int | None:
+        """The names ``max_names`` leaves the candidates once the locked positions take theirs; ``None`` without a cap.
+
+        ``needs`` is the weight the candidates must hold (long-only, the
+        budget the locked positions leave); locked names filling the cap
+        while it is positive leave no room for it.
+        """
         names = self.config.max_names
         if names is None:
             return None
@@ -885,10 +897,10 @@ class MeanVarianceOptimizer(PortfolioConstructor):
             raise PortfolioConstructionError(
                 f"the locked positions {shown} are {locked} names, above max_names={names}"
             )
-        if locked == names and total > 1e-12:
+        if locked == names and needs > 1e-12:
             raise PortfolioConstructionError(
                 f"the locked positions {shown} are {locked} names, which leaves no room for "
-                f"the {total:.4g} of the book they do not hold under max_names={names}"
+                f"the {needs:.4g} of the book they do not hold under max_names={names}"
             )
         return names - locked
 
