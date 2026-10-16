@@ -478,7 +478,7 @@ With `output_dir=None` a run writes nothing: no run directory, no report. `resul
 
 ### Sweep with the approximate backtest
 
-A backtest run decides one bar at a time, replays the holdings under the Execution rules and writes a run directory: too slow to sweep a rule's parameters or compare many models. The approximate backtest (`quantlab.backtest.approximate`, ADR 0041) decides every rebalance of a prediction panel at once and simulates the window as array operations. Build it once over a price dataset and a window, then run it on as many (predictions, rule) pairs as you like: the window's prices are read once, and nothing is written. Use it to choose; confirm the choice with `run()`, which takes the same rule config unchanged.
+A backtest run decides one bar at a time, replays the holdings under the Execution rules and writes a run directory: too slow to sweep a rule's parameters or compare many models. The approximate backtest (`quantlab.backtest.approximate`, ADR 0045) decides every rebalance of a prediction panel at once and simulates the window as array operations. Build it once over a price dataset and a window, then run it on as many (predictions, rule) pairs as you like: the window's prices are read once, and nothing is written. Use it to choose; confirm the choice with `run()`, which takes the same rule config unchanged.
 
 Continuing the first session, the run's recorded predictions go to an approximate backtest over the same window (`cost` stands for the run's fees plus slippage):
 
@@ -517,27 +517,28 @@ Given up, each a source of gap from `run()`:
 - **Rejected orders.** A fill price missing at a fill bar falls back to the previous bar's close; the run rejects that order and keeps the holding.
 - **Locked positions.** A held symbol that cannot trade is not kept: the next rebalance sells it at the price it stopped at, where the run keeps it until it trades again.
 - **Delisting settlements.** A delisted holding stays at its last valuation until a rebalance sells it at that same price; the run turns it into cash on the next bar.
-- **The cash cap and `min_trade`.** The run cuts a fill's last buys to the cash the fees leave; the approximation does not, so with fees its holdings differ from the run's by about the cost times the turnover. A rule with a turnover penalty carries that into its weights.
+- **The cash cap.** The run cuts a fill's last buys to the cash the fees leave; the approximation does not, so with fees its holdings differ from the run's by about the cost times the turnover. A rule with a turnover penalty carries that into its weights.
+- **`min_trade`.** The approximate backtest does not model it: configs that differ only in `min_trade` give the same approximate result.
 - **Order mechanics.** Fees and slippage are one `cost` on traded weight.
 
 Measured on synthetic stores (`tests/test_backtest_approximate.py`): with none of these events, `TopNConstructor` gives the run's weights exactly and its value within 2e-4, and mean-variance its weights within 2e-7 (L1) of a tightly solved run and its value within 1e-4; with a turnover penalty and 5 bp fees the weights are within 1.3e-3 (the cash cap). On a store with delistings, a listing, a halt and missing fill prices inside a 68-bar window, the value stays within 1e-3 of the run's until the first event and within 2.3e-2 over the window, a few percentage points of annualised return; the test locks 3e-2. On real data the gap grows with how often held names halt, delist or miss a fill price.
 
 #### Rules and configurations
 
-A rule runs when it implements `prepare` and `solve` (see the portfolio guide's [Writing a rule](portfolio.md#writing-a-rule)):
+The approximate backtest is its own module: it reads the rule's config and decides with its own implementation of the rule, which it chooses by the rule's exact class: the implementations are the portfolio layer's `quantlab/portfolio/approximate/`, the simulation the execution layer's `quantlab.execution.approximate`, and `quantlab.backtest.approximate` holds only the backtest (prices, schedule, account, statistics). The rules' classes decide one bar at a time for a backtest run and know nothing of it. It runs:
 
 - `TopNConstructor`, long-only and long-short;
 - `MeanVarianceOptimizer`, long-only or long-short, either calibration, with or without a turnover penalty, `candidate_top_k` and `volatility_label`, over `LedoitWolfEstimator` or `FactorRiskStoreEstimator` (see [Mean-variance in the approximate backtest](portfolio.md#mean-variance-in-the-approximate-backtest));
 - `ActiveRiskOptimizer` without a tracking-error cap.
 
-Refused before any data is read, the message naming the rule, field or estimator: a rule without the pair (`TopkDropoutConstructor`, a custom rule), a tracking-error cap, `exposure_bounds`, a custom `risk_constraints`, a `reference_weights` without its panel counterpart, and a covariance estimator without `estimate_all`. `solver` and `min_trade` are not read.
+Each config field is read, ignored, or must keep its default. Ignored: `solver`, `min_trade` (not modelled, see above) and `exposure_factors` (read only through `exposure_bounds`). Refused before any data is read, the message naming the rule, estimator or field: any other rule (`TopkDropoutConstructor`, a custom rule), a subclass of a supported rule or estimator (it may decide differently), any other covariance estimator, a tracking-error cap, `exposure_bounds`, and a field the approximate backtest does not know when it is not at its default (a field added to a rule's config later is never silently approximated).
 
 ```python
 >>> from quantlab.portfolio.config import TopkDropoutConfig
 >>> from quantlab.portfolio.predefined.topk_dropout import TopkDropoutConstructor
 >>> approximate.run(predictions, TopkDropoutConstructor(TopkDropoutConfig(direction="long_only", topk=2, n_drop=1)))
 Traceback (most recent call last):
-ValueError: USEquityApproximateBacktest cannot run TopkDropoutConstructor: TopkDropoutConstructor has no panel decision (prepare and solve); backtest it with a backtest run
+ValueError: USEquityApproximateBacktest cannot run TopkDropoutConstructor: TopkDropoutConstructor has no approximate implementation: the approximate backtest runs TopNConstructor, MeanVarianceOptimizer, ActiveRiskOptimizer, as those exact classes; backtest it with a backtest run
 ```
 
 On a us3000-shaped synthetic store (10,000 symbols on the axis, 3,000 of them priced, returns from 60 factors whose largest covariance eigenvalues are about 4,500 and 110 times the specific variance, a 60-bar Ledoit-Wolf window), the paper-trading mean-variance rule (risk aversion 20, `weight_cap` 0.05, `turnover_penalty` 0.002) over 67 daily rebalances at 10 bp took 1.0 s against `run()`'s 532 s (4.6 iterations per bar on average), the value within 5e-4 and the annualised return within 0.25 percentage points.

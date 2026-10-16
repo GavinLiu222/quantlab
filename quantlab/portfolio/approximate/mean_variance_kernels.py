@@ -1,7 +1,7 @@
 """Compiled kernels of the approximate backtest's mean-variance solve (numba).
 
-``MeanVarianceOptimizer.solve`` hands every chunk of decision bars to one of
-two compiled loops, so no bar and no iteration returns to Python:
+``mean_variance.solve`` hands every chunk of decision bars to one of two
+compiled loops, so no bar and no iteration returns to Python:
 
 - ``solve_forward``: the bars in time order, each solved once from the
   holdings its book drifts to (``quantlab.execution.approximate.mark_book``:

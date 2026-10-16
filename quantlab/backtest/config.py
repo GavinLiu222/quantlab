@@ -307,12 +307,12 @@ class ApproximateBacktestConfig(FrozenConfig):
     #: decided before it, so the size changes memory, not the result.
     chunk_bars: int = 63
     #: An iterative rule's iterations per decision bar before the bar is
-    #: reported as not converged (``quantlab.portfolio.base.Stopping``).
+    #: reported as not converged (``quantlab.portfolio.approximate.rules.Stopping``).
     max_iterations: int = 20_000
     #: An iterative rule's bar has converged when its gradient-mapping
     #: residual is at most this times the largest entry of its starting
     #: gradient: its objective is then within about twice that of the optimum
-    #: (``quantlab.portfolio.base.Stopping``).
+    #: (``quantlab.portfolio.approximate.rules.Stopping``).
     tolerance: float = 1e-5
 
     def __post_init__(self):

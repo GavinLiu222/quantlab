@@ -73,6 +73,41 @@ def test_framework_modules_never_import_their_predefined_package(layer):
     assert {name: found for name, found in offenders.items() if found} == {}
 
 
+def test_the_approximate_rule_implementations_import_no_predefined_module():
+    # They are chosen by the rules' import paths, so no rule module (nor cvxpy) loads before use.
+    root = REPO_ROOT / "quantlab/portfolio/approximate"
+    # Positive control: the package and its dispatch are seen.
+    assert (root / "rules.py").is_file()
+    offenders = {
+        path.name: sorted(
+            name
+            for name in _resolved_imports(path)
+            if _is_or_under(name, "quantlab.portfolio.predefined") or _is_or_under(name, "cvxpy")
+        )
+        for path in sorted(root.glob("*.py"))
+    }
+    assert {name: found for name, found in offenders.items() if found} == {}
+
+
+def test_importing_the_portfolio_root_and_rules_loads_no_numba():
+    # numba is the approximate backtest's (quantlab.portfolio.approximate, quantlab.execution.approximate),
+    # imported where it is used; a per-bar rule, run by a backtest run and the live trader, never pays it.
+    code = (
+        "import sys\n"
+        "import quantlab.portfolio.base, quantlab.portfolio.decision_inputs\n"
+        "import quantlab.portfolio.predefined.top_n, quantlab.portfolio.predefined.mean_variance\n"
+        "import quantlab.portfolio.predefined.active_risk, quantlab.portfolio.predefined.ledoit_wolf\n"
+        "import quantlab.portfolio.predefined.factor_risk\n"
+        "import quantlab.portfolio.approximate.rules, quantlab.backtest.approximate\n"
+        "print('numba' in sys.modules)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, cwd=REPO_ROOT
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().splitlines()[-1] == "False"
+
+
 @pytest.mark.parametrize("layer", LAYERS)
 def test_predefined_init_files_are_empty(layer):
     for init in (REPO_ROOT / "quantlab" / layer / "predefined").rglob("__init__.py"):

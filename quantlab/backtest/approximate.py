@@ -3,7 +3,7 @@
 A backtest run (``BaseBacktester.run()``) decides its rebalances one bar at
 a time with the holdings replayed under the Execution rules, and pays a
 fixed cost for its report and run directory. The *approximate backtest*
-(ADR 0041) is a second backtest for parameter sweeps: built once over a price dataset
+(ADR 0045) is a second backtest for parameter sweeps: built once over a price dataset
 (its window's prices are read once), it is run many times on (predictions,
 rule) pairs and returns each account in memory, writing nothing.
 
@@ -17,19 +17,26 @@ valuation, never turned into cash), the cash cap on buys and ``min_trade``;
 fees and slippage are one ``cost`` on traded weight. A fill price missing at
 a fill bar falls back to the previous bar's valuation.
 
-The rule decides through its panel pair, ``prepare`` and ``solve``
-(``quantlab.portfolio.base.PortfolioConstructor``), on the decision inputs
-``quantlab.portfolio.decision_inputs.DecisionInputs.panel`` assembles, so
-the point-in-time reads stay in one module. A rule without the pair is
-refused before any data is read. The window is cut into chunks of
-``chunk_bars`` bars, each prepared once and solved in time order: a chunk is
-handed the book filled before it and each decision bar's valuation and fill
-prices (``PanelPrices``), so a rule whose decision reads the holdings (a
-turnover penalty) drifts them itself and solves its bars forward, each once,
-and a rule that does not solves them at once. An iterative solver stops a bar
-when its residual falls to ``tolerance``, or after ``max_iterations``, with
-a warning (``Stopping``). The simulation and the drift are
-``quantlab.execution.approximate``'s, compiled.
+The approximate backtest decides with its own implementations of the rules
+it runs (``quantlab.portfolio.approximate``, the portfolio layer's): ``TopNConstructor``, ``MeanVarianceOptimizer`` and
+``ActiveRiskOptimizer``, chosen by the rule's exact class and reading its
+config through a field table, with a ``LedoitWolfEstimator`` or a
+``FactorRiskStoreEstimator`` as the covariance estimator; any other rule or
+estimator, a subclass of one, or a config field it does not handle is
+refused before any data is read. The rules' own classes decide one bar at a
+time for a backtest run and know nothing of those implementations. The decision
+inputs are read through ``quantlab.portfolio.decision_inputs.DecisionInputs.panel``,
+so the point-in-time reads stay in one module. The window is cut into
+chunks of ``chunk_bars`` bars, each prepared once and solved in time order:
+a chunk is handed the book filled before it and each decision bar's
+valuation and fill prices (``PanelPrices``), so a rule whose decision reads
+the holdings (a turnover penalty) drifts them and solves its bars forward,
+each once, and a rule that does not solves them at once. An iterative
+solver stops a bar when its residual falls to ``tolerance``, or after
+``max_iterations``, with a warning (``Stopping``). The simulation and the
+drift are the execution layer's (``quantlab.execution.approximate``),
+compiled; this module only reads the prices and the schedule, calls the
+implementations and the simulation, and computes the statistics.
 
 The statistics are the backtest run's own functions
 (``quantlab.runs.backtest_stats``), so the numbers mean what a run's
@@ -50,7 +57,8 @@ from loguru import logger
 from quantlab.backtest.base import MarketSpec
 from quantlab.backtest.config import ApproximateBacktestConfig
 from quantlab.core.component import Component
-from quantlab.portfolio.base import PanelPrices, PortfolioConstructor, Stopping
+from quantlab.portfolio.approximate.rules import PanelPrices, Stopping, implementation, refusal
+from quantlab.portfolio.base import PortfolioConstructor
 from quantlab.portfolio.decision_inputs import DecisionInputs
 from quantlab.runs import backtest_stats
 from quantlab.runs.backtest_attribution import (
@@ -256,7 +264,8 @@ class ApproximateBacktest(Component):
     def run(self, predictions: PredictionPanel, constructor: PortfolioConstructor) -> ApproximateAccount:
         """Backtest one prediction panel with one rule and return the account.
 
-        The rule is checked first (``panel_refusal``), before any data is
+        The rule is checked first (``rules.refusal``: its exact class, its
+        config's fields and its covariance estimator), before any data is
         read, then bound to the panel's label specs. The predictions are
         spread over the window's prices (a symbol without one is never
         picked), the schedule names the decision bars, and each chunk of
@@ -280,8 +289,9 @@ class ApproximateBacktest(Component):
         TypeError
             If ``constructor`` is not a ``PortfolioConstructor``.
         ValueError
-            If the rule has no panel decision (the message names it and
-            why), refuses the labels, or the window has fewer than two
+            If the approximate backtest does not run the rule as configured
+            (the message names the rule, the estimator or the field),
+            the rule refuses the labels, or the window has fewer than two
             price bars.
 
         Examples
@@ -294,12 +304,13 @@ class ApproximateBacktest(Component):
             raise TypeError(
                 f"constructor must be a PortfolioConstructor, got {type(constructor).__name__}"
             )
-        refusal = constructor.panel_refusal()
-        if refusal is not None:
+        refused = refusal(constructor)
+        if refused is not None:
             raise ValueError(
-                f"{type(self).__name__} cannot run {type(constructor).__name__}: {refusal}; "
+                f"{type(self).__name__} cannot run {type(constructor).__name__}: {refused}; "
                 f"backtest it with a backtest run"
             )
+        rule = implementation(constructor)
         constructor.bind(predictions.labels)
         config, market = self.config, self.MARKET
         prices = self._window_prices()
@@ -328,7 +339,8 @@ class ApproximateBacktest(Component):
         stopping = Stopping(tolerance=config.tolerance, max_iterations=config.max_iterations)
         for chunk in np.unique(decisions // config.chunk_bars):
             members = np.flatnonzero(decisions // config.chunk_bars == chunk)
-            problem = constructor.prepare(
+            problem = rule.prepare(
+                constructor,
                 inputs.panel(
                     panel.isel(timestamp=decisions[members]), prices=self._history_prices(inputs), risk=risk
                 )
@@ -342,7 +354,7 @@ class ApproximateBacktest(Component):
                 close=close[decisions[members]],
                 entry=entry[decisions[members] + 1],
             )
-            solution = constructor.solve(problem, book, stopping)
+            solution = rule.solve(constructor, problem, book, stopping)
             self._check_rows(constructor, solution.weights)
             targets[members] = solution.weights
             iterations[members] = solution.iterations
@@ -371,8 +383,8 @@ class ApproximateBacktest(Component):
         finite = np.isfinite(weights)
         if (finite.any(axis=1) & ~finite.all(axis=1)).any():
             raise ValueError(
-                f"{type(constructor).__name__}.solve returned a row mixing finite weights and "
-                f"NaN; return every symbol finite or the whole row NaN to hold"
+                f"the approximate {type(constructor).__name__} returned a row mixing finite "
+                f"weights and NaN; a row is every symbol finite or the whole row NaN to hold"
             )
 
     def _window_prices(self) -> xr.Dataset:

@@ -20,13 +20,11 @@ the loop checks both. A rule holds no state between bars. A bar the rule
 cannot solve raises ``PortfolioConstructionError``, and the loop holds it
 instead.
 
-A rule may also decide a block of bars at once, for the approximate
-backtest (ADR 0041): ``prepare`` turns a ``DecisionPanel`` into a problem
-once and ``solve`` returns every bar's weights (a ``PanelSolution``), the
-holdings following from the weights. The base class
-refuses (``panel_refusal`` names the rule); a rule opts in by implementing
-the pair. A covariance estimator opts in the same way with
-``estimate_all``, every bar's estimate at once as a ``LowRankCovariance``.
+The approximate backtest (``quantlab.backtest.approximate``, ADR 0045) reads
+the same rules' configs and decides a block of bars at once with its own
+implementations (``quantlab.portfolio.approximate``); a rule here knows
+nothing of them. ``DecisionPanel`` is what
+``DecisionInputs.panel`` reads for it: a block of bars' decision inputs.
 
 A *covariance estimator* (``CovarianceEstimator``) estimates the covariance
 of one-bar returns at a bar, as a ``quantlab.risk.base.ReturnCovariance``
@@ -202,18 +200,16 @@ class PortfolioContext:
 class DecisionPanel:
     """What a rule may read at a block of decision bars at once: the panel counterpart of a context.
 
-    ``DecisionInputs.panel`` assembles it for the approximate backtest, from
-    the same reads as the per-bar context, and a rule turns it into a
-    problem with ``PortfolioConstructor.prepare``. It holds no holdings:
-    those are handed to ``solve``.
+    ``DecisionInputs.panel`` assembles it for the approximate backtest
+    (``quantlab.backtest.approximate``), from the same reads as the
+    per-bar context. It holds no holdings.
 
     Attributes
     ----------
     timestamps : pd.DatetimeIndex
         The decision bars, in time order.
     symbols : np.ndarray
-        The symbols, the second axis of every array here and of the weights
-        ``solve`` returns.
+        The symbols, the second axis of every array here.
     predictions : xr.Dataset
         Every label's prediction at the bars: one variable per label name
         on ``(timestamp, symbol)``.
@@ -347,97 +343,6 @@ class DecisionPanel:
             known, prices[np.maximum(source, 0), np.arange(prices.shape[1])], np.nan
         )
         return filled[:, 1:] / filled[:, :-1] - 1.0
-
-
-@dataclass(frozen=True)
-class PanelPrices:
-    """The book filled before a panel and the prices its holdings drift with: what ``solve`` reads besides its problem.
-
-    A rule whose decision reads the holdings (a turnover penalty) solves its
-    bars in time order: the holdings at a bar are the book of the last bar it
-    decided (or ``previous``), its weights at their fill prices, marked at the
-    bar's ``close`` over the book's value, cash included
-    (``quantlab.execution.approximate.mark_book``). A bar it decides fills at
-    its ``entry`` prices; a bar it holds leaves the book as it was.
-
-    Attributes
-    ----------
-    previous : np.ndarray
-        ``[symbols]``: the book's weights decided before the first bar, cash
-        excluded; zeros for none.
-    previous_entry : np.ndarray
-        ``[symbols]``: the prices ``previous`` filled at.
-    close : np.ndarray
-        ``[bars, symbols]``: each bar's valuation price, forward-filled.
-    entry : np.ndarray
-        ``[bars, symbols]``: the price each bar's weights fill at.
-
-    Examples
-    --------
-    >>> prices = PanelPrices(
-    ...     previous=np.array([0.5, 0.5]), previous_entry=np.array([10.0, 20.0]),
-    ...     close=np.array([[11.0, 20.0]]), entry=np.array([[11.0, 19.0]]),
-    ... )
-    >>> prices.close.shape
-    (1, 2)
-    """
-
-    previous: np.ndarray
-    previous_entry: np.ndarray
-    close: np.ndarray
-    entry: np.ndarray
-
-
-@dataclass(frozen=True)
-class Stopping:
-    """When an iterative panel solver stops on a bar.
-
-    Attributes
-    ----------
-    tolerance : float
-        The bar has converged when its gradient-mapping residual (the
-        largest entry of ``(y - w) / step``, the projected gradient) is at
-        most this times the largest entry of the objective's gradient at the
-        start: the objective is then within about twice that of its optimum.
-    max_iterations : int
-        Iterations before the bar is reported as not converged.
-
-    Examples
-    --------
-    >>> Stopping()
-    Stopping(tolerance=1e-05, max_iterations=20000)
-    """
-
-    tolerance: float = 1e-5
-    max_iterations: int = 20_000
-
-
-@dataclass(frozen=True)
-class PanelSolution:
-    """Every bar's weights of a panel, as ``PortfolioConstructor.solve`` returns them.
-
-    Attributes
-    ----------
-    weights : np.ndarray
-        ``[bars, symbols]``: finite on a decided bar, all NaN on a held one.
-    iterations : np.ndarray
-        ``[bars]``: the iterations an iterative solver took on each bar (0
-        for a rule that does not iterate, or a held bar).
-    converged : np.ndarray
-        ``[bars]``: whether each bar met the solver's stopping rule.
-
-    Examples
-    --------
-    >>> solution = PanelSolution(
-    ...     weights=np.array([[0.5, 0.5]]), iterations=np.array([0]), converged=np.array([True])
-    ... )
-    >>> bool(solution.converged.all())
-    True
-    """
-
-    weights: np.ndarray
-    iterations: np.ndarray
-    converged: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -726,124 +631,6 @@ class CovarianceEstimate:
         )
 
 
-@dataclass(frozen=True)
-class LowRankCovariance:
-    """Every bar's covariance of a decision panel, in low-rank form: ``CovarianceEstimator.estimate_all``'s result.
-
-    Bar ``k``'s covariance over its covered symbols is ``B F B' +
-    diag(D)``, with ``B = exposures[k]``, ``F = factor_covariance[k]`` (the
-    identity when ``None``) and ``D = specific_variance[k]``; the dense
-    ``[symbols, symbols]`` matrix is never built. A symbol a bar does not
-    cover has zero exposures and specific variance there.
-
-    Attributes
-    ----------
-    covered : np.ndarray
-        Booleans ``[bars, symbols]``: the symbols each bar's estimate covers.
-    exposures : np.ndarray
-        ``[bars, symbols, k]``: ``B`` per bar.
-    factor_covariance : np.ndarray or None
-        ``[bars, k, k]``: ``F`` per bar, or ``None`` for the identity.
-    specific_variance : np.ndarray
-        ``[bars, symbols]``: ``D`` per bar.
-
-    Examples
-    --------
-    >>> covariance = LowRankCovariance(
-    ...     covered=np.array([[True, True]]),
-    ...     exposures=np.array([[[0.1], [0.2]]]),
-    ...     factor_covariance=None,
-    ...     specific_variance=np.array([[0.01, 0.02]]),
-    ... )
-    >>> covariance.variance
-    array([[0.02, 0.06]])
-    >>> covariance.times(np.array([[1.0, 0.0]]))
-    array([[0.02, 0.02]])
-    """
-
-    covered: np.ndarray
-    exposures: np.ndarray
-    factor_covariance: np.ndarray | None
-    specific_variance: np.ndarray
-
-    @property
-    def variance(self) -> np.ndarray:
-        """``[bars, symbols]``: each covered symbol's variance, the diagonal; 0 where not covered.
-
-        Examples
-        --------
-        >>> covariance.variance
-        array([[0.02, 0.06]])
-        """
-        if self.factor_covariance is None:
-            factor = np.einsum("bsk,bsk->bs", self.exposures, self.exposures)
-        else:
-            factor = np.einsum("bsk,bkl,bsl->bs", self.exposures, self.factor_covariance, self.exposures)
-        return factor + self.specific_variance
-
-    def scaled(self, factor: float) -> Self:
-        """Return the covariance with every entry multiplied by ``factor``, the span scaling.
-
-        Examples
-        --------
-        >>> covariance.scaled(5).variance
-        array([[0.1, 0.3]])
-        """
-        if self.factor_covariance is None:
-            return dataclasses.replace(
-                self,
-                exposures=self.exposures * np.sqrt(factor),
-                specific_variance=self.specific_variance * factor,
-            )
-        return dataclasses.replace(
-            self,
-            factor_covariance=self.factor_covariance * factor,
-            specific_variance=self.specific_variance * factor,
-        )
-
-    def times(self, weights: np.ndarray) -> np.ndarray:
-        """``[bars, symbols]``: each bar's covariance times its row of ``weights``.
-
-        Examples
-        --------
-        >>> covariance.times(np.array([[1.0, 0.0]]))
-        array([[0.02, 0.02]])
-        """
-        load = np.einsum("bsk,bs->bk", self.exposures, weights)
-        if self.factor_covariance is not None:
-            load = np.einsum("bkl,bl->bk", self.factor_covariance, load)
-        return np.einsum("bsk,bk->bs", self.exposures, load) + self.specific_variance * weights
-
-    def with_volatility(self, volatility: np.ndarray) -> Self:
-        """Return the covariance with each covered symbol's volatility replaced, the correlations kept.
-
-        ``S Sigma S`` with ``S = diag(volatility / sqrt(variance))``: the
-        rows of ``B`` scaled by ``S`` and ``D`` by ``S^2``. A symbol without
-        a finite positive ``volatility`` is no longer covered, its row and
-        specific variance zeroed.
-
-        Parameters
-        ----------
-        volatility : np.ndarray
-            ``[bars, symbols]`` volatilities.
-
-        Examples
-        --------
-        >>> np.sqrt(covariance.with_volatility(np.array([[0.2, np.nan]])).variance).round(6)
-        array([[0.2, 0. ]])
-        """
-        covered = self.covered & np.isfinite(volatility) & (volatility > 0)
-        current = self.variance
-        with np.errstate(divide="ignore", invalid="ignore"):
-            scale = np.where(covered & (current > 0), volatility / np.sqrt(current), 0.0)
-        return LowRankCovariance(
-            covered=covered,
-            exposures=self.exposures * scale[..., None],
-            factor_covariance=self.factor_covariance,
-            specific_variance=self.specific_variance * scale**2,
-        )
-
-
 class CovarianceEstimator(_Configured, ABC):
     """Base class of every covariance estimator: the covariance of returns at one bar.
 
@@ -934,51 +721,6 @@ class CovarianceEstimator(_Configured, ABC):
         >>> risk.estimate(context).symbols.tolist()
         ['AAA', 'BBB', 'CCC']
         """
-
-    def panel_refusal(self) -> str | None:
-        """Return why the estimator has no batched estimate, or ``None`` when it has one.
-
-        Asked, through the rule holding it, by the approximate backtest
-        before it reads any data. The default names the estimator.
-
-        Examples
-        --------
-        >>> risk.panel_refusal() is None
-        True
-        """
-        return f"{type(self).__name__} has no batched estimate (estimate_all)"
-
-    def estimate_all(self, panel: DecisionPanel, volatility: np.ndarray | None = None) -> LowRankCovariance:
-        """Estimate the covariance of one-bar returns at every bar of a decision panel.
-
-        The panel counterpart of ``estimate``: bar ``k``'s covariance is the
-        one ``estimate`` gives on that bar's context, over the same covered
-        symbols, in low-rank form. The default refuses.
-
-        Parameters
-        ----------
-        panel : DecisionPanel
-            The bars' decision inputs, their valuation prices included.
-        volatility : np.ndarray, optional
-            ``[bars, symbols]`` one-bar volatilities to use in place of the
-            historical ones, as ``estimate``'s ``volatility``; a symbol
-            without a finite positive one is not covered.
-
-        Returns
-        -------
-        LowRankCovariance
-
-        Raises
-        ------
-        NotImplementedError
-            When the estimator has no batched estimate (``panel_refusal``).
-
-        Examples
-        --------
-        >>> risk.estimate_all(panel).covered.shape  # [bars, symbols]
-        (2, 3)
-        """
-        raise NotImplementedError(self.panel_refusal())
 
 
 class PortfolioConstructor(_Configured, ABC):
@@ -1104,108 +846,6 @@ class PortfolioConstructor(_Configured, ABC):
         >>> rule.construct(context).values  # CCC is locked at 0.6
         array([0.2, 0.2, 0.6])
         """
-
-    def panel_refusal(self) -> str | None:
-        """Return why the rule cannot decide a panel at once, or ``None`` when it can.
-
-        Asked by the approximate backtest before it reads any data. A rule
-        that implements ``prepare`` and ``solve`` returns ``None`` (or the
-        reason a config field it does not handle in a panel is refused);
-        the default names the rule.
-
-        Examples
-        --------
-        >>> from quantlab.portfolio.config import TopkDropoutConfig
-        >>> from quantlab.portfolio.predefined.topk_dropout import TopkDropoutConstructor
-        >>> TopkDropoutConstructor(
-        ...     TopkDropoutConfig(direction="long_only", topk=3, n_drop=1)
-        ... ).panel_refusal()
-        'TopkDropoutConstructor has no panel decision (prepare and solve)'
-
-        With ``rule`` the top-2 rule of the class example:
-
-        >>> rule.panel_refusal() is None
-        True
-        """
-        return f"{type(self).__name__} has no panel decision (prepare and solve)"
-
-    def prepare(self, panel: DecisionPanel) -> Any:
-        """Turn a block of decision bars' inputs into a problem, once.
-
-        The panel counterpart of ``construct``, for the approximate backtest:
-        everything the rule's decisions read except the holdings goes into
-        the returned problem, which ``solve`` then answers.
-        The problem is opaque to the caller. The default refuses.
-
-        Parameters
-        ----------
-        panel : DecisionPanel
-            The bars' predictions and tradability.
-
-        Returns
-        -------
-        object
-            The rule's problem over the bars.
-
-        Raises
-        ------
-        NotImplementedError
-            When the rule has no panel decision (``panel_refusal``).
-
-        Examples
-        --------
-        With ``panel`` the ``DecisionPanel`` example, the top-2 rule's
-        problem is its books (see ``solve``):
-
-        >>> problem = rule.prepare(panel)
-        >>> problem.shape
-        (2, 2)
-        """
-        raise NotImplementedError(self.panel_refusal())
-
-    def solve(self, problem: Any, prices: PanelPrices | None = None, stopping: Stopping = Stopping()) -> PanelSolution:
-        """Return every bar's weights of a prepared problem.
-
-        The approximate backtest hands a rule the book filled before the
-        panel's first bar and each bar's valuation and fill prices: a rule
-        whose decision reads the holdings (a turnover penalty) drifts its own
-        book with them and solves the bars in time order, and a rule that
-        does not ignores them and may solve the bars at once. Pure: the same
-        arguments give the same weights. Each row follows the weights
-        contract with nothing locked (finite, gross at most one), or is all
-        NaN to hold. The default refuses.
-
-        Parameters
-        ----------
-        problem : object
-            What ``prepare`` returned.
-        prices : PanelPrices, optional
-            The book before the first bar and the prices it drifts with;
-            ``None`` for no book.
-        stopping : Stopping
-            An iterative solver's stopping rule.
-
-        Returns
-        -------
-        PanelSolution
-            The ``[bars, symbols]`` weights, in the panel's order, with each
-            bar's iterations and whether it converged.
-
-        Raises
-        ------
-        NotImplementedError
-            When the rule has no panel decision (``panel_refusal``).
-
-        Examples
-        --------
-        With ``rule`` top-2 and ``panel`` the ``DecisionPanel`` example (BBB
-        has no score at the second bar, so only AAA is picked there):
-
-        >>> rule.solve(problem).weights
-        array([[0.5, 0.5],
-               [1. , 0. ]])
-        """
-        raise NotImplementedError(self.panel_refusal())
 
     def decide(self, context: PortfolioContext) -> Decision:
         """Decide one bar: run ``construct``, check its row and hold a bar it cannot solve.

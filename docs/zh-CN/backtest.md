@@ -478,7 +478,7 @@ ValueError: USEquityCrossectionSelectStockVectorBt: the weight bars must be exac
 
 ### 用近似回测做参数扫描
 
-回测运行逐 bar 决策、按 Execution 规则重放持仓，并写运行目录，用来扫描规则参数或比较很多模型太慢。近似回测（`quantlab.backtest.approximate`，ADR 0041）一次决定预测面板上的全部调仓，并用数组运算模拟整个窗口。在一个价格数据集和窗口上构建一次，然后对任意多组（预测，规则）运行：窗口的价格只读一次，什么都不写。用它来做选择，再用 `run()` 确认选出的配置；`run()` 原样接受同一个规则配置。
+回测运行逐 bar 决策、按 Execution 规则重放持仓，并写运行目录，用来扫描规则参数或比较很多模型太慢。近似回测（`quantlab.backtest.approximate`，ADR 0045）一次决定预测面板上的全部调仓，并用数组运算模拟整个窗口。在一个价格数据集和窗口上构建一次，然后对任意多组（预测，规则）运行：窗口的价格只读一次，什么都不写。用它来做选择，再用 `run()` 确认选出的配置；`run()` 原样接受同一个规则配置。
 
 接着第一个会话，把运行记录的预测交给同一窗口上的近似回测（`cost` 代表运行的手续费加滑点）：
 
@@ -517,27 +517,28 @@ np.True_
 - **被拒订单。** 成交 bar 缺成交价时退回前一 bar 的收盘价成交；运行会拒绝这笔订单并保留原持仓。
 - **锁定持仓。** 不能交易的持仓不会被保留：下一次调仓以它停止交易时的价格卖出；运行则一直持有到它恢复交易。
 - **退市清算。** 退市的持仓停在最后估值，直到某次调仓以同样的价格卖出；运行在下一个 bar 把它转成现金。
-- **现金上限和 `min_trade`。** 运行会把一次成交最后几笔买单砍到手续费之后剩下的现金；近似回测不这样做，所以有手续费时持仓与运行相差约“费率 × 换手”。带换手惩罚的规则会把这点差带进权重。
+- **现金上限。** 运行会把一次成交最后几笔买单砍到手续费之后剩下的现金；近似回测不这样做，所以有手续费时持仓与运行相差约“费率 × 换手”。带换手惩罚的规则会把这点差带进权重。
+- **`min_trade`。** 近似回测不模拟它：只在 `min_trade` 上不同的配置，近似结果相同。
 - **订单机制。** 手续费和滑点合成一个按成交权重计的 `cost`。
 
 在合成数据上的实测（`tests/test_backtest_approximate.py`）：没有上述事件时，`TopNConstructor` 的权重与运行完全相同，净值相差在 2e-4 以内；均值-方差的权重与高精度求解的运行相差在 2e-7（L1）以内，净值在 1e-4 以内；带换手惩罚和 5 bp 手续费时权重相差在 1.3e-3 以内（现金上限所致）。在一个有退市、新上市、停牌和缺成交价的 68 bar 窗口上，第一个事件之前净值与运行相差在 1e-3 以内，整个窗口在 2.3e-2 以内，折合几个百分点的年化收益；测试锁定 3e-2。在真实数据上，差距随持仓标的停牌、退市或缺成交价的频率增大。
 
 #### 规则与配置
 
-实现了 `prepare` 和 `solve` 的规则才能运行（见组合构建指南的[编写规则](portfolio.md#编写规则)）：
+近似回测是一个独立的模块：它读取规则的配置，用自己的规则实现做决策，按规则的确切类选择实现：这些实现在组合层的 `quantlab/portfolio/approximate/`，模拟在执行层的 `quantlab.execution.approximate`，`quantlab.backtest.approximate` 只负责回测本身（价格、调仓日程、账户和统计）。规则类本身只为回测运行逐 bar 决策，对近似回测一无所知。它能运行：
 
 - `TopNConstructor`，只做多和多空；
 - `MeanVarianceOptimizer`，只做多或多空、两种校准、有无换手惩罚、`candidate_top_k` 和 `volatility_label`，协方差估计器为 `LedoitWolfEstimator` 或 `FactorRiskStoreEstimator`（见[近似回测中的均值-方差](portfolio.md#近似回测中的均值-方差)）；
 - 不设跟踪误差上限的 `ActiveRiskOptimizer`。
 
-以下情况在读任何数据之前就被拒绝，消息会写明规则、字段或估计器：没有实现这对方法的规则（`TopkDropoutConstructor`、自定义规则）、跟踪误差上限、`exposure_bounds`、自定义的 `risk_constraints`、没有面板版本的 `reference_weights`，以及没有 `estimate_all` 的协方差估计器。`solver` 和 `min_trade` 不读。
+每个配置字段要么被读取，要么被忽略，要么必须保持默认值。被忽略的：`solver`、`min_trade`（不模拟，见上文）和 `exposure_factors`（只通过 `exposure_bounds` 起作用）。以下情况在读任何数据之前就被拒绝，消息会写明规则、估计器或字段：其他规则（`TopkDropoutConstructor`、自定义规则）、受支持规则或估计器的子类（它可能做出不同的决策）、其他协方差估计器、跟踪误差上限、`exposure_bounds`，以及近似回测不认识且不是默认值的字段（以后给规则配置加的字段不会被悄悄近似掉）。
 
 ```python
 >>> from quantlab.portfolio.config import TopkDropoutConfig
 >>> from quantlab.portfolio.predefined.topk_dropout import TopkDropoutConstructor
 >>> approximate.run(predictions, TopkDropoutConstructor(TopkDropoutConfig(direction="long_only", topk=2, n_drop=1)))
 Traceback (most recent call last):
-ValueError: USEquityApproximateBacktest cannot run TopkDropoutConstructor: TopkDropoutConstructor has no panel decision (prepare and solve); backtest it with a backtest run
+ValueError: USEquityApproximateBacktest cannot run TopkDropoutConstructor: TopkDropoutConstructor has no approximate implementation: the approximate backtest runs TopNConstructor, MeanVarianceOptimizer, ActiveRiskOptimizer, as those exact classes; backtest it with a backtest run
 ```
 
 在 us3000 规模的合成数据上（价格轴 10,000 只标的，其中 3,000 只有价格，收益来自 60 个因子，最大的协方差特征值约为特定方差的 4,500 倍和 110 倍，60 bar 的 Ledoit-Wolf 窗口），模拟盘的均值-方差规则（风险厌恶 20、`weight_cap` 0.05、`turnover_penalty` 0.002）在 67 次日度调仓、10 bp 成本下用时 1.0 秒，`run()` 用时 532 秒（每个 bar 平均迭代 4.6 次）；净值相差在 5e-4 以内，年化收益相差在 0.25 个百分点以内。

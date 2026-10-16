@@ -11,23 +11,27 @@ the same config on the run's recorded predictions:
   bar and every fifth bar;
 - the value without costs equals a zero-cost approximate run;
 - the return statistics agree with the run's `metrics.json`;
-- a rule without a panel decision (`TopkDropoutConstructor`) is refused
-  before any data is read, the message naming the rule.
+- a rule the approximate backtest has no implementation of
+  (`TopkDropoutConstructor`), a subclass of a supported rule or covariance
+  estimator, and a config field it does not know set away from its default
+  are refused before any data is read, the message naming the rule, the
+  estimator or the field; at its default an unknown field runs as before.
 
 Mean-variance, long-only with Ledoit-Wolf and no turnover penalty (#305),
 against `run()` with the same `MeanVarianceConfig`: weights within 1e-3 (L1)
 on every decided bar and the value within 1e-3, a long halt before the
 window keeping a symbol out of the first estimates in both; a tracking-error
-cap, exposure bounds and an estimator without a batched estimate are refused
-before any data is read, each message naming the field or the estimator.
+cap, exposure bounds and an estimator the approximate backtest does not
+estimate with are refused before any data is read, each message naming the
+field or the estimator.
 
 Active risk against a benchmark factor (#309), Ledoit-Wolf without a
 tracking-error cap, against `run()` with the same `ActiveRiskConfig`: the
 same bounds, and the benchmark pulling the books toward it; a turnover
 penalty case runs since #306 (without fees to the same bounds, with fees to
-the cash cap's looser weights bound); a rule constraining its risk term, or
-pricing a reference book per bar without a panel counterpart, is refused
-before any data is read.
+the cash cap's looser weights bound); a subclass constraining its risk
+term, or pricing a reference book per bar, is refused before any data is
+read.
 
 Mean-variance on a factor risk model (#308), with a `FactorRiskStoreEstimator`:
 the same bounds against `run()`, and the risk stores read once over the window
@@ -320,20 +324,45 @@ def test_a_rule_without_a_panel_decision_is_refused_before_any_read(store, monke
         backtest.run(None, rule)
 
 
-class _MixedRow(TopNConstructor):
-    """Top-n whose first solved row mixes finite weights and NaN."""
-
-    def solve(self, problem, prices=None, stopping=None):
-        solution = super().solve(problem, prices)
-        solution.weights[0, 0] = np.nan
-        return solution
+class _Subclassed(TopNConstructor):
+    """Top-n under another class: it may decide differently, so it is not approximated as top-n."""
 
 
-def test_a_solved_row_mixing_finite_weights_and_nan_is_refused(case, store):
-    _, predictions, _, top_n_config, rebalance_periods = case
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class _ExtendedTopNConfig(TopNConfig):
+    """A top-n config with a field the approximate backtest does not know."""
 
-    with pytest.raises(ValueError, match="_MixedRow.solve returned a row mixing"):
-        _approximate(store, rebalance_periods).run(predictions, _MixedRow(top_n_config))
+    smoothing: float = 0.0
+
+
+def _refused_before_any_read(backtest, monkeypatch, rule, named):
+    def refuse(*args, **kwargs):
+        raise AssertionError("the price dataset was read")
+
+    monkeypatch.setattr(type(backtest.config.price_dataset), "panel", refuse)
+    with pytest.raises(ValueError, match=named):
+        backtest.run(None, rule)
+
+
+def test_a_subclass_of_a_supported_rule_is_refused_before_any_read(store, monkeypatch):
+    rule = _Subclassed(TopNConfig(direction="long_only", top_n=3))
+
+    _refused_before_any_read(_approximate(store, 5), monkeypatch, rule, "_Subclassed")
+
+
+def test_a_config_field_the_approximate_backtest_does_not_know_is_refused_when_set(store, monkeypatch):
+    rule = TopNConstructor(_ExtendedTopNConfig(direction="long_only", top_n=3, smoothing=0.5))
+
+    _refused_before_any_read(_approximate(store, 5), monkeypatch, rule, "smoothing")
+
+
+def test_a_config_field_the_approximate_backtest_does_not_know_runs_at_its_default(case, store):
+    _, predictions, account, top_n_config, rebalance_periods = case
+    rule = TopNConstructor(_ExtendedTopNConfig(**dataclasses.asdict(top_n_config)))
+
+    extended = _approximate(store, rebalance_periods).run(predictions, rule)
+
+    np.testing.assert_array_equal(extended.weights.values, account.weights.values)
 
 
 # --------------------------------------------------------------------------
@@ -762,28 +791,28 @@ class _CappedRisk(MeanVarianceOptimizer):
         return [risk <= 1e-4]
 
 
-class _ReferenceOnlyPerBar(MeanVarianceOptimizer):
-    """Mean-variance with a reference book per bar but none for a panel."""
+class _ReferenceBook(MeanVarianceOptimizer):
+    """Mean-variance with a reference book per bar."""
 
     def reference_weights(self, context):
         return context.current_weights
 
 
-@pytest.mark.parametrize(
-    "rule, named",
-    [(_CappedRisk, "risk_constraints"), (_ReferenceOnlyPerBar, "panel_reference_weights")],
-)
-def test_a_risk_extension_without_a_panel_counterpart_is_refused_before_any_read(
+class _PlainLedoitWolf(LedoitWolfEstimator):
+    """Ledoit-Wolf under another class."""
+
+
+@pytest.mark.parametrize("rule, named", [(_CappedRisk, "_CappedRisk"), (_ReferenceBook, "_ReferenceBook")])
+def test_a_subclass_using_the_risk_extension_points_is_refused_before_any_read(
     mvo_store, monkeypatch, rule, named
 ):
-    backtest = _approximate(mvo_store, 5)
+    _refused_before_any_read(_approximate(mvo_store, 5), monkeypatch, rule(_mvo().config), named)
 
-    def refuse(*args, **kwargs):
-        raise AssertionError("the price dataset was read")
 
-    monkeypatch.setattr(type(backtest.config.price_dataset), "panel", refuse)
-    with pytest.raises(ValueError, match=named):
-        backtest.run(None, rule(_mvo().config))
+def test_a_subclassed_covariance_estimator_is_refused_before_any_read(mvo_store, monkeypatch):
+    rule = _mvo(covariance=_PlainLedoitWolf(LedoitWolfEstimatorConfig(lookback_bars=MVO_LOOKBACK)))
+
+    _refused_before_any_read(_approximate(mvo_store, 5), monkeypatch, rule, "_PlainLedoitWolf")
 
 
 # Mean-variance on a factor risk model (#308): the synthetic factor risk setup

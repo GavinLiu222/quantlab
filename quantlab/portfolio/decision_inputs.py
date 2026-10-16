@@ -33,8 +33,9 @@ from that record.
 ``panel`` gives a block of decision bars' inputs at once (a
 ``DecisionPanel``: their predictions and tradability, and a declared risk
 model's exposures and estimate rows, read as the per-bar context reads
-them, the latter once over many blocks with ``risk_inputs``) for a rule's ``prepare``, the approximate backtest's
-path; ``scheduled`` names the scheduled bars of many timestamps at once.
+them, the latter once over many blocks with ``risk_inputs``) for the
+approximate backtest (``quantlab.backtest.approximate``); ``scheduled``
+names the scheduled bars of many timestamps at once.
 
 ``DecisionInputs.from_run`` rebuilds the inputs of a recorded backtest run,
 read through ``quantlab.runs.backtest_run.BacktestRun``.
@@ -458,7 +459,7 @@ class DecisionInputs:
         prices: xr.Dataset | None = None,
         risk: tuple[xr.Dataset | None, xr.Dataset | None] | None = None,
     ) -> DecisionPanel:
-        """Return the decision inputs of a block of decision bars at once, for ``PortfolioConstructor.prepare``.
+        """Return the decision inputs of a block of decision bars at once, for the approximate backtest.
 
         The panel counterpart of ``context``: each bar's predictions, its
         tradability (``tradable_bars``, judged from nothing later than the
