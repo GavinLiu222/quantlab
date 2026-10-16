@@ -314,10 +314,13 @@ class MeanVarianceOptimizer(PortfolioConstructor):
     Two extension points let a rule built on the optimiser change what risk
     means: ``reference_weights`` (the risk term prices ``w - b`` against a
     reference book, a benchmark say) and ``risk_constraints`` (constraints
-    on the risk term, a tracking-error cap say). Both are unused by default,
-    and the problem is then exactly the one above. ``ActiveRiskOptimizer``
+    on the risk term, a tracking-error cap say). A third, ``posterior``,
+    lets it replace ``mu`` and the covariance estimate and change the
+    candidates, after ``mu`` is computed and before ``candidate_top_k``
+    (ADR 0047). All are unused by default, and the problem is then exactly
+    the one above. ``ActiveRiskOptimizer``
     (``quantlab.portfolio.predefined.active_risk``) builds a
-    benchmark-relative rule on them.
+    benchmark-relative rule on the first two.
 
     ``declared_inputs()`` is the covariance estimator's declaration (its
     return window, its factor risk model) merged with the
@@ -579,6 +582,68 @@ class MeanVarianceOptimizer(PortfolioConstructor):
         """
         return []
 
+    def posterior(
+        self,
+        context: PortfolioContext,
+        symbols: np.ndarray,
+        expected_return: np.ndarray,
+        estimate: "ReturnCovariance",
+        candidates: np.ndarray,
+    ) -> tuple[np.ndarray, "ReturnCovariance", np.ndarray]:
+        """Return the expected return, the covariance estimate and the candidates the bar optimises.
+
+        An extension point, called by ``problem_inputs`` after ``mu`` is
+        computed and before ``candidate_top_k`` cuts the pool: a rule may
+        replace the expected return (a Bayes update toward a prior, say),
+        replace the estimate (a posterior covariance) and widen or narrow
+        the candidates among the selectable symbols. The default returns
+        them unchanged, and the problem is then exactly the one in the class
+        docstring.
+
+        Parameters
+        ----------
+        context : PortfolioContext
+            The bar's context.
+        symbols : np.ndarray
+            The selectable symbols, in the context's order: tradable, not
+            locked, covered by the estimate and with every bounded exposure.
+        expected_return : np.ndarray
+            ``mu`` per selectable symbol on the expected-return label's
+            span, NaN where there is no prediction.
+        estimate : ReturnCovariance
+            The covariance estimator's estimate on the span, over the
+            symbols it covers.
+        candidates : np.ndarray
+            Booleans per selectable symbol: the ones the bar optimises (a
+            prediction, or held).
+
+        Returns
+        -------
+        expected_return : np.ndarray
+            ``mu`` per selectable symbol; a candidate left NaN gets 0.0.
+        estimate : ReturnCovariance
+            The estimate the risk term prices; it must cover every candidate
+            (a ``ValueError`` otherwise), and the locked positions it covers
+            enter the risk term.
+        candidates : np.ndarray
+            Booleans per selectable symbol.
+
+        Examples
+        --------
+        With ``optimizer`` and ``context`` as in the class example, the
+        default changes nothing:
+
+        >>> symbols = context.symbols
+        >>> estimate = optimizer.config.covariance.estimate(context).scaled(5)
+        >>> mu, same, candidates = optimizer.posterior(
+        ...     context, symbols, np.array([0.01, np.nan, -0.01, 0.0]), estimate,
+        ...     np.array([True, False, True, True]),
+        ... )
+        >>> mu.tolist(), same is estimate, candidates.tolist()
+        ([0.01, nan, -0.01, 0.0], True, [True, False, True, True])
+        """
+        return expected_return, estimate, candidates
+
     @property
     def span(self) -> int | None:
         """The expected-return label's span in bars, once ``bind`` has read it.
@@ -727,11 +792,11 @@ class MeanVarianceOptimizer(PortfolioConstructor):
                 f"the locked positions {symbols[locked & ~exposed].tolist()[:5]} lack a "
                 f"bounded exposure ({bounded}), so the book's exposure is unknown"
             )
-        free = tradable & ~locked & covered & exposed & (np.isfinite(prediction) | held)
-        index = np.flatnonzero(free)
-        current = current_all[index]
+        selectable = np.flatnonzero(tradable & ~locked & covered & exposed)
+        candidates = np.isfinite(prediction[selectable]) | held[selectable]
+        index = selectable[candidates]
         predicted = np.isfinite(prediction[index])
-        expected = np.zeros(len(index))
+        expected = np.full(len(selectable), np.nan)
         if predicted.any():
             model = config.expected_return
             sigma = (
@@ -740,9 +805,23 @@ class MeanVarianceOptimizer(PortfolioConstructor):
                 else None
             )
             values = prediction[index][predicted][None]
-            expected[predicted] = model.expected_returns(
+            expected[np.flatnonzero(candidates)[predicted]] = model.expected_returns(
                 values, sigma, np.ones(values.shape, dtype=bool)
             )[0]
+        expected, estimate, candidates = self.posterior(
+            context, symbols[selectable], expected, estimate, candidates
+        )
+        candidates = np.asarray(candidates, dtype=bool)
+        index = selectable[candidates]
+        # A candidate without an expected return (held, no prediction) gets 0.0.
+        expected = np.nan_to_num(np.asarray(expected, dtype=np.float64)[candidates], nan=0.0)
+        current = current_all[index]
+        position = pd.Index(estimate.symbols).get_indexer(symbols)
+        if (position[index] < 0).any():
+            raise ValueError(
+                f"posterior returned an estimate that does not cover the candidates "
+                f"{symbols[index][position[index] < 0].tolist()[:5]}"
+            )
 
         if config.candidate_top_k is not None and config.candidate_top_k < len(index):
             strength = expected if config.direction == "long_only" else np.abs(expected)
@@ -753,7 +832,7 @@ class MeanVarianceOptimizer(PortfolioConstructor):
             pool |= current != 0
             index, expected, current = index[pool], expected[pool], current[pool]
         locked_index = np.flatnonzero(locked)
-        risk_locked = locked_index[covered[locked_index]]
+        risk_locked = locked_index[position[locked_index] >= 0]
         rows = np.concatenate([index, risk_locked])
         reference_weights, reference_without_risk = np.array([]), np.array([])
         reference = self.reference_weights(context)
@@ -761,10 +840,10 @@ class MeanVarianceOptimizer(PortfolioConstructor):
             b = np.nan_to_num(
                 np.asarray(reference.reindex(symbol=symbols).values, dtype=np.float64)
             )
-            others = np.setdiff1d(np.flatnonzero((b != 0) & covered), rows)
+            others = np.setdiff1d(np.flatnonzero((b != 0) & (position >= 0)), rows)
             rows = np.concatenate([rows, others])
             reference_weights = b[rows]
-            reference_without_risk = symbols[(b != 0) & ~covered]
+            reference_without_risk = symbols[(b != 0) & (position < 0)]
         return MeanVarianceInputs(
             symbols=symbols[index],
             expected_return=expected,

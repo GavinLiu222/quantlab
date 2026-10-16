@@ -22,6 +22,7 @@ code the per-bar rule calls, handed ``sigma`` (the covariance's diagonal on
 the span) when it needs it.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -38,8 +39,11 @@ from quantlab.portfolio.base import DecisionPanel
 
 
 @dataclass(frozen=True)
-class _Problem:
-    """``_problem``'s result: what every bar's decision reads but its holdings."""
+class PanelProblem:
+    """What every bar's decision reads but its holdings: ``mu``, the covariance and the candidates.
+
+    What a ``posterior`` passed to ``decide`` receives and returns.
+    """
 
     #: Each bar's covariance on the expected-return label's span.
     low_rank: LowRankCovariance
@@ -47,7 +51,8 @@ class _Problem:
     expected_return: np.ndarray
     #: ``[bars, symbols]``: tradable and covered, so a holding there is a candidate.
     selectable: np.ndarray
-    #: ``[bars, symbols]``: selectable with a finite prediction, a candidate whatever is held.
+    #: ``[bars, symbols]``: selectable with a finite prediction, a candidate whatever is held
+    #: (a ``posterior`` may widen it to selectable symbols without one).
     predicted: np.ndarray
     #: ``[bars, symbols]``: the reference book ``b`` the risk term prices ``w - b`` against
     #: (the active-risk rule's benchmark weights, NaN as 0), or ``None`` for total risk.
@@ -97,7 +102,7 @@ def _prediction(panel: DecisionPanel, label: str) -> np.ndarray:
     )
 
 
-def _problem(rule, panel: DecisionPanel) -> _Problem:
+def _problem(rule, panel: DecisionPanel) -> PanelProblem:
     """Every bar's inputs but the holdings: ``mu``, the covariance and the candidates (see the module docstring).
 
     Raises
@@ -126,7 +131,7 @@ def _problem(rule, panel: DecisionPanel) -> _Problem:
     if rule.import_path == ACTIVE_RISK:
         # The benchmark's weights at each bar, as the per-bar rule's reference_weights reads them.
         reference = np.nan_to_num(_factor(panel, config.benchmark_weight))
-    return _Problem(low_rank, expected, selectable, predicted, reference)
+    return PanelProblem(low_rank, expected, selectable, predicted, reference)
 
 
 def _factor(panel: DecisionPanel, name: str) -> np.ndarray:
@@ -135,7 +140,7 @@ def _factor(panel: DecisionPanel, name: str) -> np.ndarray:
     return np.asarray(values.sel(symbol=panel.symbols).values, dtype=np.float64)
 
 
-def _solve(rule, problem: _Problem, prices: PanelPrices | None, stopping: Stopping) -> PanelSolution:
+def _solve(rule, problem: PanelProblem, prices: PanelPrices | None, stopping: Stopping) -> PanelSolution:
     """Every bar's weights of ``problem`` (see ``decide``)."""
     from quantlab.portfolio.predefined.approximate._support import mean_variance_kernels
 
@@ -208,7 +213,12 @@ def _solve(rule, problem: _Problem, prices: PanelPrices | None, stopping: Stoppi
 
 
 def decide(
-    rule, panel: DecisionPanel, prices: PanelPrices | None = None, stopping: Stopping = Stopping()
+    rule,
+    panel: DecisionPanel,
+    prices: PanelPrices | None = None,
+    stopping: Stopping = Stopping(),
+    *,
+    posterior: Callable[[object, DecisionPanel, PanelProblem], PanelProblem] | None = None,
 ) -> PanelSolution:
     """Return every bar's mean-variance weights of a decision panel: in time order when they read the holdings, at once otherwise.
 
@@ -258,6 +268,15 @@ def decide(
     stopping : Stopping
         The residual at which a bar has converged, and the iterations after
         which it stops unconverged.
+    posterior : callable, optional
+        The per-rule hook ahead of the kernels, the panel counterpart of
+        ``MeanVarianceOptimizer.posterior``: ``posterior(rule, panel,
+        problem)`` returns the ``PanelProblem`` to solve, its ``mu``, its
+        covariance (of any rank) and its candidates (``predicted``) replaced
+        as the rule's per-bar ``posterior`` replaces them; ``candidate_top_k``
+        ranks the returned ``mu``. ``None`` (the default) solves the problem
+        as it is. An approximate implementation of a rule built on the
+        optimiser passes its own.
 
     Returns
     -------
@@ -307,4 +326,7 @@ def decide(
     array([[0.481, 0.519, 0.   ],
            [0.482, 0.518, 0.   ]])
     """
-    return _solve(rule, _problem(rule, panel), prices, stopping)
+    problem = _problem(rule, panel)
+    if posterior is not None:
+        problem = posterior(rule, panel, problem)
+    return _solve(rule, problem, prices, stopping)
