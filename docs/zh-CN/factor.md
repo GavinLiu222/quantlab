@@ -552,7 +552,7 @@ features = MembershipMaskedFactor(MembershipMaskedFactorConfig(
 ))
 ```
 
-输入开始得晚的因子，存储也开始得晚：分钟 bar 的日频因子（`IntradayStats`、`IntradayAverage`、`IntradayComposite`）从 2016-10-11 开始，也就是分钟库的第一个交易日；而从 2000 年开始训练的模型向每个因子要 2000 年起的面板，存储会拒绝。`StartClippedFactor`（`quantlab.factor.predefined.start_clipped`）包装任意因子，把 `read` 和 `compute` 的起点移到被包装因子记录的存储区间的第一天；请求在那一天之前就结束时，返回存储的变量和标的、不含任何 bar。模型按因子和标签面板 bar 的并集合并，所以更早的 bar 是 NaN。终点从不移动：读到存储终点之后仍然被拒绝，因为存储还没到请求的 bar 就是过期了。它的配置是 `StartClippedConfig`，只有被包装的 `factor`；它和 `RosterFactor` 一样是因子视图，视图可以嵌套，所以模型可以按名单读这样的存储，再按成员资格屏蔽：
+输入开始得晚的因子，存储也开始得晚：分钟 bar 的日频因子（`IntradayStats`、`IntradayAverage`、`IntradayComposite`）从 2016-10-11 开始，也就是分钟库的第一个交易日；而从 2000 年开始训练的模型向每个因子要 2000 年起的面板，存储会拒绝。`StartClippedFactor`（`quantlab.factor.predefined.start_clipped`）包装任意因子，把 `read` 和 `compute` 的起点移到被包装因子记录的存储区间的第一天；请求在那一天之前就结束时，返回存储的变量和标的、不含任何 bar。模型按各因子面板 bar 的并集合并，所以更早的 bar 是 NaN。终点从不移动：读到存储终点之后仍然被拒绝，因为存储还没到请求的 bar 就是过期了。它的配置是 `StartClippedConfig`，只有被包装的 `factor`；它和 `RosterFactor` 一样是因子视图，视图可以嵌套，所以模型可以按名单读这样的存储，再按成员资格屏蔽：
 
 ```python
 from quantlab.factor.config import StartClippedConfig

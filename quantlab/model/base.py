@@ -491,7 +491,7 @@ class BaseModel(Component, ABC):
         data = self._collect_panels(
             self.config.labels, self.config.label_data_strategy, start, end
         )
-        return data.sortby(["timestamp", "symbol"])
+        return sorted_panel(data)
 
     @property
     def warmup_bars(self) -> int:
@@ -583,9 +583,11 @@ class BaseModel(Component, ABC):
         ``"read"`` strategy, ``compute(start, end)`` from its inputs under
         ``"cal"``. Factor panels start ``warmup_bars`` bars earlier (see
         ``_collect_all_features``); labels do not, so they are NaN on those
-        bars. The factor and label panels are merged on the union of their
-        ``(timestamp, symbol)`` coordinates, sorted on both axes, and kept
-        as ``collected_panel`` (a ``CollectedPanel``). Call this before
+        bars. The factor panels are merged on the union of their
+        ``(timestamp, symbol)`` coordinates, and the labels are joined onto
+        the features' bars and symbols (``CollectedPanel.assemble``: a
+        label's symbol or bar without features is dropped); the panel is
+        kept, sorted on both axes, as ``collected_panel``. Call this before
         ``train()`` or ``train_cv()``.
 
         What it reads is recorded by a ``DataRecorder`` keyed by component
@@ -717,10 +719,7 @@ class BaseModel(Component, ABC):
         feature = self._collect_all_features()
         label = self._collect_all_labels()
         with Timer(f"{self.class_name}: collect merge"):
-            # Outer join: the features may start the model's warm-up earlier.
-            d = xr.combine_by_coords([feature, label], join="outer")
-            d = d.sortby(["timestamp", "symbol"])
-        self.collected_panel = CollectedPanel(d, source=self._panel_source())
+            self.collected_panel = CollectedPanel.assemble(feature, label, source=self._panel_source())
 
     @staticmethod
     def _variable_names(obj) -> tuple[str, ...]:

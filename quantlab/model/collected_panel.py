@@ -156,6 +156,57 @@ class CollectedPanel:
     True
     """
 
+    @classmethod
+    def assemble(cls, features: xr.Dataset, labels: xr.Dataset, source: dict | None = None) -> "CollectedPanel":
+        """Join a model's features and labels into one panel on the features' bars and symbols.
+
+        The features decide the axes: the labels are reindexed onto them, so
+        a label's symbol or bar without features is dropped (nothing can be
+        fitted or predicted on it) and a feature's warm-up bar has NaN
+        labels. The features are sorted only when they are not, so sorted
+        features are not copied; only the labels are.
+
+        Parameters
+        ----------
+        features : xr.Dataset
+            The factor panels on ``(timestamp, symbol)``.
+        labels : xr.Dataset
+            The label panels on ``(timestamp, symbol)``.
+        source : dict, optional
+            What the panel was read for (see the class).
+
+        Returns
+        -------
+        CollectedPanel
+            The panel, with an empty record.
+
+        Raises
+        ------
+        ValueError
+            If no label symbol is on the features' symbol axis (an integer
+            permaticker against a text one), which would leave every label NaN.
+
+        Examples
+        --------
+        With ``features`` on symbols ``A`` and ``B`` and ``labels`` on ``A``,
+        ``B`` and ``C``:
+
+        >>> CollectedPanel.assemble(features, labels).data["symbol"].values.tolist()
+        ['A', 'B']
+        """
+        features = sorted_panel(features)
+        symbols = features.indexes["symbol"]
+        label_symbols = labels.indexes["symbol"]
+        if len(label_symbols) and len(symbols) and not label_symbols.isin(symbols).any():
+            raise ValueError(
+                f"CollectedPanel: none of the {len(label_symbols)} label symbol(s) is on the "
+                f"features' symbol axis (labels {label_symbols[:3].tolist()} of type "
+                f"{label_symbols.dtype} against {symbols[:3].tolist()} of type {symbols.dtype}); "
+                f"every label would be NaN. Check that both are on the same axis."
+            )
+        labels = labels.reindex(timestamp=features.indexes["timestamp"], symbol=symbols)
+        return cls(features.assign(labels.data_vars), source=source)
+
     def __init__(self, data: xr.Dataset, record: dict | None = None, source: dict | None = None):
         """Hold ``data`` sorted; see the class docstring for parameters."""
         self._data = sorted_panel(data)

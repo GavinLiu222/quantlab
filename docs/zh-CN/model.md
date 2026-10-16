@@ -16,7 +16,7 @@ export OMP_NUM_THREADS=1   # 仅 macOS
 
 ### 输入与输出
 
-模型头用一个因子对象列表（特征）和一个标签对象列表（目标）来配置，二者都来自因子层（见 factor 指南）。`collect()` 用 `read(start, end)` 或 `compute(start, end)` 向每个对象请求模型 `start_date` 到 `end_date` 的面板，按 `(timestamp, symbol)` 合并，并把面板作为模型的 `collected_panel` 保存在内存中（一个 `CollectedPanel`：两个轴都排好序的数据、读取记录，以及由它生成、各只生成一次的数组）。模型头内部处理形状为 `[num_times, num_symbols, num_features]` 的数组，最后一个轴的顺序与 `get_factor_names()` 完全一致，输出形状为 `[num_times, num_symbols, num_labels]` 的预测。
+模型头用一个因子对象列表（特征）和一个标签对象列表（目标）来配置，二者都来自因子层（见 factor 指南）。`collect()` 用 `read(start, end)` 或 `compute(start, end)` 向每个对象请求模型 `start_date` 到 `end_date` 的面板，各因子按 `(timestamp, symbol)` 坐标的并集合并，标签则对齐到特征的 bar 和标的上（没有特征的标的或 bar 直接丢掉，所以在比特征更宽的范围上读到的标签不会撑大面板；`CollectedPanel.assemble`），并把面板作为模型的 `collected_panel` 保存在内存中（一个 `CollectedPanel`：两个轴都排好序的数据、读取记录，以及由它生成、各只生成一次的数组）。模型头内部处理形状为 `[num_times, num_symbols, num_features]` 的数组，最后一个轴的顺序与 `get_factor_names()` 完全一致，输出形状为 `[num_times, num_symbols, num_labels]` 的预测。
 
 标签会读取 t 之后的 bar，因此绝不能用作特征。模型靠 `lookahead_bars()` 区分这两种角色：每个标签都有这个方法，因子都没有；构造时，因子列表里出现标签、或标签列表里出现因子，都会被拒绝（见注意事项）。真实的标签是 `quantlab.label.forward.Forward`，即向前平移 `delay + span` 个 bar 的因子，`lookahead_bars()` 返回这个和（见 factor 指南）。
 
