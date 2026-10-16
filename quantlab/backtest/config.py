@@ -281,8 +281,8 @@ class ApproximateBacktestConfig(FrozenConfig):
     ...     end_date="2023-12-31",
     ...     rebalance_periods=5,
     ... )
-    >>> cfg.cost, cfg.chunk_bars, cfg.max_sweeps, cfg.tolerance
-    (0.001, 21, 50, 1e-06)
+    >>> cfg.cost, cfg.chunk_bars, cfg.max_iterations, cfg.tolerance
+    (0.001, 63, 20000, 1e-05)
     """
 
     #: The dataset whose prices the simulation trades on.
@@ -301,21 +301,24 @@ class ApproximateBacktestConfig(FrozenConfig):
     #: ``benchmark_dataset`` is; the account then reports its curve, its
     #: return statistics and the excess over it. ``None`` for none.
     benchmark_dataset: "MarketDataset | None" = component(default=None)
-    #: Bars of the window swept to convergence together; a chunk's decision
-    #: inputs are held in memory at once. Sweep j is exact on a chunk's first
-    #: j decisions, so a chunk of n decisions converges within n + 1 sweeps
-    #: whatever couples them; keep it below ``max_sweeps`` for a rule whose
-    #: decision reads the holdings (a turnover penalty).
-    chunk_bars: int = 21
-    #: Most sweeps per chunk before it is reported as not converged.
-    max_sweeps: int = 50
-    #: A chunk has converged when no bar's weights move by more than this (L1) between sweeps.
-    tolerance: float = 1e-6
+    #: Bars of the window prepared together: a chunk's decision inputs (its
+    #: covariance estimates, for a mean-variance rule) are held in memory at
+    #: once. The chunks are solved in time order, each from the weights
+    #: decided before it, so the size changes memory, not the result.
+    chunk_bars: int = 63
+    #: An iterative rule's iterations per decision bar before the bar is
+    #: reported as not converged (``quantlab.portfolio.base.Stopping``).
+    max_iterations: int = 20_000
+    #: An iterative rule's bar has converged when its gradient-mapping
+    #: residual is at most this times the largest entry of its starting
+    #: gradient: its objective is then within about twice that of the optimum
+    #: (``quantlab.portfolio.base.Stopping``).
+    tolerance: float = 1e-5
 
     def __post_init__(self):
         """Check the counts and the cost."""
         super().__post_init__()
-        for name in ("rebalance_periods", "chunk_bars", "max_sweeps"):
+        for name in ("rebalance_periods", "chunk_bars", "max_iterations"):
             if getattr(self, name) < 1:
                 raise ValueError(f"{name} must be >= 1, got {getattr(self, name)}")
         if self.cost < 0:

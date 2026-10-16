@@ -13,7 +13,14 @@ import xarray as xr
 from loguru import logger
 
 from quantlab.portfolio.config import TopNConfig
-from quantlab.portfolio.base import DecisionPanel, PortfolioConstructor, PortfolioContext
+from quantlab.portfolio.base import (
+    DecisionPanel,
+    PanelPrices,
+    PanelSolution,
+    PortfolioConstructor,
+    PortfolioContext,
+    Stopping,
+)
 from quantlab.runs.prediction_panel import LabelSpec
 
 
@@ -290,12 +297,17 @@ class TopNConstructor(PortfolioConstructor):
             np.put_along_axis(weights, order, picked, axis=1)
         return weights
 
-    def solve(self, problem: np.ndarray, holdings: np.ndarray | None, warm_start: np.ndarray | None = None) -> np.ndarray:
-        """Return the prepared books; top-n reads neither the holdings nor a warm start.
+    def solve(
+        self, problem: np.ndarray, prices: PanelPrices | None = None, stopping: Stopping = Stopping()
+    ) -> PanelSolution:
+        """Return the prepared books; top-n reads neither the holdings nor a stopping rule.
 
         Examples
         --------
-        >>> rule.solve(rule.prepare(panel), None)[1]
+        >>> rule.solve(rule.prepare(panel)).weights[1]
         array([0.5, 0. , 0.5, 0. ])
         """
-        return problem.copy()
+        bars = len(problem)
+        return PanelSolution(
+            weights=problem.copy(), iterations=np.zeros(bars, dtype=np.int64), converged=np.ones(bars, dtype=bool)
+        )

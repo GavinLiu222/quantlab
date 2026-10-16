@@ -3,7 +3,7 @@
 A backtest run (``BaseBacktester.run()``) decides its rebalances one bar at
 a time with the holdings replayed under the Execution rules, and pays a
 fixed cost for its report and run directory. The *approximate backtest*
-(ADR 0041) is a second backtest for sweeps: built once over a price dataset
+(ADR 0041) is a second backtest for parameter sweeps: built once over a price dataset
 (its window's prices are read once), it is run many times on (predictions,
 rule) pairs and returns each account in memory, writing nothing.
 
@@ -21,11 +21,15 @@ The rule decides through its panel pair, ``prepare`` and ``solve``
 (``quantlab.portfolio.base.PortfolioConstructor``), on the decision inputs
 ``quantlab.portfolio.decision_inputs.DecisionInputs.panel`` assembles, so
 the point-in-time reads stay in one module. A rule without the pair is
-refused before any data is read. A rule whose decision reads the holdings
-couples the bars: the window is cut into chunks of ``chunk_bars`` bars, and
-each chunk is swept (its holdings simulated from the previous sweep's
-weights, the rule asked again) until no bar's weights move by more than
-``tolerance``, or ``max_sweeps`` is reached, with a warning.
+refused before any data is read. The window is cut into chunks of
+``chunk_bars`` bars, each prepared once and solved in time order: a chunk is
+handed the book filled before it and each decision bar's valuation and fill
+prices (``PanelPrices``), so a rule whose decision reads the holdings (a
+turnover penalty) drifts them itself and solves its bars forward, each once,
+and a rule that does not solves them at once. An iterative solver stops a bar
+when its residual falls to ``tolerance``, or after ``max_iterations``, with
+a warning (``Stopping``). The simulation and the drift are
+``quantlab.execution.approximate``'s, compiled.
 
 The statistics are the backtest run's own functions
 (``quantlab.runs.backtest_stats``), so the numbers mean what a run's
@@ -46,7 +50,7 @@ from loguru import logger
 from quantlab.backtest.base import MarketSpec
 from quantlab.backtest.config import ApproximateBacktestConfig
 from quantlab.core.component import Component
-from quantlab.portfolio.base import PortfolioConstructor
+from quantlab.portfolio.base import PanelPrices, PortfolioConstructor, Stopping
 from quantlab.portfolio.decision_inputs import DecisionInputs
 from quantlab.runs import backtest_stats
 from quantlab.runs.backtest_attribution import (
@@ -95,9 +99,10 @@ class ApproximateAccount:
     metrics : dict
         ``backtest_stats.return_stats`` of ``returns`` over the window (the
         rows of a run's ``in_sample`` and ``out_of_sample`` blocks),
-        ``backtest_stats.turnover_stats`` of ``turnover``, ``sweeps`` (the
-        sweeps each chunk took, in time order) and ``converged`` (whether
-        every chunk converged); ``selection``, the
+        ``backtest_stats.turnover_stats`` of ``turnover``, ``iterations``
+        (the ``mean`` and ``max`` iterations of the solver per decision bar,
+        0 for a rule that does not iterate) and ``converged`` (whether every
+        bar met the solver's stopping rule); ``selection``, the
         ``backtest_stats.relative_stats`` of the account over the universe
         (the excess the scores and the rule add, with its annualised return
         and information ratio); ``attribution``, the ``score_label`` and the
@@ -111,8 +116,8 @@ class ApproximateAccount:
     >>> account = backtest.run(predictions, rule)
     >>> float(account.value[0]), account.weights.dims
     (1.0, ('timestamp', 'symbol'))
-    >>> account.metrics["converged"], account.metrics["sweeps"]
-    (True, [1])
+    >>> account.metrics["converged"], account.metrics["iterations"]
+    (True, {'mean': 0.0, 'max': 0})
     >>> sorted(account.metrics["attribution"]["decomposition"])
     ['costs', 'selection', 'total']
     """
@@ -151,67 +156,46 @@ def _returns(value: np.ndarray, timestamps: np.ndarray) -> xr.DataArray:
 
 
 def _ffill(values: np.ndarray) -> np.ndarray:
-    """Forward-fill NaN down the rows of a ``[T, S]`` array."""
-    rows = np.where(np.isfinite(values), np.arange(len(values))[:, None], 0)
-    np.maximum.accumulate(rows, axis=0, out=rows)
-    return values[rows, np.arange(values.shape[1])]
+    """Forward-fill NaN down the rows of a ``[T, S]`` array (``quantlab.execution.approximate.ffill``)."""
+    from quantlab.execution.approximate import ffill
+
+    return ffill(np.ascontiguousarray(values, dtype=np.float64))
+
+
+def _entry_prices(fill: np.ndarray, close: np.ndarray) -> np.ndarray:
+    """``[T, S]``: what a weight decided at the previous bar fills at (``quantlab.execution.approximate.entry_prices``)."""
+    from quantlab.execution.approximate import entry_prices
+
+    return entry_prices(np.ascontiguousarray(fill, dtype=np.float64), np.ascontiguousarray(close, dtype=np.float64))
 
 
 def _simulate(
     targets: np.ndarray, decisions: np.ndarray, fill: np.ndarray, close: np.ndarray, cost: float
 ) -> _Simulation:
-    """Simulate the targets decided at ``decisions`` with no loop over bars or fills.
+    """Simulate the targets decided at ``decisions``, in one compiled pass over the bars.
 
-    ``targets[k]`` (``[K, S]``; an all-NaN row holds) is decided at row
-    ``decisions[k]`` and fills at the next row's fill price; ``fill`` is
-    raw and ``close`` the valuation price forward-filled, both ``[T, S]``,
-    and every decision is before the last row. Between fills the book
-    drifts from the fill's open; each fill costs ``cost`` times its traded
-    weight. Returns the value (1.0 before the first fill), the holdings at
-    each decision bar's close (cash excluded, the previous fills' book
-    drifted there; zero before the first fill), and the turnover of each
-    fill, with ``filled`` marking which decisions filled.
+    ``quantlab.execution.approximate.simulate``: ``targets[k]`` (``[K, S]``;
+    an all-NaN row holds) is decided at row ``decisions[k]`` (in time order)
+    and fills at the next row's fill price, or the previous row's valuation
+    where it has none; ``fill`` is raw and ``close`` the valuation price
+    forward-filled, both ``[T, S]``, and every decision is before the last
+    row. Between fills the book is marked at the valuation price, a price
+    missing on either side counting as no change; each fill costs ``cost``
+    times its traded weight, against the previous book marked at the fill's
+    prices. Returns the value (1.0 before the first fill), the holdings at
+    each decision bar's close (cash excluded, zero before the first fill),
+    and the turnover of each fill, with ``filled`` marking which decisions
+    filled.
     """
-    T, S = close.shape
-    previous = np.vstack([np.full((1, S), np.nan), close[:-1]])
-    open_ = np.where(np.isfinite(fill), fill, previous)
-    filled = np.isfinite(targets).all(axis=1)
-    fills = decisions[filled] + 1
-    W = targets[filled]
-    K = len(fills)
-    value = np.ones(T)
-    holdings = np.zeros_like(targets)
-    turnover = np.empty(K)
-    if K == 0:
-        return _Simulation(value, holdings, turnover, filled)
-    cash = 1.0 - W.sum(axis=1)
-    entry = open_[fills]
-    with np.errstate(divide="ignore", invalid="ignore"):
-        # Each fill's book grown to the next fill's open.
-        growth = np.nan_to_num(entry[1:] / entry[:-1], nan=1.0)
-    grown = cash[:-1] + (W[:-1] * growth).sum(axis=1)
-    drifted = W[:-1] * growth / grown[:, None]
-    turnover[0] = np.abs(W[0]).sum()
-    turnover[1:] = np.abs(W[1:] - drifted).sum(axis=1)
-    step = np.ones(K)
-    step[1:] = grown
-    # The value at each fill's open, after its costs.
-    at_fill = np.cumprod(step * (1.0 - cost * turnover))
+    from quantlab.execution.approximate import simulate
 
-    def marked(rows: np.ndarray, segments: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """The book of fill ``segments`` marked at ``rows``' close, and its value per unit of ``at_fill``."""
-        with np.errstate(divide="ignore", invalid="ignore"):
-            book = W[segments] * np.nan_to_num(close[rows] / entry[segments], nan=1.0)
-        return book, cash[segments] + book.sum(axis=1)
-
-    segment = np.searchsorted(fills, np.arange(T), side="right") - 1
-    live = segment >= 0
-    _, worth = marked(np.flatnonzero(live), segment[live])
-    value[live] = at_fill[segment[live]] * worth
-    at_decision = segment[decisions]
-    held = at_decision >= 0
-    book, worth = marked(decisions[held], at_decision[held])
-    holdings[held] = book / worth[:, None]
+    value, holdings, turnover, filled = simulate(
+        np.ascontiguousarray(targets, dtype=np.float64),
+        np.ascontiguousarray(decisions, dtype=np.int64),
+        _entry_prices(fill, close),
+        np.ascontiguousarray(close, dtype=np.float64),
+        float(cost),
+    )
     return _Simulation(value, holdings, turnover, filled)
 
 
@@ -227,8 +211,8 @@ class ApproximateBacktest(Component):
     Parameters
     ----------
     config : ApproximateBacktestConfig
-        The price dataset, the window, ``rebalance_periods``, the cost rate
-        and the sweep settings.
+        The price dataset, the window, ``rebalance_periods``, the cost rate,
+        the chunk size and the solver's stopping rule.
 
     Raises
     ------
@@ -277,8 +261,8 @@ class ApproximateBacktest(Component):
         read, then bound to the panel's label specs. The predictions are
         spread over the window's prices (a symbol without one is never
         picked), the schedule names the decision bars, and each chunk of
-        ``chunk_bars`` bars is prepared once and swept to convergence in
-        time order.
+        ``chunk_bars`` bars is prepared once and solved, in time order, from
+        the weights decided before it.
 
         Parameters
         ----------
@@ -339,50 +323,41 @@ class ApproximateBacktest(Component):
         # A declared risk model's exposures and estimate rows, one request each over the decision bars.
         risk = inputs.risk_inputs(timestamps[decisions[0]], timestamps[decisions[-1]]) if len(decisions) else None
         targets = np.full((len(decisions), len(symbols)), np.nan)
-        sweeps: list[int] = []
-        converged = True
+        iterations = np.zeros(len(decisions), dtype=np.int64)
+        converged = np.ones(len(decisions), dtype=bool)
+        entry = _entry_prices(fill, close)
+        stopping = Stopping(tolerance=config.tolerance, max_iterations=config.max_iterations)
         for chunk in np.unique(decisions // config.chunk_bars):
             members = np.flatnonzero(decisions // config.chunk_bars == chunk)
-            known = members[-1] + 1
             problem = constructor.prepare(
                 inputs.panel(
                     panel.isel(timestamp=decisions[members]), prices=self._history_prices(inputs), risk=risk
                 )
             )
-            weights = constructor.solve(problem, None)
-            self._check_rows(constructor, weights)
-            # A bar's holdings read only the last fill before it, so each sweep
-            # simulates from the chunk's last earlier fill (the previous chunk's
-            # final book) to its last fill, on those rows alone.
+            # The chunk starts from the last book filled before it (none at the window's start).
             earlier = np.flatnonzero(np.isfinite(targets[: members[0]]).all(axis=1))
-            first = earlier[-1] if len(earlier) else members[0]
-            rows = slice(decisions[first], decisions[known - 1] + 2)
-            for sweep in range(1, config.max_sweeps + 1):
-                targets[members] = weights
-                holdings = _simulate(
-                    targets[first:known], decisions[first:known] - decisions[first],
-                    fill[rows], close[rows], config.cost,
-                ).holdings[members - first]
-                moved = constructor.solve(problem, holdings, warm_start=weights)
-                self._check_rows(constructor, moved)
-                change = np.nan_to_num(np.abs(moved - weights), nan=0.0).sum(axis=1)
-                change[np.isnan(moved).all(axis=1) != np.isnan(weights).all(axis=1)] = np.inf
-                weights = moved
-                if change.max(initial=0.0) <= config.tolerance:
-                    break
-            else:
-                converged = False
-                logger.warning(
-                    f"{type(self).__name__}: the chunk {bar_label(timestamps[decisions[members[0]]])} to "
-                    f"{bar_label(timestamps[decisions[members[-1]]])} did not converge in "
-                    f"{config.max_sweeps} sweeps (largest move {change.max():.3g})"
-                )
-            targets[members] = weights
-            sweeps.append(sweep)
+            last = earlier[-1] if len(earlier) else None
+            book = PanelPrices(
+                previous=np.zeros(len(symbols)) if last is None else targets[last],
+                previous_entry=np.ones(len(symbols)) if last is None else entry[decisions[last] + 1],
+                close=close[decisions[members]],
+                entry=entry[decisions[members] + 1],
+            )
+            solution = constructor.solve(problem, book, stopping)
+            self._check_rows(constructor, solution.weights)
+            targets[members] = solution.weights
+            iterations[members] = solution.iterations
+            converged[members] = solution.converged
+        if not converged.all():
+            missed = [bar_label(timestamps[d]) for d in decisions[~converged][:5]]
+            logger.warning(
+                f"{type(self).__name__}: {int((~converged).sum())} decision bar(s) did not converge in "
+                f"{config.max_iterations} iterations, the first {missed}"
+            )
 
         simulation = _simulate(targets, decisions, fill, close, config.cost)
         without_costs = _simulate(targets, decisions, fill, close, 0.0)
-        account = self._account(timestamps, symbols, decisions, targets, simulation, without_costs, sweeps, converged)
+        account = self._account(timestamps, symbols, decisions, targets, simulation, without_costs, iterations, converged)
         return self._compared(account, panel[_score_label(constructor, panel)])
 
     @staticmethod
@@ -442,7 +417,7 @@ class ApproximateBacktest(Component):
         return self._history[1]
 
     def _account(
-        self, timestamps, symbols, decisions, targets, simulation, without_costs, sweeps, converged
+        self, timestamps, symbols, decisions, targets, simulation, without_costs, iterations, converged
     ) -> ApproximateAccount:
         """Wrap a simulation in an account with its statistics."""
         on_bars = {"timestamp": timestamps}
@@ -462,8 +437,11 @@ class ApproximateBacktest(Component):
             **backtest_stats.turnover_stats(
                 flows, decided, timestamps, ranges=window, bar_interval=bar_interval, year_freq=year_freq
             ),
-            "sweeps": sweeps,
-            "converged": converged,
+            "iterations": {
+                "mean": float(iterations.mean()) if len(iterations) else 0.0,
+                "max": int(iterations.max(initial=0)),
+            },
+            "converged": bool(converged.all()),
         }
         return ApproximateAccount(
             value=value,

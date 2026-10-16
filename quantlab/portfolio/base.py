@@ -22,7 +22,8 @@ instead.
 
 A rule may also decide a block of bars at once, for the approximate
 backtest (ADR 0041): ``prepare`` turns a ``DecisionPanel`` into a problem
-once and ``solve`` answers it for the holdings at every bar. The base class
+once and ``solve`` returns every bar's weights (a ``PanelSolution``), the
+holdings following from the weights. The base class
 refuses (``panel_refusal`` names the rule); a rule opts in by implementing
 the pair. A covariance estimator opts in the same way with
 ``estimate_all``, every bar's estimate at once as a ``LowRankCovariance``.
@@ -346,6 +347,97 @@ class DecisionPanel:
             known, prices[np.maximum(source, 0), np.arange(prices.shape[1])], np.nan
         )
         return filled[:, 1:] / filled[:, :-1] - 1.0
+
+
+@dataclass(frozen=True)
+class PanelPrices:
+    """The book filled before a panel and the prices its holdings drift with: what ``solve`` reads besides its problem.
+
+    A rule whose decision reads the holdings (a turnover penalty) solves its
+    bars in time order: the holdings at a bar are the book of the last bar it
+    decided (or ``previous``), its weights at their fill prices, marked at the
+    bar's ``close`` over the book's value, cash included
+    (``quantlab.execution.approximate.mark_book``). A bar it decides fills at
+    its ``entry`` prices; a bar it holds leaves the book as it was.
+
+    Attributes
+    ----------
+    previous : np.ndarray
+        ``[symbols]``: the book's weights decided before the first bar, cash
+        excluded; zeros for none.
+    previous_entry : np.ndarray
+        ``[symbols]``: the prices ``previous`` filled at.
+    close : np.ndarray
+        ``[bars, symbols]``: each bar's valuation price, forward-filled.
+    entry : np.ndarray
+        ``[bars, symbols]``: the price each bar's weights fill at.
+
+    Examples
+    --------
+    >>> prices = PanelPrices(
+    ...     previous=np.array([0.5, 0.5]), previous_entry=np.array([10.0, 20.0]),
+    ...     close=np.array([[11.0, 20.0]]), entry=np.array([[11.0, 19.0]]),
+    ... )
+    >>> prices.close.shape
+    (1, 2)
+    """
+
+    previous: np.ndarray
+    previous_entry: np.ndarray
+    close: np.ndarray
+    entry: np.ndarray
+
+
+@dataclass(frozen=True)
+class Stopping:
+    """When an iterative panel solver stops on a bar.
+
+    Attributes
+    ----------
+    tolerance : float
+        The bar has converged when its gradient-mapping residual (the
+        largest entry of ``(y - w) / step``, the projected gradient) is at
+        most this times the largest entry of the objective's gradient at the
+        start: the objective is then within about twice that of its optimum.
+    max_iterations : int
+        Iterations before the bar is reported as not converged.
+
+    Examples
+    --------
+    >>> Stopping()
+    Stopping(tolerance=1e-05, max_iterations=20000)
+    """
+
+    tolerance: float = 1e-5
+    max_iterations: int = 20_000
+
+
+@dataclass(frozen=True)
+class PanelSolution:
+    """Every bar's weights of a panel, as ``PortfolioConstructor.solve`` returns them.
+
+    Attributes
+    ----------
+    weights : np.ndarray
+        ``[bars, symbols]``: finite on a decided bar, all NaN on a held one.
+    iterations : np.ndarray
+        ``[bars]``: the iterations an iterative solver took on each bar (0
+        for a rule that does not iterate, or a held bar).
+    converged : np.ndarray
+        ``[bars]``: whether each bar met the solver's stopping rule.
+
+    Examples
+    --------
+    >>> solution = PanelSolution(
+    ...     weights=np.array([[0.5, 0.5]]), iterations=np.array([0]), converged=np.array([True])
+    ... )
+    >>> bool(solution.converged.all())
+    True
+    """
+
+    weights: np.ndarray
+    iterations: np.ndarray
+    converged: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -709,21 +801,6 @@ class LowRankCovariance:
             specific_variance=self.specific_variance * factor,
         )
 
-    def take(self, bars: np.ndarray) -> Self:
-        """Return the covariance of the bars at positions (or the mask) ``bars``.
-
-        Examples
-        --------
-        >>> covariance.take(np.array([True])).variance
-        array([[0.02, 0.06]])
-        """
-        return LowRankCovariance(
-            covered=self.covered[bars],
-            exposures=self.exposures[bars],
-            factor_covariance=None if self.factor_covariance is None else self.factor_covariance[bars],
-            specific_variance=self.specific_variance[bars],
-        )
-
     def times(self, weights: np.ndarray) -> np.ndarray:
         """``[bars, symbols]``: each bar's covariance times its row of ``weights``.
 
@@ -765,22 +842,6 @@ class LowRankCovariance:
             factor_covariance=self.factor_covariance,
             specific_variance=self.specific_variance * scale**2,
         )
-
-    def largest_eigenvalue(self) -> np.ndarray:
-        """``[bars]``: an upper bound of each bar's largest eigenvalue, at most ``max(D) + |F^1/2 B' B F^1/2|``.
-
-        Examples
-        --------
-        >>> covariance.largest_eigenvalue().round(4)
-        array([0.07])
-        """
-        gram = np.einsum("bsk,bsl->bkl", self.exposures, self.exposures)
-        if self.factor_covariance is not None:
-            values, vectors = np.linalg.eigh(self.factor_covariance)
-            root = np.sqrt(np.clip(values, 0.0, None))[..., None] * np.swapaxes(vectors, -1, -2)
-            gram = root @ gram @ np.swapaxes(root, -1, -2)
-        top = np.linalg.eigvalsh(gram)[..., -1] if gram.shape[-1] else np.zeros(len(gram))
-        return np.clip(top, 0.0, None) + self.specific_variance.max(axis=1, initial=0.0)
 
 
 class CovarianceEstimator(_Configured, ABC):
@@ -1045,7 +1106,7 @@ class PortfolioConstructor(_Configured, ABC):
 
         The panel counterpart of ``construct``, for the approximate backtest:
         everything the rule's decisions read except the holdings goes into
-        the returned problem, which ``solve`` then answers for any holdings.
+        the returned problem, which ``solve`` then answers.
         The problem is opaque to the caller. The default refuses.
 
         Parameters
@@ -1074,30 +1135,33 @@ class PortfolioConstructor(_Configured, ABC):
         """
         raise NotImplementedError(self.panel_refusal())
 
-    def solve(self, problem: Any, holdings: np.ndarray | None, warm_start: np.ndarray | None = None) -> np.ndarray:
-        """Return every bar's weights of a prepared problem, given the holdings at each bar.
+    def solve(self, problem: Any, prices: PanelPrices | None = None, stopping: Stopping = Stopping()) -> PanelSolution:
+        """Return every bar's weights of a prepared problem.
 
-        Pure in the holdings: the same problem and holdings give the same
-        weights. A rule whose decision does not read the holdings ignores
-        them. Each row follows the weights contract with nothing locked
-        (finite, gross at most one), or is all NaN to hold. The default
-        refuses.
+        The approximate backtest hands a rule the book filled before the
+        panel's first bar and each bar's valuation and fill prices: a rule
+        whose decision reads the holdings (a turnover penalty) drifts its own
+        book with them and solves the bars in time order, and a rule that
+        does not ignores them and may solve the bars at once. Pure: the same
+        arguments give the same weights. Each row follows the weights
+        contract with nothing locked (finite, gross at most one), or is all
+        NaN to hold. The default refuses.
 
         Parameters
         ----------
         problem : object
             What ``prepare`` returned.
-        holdings : np.ndarray or None
-            ``[bars, symbols]``: the weights held at each bar's close before
-            it decides, cash excluded; ``None`` to decide as if the holdings
-            did not matter (no turnover term).
-        warm_start : np.ndarray, optional
-            ``[bars, symbols]``: weights to start an iterative solver from.
+        prices : PanelPrices, optional
+            The book before the first bar and the prices it drifts with;
+            ``None`` for no book.
+        stopping : Stopping
+            An iterative solver's stopping rule.
 
         Returns
         -------
-        np.ndarray
-            ``[bars, symbols]`` weights, in the panel's order.
+        PanelSolution
+            The ``[bars, symbols]`` weights, in the panel's order, with each
+            bar's iterations and whether it converged.
 
         Raises
         ------
@@ -1109,7 +1173,7 @@ class PortfolioConstructor(_Configured, ABC):
         With ``rule`` top-2 and ``panel`` the ``DecisionPanel`` example (BBB
         has no score at the second bar, so only AAA is picked there):
 
-        >>> rule.solve(problem, None)
+        >>> rule.solve(problem).weights
         array([[0.5, 0.5],
                [1. , 0. ]])
         """

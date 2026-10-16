@@ -34,11 +34,15 @@ the same bounds against `run()`, and the risk stores read once over the window
 whatever the chunks.
 
 With a turnover penalty (#306), the bars coupled through the holdings and
-swept to a fixed point: without fees (where the run's cash cap, which the
+solved forward in time, each once (#319): without fees (where the run's cash cap, which the
 approximate backtest gives up, does not move its holdings) weights within
 1e-3 (L1) and the value within 1e-3 of the run's, a smaller chunk giving the
-weights of one chunk, a sweep limit of one warning and reporting not
-converged; with fees the gap stays within the cash cap's bound.
+weights of one chunk, an iteration limit of one warning and reporting not
+converged; with fees the gap stays within the cash cap's bound. Across a bar
+no symbol can trade (the penalised solve holds there) the book drifts from
+its last fill, and a chunk starting on that bar carries a held name none of
+its bars can select: chunks starting on it or just after it give one chunk's
+weights.
 
 The remaining mean-variance configurations (#307), each against `run()` to
 the same bounds: long-short without and with a turnover penalty (the
@@ -99,6 +103,7 @@ from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
 from quantlab.portfolio.predefined.top_n import TopNConstructor
 from quantlab.portfolio.predefined.topk_dropout import TopkDropoutConstructor
 from quantlab.runs.backtest_run import BacktestRun
+from quantlab.runs.prediction_panel import LabelSpec, PredictionPanel
 from tests.backtest_fixtures import (
     ForwardReturnLabel,
     PastReturnFactor,
@@ -263,11 +268,11 @@ def test_the_turnover_is_recorded_per_rebalance(case):
     )
 
 
-def test_top_n_converges_in_one_sweep(case):
+def test_top_n_decides_without_iterating(case):
     _, _, account, _, _ = case
 
     assert account.metrics["converged"] is True
-    assert set(account.metrics["sweeps"]) == {1}
+    assert account.metrics["iterations"] == {"mean": 0.0, "max": 0}
 
 
 def test_a_smaller_chunk_gives_the_same_account(case, store):
@@ -278,7 +283,6 @@ def test_a_smaller_chunk_gives_the_same_account(case, store):
 
     np.testing.assert_array_equal(chunked.weights.values, account.weights.values)
     np.testing.assert_allclose(chunked.value.values, account.value.values, rtol=1e-12)
-    assert len(chunked.metrics["sweeps"]) > 1
 
 
 def test_the_approximate_backtest_is_built_once_and_run_many_times(case, store):
@@ -294,7 +298,7 @@ def test_the_approximate_backtest_is_built_once_and_run_many_times(case, store):
 
 
 def test_the_config_is_frozen_and_rebuildable(store):
-    backtest = _approximate(store, 5, chunk_bars=20, max_sweeps=8, tolerance=1e-7)
+    backtest = _approximate(store, 5, chunk_bars=20, max_iterations=8, tolerance=1e-7)
 
     with pytest.raises(dataclasses.FrozenInstanceError):
         backtest.config.cost = 0.0
@@ -319,10 +323,10 @@ def test_a_rule_without_a_panel_decision_is_refused_before_any_read(store, monke
 class _MixedRow(TopNConstructor):
     """Top-n whose first solved row mixes finite weights and NaN."""
 
-    def solve(self, problem, holdings, warm_start=None):
-        weights = super().solve(problem, holdings, warm_start)
-        weights[0, 0] = np.nan
-        return weights
+    def solve(self, problem, prices=None, stopping=None):
+        solution = super().solve(problem, prices)
+        solution.weights[0, 0] = np.nan
+        return solution
 
 
 def test_a_solved_row_mixing_finite_weights_and_nan_is_refused(case, store):
@@ -848,7 +852,8 @@ def test_the_risk_stores_are_read_once_over_the_window(factor_risk_case):
 
 
 # Mean-variance with a turnover penalty (#306): the penalty couples the bars
-# through the holdings, which the approximate backtest resolves by sweeping
+# through the holdings, which the approximate backtest resolves by solving
+# them forward in time, each once
 # each chunk to a fixed point; the oracle is the same tightly solved run().
 #
 # The penalty keeps a weight at its holding inside the no-trade band, so the
@@ -861,7 +866,7 @@ def test_the_risk_stores_are_read_once_over_the_window(factor_risk_case):
 
 PENALTY = 1e-3
 #: One chunk over the whole window, swept until it converges.
-ONE_CHUNK = dict(chunk_bars=N_BARS, max_sweeps=N_BARS + 1)
+ONE_CHUNK = dict(chunk_bars=N_BARS)
 #: The weights gap a fee rate opens through the run's cash cap: about cost x turnover per fill.
 FEE_GAP_L1 = 3e-3
 
@@ -906,8 +911,8 @@ def test_penalised_weights_are_within_the_bound_of_the_runs(penalty_case):
 
     assert _weights_gap(result, account).max() <= WEIGHTS_L1
     assert account.metrics["converged"] is True
-    # The penalty couples the bars, so it takes more than the one sweep top-n takes.
-    assert max(account.metrics["sweeps"]) > 1
+    # The penalised solve iterates on every bar.
+    assert account.metrics["iterations"]["max"] > 1
 
 
 def test_penalised_value_is_within_the_tolerance_of_the_runs(penalty_case):
@@ -935,26 +940,83 @@ def test_a_smaller_chunk_gives_the_penalised_weights_of_one_chunk(penalty_case, 
         predictions, _mvo(**overrides)
     )
 
-    assert len(whole.metrics["sweeps"]) == 1 and whole.metrics["converged"] is True
-    assert len(chunked.metrics["sweeps"]) > 1 and chunked.metrics["converged"] is True
+    assert whole.metrics["converged"] is True and chunked.metrics["converged"] is True
     gap = np.abs(chunked.weights.values - whole.weights.values).sum(axis=1)
     assert gap.max() <= 1e-5
 
 
-def test_a_sweep_limit_of_one_with_a_penalty_warns_and_is_not_converged(penalty_case, mvo_store):
+def test_an_iteration_limit_of_one_with_a_penalty_warns_and_is_not_converged(penalty_case, mvo_store):
     _, predictions, _, overrides, rebalance_periods = penalty_case
     messages = []
     sink = logger.add(messages.append, level="WARNING", format="{message}")
     try:
-        account = _approximate(mvo_store, rebalance_periods, cost=0.0, max_sweeps=1, chunk_bars=N_BARS).run(
+        account = _approximate(mvo_store, rebalance_periods, cost=0.0, max_iterations=1, chunk_bars=N_BARS).run(
             predictions, _mvo(**overrides)
         )
     finally:
         logger.remove(sink)
 
     assert account.metrics["converged"] is False
-    assert account.metrics["sweeps"] == [1]
-    assert any("did not converge in 1 sweeps" in str(message) for message in messages)
+    assert account.metrics["iterations"]["max"] == 1
+    assert any("did not converge in 1 iterations" in str(message) for message in messages)
+
+
+#: The window row on which no symbol has a fill price, and from which S05 has none.
+HELD_ROW = 21
+
+
+@pytest.fixture(scope="module")
+def held_store(tmp_path_factory):
+    """A store whose window has a bar without any fill price (every symbol untradable), from which S05 has none.
+
+    S05 keeps its closes, so it stays marked at a moving price while no bar
+    after the held one can trade it.
+    """
+    root = tmp_path_factory.mktemp("approximate_held")
+    dataset_config = write_price_store(root, symbols=SYMBOLS, n_bars=N_BARS, seed=9)
+    data = xr.open_zarr(dataset_config.zarr_file_path).load()
+    s05 = list(SYMBOLS).index("S05")
+    for name in ("adjOpen", "open"):
+        values = data[name].transpose("timestamp", "symbol").values.copy()
+        values[WINDOW[0] + HELD_ROW] = np.nan
+        values[WINDOW[0] + HELD_ROW :, s05] = np.nan
+        data[name] = (("timestamp", "symbol"), values)
+    data.to_zarr(dataset_config.zarr_file_path, mode="w")
+    bars = pd.bdate_range("2024-01-01", periods=N_BARS)
+    rng = np.random.default_rng(4)
+    scores = rng.normal(0, 0.01, (WINDOW[1] - WINDOW[0] + 1, len(SYMBOLS)))
+    predictions = PredictionPanel(
+        xr.Dataset(
+            {"fwd_ret_1": (("timestamp", "symbol"), scores)},
+            coords={"timestamp": bars[WINDOW[0] : WINDOW[1] + 1], "symbol": SYMBOLS},
+        ),
+        [LabelSpec("fwd_ret_1", "raw", 1, 1)],
+    )
+    return root, dataset_config, bars, predictions
+
+
+def test_the_chunks_carry_the_book_across_a_held_bar_and_a_delisting(held_store):
+    # On HELD_ROW no symbol can trade, so the penalised solve holds there, and
+    # from it S05, held before, cannot trade though its price moves. The book
+    # drifts from its last fill across the held bar, and a chunk starting on
+    # it carries S05 though none of its bars can select it: chunks starting
+    # on the held bar or just after it give the weights of one chunk.
+    _, dataset_config, bars, predictions = held_store
+    store = (None, dataset_config, bars)
+    rule = dict(turnover_penalty=PENALTY, weight_cap=0.3)
+    accounts = {
+        chunk: _approximate(store, 1, cost=0.0, chunk_bars=chunk).run(predictions, _mvo(**rule))
+        for chunk in (N_BARS, HELD_ROW, HELD_ROW + 1)
+    }
+    whole = accounts[N_BARS]
+    held = np.datetime64(bars[WINDOW[0] + HELD_ROW])
+
+    assert held not in whole.weights.timestamp.values
+    s05 = list(SYMBOLS).index("S05")
+    assert whole.weights.values[HELD_ROW - 1, s05] > 0
+    for chunk in (HELD_ROW, HELD_ROW + 1):
+        np.testing.assert_array_equal(accounts[chunk].weights.timestamp.values, whole.weights.timestamp.values)
+        np.testing.assert_allclose(accounts[chunk].weights.values, whole.weights.values, rtol=0, atol=1e-9)
 
 
 def test_with_fees_the_penalised_gap_is_the_runs_cash_cap(mvo_store):
@@ -1102,6 +1164,12 @@ def configuration_case(request, mvo_store):
 
 
 def test_each_configuration_s_weights_are_within_the_bound_of_the_runs(configuration_case):
+    # candidate_top_k keeps the held names in its pool, any nonzero weight
+    # counting as held: the run holds a name at 1.9e-9 on bar 53. Solved to a
+    # 1e-12 residual the approximate weight there is an exact 0, so bar 54's
+    # pools differ by that name and the books by 8.3e-3 (L1). At the default
+    # stopping rule every bar is within 7e-6, so this bound holds only while
+    # the two backtests agree on which near-zero weights are held.
     _, result, account = configuration_case
 
     assert _weights_gap(result, account).max() <= WEIGHTS_L1

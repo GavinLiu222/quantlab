@@ -540,11 +540,11 @@ Traceback (most recent call last):
 ValueError: USEquityApproximateBacktest cannot run TopkDropoutConstructor: TopkDropoutConstructor has no panel decision (prepare and solve); backtest it with a backtest run
 ```
 
-On 1,000 synthetic symbols and 137 daily rebalances, long-only mean-variance took 1.0 s against `run()`'s 76 s, with `turnover_penalty=1e-3` 8 s against 185 s, and long-short with that penalty 18 s against 361 s.
+On a us3000-shaped synthetic store (10,000 symbols on the axis, 3,000 of them priced, returns from 60 factors whose largest covariance eigenvalues are about 4,500 and 110 times the specific variance, a 60-bar Ledoit-Wolf window), the paper-trading mean-variance rule (risk aversion 20, `weight_cap` 0.05, `turnover_penalty` 0.002) over 67 daily rebalances at 10 bp took 1.0 s against `run()`'s 532 s (4.6 iterations per bar on average), the value within 5e-4 and the annualised return within 0.25 percentage points.
 
-#### Sweeps and chunks
+#### Chunks and the solver
 
-A rule whose decision reads the holdings (the turnover penalty) couples the bars. The window is cut into chunks of `chunk_bars` bars (default 21); each chunk is prepared once and swept: its holdings are simulated from the last sweep's weights, the previous chunk's final book carrying into its first bar, and the rule is asked again, until no bar's weights move by more than `tolerance` (L1, default 1e-6). Sweep j is exact on a chunk's first j decisions, so a chunk of n decisions converges within n + 1 sweeps; at `max_sweeps` (default 50) a warning names the chunk and `converged` is `False`. Top-n does not read the holdings and converges in one sweep. Continuing the session:
+The window is cut into chunks of `chunk_bars` bars (default 63), each prepared once, which bounds the memory a chunk's decision inputs take (a mean-variance rule's covariance estimates), and solved in time order: the rule is handed the book filled before the chunk and each decision bar's valuation and fill prices (`PanelPrices`), with which it drifts the book itself, as the simulation does (`quantlab.execution.approximate`: the last filled weights at their fill prices, marked at each close; a bar the rule holds leaves the book as it was). A rule whose decision reads the holdings (a turnover penalty, or `candidate_top_k`, which keeps the held names) solves its bars forward, each once from the previous bar's weights, in one compiled loop; a rule that does not solves them all at once (mean-variance in parallel over the bars, except on macOS, where torch and xgboost each bring an OpenMP runtime and the bars run in turn; `numba.set_num_threads` or `NUMBA_NUM_THREADS` caps the threads). The chunk size changes memory, not the result. A mean-variance bar has converged when its gradient-mapping residual is at most `tolerance` (default 1e-5) times its starting gradient's largest entry, which keeps its objective within about twice that of the optimum; after `max_iterations` (default 20,000) a warning names the bars and `converged` is `False`. Top-n does not iterate. Continuing the session:
 
 ```python
 >>> from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig
@@ -556,10 +556,10 @@ A rule whose decision reads the holdings (the turnover penalty) couples the bars
 ...         covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=10)),
 ...         ic=0.05, risk_aversion=5.0, weight_cap=0.5, turnover_penalty=penalty,
 ...     ))
-...     swept = approximate.run(predictions, rule)
-...     print(penalty, round(swept.metrics["Turnover per Rebalance [%]"], 1), swept.metrics["sweeps"])
-0.0 117.9 [1, 1]
-0.002 34.7 [5, 2]
+...     solved = approximate.run(predictions, rule)
+...     print(penalty, round(solved.metrics["Turnover per Rebalance [%]"], 1), solved.metrics["iterations"]["max"])
+0.0 117.9 6
+0.002 34.7 5
 ```
 
 #### The account
@@ -569,7 +569,7 @@ A rule whose decision reads the holdings (the turnover penalty) couples the bars
 - `value` (1.0 at the window's first bar), `returns` (0.0 there) and `value_without_costs`, on the window's bars;
 - `weights`, the target weights at the decided bars, and `turnover`, the traded weight of each rebalance (1.0 for the buy-in from cash);
 - `universe_value`, the equal-weighted universe of a run's attribution, and `benchmark_value` (`None` without a benchmark);
-- `metrics`: the rows of `backtest_stats.return_stats` and `backtest_stats.turnover_stats` over the window, `selection` (the `relative_stats` of the account over the universe: what the scores and the rule add, with its annualised excess return and information ratio), `attribution` (a run's `decomposition` and `annualized_log_return`), `sweeps` (per chunk) and `converged`.
+- `metrics`: the rows of `backtest_stats.return_stats` and `backtest_stats.turnover_stats` over the window, `selection` (the `relative_stats` of the account over the universe: what the scores and the rule add, with its annualised excess return and information ratio), `attribution` (a run's `decomposition` and `annualized_log_return`), `iterations` (the solver's `mean` and `max` iterations per decision bar, 0 for a rule that does not iterate) and `converged`.
 
 With `benchmark_dataset` (one symbol, as for a run) the benchmark is bought at the second bar's open at the same `cost` and held, and `metrics` gains `benchmark` (its return statistics) and `relative` (a run's `relative` rows without the win rates), the decomposition its `universe` part:
 

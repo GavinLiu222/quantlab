@@ -540,11 +540,11 @@ Traceback (most recent call last):
 ValueError: USEquityApproximateBacktest cannot run TopkDropoutConstructor: TopkDropoutConstructor has no panel decision (prepare and solve); backtest it with a backtest run
 ```
 
-在 1,000 只合成标的、137 次日度调仓上，只做多的均值-方差用时 1.0 秒，`run()` 用时 76 秒；`turnover_penalty=1e-3` 时 8 秒对 185 秒；多空加同样的惩罚 18 秒对 361 秒。
+在 us3000 规模的合成数据上（价格轴 10,000 只标的，其中 3,000 只有价格，收益来自 60 个因子，最大的协方差特征值约为特定方差的 4,500 倍和 110 倍，60 bar 的 Ledoit-Wolf 窗口），模拟盘的均值-方差规则（风险厌恶 20、`weight_cap` 0.05、`turnover_penalty` 0.002）在 67 次日度调仓、10 bp 成本下用时 1.0 秒，`run()` 用时 532 秒（每个 bar 平均迭代 4.6 次）；净值相差在 5e-4 以内，年化收益相差在 0.25 个百分点以内。
 
-#### 扫描与分块
+#### 分块与求解
 
-决策要读持仓的规则（换手惩罚）会把各 bar 耦合起来。窗口按 `chunk_bars` 个 bar 分块（默认 21）；每块只准备一次问题，然后反复扫描：由上一轮的权重模拟出持仓（上一分块的最终账户带入本块的第一个 bar），再问一次规则，直到没有哪个 bar 的权重变动超过 `tolerance`（L1，默认 1e-6）。第 j 轮扫描在分块的前 j 次决策上是精确的，所以 n 次决策的分块最多 n + 1 轮就收敛；达到 `max_sweeps`（默认 50）时，会记录一条写明分块的警告，并把 `converged` 设为 `False`。top-n 不读持仓，一轮即收敛。接着会话：
+窗口按 `chunk_bars` 个 bar 分块（默认 63），每块只准备一次问题，以此限制一块决策输入（均值-方差规则的协方差估计）占用的内存，并按时间顺序求解：规则拿到本块之前成交的账户，以及每个决策 bar 的估值价和成交价（`PanelPrices`），并像模拟一样自己漂移账户（`quantlab.execution.approximate`：最后一次成交的权重按成交价计，按每个收盘价估值；规则保持仓位的 bar 不改变账户）。决策要读持仓的规则（换手惩罚，或保留持仓标的的 `candidate_top_k`）在一个编译好的循环里按时间顺序求解，每个 bar 从上一个 bar 的权重出发只解一次；不读持仓的规则一次解完所有 bar（均值-方差按 bar 并行；macOS 上 torch 和 xgboost 各自带一个 OpenMP 运行时，所以按顺序逐个求解；`numba.set_num_threads` 或 `NUMBA_NUM_THREADS` 限制线程数）。分块大小只影响内存，不影响结果。均值-方差的一个 bar 在梯度映射残差不超过 `tolerance`（默认 1e-5）乘以起点梯度最大分量时视为收敛，此时目标值离最优不超过约两倍于此；达到 `max_iterations`（默认 20,000）时，会记录一条写明 bar 的警告，并把 `converged` 设为 `False`。top-n 不迭代。接着会话：
 
 ```python
 >>> from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig
@@ -556,10 +556,10 @@ ValueError: USEquityApproximateBacktest cannot run TopkDropoutConstructor: TopkD
 ...         covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=10)),
 ...         ic=0.05, risk_aversion=5.0, weight_cap=0.5, turnover_penalty=penalty,
 ...     ))
-...     swept = approximate.run(predictions, rule)
-...     print(penalty, round(swept.metrics["Turnover per Rebalance [%]"], 1), swept.metrics["sweeps"])
-0.0 117.9 [1, 1]
-0.002 34.7 [5, 2]
+...     solved = approximate.run(predictions, rule)
+...     print(penalty, round(solved.metrics["Turnover per Rebalance [%]"], 1), solved.metrics["iterations"]["max"])
+0.0 117.9 6
+0.002 34.7 5
 ```
 
 #### 账户
@@ -569,7 +569,7 @@ ValueError: USEquityApproximateBacktest cannot run TopkDropoutConstructor: TopkD
 - `value`（窗口第一个 bar 为 1.0）、`returns`（该 bar 为 0.0）和 `value_without_costs`，都在窗口的 bar 上；
 - `weights`：各决策 bar 的目标权重；`turnover`：每次调仓的成交权重（从现金建仓时为 1.0）；
 - `universe_value`：运行归因所用的等权全体；`benchmark_value`（没有基准时为 `None`）；
-- `metrics`：窗口上 `backtest_stats.return_stats` 和 `backtest_stats.turnover_stats` 的各行，`selection`（账户相对等权全体的 `relative_stats`，也就是分数和规则带来的超额，含年化超额收益和信息比率），`attribution`（运行的 `decomposition` 和 `annualized_log_return`），`sweeps`（每块的扫描轮数）和 `converged`。
+- `metrics`：窗口上 `backtest_stats.return_stats` 和 `backtest_stats.turnover_stats` 的各行，`selection`（账户相对等权全体的 `relative_stats`，也就是分数和规则带来的超额，含年化超额收益和信息比率），`attribution`（运行的 `decomposition` 和 `annualized_log_return`），`iterations`（求解器每个决策 bar 迭代次数的 `mean` 和 `max`，不迭代的规则为 0）和 `converged`。
 
 设置 `benchmark_dataset`（只含一个标的，与运行的要求相同）后，基准在第二个 bar 开盘以同样的 `cost` 买入并持有，`metrics` 多出 `benchmark`（它的收益统计）和 `relative`（运行的 `relative` 各行，不含胜率），分解中也多出 `universe` 部分：
 

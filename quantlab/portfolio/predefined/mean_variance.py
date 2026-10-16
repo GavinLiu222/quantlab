@@ -11,10 +11,12 @@ sigma * z``) or is the prediction itself (``raw``), the covariance ``Sigma``
 comes from a covariance estimator, its volatilities optionally from a volatility
 label's prediction, and all are on the span of the expected-return label.
 This is the only quantlab module that imports cvxpy. For the approximate
-backtest the optimiser also decides a panel of bars at once (``prepare`` and
-``solve``), long-only, by accelerated proximal gradient in numpy rather
-than cvxpy, the turnover penalty entering the projection as a pull toward
-each bar's holdings.
+backtest the optimiser also decides a panel of bars (``prepare`` and
+``solve``) by accelerated proximal gradient in compiled code
+(``_support/mean_variance_kernels.py``, numba, imported only there) rather
+than cvxpy: forward in time when
+the decision reads the holdings (the turnover penalty entering the
+projection as a pull toward them), in parallel over the bars otherwise.
 """
 
 from collections.abc import Sequence
@@ -38,9 +40,12 @@ from quantlab.portfolio.base import (
     DecisionPanel,
     InputDeclaration,
     LowRankCovariance,
+    PanelPrices,
+    PanelSolution,
     PortfolioConstructionError,
     PortfolioConstructor,
     PortfolioContext,
+    Stopping,
 )
 from quantlab.runs.prediction_panel import LabelSpec
 from quantlab.utils.cross_section import cross_sectional_zscore
@@ -177,267 +182,38 @@ def _project_capped_simplex(values: np.ndarray, cap: float, total: float = 1.0) 
     return np.clip(values - high, 0.0, cap)
 
 
-def _project_capped_simplex_rows(values: np.ndarray, cap: np.ndarray, total: float = 1.0) -> np.ndarray:
-    """Row by row, ``_project_capped_simplex`` with a cap per entry (0 keeps an entry at 0).
+def _contiguous(values) -> np.ndarray:
+    """``values`` as a C-contiguous float64 array, the layout the compiled kernels take."""
+    return np.ascontiguousarray(values, dtype=np.float64)
 
-    The shift of every row is bisected at once, until no float lies inside
-    any row's bracket; each row's ``high`` end is returned, as the one-row
-    projection returns it. Every row must reach ``total`` with every entry
-    at its cap.
+
+def _factor_roots(low_rank: LowRankCovariance) -> np.ndarray:
+    """``[bars, symbols, k]``: ``U = B F^1/2`` per bar, so each bar's covariance is ``U U' + diag(D)``."""
+    if low_rank.factor_covariance is None:
+        return low_rank.exposures
+    values, vectors = np.linalg.eigh(low_rank.factor_covariance)
+    root = vectors * np.sqrt(np.clip(values, 0.0, None))[:, None, :]
+    return low_rank.exposures @ root
+
+
+def _tangent_curvature(roots: np.ndarray, specific: np.ndarray, columns: np.ndarray) -> np.ndarray:
+    """``[bars]``: a bound of each bar's largest eigenvalue on ``{dw on columns, sum(dw) = 0}``.
+
+    Two feasible books of a bar have the same sum (the budget, or 0
+    long-short) and live on its columns, so their difference lies in that
+    subspace, and a gradient step one over ``risk_aversion`` times this
+    bound descends. On it ``U U'`` acts as ``C C'``, ``C`` the rows of ``U``
+    on the columns centred over them; the market factor, on which every
+    symbol loads alike, mostly cancels, which is what makes the step much
+    longer than one over the whole covariance's largest eigenvalue. Plus the
+    largest specific variance on the columns.
     """
-    low = (values - cap).min(axis=1)
-    high = values.max(axis=1)
-    while True:
-        tau = (low + high) / 2
-        inside = (low < tau) & (tau < high)
-        if not inside.any():
-            break
-        over = np.clip(values - tau[:, None], 0.0, cap).sum(axis=1) > total
-        low = np.where(inside & over, tau, low)
-        high = np.where(inside & ~over, tau, high)
-    return np.clip(values - high[:, None], 0.0, cap)
-
-
-def _project_penalised_rows(
-    values: np.ndarray,
-    cap: np.ndarray,
-    anchor: np.ndarray,
-    threshold: np.ndarray,
-    total: float = 1.0,
-    shift: np.ndarray | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Row by row, the prox of ``threshold * |w - anchor|_1`` over the capped simplex, and each row's shift.
-
-    The nearest point to ``values`` plus the L1 pull toward ``anchor``: for
-    a shift ``tau`` each entry is ``values - tau`` soft-thresholded toward
-    its anchor by the row's ``threshold``, then clipped to ``[0, cap]``.
-    The sum is piecewise linear and falls as ``tau`` grows, its slope minus
-    the count of entries strictly between their bounds and outside the
-    band, so ``tau`` is found by Newton steps from ``shift`` (the last
-    call's, which a proximal-gradient iteration barely moves), each kept
-    inside a bracket that bisection narrows when a step leaves it; a step
-    on the root's linear piece lands on the root. ``anchor`` must be
-    non-negative (long-only holdings); an entry capped at 0 stays at 0
-    whatever its anchor.
-    """
-    threshold = threshold[:, None]
-
-    def at(tau: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        shifted = values - tau[:, None]
-        gap = shifted - anchor
-        free = np.abs(gap) > threshold
-        pulled = np.where(free, shifted - threshold * np.sign(gap), anchor)
-        clipped = np.clip(pulled, 0.0, cap)
-        return clipped, (free & (pulled > 0.0) & (pulled < cap)).sum(axis=1)
-
-    # Every entry at its cap below low, every entry at 0 above high.
-    low = (values - np.maximum(cap, anchor) - threshold).min(axis=1)
-    high = (values + threshold).max(axis=1)
-    tau = (low + high) / 2 if shift is None else np.clip(shift, low, high)
-    exact = 4 * np.finfo(np.float64).eps * max(total, 1.0)
-    for _ in range(200):
-        weights, slope = at(tau)
-        excess = weights.sum(axis=1) - total
-        done = np.abs(excess) <= exact
-        if done.all():
-            return weights, tau
-        low = np.where(~done & (excess > 0), tau, low)
-        high = np.where(~done & (excess < 0), tau, high)
-        newton = tau + excess / np.where(slope > 0, slope, 1)
-        inside = (slope > 0) & (low < newton) & (newton < high)
-        stalled = (low >= high) | ((low + high) / 2 == low) | ((low + high) / 2 == high)
-        tau = np.where(done | stalled, tau, np.where(inside, newton, (low + high) / 2))
-        if (done | stalled).all():
-            break
-    return at(tau)[0], tau
-
-
-def _prox_entries(
-    values: np.ndarray,
-    weight: np.ndarray,
-    cap: np.ndarray,
-    anchor: np.ndarray | None,
-    threshold: np.ndarray | None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Entrywise ``argmin 1/2 (w - values)^2 + weight |w| + threshold |w - anchor|`` over ``[-cap, cap]``, and where it moves with ``values``.
-
-    ``weight`` and ``threshold`` are ``[rows, 1]``. Without an anchor it is
-    the soft-threshold. With one, cut at ``lo = min(0, anchor)`` and ``hi =
-    max(0, anchor)``, the minimiser is piecewise linear in ``values``:
-    ``values - weight - threshold`` above ``hi + weight + threshold``,
-    ``values + weight + threshold`` below ``lo - weight - threshold``, and
-    ``clip(values - m, lo, hi)`` between, ``m = sign(anchor) * (weight -
-    threshold)`` the slope of the two terms between the cuts. Clipping a
-    one-dimensional convex minimiser to ``[-cap, cap]`` minimises it there.
-    The second array marks the entries on a piece of slope one strictly
-    inside the cap, where the minimiser moves one for one with ``values``.
-    """
-    if anchor is None:
-        weights = np.sign(values) * np.maximum(np.abs(values) - weight, 0.0)
-        moving = np.abs(values) > weight
-    else:
-        low, high = np.minimum(0.0, anchor), np.maximum(0.0, anchor)
-        pulled = weight + threshold
-        middle = values - np.sign(anchor) * (weight - threshold)
-        above, below = values > high + pulled, values < low - pulled
-        weights = np.where(above, values - pulled, np.where(below, values + pulled, np.clip(middle, low, high)))
-        moving = above | below | ((middle > low) & (middle < high))
-    moving = moving & (np.abs(weights) < cap)
-    return np.clip(weights, -cap, cap), moving
-
-
-def _project_long_short_rows(
-    values: np.ndarray,
-    cap: np.ndarray,
-    gross: float,
-    anchor: np.ndarray | None = None,
-    threshold: np.ndarray | None = None,
-    state: tuple[np.ndarray, np.ndarray] | None = None,
-) -> tuple[np.ndarray, tuple[np.ndarray, np.ndarray]]:
-    """Row by row, the prox over ``{sum(w) = 0, |w|_1 <= gross, |w| <= cap}``, with an L1 pull toward ``anchor``; and each row's multipliers.
-
-    The minimiser is ``_prox_entries(values - tau, weight)``: ``tau`` the
-    shift that makes a row sum to 0 and ``weight`` the multiplier of the
-    gross ceiling, 0 where the ceiling does not bind. For a ``weight`` the
-    shift is found as ``_project_penalised_rows`` finds its own (the sum
-    falls with ``tau``, its slope minus the entries moving with it). The
-    gross falls as ``weight`` grows, piecewise linearly with ``tau``
-    re-solved: on the entries ``M`` moving with ``values`` at signs ``s``
-    its slope is ``-(|M| - sum(s)^2 / |M|)``, so ``weight`` is found by
-    Newton steps from the last call's (``state`` carries ``(tau,
-    weight)``, which a proximal-gradient iteration barely moves), each
-    kept inside a bracket that bisection narrows when a step leaves it.
-    """
-    rows = len(values)
-    exact = 4 * np.finfo(np.float64).eps * max(gross, 1.0)
-    reach = np.abs(values).max(axis=1, initial=0.0) + cap.max(axis=1, initial=0.0) + 1.0
-    if threshold is not None:
-        reach = reach + threshold[:, 0] + np.abs(anchor).max(axis=1, initial=0.0)
-
-    def shifted(weight: np.ndarray, tau: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Every row at ``weight``, its shift solved from ``tau``; the weights, the shifts and the moving entries."""
-        span = reach + weight
-        low, high = -span, span
-        shift = np.clip(tau, low, high)
-        lam = weight[:, None]
-        for _ in range(200):
-            weights, moving = _prox_entries(values - shift[:, None], lam, cap, anchor, threshold)
-            excess = weights.sum(axis=1)
-            done = np.abs(excess) <= exact
-            if done.all():
-                return weights, shift, moving
-            slope = moving.sum(axis=1)
-            low = np.where(~done & (excess > 0), shift, low)
-            high = np.where(~done & (excess < 0), shift, high)
-            newton = shift + excess / np.where(slope > 0, slope, 1)
-            inside = (slope > 0) & (low < newton) & (newton < high)
-            stalled = (low >= high) | ((low + high) / 2 == low) | ((low + high) / 2 == high)
-            shift = np.where(done | stalled, shift, np.where(inside, newton, (low + high) / 2))
-            if (done | stalled).all():
-                break
-        weights, moving = _prox_entries(values - shift[:, None], lam, cap, anchor, threshold)
-        return weights, shift, moving
-
-    tau = np.zeros(rows) if state is None else state[0].copy()
-    weight = np.zeros(rows) if state is None else state[1].copy()
-    # A known weight above the root (the gross over the ceiling) and below it.
-    low = np.zeros(rows)
-    high = np.full(rows, np.inf)
-    for _ in range(200):
-        weights, tau, moving = shifted(weight, tau)
-        excess = np.abs(weights).sum(axis=1) - gross
-        done = (np.abs(excess) <= 1e3 * exact) | ((weight == 0) & (excess <= 0))
-        if done.all():
-            break
-        low = np.where(~done & (excess > 0), weight, low)
-        high = np.where(~done & (excess < 0), weight, high)
-        signs = np.where(moving, np.sign(weights), 0.0)
-        count = moving.sum(axis=1)
-        slope = count - signs.sum(axis=1) ** 2 / np.where(count > 0, count, 1)
-        newton = np.maximum(weight + excess / np.where(slope > 0, slope, 1), 0.0)
-        inside = (slope > 0) & (newton >= low) & (newton <= high) & (newton != weight)
-        fallback = np.where(np.isfinite(high), (low + high) / 2, 2.0 * np.maximum(weight, reach))
-        stalled = np.isfinite(high) & (((low + high) / 2 == low) | ((low + high) / 2 == high))
-        weight = np.where(done | stalled, weight, np.where(inside, newton, fallback))
-        if (done | stalled).all():
-            break
-    # Never over the ceiling: a last ulp of gross is taken off both sides alike.
-    total = np.abs(weights).sum(axis=1)
-    weights = np.where((total > gross)[:, None], weights * (gross / np.where(total > 0, total, 1.0))[:, None], weights)
-    return weights, (tau, weight)
-
-def _maximise_rows(
-    expected: np.ndarray,
-    cap: np.ndarray,
-    low_rank: LowRankCovariance,
-    risk_aversion: float,
-    start: np.ndarray,
-    *,
-    penalty: float = 0.0,
-    anchor: np.ndarray | None = None,
-    gross: float | None = None,
-    tolerance: float = 1e-10,
-    iterations: int = 50_000,
-) -> np.ndarray:
-    """Maximise ``mu' w - risk_aversion / 2 * w' Sigma w - penalty * |w - anchor|_1`` over each row's feasible set.
-
-    All rows at once, by accelerated proximal gradient (FISTA) with
-    adaptive restart: the step is one over ``risk_aversion`` times each
-    row's largest eigenvalue (an upper bound). Long-only (``gross`` None)
-    the set is the capped simplex and the prox
-    ``_project_capped_simplex_rows``, or ``_project_penalised_rows`` with a
-    penalty and an anchor (the holdings); long-short it is ``{sum(w) = 0,
-    |w|_1 <= gross, |w| <= cap}`` and the prox ``_project_long_short_rows``.
-    It stops when no row's weights move by more than ``tolerance`` (L1) in
-    one step.
-    """
-    curvature = risk_aversion * low_rank.largest_eigenvalue()
-    scale = np.abs(expected).max(axis=1, initial=0.0)
-    # Without curvature the problem is linear: a long step lands on its vertex.
-    step = np.where(curvature > 0, 1.0 / np.where(curvature > 0, curvature, 1.0), 1e12 / np.maximum(scale, 1e-300))
-    penalised = bool(penalty) and anchor is not None
-    threshold = penalty * step if penalised else None
-    if gross is not None:
-        state = None
-
-        def project(values: np.ndarray) -> np.ndarray:
-            nonlocal state
-            weights, state = _project_long_short_rows(
-                values,
-                cap,
-                gross,
-                anchor if penalised else None,
-                None if threshold is None else threshold[:, None],
-                state,
-            )
-            return weights
-    elif penalised:
-        shift = None
-
-        def project(values: np.ndarray) -> np.ndarray:
-            nonlocal shift
-            weights, shift = _project_penalised_rows(values, cap, anchor, threshold, shift=shift)
-            return weights
-    else:
-
-        def project(values: np.ndarray) -> np.ndarray:
-            return _project_capped_simplex_rows(values, cap)
-
-    w = project(start) if gross is not None else _project_capped_simplex_rows(start, cap)
-    y, t = w, np.ones(len(w))
-    for _ in range(iterations):
-        gradient = expected - risk_aversion * low_rank.times(y)
-        following = project(y + step[:, None] * gradient)
-        move = np.abs(following - w).sum(axis=1)
-        restart = ((y - following) * (following - w)).sum(axis=1) > 0
-        t_next = (1.0 + np.sqrt(1.0 + 4.0 * t * t)) / 2.0
-        momentum = np.where(restart, 0.0, (t - 1.0) / t_next)
-        y = following + momentum[:, None] * (following - w)
-        t = np.where(restart, 1.0, t_next)
-        w = following
-        if move.max(initial=0.0) <= tolerance:
-            break
-    return w
+    on = roots * columns[..., None]
+    count = np.maximum(columns.sum(axis=1), 1)
+    total = on.sum(axis=1)
+    gram = np.swapaxes(on, 1, 2) @ on - total[:, :, None] * total[:, None, :] / count[:, None, None]
+    top = np.linalg.eigvalsh(gram)[:, -1] if gram.shape[-1] else np.zeros(len(gram))
+    return np.clip(top, 0.0, None) + np.where(columns, specific, 0.0).max(axis=1, initial=0.0)
 
 
 @dataclass(frozen=True)
@@ -1216,110 +992,141 @@ class MeanVarianceOptimizer(PortfolioConstructor):
             dtype=np.float64,
         )
 
-    def _pool(self, expected: np.ndarray, candidate: np.ndarray, held: np.ndarray | None) -> np.ndarray:
-        """The candidates kept by ``candidate_top_k``: each bar's top ``mu`` (``|mu|`` long-short) and the held ones.
-
-        Ranked with a stable sort, so ties keep the symbol order, as the
-        per-bar rule ranks them.
-        """
-        strength = expected if self.config.direction == "long_only" else np.abs(expected)
-        order = np.argsort(np.where(candidate, -strength, np.inf), axis=1, kind="stable")
-        rank = np.empty_like(order)
-        np.put_along_axis(rank, order, np.arange(order.shape[1])[None, :].repeat(len(order), axis=0), axis=1)
-        pool = candidate & (rank < self.config.candidate_top_k)
-        return pool if held is None else pool | held
-
     def solve(
-        self, problem: _PanelProblem, holdings: np.ndarray | None, warm_start: np.ndarray | None = None
-    ) -> np.ndarray:
-        """Return every bar's mean-variance weights, given the holdings at each bar.
+        self, problem: _PanelProblem, prices: PanelPrices | None = None, stopping: Stopping = Stopping()
+    ) -> PanelSolution:
+        """Return every bar's mean-variance weights: in time order when they read the holdings, at once otherwise.
 
-        The candidates are the bars' predicted symbols and, with
-        ``holdings``, the selectable symbols held (at ``mu = 0``), as the
-        per-bar rule takes them; with ``candidate_top_k`` only the top
-        ``candidate_top_k`` by ``mu`` (``|mu|`` long-short) and the held
-        ones are kept. A bar with no candidate, or long-only too few to
-        hold the book under ``weight_cap``, holds (an all-NaN row), as a
-        backtest run holds it. The rest are solved together by accelerated
-        proximal gradient (``_maximise_rows``), from ``warm_start`` where it
-        is finite: long-only on the capped simplex, long-short on ``sum(w)
-        = 0``, ``|w|_1 <= 1``, ``|w| <= weight_cap``. With ``holdings`` and
-        a ``turnover_penalty`` the objective loses ``turnover_penalty * |w -
-        holdings|_1``, the per-bar rule's term, which enters the projection
-        as an L1 pull toward the holdings; without ``holdings`` the penalty
-        is left out (the approximate backtest's first, unpenalised solve).
+        The candidates are each bar's predicted symbols, with
+        ``candidate_top_k`` only the top ``candidate_top_k`` by ``mu``
+        (``|mu|`` long-short), and with a turnover penalty or
+        ``candidate_top_k`` also the selectable symbols held. A bar with no
+        candidate, or long-only too few to hold the book under
+        ``weight_cap``, holds (an all-NaN row), as a backtest run holds it.
+        Each bar maximises the per-bar rule's objective on its candidates in
+        compiled code (``_support/mean_variance_kernels.py``), only on the
+        columns some bar of the panel can select: accelerated proximal
+        gradient whose step backtracks below the curvature on the budget's
+        tangent space, until the residual meets ``stopping``. Long-only on
+        the capped simplex, long-short on ``sum(w) = 0``, ``|w|_1 <= 1``,
+        ``|w| <= weight_cap``.
+
+        With a ``turnover_penalty`` or ``candidate_top_k`` the bars are
+        solved forward in time, each once: its holdings are its book (the
+        last decided bar's weights, or ``prices.previous``, at their fill
+        prices) marked at its close over the book's value, cash included; the
+        objective loses ``turnover_penalty * |w - holdings|_1``, which enters
+        the projection as an L1 pull toward the holdings, and the solve
+        starts from the holdings. A held bar leaves the book as it was.
+        Otherwise the bars are independent and solved at once, in parallel
+        except on macOS; a held symbol without a prediction is then not a
+        candidate (the per-bar rule keeps it at ``mu = 0``).
 
         Parameters
         ----------
         problem : object
             What ``prepare`` returned.
-        holdings : np.ndarray or None
-            ``[bars, symbols]`` weights held at each bar, cash excluded,
-            or ``None``.
-        warm_start : np.ndarray, optional
-            ``[bars, symbols]`` weights to start from.
+        prices : PanelPrices, optional
+            The book before the first bar and the prices it drifts with;
+            ``None`` for no book.
+        stopping : Stopping
+            The residual at which a bar has converged, and the iterations
+            after which it stops unconverged.
 
         Returns
         -------
-        np.ndarray
-            ``[bars, symbols]`` weights.
+        PanelSolution
+            ``[bars, symbols]`` weights, each bar's iterations and whether it
+            converged.
 
         Examples
         --------
-        >>> optimizer.solve(problem, None).round(3)
-        array([[0.654, 0.346, 0.   ],
-               [0.651, 0.349, 0.   ]])
+        With ``optimizer`` and ``problem`` as in ``prepare`` (two bars of
+        ``AAA``, ``BBB`` and ``CCC``, CCC listed too late for the window):
 
-        With ``penalised`` an optimiser with ``turnover_penalty=0.002`` and
-        ``problem`` its prepared problem over two bars of three covered
-        symbols, whose unpenalised weights are ``[0.369, 0.392, 0.239]``
-        and ``[0.33, 0.456, 0.214]``, holdings of ``[0.2, 0.4, 0.4]`` pull
-        each bar toward them, and BBB, inside the band the penalty leaves
-        untraded, stays at its holding:
+        >>> optimizer.solve(problem).weights.round(3)
+        array([[0.578, 0.422, 0.   ],
+               [0.577, 0.423, 0.   ]])
 
-        >>> penalised.solve(problem, np.array([[0.2, 0.4, 0.4], [0.2, 0.4, 0.4]])).round(3)
-        array([[0.258, 0.4  , 0.342],
-               [0.24 , 0.4  , 0.36 ]])
+        With a turnover penalty, a book of 0.2 AAA and 0.8 BBB held before
+        the first bar, prices unchanged, pulls both bars toward it:
+
+        >>> penalised = MeanVarianceOptimizer(dataclasses.replace(optimizer.config, turnover_penalty=0.002))
+        >>> penalised.bind([LabelSpec(name="ret_5", scale="raw", delay=1, span=5)])
+        >>> book = PanelPrices(
+        ...     previous=np.array([0.2, 0.8, 0.0]), previous_entry=np.ones(3),
+        ...     close=np.ones((2, 3)), entry=np.ones((2, 3)),
+        ... )
+        >>> penalised.solve(penalised.prepare(panel), book).weights.round(3)
+        array([[0.481, 0.519, 0.   ],
+               [0.482, 0.518, 0.   ]])
         """
+        from quantlab.portfolio.predefined._support import mean_variance_kernels
+
         config = self.config
         long_only = config.direction == "long_only"
-        candidate = problem.predicted.copy()
-        held = None
-        if holdings is not None:
-            held = problem.selectable & (holdings != 0)
-            candidate |= held
-        if config.candidate_top_k is not None:
-            candidate = self._pool(problem.expected_return, candidate, held)
-        count = candidate.sum(axis=1)
-        solvable = count > 0
-        if long_only:
-            solvable &= count * config.weight_cap >= 1.0 - 1e-12
-        weights = np.full(candidate.shape, np.nan)
-        if not solvable.any():
-            return weights
-        cap = np.where(candidate[solvable], config.weight_cap, 0.0)
-        low_rank = problem.low_rank.take(solvable)
-        expected = problem.expected_return[solvable]
+        bars, symbols = problem.expected_return.shape
+        expected = problem.expected_return
         if problem.reference is not None:
             # The risk of w - b: its gradient is that of w's risk plus risk_aversion * Sigma b,
             # Sigma zero off a bar's covered symbols, so b's uncovered weight drops out.
-            expected = expected + config.risk_aversion * low_rank.times(problem.reference[solvable])
-        start = cap
-        if warm_start is not None:
-            given = warm_start[solvable]
-            start = np.where(np.isfinite(given).all(axis=1)[:, None], np.nan_to_num(given), cap)
-        penalised = holdings is not None and config.turnover_penalty != 0
-        weights[solvable] = _maximise_rows(
-            expected,
-            cap,
-            low_rank,
-            config.risk_aversion,
-            start,
-            penalty=config.turnover_penalty if penalised else 0.0,
-            anchor=None if not penalised else (np.clip(holdings[solvable], 0.0, None) if long_only else holdings[solvable]),
-            gross=None if long_only else 1.0,
-        )
-        return weights
+            expected = expected + config.risk_aversion * problem.low_rank.times(problem.reference)
+        # The holdings enter through the penalty, and through the held names candidate_top_k keeps.
+        forward = config.turnover_penalty != 0 or config.candidate_top_k is not None
+        pool = problem.predicted
+        selectable = problem.selectable if forward else pool
+        columns = selectable.any(axis=0)
+        roots = _factor_roots(problem.low_rank)[:, columns]
+        specific = _contiguous(problem.low_rank.specific_variance[:, columns])
+        bound = _contiguous(_tangent_curvature(roots, specific, selectable[:, columns]))
+        transposed = _contiguous(np.swapaxes(roots, 1, 2))
+        mu = _contiguous(expected[:, columns])
+        tolerance, max_iterations = float(stopping.tolerance), int(stopping.max_iterations)
+        if forward:
+            strength = problem.expected_return if long_only else np.abs(problem.expected_return)
+            if prices is None:
+                prices = PanelPrices(
+                    previous=np.zeros(symbols), previous_entry=np.ones(symbols),
+                    close=np.ones((bars, symbols)), entry=np.ones((bars, symbols)),
+                )
+            solved, iterations = mean_variance_kernels.solve_forward(
+                (
+                    mu,
+                    np.ascontiguousarray(pool[:, columns]),
+                    np.ascontiguousarray(selectable[:, columns]),
+                    _contiguous(strength[:, columns]),
+                    transposed,
+                    specific,
+                    bound,
+                ),
+                (
+                    _contiguous(np.nan_to_num(prices.previous)),
+                    _contiguous(prices.previous_entry),
+                    _contiguous(prices.close),
+                    _contiguous(prices.entry),
+                    np.flatnonzero(columns).astype(np.int64),
+                ),
+                (
+                    float(config.weight_cap),
+                    float(config.risk_aversion),
+                    float(config.turnover_penalty),
+                    long_only,
+                    1.0,
+                    int(config.candidate_top_k or 0),
+                ),
+                (tolerance, max_iterations),
+            )
+        else:
+            solved, iterations = mean_variance_kernels.solve_independent(
+                (mu, np.ascontiguousarray(pool[:, columns]), transposed, specific, bound),
+                (float(config.weight_cap), float(config.risk_aversion), long_only, 1.0),
+                (tolerance, max_iterations),
+            )
+        weights = np.full((bars, symbols), np.nan)
+        decided = np.isfinite(solved).all(axis=1)
+        weights[decided] = 0.0
+        weights[np.ix_(decided, columns)] = solved[decided]
+        return PanelSolution(weights=weights, iterations=np.abs(iterations), converged=iterations >= 0)
 
     def _skip_small_trades(self, solution: np.ndarray, current: np.ndarray, total: float) -> np.ndarray:
         """Keep the current weight wherever the solved change is below ``min_trade`` (long-only)."""
