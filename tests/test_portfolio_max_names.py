@@ -111,12 +111,16 @@ def _brute_force(rule: MeanVarianceOptimizer, context: PortfolioContext, slots: 
     The rule's objective written out on the dense covariance of its inputs:
     ``mu w - lambda/2 (x - b)' Sigma (x - b) - kappa |w - w_current|_1``, x
     the candidates then the covered locked weights (then the reference's
-    others at 0), under the budget, the cap and the exposure bounds.
+    others at 0), under the budget (long-only: the rest of one; long-short:
+    offsetting the locked net within the gross they leave), the cap and the
+    exposure bounds.
     """
     config = rule.config
     inputs = rule.problem_inputs(context)
     n = len(inputs.symbols)
-    total = 1.0 - float(inputs.locked_weights.sum())
+    long_only = config.direction == "long_only"
+    locked_sum = float(inputs.locked_weights.sum())
+    total = 1.0 - locked_sum if long_only else -locked_sum
     best, best_value = None, -np.inf
     for chosen in itertools.combinations(range(n), slots):
         w = cp.Variable(n)
@@ -130,7 +134,11 @@ def _brute_force(rule: MeanVarianceOptimizer, context: PortfolioContext, slots: 
         if config.turnover_penalty:
             objective = objective - config.turnover_penalty * cp.norm1(w - inputs.current_weights)
         out = [i for i in range(n) if i not in chosen]
-        constraints = [cp.sum(w) == total, w >= 0, w <= config.weight_cap]
+        if long_only:
+            constraints = [cp.sum(w) == total, w >= 0, w <= config.weight_cap]
+        else:
+            gross = 1.0 - float(np.abs(inputs.locked_weights).sum())
+            constraints = [cp.sum(w) == total, cp.norm1(w) <= gross, cp.abs(w) <= config.weight_cap]
         if out:
             constraints.append(w[out] == 0)
         for (lower, upper), row, locked in zip(inputs.exposure_bounds, inputs.exposures, inputs.locked_exposures):
@@ -140,7 +148,7 @@ def _brute_force(rule: MeanVarianceOptimizer, context: PortfolioContext, slots: 
         if problem.status == cp.OPTIMAL and problem.value > best_value:
             best, best_value = np.asarray(w.value), problem.value
     weights = pd.Series(0.0, index=context.symbols)
-    weights[inputs.symbols] = np.where(best > 1e-7, best, 0.0)
+    weights[inputs.symbols] = np.where(np.abs(best) > 1e-7, best, 0.0)
     weights[inputs.locked_symbols] = inputs.locked_weights
     return weights.values
 
@@ -150,7 +158,7 @@ def _uncapped_names(rule, context) -> int:
     config = dataclasses.replace(rule.config, max_names=None, mip_gap=None, solver="CLARABEL")
     uncapped = type(rule)(config)
     uncapped.bind(_specs({"ret_5": SPAN}))
-    return int((uncapped.construct(context).values > 1e-6).sum())
+    return int((np.abs(uncapped.construct(context).values) > 1e-6).sum())
 
 
 def _assert_brute_force(weights, best) -> None:
@@ -187,9 +195,13 @@ def test_a_solver_that_cannot_solve_mixed_integer_programs_is_refused_naming_the
         assert "MOSEK" in str(error.value)
 
 
-def test_max_names_long_short_is_refused_for_now():
-    with pytest.raises(ValueError, match="long_only"):
-        MeanVarianceOptimizer(MeanVarianceConfig(**_params(direction="long_short")))
+def test_long_short_has_no_budget_check_since_its_gross_is_a_ceiling():
+    MeanVarianceOptimizer(MeanVarianceConfig(**_params(direction="long_short", weight_cap=0.1)))
+
+
+def test_min_trade_stays_refused_long_short():
+    with pytest.raises(ValueError, match="min_trade is supported for direction='long_only' only"):
+        MeanVarianceOptimizer(MeanVarianceConfig(**_params(direction="long_short", min_trade=1e-3)))
 
 
 @pytest.mark.parametrize("mip_gap", [0.0, 1.0, -0.1, 2.0])
@@ -369,3 +381,41 @@ def test_min_trade_on_the_kept_names_keeps_a_small_change_as_today():
     )).values
     np.testing.assert_array_equal(weights[kept], current[kept])
     assert _names(weights) <= NAMES
+
+
+# -- long-short: long and short names counted together -----------------------------------------
+
+
+@needs_solver
+@pytest.mark.parametrize("seed", range(3))
+def test_long_short_weights_are_the_best_book_of_at_most_max_names_names(seed):
+    rule, context = _optimizer(direction="long_short"), _context(seed=seed)
+    weights = rule.construct(context).values
+    assert _uncapped_names(rule, context) > NAMES
+    assert _names(weights) <= NAMES
+    assert weights.sum() == pytest.approx(0.0, abs=1e-12)
+    assert np.abs(weights).sum() <= 1.0 + 1e-12
+    _assert_brute_force(weights, _brute_force(rule, context))
+
+
+@needs_solver
+def test_long_short_with_a_turnover_penalty_the_weights_are_the_best_book_from_the_holdings():
+    current = np.array([0.3, 0.0, -0.2, 0.0, 0.0, -0.1, 0.0, 0.0])
+    rule = _optimizer(direction="long_short", turnover_penalty=0.002, risk_aversion=2.0)
+    context = _context(seed=1, current=current)
+    weights = rule.construct(context).values
+    assert _uncapped_names(rule, context) > NAMES
+    assert _names(weights) <= NAMES
+    _assert_brute_force(weights, _brute_force(rule, context))
+
+
+@needs_solver
+def test_long_short_locked_positions_on_either_side_take_slots():
+    """GGG held long and HHH held short, both halted: one slot is left, the best one-name book."""
+    eligible = [True] * 6 + [False, False]
+    current = [0.0] * 6 + [0.2, -0.1]
+    rule, context = _optimizer(direction="long_short"), _context(seed=2, eligible=eligible, current=current)
+    weights = rule.construct(context).values
+    assert weights[-2] == 0.2 and weights[-1] == -0.1
+    assert _names(weights) <= NAMES
+    _assert_brute_force(weights, _brute_force(rule, context, slots=NAMES - 2))

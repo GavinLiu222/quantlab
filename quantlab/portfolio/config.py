@@ -168,7 +168,8 @@ class MeanVarianceConfig(FrozenConfig):
     #: (``"MOSEK"``, which needs a licence); names the solve leaves out
     #: get exactly 0, a held one closed in full whatever ``min_trade``.
     #: Long-only, ``weight_cap * max_names`` must be at least 1 (near 1 the
-    #: weights are all near the cap). ``"long_only"`` only for now. With
+    #: weights are all near the cap); long-short, long and short names
+    #: count together and any cap fits, the gross being a ceiling. With
     #: ``candidate_top_k`` the program is solved on the pool, faster.
     #: ``None``: no cap, a convex program.
     max_names: int | None = None

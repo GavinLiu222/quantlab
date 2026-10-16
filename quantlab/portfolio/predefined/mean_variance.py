@@ -299,10 +299,10 @@ class MeanVarianceOptimizer(PortfolioConstructor):
     fell out of the top can still be closed at its turnover cost. The
     z-score is taken over every candidate before the pool is cut.
 
-    With ``max_names`` set (long-only), at most that many symbols hold a
-    weight, locked positions included: each bar is solved exactly as a
-    mixed-integer program (one boolean per candidate, ``w <= weight_cap *
-    z``, ``sum(z) <= max_names`` less the locked names), names it leaves out
+    With ``max_names`` set, at most that many symbols hold a weight, long
+    and short together, locked positions included: each bar is solved
+    exactly as a mixed-integer program (one boolean per candidate, ``|w| <=
+    weight_cap * z``, ``sum(z) <= max_names`` less the locked names), names it leaves out
     get exactly 0, and a held one is closed whatever ``min_trade``. A bar
     whose locked positions leave no room, or whose solve is not optimal,
     raises ``PortfolioConstructionError``.
@@ -355,7 +355,7 @@ class MeanVarianceOptimizer(PortfolioConstructor):
         is set with a covariance estimator that does not take volatilities
         (``FactorRiskStoreEstimator``), ``solver`` is not an installed
         cvxpy solver, ``max_names`` is not a positive integer, is set
-        long-short or with ``weight_cap * max_names < 1``, or with a solver
+        long-only with ``weight_cap * max_names < 1``, or with a solver
         that cannot solve mixed-integer conic programs, or ``mip_gap`` is
         outside ``(0, 1)``, set without ``max_names`` or for a solver it is
         not passed to.
@@ -498,11 +498,8 @@ class MeanVarianceOptimizer(PortfolioConstructor):
             return
         if isinstance(names, bool) or not isinstance(names, (int, np.integer)) or names < 1:
             raise ValueError(f"max_names must be a positive integer or None, got {names!r}")
-        if config.direction != "long_only":
-            raise ValueError(
-                f"max_names is supported for direction='long_only' only, got {config.direction!r}"
-            )
-        if config.weight_cap * names < 1 - 1e-12:
+        # Long-short the gross is a ceiling, so any cap fits.
+        if config.direction == "long_only" and config.weight_cap * names < 1 - 1e-12:
             raise ValueError(
                 f"weight_cap * max_names = {config.weight_cap} * {names} is below 1: "
                 f"a long-only book of {names} names cannot be fully invested under the cap"
@@ -850,14 +847,17 @@ class MeanVarianceOptimizer(PortfolioConstructor):
                     f"the locked positions {inputs.locked_symbols.tolist()[:5]} have a "
                     f"gross exposure of {1.0 - gross:.4g}, above one"
                 )
-            reach = min(max(gross, 0.0), n * config.weight_cap)
+            # The gross is a ceiling: the locked names alone may fill the cap.
+            slots = self._free_slots(inputs, 0.0)
+            reach = min(max(gross, 0.0), (n if slots is None else min(n, slots)) * config.weight_cap)
             if n == 0 or abs(locked_sum) > reach + 1e-12:
                 raise PortfolioConstructionError(
                     f"infeasible: {n} candidate symbol(s) cannot offset a locked net "
                     f"exposure of {locked_sum:.4g} within a gross of {max(gross, 0.0):.4g} "
                     f"and weight_cap={config.weight_cap}"
+                    + ("" if slots is None else f" and max_names={config.max_names}")
                 )
-            solution, _ = self._solve(inputs, -locked_sum, max(gross, 0.0))
+            solution, _ = self._solve(inputs, -locked_sum, max(gross, 0.0), slots=slots)
 
         row = pd.Series(0.0, index=context.symbols)
         row[inputs.symbols] = solution
@@ -920,11 +920,12 @@ class MeanVarianceOptimizer(PortfolioConstructor):
     ) -> tuple[np.ndarray, np.ndarray]:
         """Solve for the candidates' weights: summing to ``total``, within ``gross`` long-short.
 
-        With ``slots`` (long-only), at most that many candidates get a
-        weight: one boolean per candidate ``z``, ``w <= weight_cap * z`` and
-        ``sum(z) <= slots``, a mixed-integer program. Returns the weights
-        and the candidates the solve left out (``z`` rounding to 0), whose
-        weights are exactly 0; the projection then runs on the kept ones.
+        With ``slots``, at most that many candidates get a weight: one
+        boolean per candidate ``z``, ``|w| <= weight_cap * z`` and ``sum(z)
+        <= slots``, a mixed-integer program. Returns the weights and the
+        candidates the solve left out (``z`` rounding to 0), whose weights
+        are exactly 0; the long-only projection or long-short cleaning then
+        runs on the kept ones.
         """
         config = self.config
         n = len(inputs.symbols)
@@ -953,17 +954,17 @@ class MeanVarianceOptimizer(PortfolioConstructor):
             chosen = cp.Variable(n, boolean=True)
             if config.mip_gap is not None:
                 options = _MIP_GAP_OPTIONS[config.solver](config.mip_gap)
+        cap = config.weight_cap if chosen is None else config.weight_cap * chosen
         if config.direction == "long_only":
-            cap = config.weight_cap if chosen is None else config.weight_cap * chosen
             constraints = [cp.sum(w) == total, w >= 0, w <= cap]
-            if chosen is not None:
-                constraints.append(cp.sum(chosen) <= slots)
         else:
             constraints = [
                 cp.sum(w) == total,
                 cp.norm1(w) <= gross,
-                cp.abs(w) <= config.weight_cap,
+                cp.abs(w) <= cap,
             ]
+        if chosen is not None:
+            constraints.append(cp.sum(chosen) <= slots)
         for (lower, upper), row, locked in zip(
             inputs.exposure_bounds, inputs.exposures, inputs.locked_exposures
         ):
@@ -989,9 +990,10 @@ class MeanVarianceOptimizer(PortfolioConstructor):
             # The solver's integer tolerance leaves residues up to weight_cap times it on the
             # names it left out: exactly 0, and the projection runs on the kept names only.
             excluded = np.asarray(chosen.value, dtype=np.float64) < 0.5
-            weights = np.zeros(n)
-            weights[~excluded] = _project_capped_simplex(values[~excluded], config.weight_cap, total)
-            return weights, excluded
+        kept = ~excluded
+        weights = np.zeros(n)
         if config.direction == "long_only":
-            return _project_capped_simplex(values, config.weight_cap, total), excluded
-        return _clean_long_short(values, config.weight_cap, total, gross), excluded
+            weights[kept] = _project_capped_simplex(values[kept], config.weight_cap, total)
+        else:
+            weights[kept] = _clean_long_short(values[kept], config.weight_cap, total, gross)
+        return weights, excluded
