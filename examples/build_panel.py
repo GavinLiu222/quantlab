@@ -13,8 +13,8 @@ synthetic daily US-equity bars:
 5. convert the same raw tier window by window with the chunked, resumable
    path, then bring the store up to date after a new month (and a new
    listing) arrives;
-6. restrict the panel to a point-in-time index membership with
-   ``UniverseMask``;
+6. mask the panel to a point-in-time index membership with the membership
+   dataset's ``mask``;
 7. query a point-in-time universe catalog.
 
 Everything runs in a temporary directory: no network, no credentials, CPU
@@ -39,7 +39,6 @@ from quantlab.backend.zarr import XrBackend
 from quantlab.dataset.config import ConstituentDatasetConfig, DatasetConfig
 from quantlab.universe import UniverseConfig
 from quantlab.dataset.raw import IndexConstituentDataset
-from quantlab.dataset._support.masking import UniverseMask
 from quantlab.dataset.stock import StockDataset
 from quantlab.universe import UniverseCatalog
 
@@ -216,14 +215,10 @@ def main() -> None:
           int(store_panel["close"].sel(symbol="EEE", timestamp=slice(None, "2024-02-29")).count()))
 
     # ------------------------------------------------------------------
-    # 6. Point-in-time index membership, applied with UniverseMask.
+    # 6. Point-in-time index membership, applied with the membership's mask.
     # ------------------------------------------------------------------
     class DemoIndex(IndexConstituentDataset):
-        """A toy index: AAA always, BBB until Feb 15, DDD in January.
-
-        ZZZ was a member for three weeks but was never downloaded, the
-        typical coverage gap that brings survivorship bias back.
-        """
+        """A toy index: AAA always, BBB until Feb 15, DDD in January."""
 
         def _pit_coverage_start(self) -> str:
             """Return the first date for which the toy membership data is complete."""
@@ -236,7 +231,6 @@ def main() -> None:
                     ("AAA", "2024-01-01", None),
                     ("BBB", "2024-01-01", "2024-02-15"),
                     ("DDD", "2024-01-01", "2024-01-31"),
-                    ("ZZZ", "2024-01-01", "2024-01-19"),
                 ],
                 schema=["symbol", "start_date", "end_date"],
                 orient="row",
@@ -250,12 +244,11 @@ def main() -> None:
         as_of="2024-03-29",
     )
     DemoIndex(index_config).from_raw_data().save()
-    membership = DemoIndex(index_config).panel("2024-01-01", "2024-03-29")
-    print("\n6. membership panel:", dict(membership.sizes), "(calendar days)")
+    index = DemoIndex(index_config)
+    print("\n6. membership panel:", dict(index.panel("2024-01-01", "2024-03-29").sizes), "(calendar days)")
 
-    mask = UniverseMask(store_panel, membership)
-    print("   report:", mask.report())
-    masked = mask.apply()
+    # A cell is kept where its symbol is a member on its bar's date; EEE was never one.
+    masked = index.mask(store_panel)
     print("   masked close, first trading day of each month:")
     print(masked["close"].sel(timestamp=["2024-01-02", "2024-02-01", "2024-03-01"]).to_pandas().round(2))
 

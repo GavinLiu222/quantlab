@@ -87,6 +87,9 @@ class _AllMembers:
             dims=("timestamp", "symbol"),
         )
 
+    def mask(self, panel, *, owner=None):
+        return panel
+
 
 WRAPPERS = {
     "masked": lambda inner: MembershipMaskedPredictor(inner, _AllMembers()),

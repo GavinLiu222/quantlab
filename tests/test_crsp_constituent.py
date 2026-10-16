@@ -390,7 +390,7 @@ def test_the_constituent_panel_symbol_coord_is_int64(tmp_path):
     """Half one of Pitfall 2: the axis carries INTEGERS, not digit strings.
 
     A digit-string axis selects nothing against the int64 price panel
-    03.11-03 produced, and `UniverseMask` would report the ENTIRE universe as
+    03.11-03 produced, and an alignment by label would find the ENTIRE universe
     missing rather than raise (T-03.11-16).
 
     Asserted by dtype KIND rather than by an exact dtype literal, following

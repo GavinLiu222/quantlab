@@ -159,7 +159,7 @@ A few properties of these panels matter when you use them:
 
 - The `timestamp` axis is every calendar day, weekends and holidays included.
   Join it to a trading-day price panel by selecting onto the price
-  timestamps; `UniverseMask` below does this for you.
+  timestamps; the membership dataset's `mask` below does this for you.
 - The `symbol` axis is every symbol that was ever a member, so a symbol whose
   membership ended before your window is an all-`False` column rather than a
   missing one.
@@ -175,19 +175,17 @@ A few properties of these panels matter when you use them:
   find no column in the price panel. The PERMNO-keyed CRSP pair does not have
   this problem, which is a strong reason to prefer it for long histories.
 
-### Build a universe panel and mask prices with it
+### Build a universe panel and mask a panel with it
 
 A concrete membership dataset implements two hooks: the earliest date its
 source can answer, and the interval table. The example uses a toy index in
-which `AAA` is always a member, `BBB` leaves on 2024-02-15, `DDD` is a member
-in January, and `ZZZ` was a member for three weeks but is absent from the
-price data:
+which `AAA` is always a member, `BBB` leaves on 2024-02-15 and `DDD` is a
+member in January:
 
 ```python
 import polars as pl
 from quantlab.dataset.config import ConstituentDatasetConfig
 from quantlab.dataset.raw import IndexConstituentDataset
-from quantlab.dataset._support.masking import UniverseMask
 
 class DemoIndex(IndexConstituentDataset):
     def _pit_coverage_start(self) -> str:
@@ -199,7 +197,6 @@ class DemoIndex(IndexConstituentDataset):
                 ("AAA", "2024-01-01", None),
                 ("BBB", "2024-01-01", "2024-02-15"),
                 ("DDD", "2024-01-01", "2024-01-31"),
-                ("ZZZ", "2024-01-01", "2024-01-19"),
             ],
             schema=["symbol", "start_date", "end_date"],
             orient="row",
@@ -213,35 +210,28 @@ index_config = ConstituentDatasetConfig(
     as_of="2024-03-29",
 )
 DemoIndex(index_config).from_raw_data().save()
-membership = DemoIndex(index_config).panel("2024-01-01", "2024-03-29")
-
-mask = UniverseMask(prices, membership)
-masked = mask.apply()
+masked = DemoIndex(index_config).mask(prices)
 ```
 
-`UniverseMask` intersects the two panels on both axes and sets every
-non-member cell to NaN. Before masking it reports every in-window index
-member that the price panel does not carry at all, in full, because each one
-is a hole through which survivorship bias returns (delisted names are the
-hardest to obtain). Price symbols outside the index are dropped silently.
+`mask` keeps the panel's bars and symbols and sets every cell to NaN where
+the symbol is not a member on its bar's own date; a symbol the index never
+held (`PNY` and `EEE` below) is never a member. A bar the membership panel
+does not cover, or a panel on another symbol axis (integer PERMNOs against
+tickers), is refused rather than masked. On the synthetic panel of
+`examples/build_panel.py` (step 6):
 
 ```text
-WARNING: UniverseMask: 1 of 4 in-window index member(s) are absent from the market panel entirely and are dropped by the alignment. Every dropped name is a survivorship-bias gap, so the complete list follows: ['ZZZ']
-   report: {'in_window_members': 4, 'missing_count': 1, 'missing_symbols': ['ZZZ'], 'missing_labels': ['ZZZ']}
    masked close, first trading day of each month:
-symbol        AAA    BBB   DDD
+symbol        AAA    BBB   DDD  PNY  EEE
 timestamp
-2024-01-02  50.06  20.16  30.0
-2024-02-01  48.44  21.04   NaN
-2024-03-01  51.46    NaN   NaN
+2024-01-02  50.06  20.16  30.0  NaN  NaN
+2024-02-01  48.44  21.04   NaN  NaN  NaN
+2024-03-01  51.46    NaN   NaN  NaN  NaN
 ```
 
-Treat a non-empty report as a finding to resolve (download the missing
-names, or switch to a PERMNO-keyed pair), not as noise. In a pipeline with
-both panels saved, `UniverseMask.from_datasets(price_dataset,
-constituent_dataset, start, end)` requests `start` to `end` from both stores
-with `panel(start, end)` and, for a CRSP store, spells the report with
-period-correct tickers.
+Mask factors, labels and predictions this way, never a backtest's prices:
+`MembershipMaskedFactor`, `MembershipMaskedLabel` and
+`MembershipMaskedPredictor` apply the same rule.
 
 ## Symbols leaving the universe in a backtest
 
@@ -295,6 +285,5 @@ normally once it lists.
 - [Datasets](datasets.md): build the price panels that universes restrict.
 - [Factors](factors.md): the factors and labels computed on a masked panel.
 - [WRDS](wrds.md): CRSP reference tables, PERMNOs and `security_filter`.
-- The docstrings of `quantlab.universe.UniverseCatalog`,
-  `quantlab.dataset.raw.IndexConstituentDataset` and
-  `quantlab.dataset._support.masking.UniverseMask` for every parameter.
+- The docstrings of `quantlab.universe.UniverseCatalog` and
+  `quantlab.dataset.raw.IndexConstituentDataset` for every parameter.

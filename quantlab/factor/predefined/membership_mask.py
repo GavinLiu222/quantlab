@@ -19,7 +19,6 @@ wrapped factor's store, and only the factor owning every variable of that
 store writes it (ADR 0029).
 """
 
-import pandas as pd
 import xarray as xr
 
 from quantlab.factor.config import MembershipMaskedFactorConfig
@@ -78,42 +77,5 @@ class MembershipMaskedFactor(FactorView):
     config: MembershipMaskedFactorConfig
 
     def _view_panel(self, panel: xr.Dataset) -> xr.Dataset:
-        """Return ``panel`` masked; see ``mask``."""
-        return self.mask(panel)
-
-    def mask(self, panel: xr.Dataset) -> xr.Dataset:
-        """Return ``panel`` with every cell that is not a member at its own bar set to NaN.
-
-        Parameters
-        ----------
-        panel : xr.Dataset
-            A factor panel on ``(timestamp, symbol)``.
-
-        Raises
-        ------
-        ValueError
-            If a bar's date lies outside the membership panel, or no symbol
-            of ``panel`` is on the membership store's symbol axis.
-
-        Examples
-        --------
-        >>> panel = factor.config.factor.read("2024-01-19", "2024-01-22")
-        >>> factor.mask(panel)["c"].sel(symbol="4").notnull().values.tolist()
-        [False, True]
-        """
-        if panel.sizes.get("timestamp", 0) == 0:
-            return panel
-        symbols = pd.Index(panel["symbol"].values)
-        membership = self.config.membership
-        if len(symbols) and not symbols.isin(membership.stored_symbols()).any():
-            raise ValueError(
-                f"{self.class_name}: none of the {len(symbols)} symbol(s) of "
-                f"{self.config.factor.class_name}'s panel is on the symbol axis of "
-                f"{membership.class_name}'s store (labels {symbols[:3].tolist()} of type "
-                f"{symbols.dtype}); every cell would be masked. Check that both are "
-                f"on the same axis (an integer permaticker against a text one)."
-            )
-        member = membership.is_member_at(
-            panel["timestamp"].values, panel["symbol"].values, owner=self.class_name
-        )
-        return panel.where(member)
+        """Return ``panel`` masked by the membership (``IndexConstituentDataset.mask``)."""
+        return self.config.membership.mask(panel, owner=self.class_name)

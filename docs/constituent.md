@@ -186,47 +186,38 @@ array([10])
 
 `CompustatNasdaq100ConstituentDataset` refuses a membership spell that has no PERMNO link. Passing `kwargs={"allow_unlinked": True}` in the config keeps the linked days instead, and the option is recorded in the run's saved config. `CrspMarketConstituentDataset` answers "was this security listed" for every security and reads the security filter from `kwargs["security_filter"]`, default `"equity_common"`.
 
-### Apply a panel to a price panel
+### Mask a panel to the members of each bar
 
-`UniverseMask` in `quantlab.dataset._support.masking` intersects a market panel with a membership panel and sets every non-member cell of the market panel to NaN. It takes two `xarray.Dataset` objects; `UniverseMask.from_datasets(market_dataset, constituent_dataset, start, end)` builds one from two stored datasets, requesting both with `panel(start, end)`.
+`mask(panel)` on a membership dataset (`IndexConstituentDataset.mask`) sets every cell of a `(timestamp, symbol)` panel to NaN where the symbol is not a member on its bar's own date, and keeps the panel's bars and symbols. It is the rule `MembershipMaskedFactor`, `MembershipMaskedLabel` and `MembershipMaskedPredictor` apply. A symbol the membership has never held is never a member. With `membership` a stored panel in which AAA is a member from 2024-01-01 on and BBB from 2024-01-01 to 2024-01-02, saved with `as_of="2024-01-05"`:
 
 ```python
 >>> import numpy as np, pandas as pd, xarray as xr
->>> from quantlab.dataset._support.masking import UniverseMask
 >>> days = pd.bdate_range("2024-01-01", periods=4)
 >>> market = xr.Dataset(
 ...     {"close": (("timestamp", "symbol"), np.arange(12.0).reshape(4, 3) + 10)},
 ...     coords={"timestamp": days, "symbol": ["AAA", "BBB", "CCC"]},
 ... )
->>> calendar = pd.date_range("2023-12-30", "2024-01-06", freq="D")
->>> is_member = np.ones((len(calendar), 3), dtype=bool)
->>> is_member[calendar > "2024-01-02", 1] = False
->>> membership = xr.Dataset(
-...     {"is_member": (("timestamp", "symbol"), is_member)},
-...     coords={"timestamp": calendar, "symbol": ["AAA", "BBB", "DDD"]},
-... )
->>> mask = UniverseMask(market, membership)
->>> mask
-UniverseMask(timestamps=4, symbols=2)
->>> mask.apply()["close"].to_pandas()
-symbol       AAA   BBB
-timestamp             
-2024-01-01  10.0  11.0
-2024-01-02  13.0  14.0
-2024-01-03  16.0   NaN
-2024-01-04  19.0   NaN
+>>> membership.mask(market)["close"].to_pandas()
+symbol       AAA   BBB  CCC
+timestamp                  
+2024-01-01  10.0  11.0  NaN
+2024-01-02  13.0  14.0  NaN
+2024-01-03  16.0   NaN  NaN
+2024-01-04  19.0   NaN  NaN
 ```
 
-Timestamps are joined on the intersection, so the calendar-day rows that have no price are dropped without comment. Symbols are treated asymmetrically. CCC is in the market panel but not in the index, and is dropped silently. DDD is an index member that the market panel does not carry at all; that is a data gap, and `report()` names every such symbol. `apply()` calls `report()` first and logs the full list as a warning.
+A bar whose date the membership panel does not cover is refused, since unknown membership is not "not a member"; so is a panel none of whose symbols is on the membership store's symbol axis (an integer permaticker against a text one), which would otherwise be masked whole:
 
 ```python
->>> mask.missing_members
-['DDD']
->>> mask.report()
-{'in_window_members': 3, 'missing_count': 1, 'missing_symbols': ['DDD'], 'missing_labels': ['DDD']}
+>>> membership.mask(market.assign_coords(timestamp=pd.bdate_range("2024-01-04", periods=4)))
+Traceback (most recent call last):
+  ...
+ValueError: DemoIndex: the membership panel of DemoIndex does not cover 2 date(s) (2024-01-08..2024-01-09); extend the membership store or narrow the window, since unknown membership is not 'not a member'
+>>> membership.mask(market.assign_coords(symbol=[1, 2, 3]))
+Traceback (most recent call last):
+  ...
+ValueError: DemoIndex: none of the 3 symbol(s) of the panel is on the symbol axis of DemoIndex's store (labels [1, 2, 3] of type int64); every cell would be masked. Check that both are on the same axis (an integer permaticker against a text one).
 ```
-
-Every data variable is masked the same way, boolean flags included: outside the index a flag is undefined, so it becomes NaN.
 
 Mask a training or analysis panel this way, never a backtest's `price_dataset`: a stock that leaves the index is still quoted and can still be sold, so its prices must stay. In a backtest, membership masks the predictions instead: wrap the model in `MembershipMaskedPredictor(model, membership)` from `quantlab.model.predefined.membership_mask`, which sets a prediction to NaN wherever `is_member` is false on that bar's date (see [backtest.md](backtest.md#restrict-the-universe-to-an-indexs-members)).
 
@@ -420,19 +411,10 @@ ValueError: as_of_date must be an ISO YYYY-MM-DD string, got '2020/01/02'. The t
 ['AAPL', 'MSFT']
 ```
 
-`UniverseMask` checks its arguments in order. Passing the two panels the wrong way round raises:
-
-```python
->>> UniverseMask(membership, market)
-Traceback (most recent call last):
-  ...
-ValueError: UniverseMask: the membership panel must carry an 'is_member' variable, got ['close']. Passing the two panels in the wrong order is the usual cause.
-```
-
 `UniverseCatalog.build()` refuses to use a cached change-log snapshot when the live fetch fails, unless `allow_stale=True`, because a stale table saved to disk looks the same as a fresh one. `save()` refuses to overwrite the table when any known category has no rows.
 
 Change-log sources record additions and removals only from a start date onward. A symbol removed in the log with no recorded addition gets the fetcher's coverage start as its `start_date`, which reads as "already a member at the earliest date the source covers", not as its true start.
 
 ## See also
 
-The `universe` guide covers the price and liquidity filter, which answers a different question from index membership and can be combined with it. The `dataset` guide describes the dataset base class the panel extends, `wrds_crsp` describes the CRSP reference tier, and `acquisition` covers downloads. Class docstrings: `quantlab.dataset.raw.IndexConstituentDataset`, `quantlab.dataset.constituent`, `quantlab.universe.UniverseCatalog`, `quantlab.universe.IndexMembershipFetcher`, `quantlab.dataset._support.masking.UniverseMask`.
+The `universe` guide covers the price and liquidity filter, which answers a different question from index membership and can be combined with it. The `dataset` guide describes the dataset base class the panel extends, `wrds_crsp` describes the CRSP reference tier, and `acquisition` covers downloads. Class docstrings: `quantlab.dataset.raw.IndexConstituentDataset`, `quantlab.dataset.constituent`, `quantlab.universe.UniverseCatalog`, `quantlab.universe.IndexMembershipFetcher`.

@@ -103,57 +103,6 @@ class MembershipMaskedPredictor(PredictorView):
 
     # -- the mask --------------------------------------------------------
 
-    def mask(self, predictions: xr.Dataset) -> xr.Dataset:
-        """Return ``predictions`` with every non-member cell set to NaN.
-
-        Parameters
-        ----------
-        predictions : xr.Dataset
-            Predictions on ``(timestamp, symbol)``.
-
-        Returns
-        -------
-        xr.Dataset
-            The same panel, NaN where ``is_member`` is false or the symbol
-            has no membership column.
-
-        Raises
-        ------
-        ValueError
-            If a bar's date lies outside the membership panel.
-
-        Examples
-        --------
-        With ``membership`` a ``DemoPanel`` (an ``IndexConstituentDataset``
-        subclass, as in its docstring) in which ``AAA`` is a member from
-        2024-01-01 on, ``BBB`` from 2024-01-01 to 2024-01-02 and ``CCC``
-        never, saved with ``as_of="2024-01-05"``, and ``predictions`` a
-        ``fwd_ret_5`` panel of 0.1 / 0.2 / 0.3 over three business days:
-
-        >>> masked = MembershipMaskedPredictor(model, membership)
-        >>> masked.mask(predictions)["fwd_ret_5"].to_pandas()
-        symbol      AAA  BBB  CCC
-        timestamp
-        2024-01-02  0.1  0.2  NaN
-        2024-01-03  0.1  NaN  NaN
-        2024-01-04  0.1  NaN  NaN
-        >>> later = predictions.assign_coords(
-        ...     timestamp=pd.bdate_range("2024-01-04", periods=3)
-        ... )
-        >>> masked.mask(later)
-        Traceback (most recent call last):
-        ...
-        ValueError: MembershipMaskedPredictor: the membership panel of DemoPanel does not cover 1 date(s) (2024-01-08..2024-01-08); extend the membership store or narrow the window, since unknown membership is not 'not a member'
-        """
-        if predictions.sizes.get("timestamp", 0) == 0:
-            return predictions
-        member = self.membership.is_member_at(
-            predictions["timestamp"].values,
-            predictions["symbol"].values,
-            owner=type(self).__name__,
-        )
-        return predictions.where(member)
-
     def _view_predictions(self, predictions: xr.Dataset) -> xr.Dataset:
-        """Return the wrapped predictor's predictions masked; see ``mask``."""
-        return self.mask(predictions)
+        """Return the wrapped predictor's predictions masked by the membership (``IndexConstituentDataset.mask``)."""
+        return self.membership.mask(predictions, owner=type(self).__name__)

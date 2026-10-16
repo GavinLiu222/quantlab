@@ -123,46 +123,6 @@ class MembershipMaskedLabel(Component):
 
     # -- the mask --------------------------------------------------------
 
-    def mask(self, panel: xr.Dataset) -> xr.Dataset:
-        """Return ``panel`` with every cell that is not a member at its own bar set to NaN.
-
-        Parameters
-        ----------
-        panel : xr.Dataset
-            A label panel on ``(timestamp, symbol)``.
-
-        Returns
-        -------
-        xr.Dataset
-            The same panel, NaN where ``is_member`` is false on the bar's
-            date or the symbol has no membership column.
-
-        Raises
-        ------
-        ValueError
-            If a bar's date lies outside the membership panel.
-
-        Examples
-        --------
-        With ``membership`` a ``DemoPanel`` in which ``AAA`` is a member
-        from 2024-01-01 on, ``BBB`` from 2024-01-01 to 2024-01-02 and
-        ``CCC`` never, and ``panel`` a ``ret_5`` panel of 0.1 / 0.2 / 0.3
-        over three business days from 2024-01-02:
-
-        >>> label.mask(panel)["ret_5"].to_pandas()
-        symbol      AAA  BBB  CCC
-        timestamp
-        2024-01-02  0.1  0.2  NaN
-        2024-01-03  0.1  NaN  NaN
-        2024-01-04  0.1  NaN  NaN
-        """
-        if panel.sizes.get("timestamp", 0) == 0:
-            return panel
-        member = self.membership.is_member_at(
-            panel["timestamp"].values, panel["symbol"].values, owner=type(self).__name__
-        )
-        return panel.where(member)
-
     def read(self, start, end) -> xr.Dataset:
         """Return the wrapped label's stored panel from ``start`` to ``end``, masked.
 
@@ -180,10 +140,10 @@ class MembershipMaskedLabel(Component):
         --------
         >>> label.build("2024-01-01", "2024-02-29")
         >>> label.read("2024-02-01", "2024-02-10").equals(
-        ...     label.mask(ret.read("2024-02-01", "2024-02-10")))
+        ...     membership.mask(ret.read("2024-02-01", "2024-02-10")))
         True
         """
-        return self.mask(self.label.read(start, end))
+        return self.membership.mask(self.label.read(start, end), owner=type(self).__name__)
 
     def compute(self, start, end) -> xr.Dataset:
         """Compute the wrapped label from ``start`` to ``end`` and mask it.
@@ -201,10 +161,10 @@ class MembershipMaskedLabel(Component):
         Examples
         --------
         >>> label.compute("2024-02-01", "2024-02-10").equals(
-        ...     label.mask(ret.compute("2024-02-01", "2024-02-10")))
+        ...     membership.mask(ret.compute("2024-02-01", "2024-02-10")))
         True
         """
-        return self.mask(self.label.compute(start, end))
+        return self.membership.mask(self.label.compute(start, end), owner=type(self).__name__)
 
     # -- the label protocol, forwarded -----------------------------------
 

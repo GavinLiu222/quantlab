@@ -186,47 +186,38 @@ array([10])
 
 `CompustatNasdaq100ConstituentDataset` 会拒绝没有 PERMNO 链接的成分区间。在配置里传 `kwargs={"allow_unlinked": True}` 则改为保留有链接的那些天，该选项会记录在这次运行保存的配置里。`CrspMarketConstituentDataset` 回答的是"这只证券当天是否在市"，覆盖所有证券，证券过滤条件读自 `kwargs["security_filter"]`，默认 `"equity_common"`。
 
-### 把面板应用到价格面板上
+### 把面板屏蔽到每根 bar 的成员
 
-`quantlab.dataset._support.masking` 中的 `UniverseMask` 把行情面板和成分面板取交集，并把行情面板中所有非成分的格子置为 NaN。它接收两个 `xarray.Dataset`；`UniverseMask.from_datasets(market_dataset, constituent_dataset, start, end)` 可以从两个已存储的数据集构建，两者都用 `panel(start, end)` 请求。
+成员资格数据集上的 `mask(panel)`（`IndexConstituentDataset.mask`）把 `(timestamp, symbol)` 面板中、标的在该 bar 当天不是成员的格子置为 NaN，面板的 bar 和标的保持不变。`MembershipMaskedFactor`、`MembershipMaskedLabel`、`MembershipMaskedPredictor` 用的都是这条规则。成员资格从未包含的标的永远不是成员。下面的 `membership` 是一个已存储的面板，其中 AAA 从 2024-01-01 起是成员，BBB 从 2024-01-01 到 2024-01-02 是成员，以 `as_of="2024-01-05"` 保存：
 
 ```python
 >>> import numpy as np, pandas as pd, xarray as xr
->>> from quantlab.dataset._support.masking import UniverseMask
 >>> days = pd.bdate_range("2024-01-01", periods=4)
 >>> market = xr.Dataset(
 ...     {"close": (("timestamp", "symbol"), np.arange(12.0).reshape(4, 3) + 10)},
 ...     coords={"timestamp": days, "symbol": ["AAA", "BBB", "CCC"]},
 ... )
->>> calendar = pd.date_range("2023-12-30", "2024-01-06", freq="D")
->>> is_member = np.ones((len(calendar), 3), dtype=bool)
->>> is_member[calendar > "2024-01-02", 1] = False
->>> membership = xr.Dataset(
-...     {"is_member": (("timestamp", "symbol"), is_member)},
-...     coords={"timestamp": calendar, "symbol": ["AAA", "BBB", "DDD"]},
-... )
->>> mask = UniverseMask(market, membership)
->>> mask
-UniverseMask(timestamps=4, symbols=2)
->>> mask.apply()["close"].to_pandas()
-symbol       AAA   BBB
-timestamp             
-2024-01-01  10.0  11.0
-2024-01-02  13.0  14.0
-2024-01-03  16.0   NaN
-2024-01-04  19.0   NaN
+>>> membership.mask(market)["close"].to_pandas()
+symbol       AAA   BBB  CCC
+timestamp                  
+2024-01-01  10.0  11.0  NaN
+2024-01-02  13.0  14.0  NaN
+2024-01-03  16.0   NaN  NaN
+2024-01-04  19.0   NaN  NaN
 ```
 
-时间戳按交集连接，因此没有价格的日历日行会被直接丢掉，不会有提示。标的的处理是不对称的：CCC 在行情面板里但不在指数里，被静默丢掉；DDD 是指数成分，但行情面板完全没有它——这是数据缺口，`report()` 会点名每一个这样的标的。`apply()` 会先调用 `report()`，并把完整名单作为 warning 记录下来。
+成员资格面板不覆盖的日期会被拒绝，因为“不知道是不是成员”不等于“不是成员”；面板的标的全都不在成员资格存储的 symbol 轴上（整数 permaticker 轴对文本轴）时也会被拒绝，否则整个面板都会被屏蔽：
 
 ```python
->>> mask.missing_members
-['DDD']
->>> mask.report()
-{'in_window_members': 3, 'missing_count': 1, 'missing_symbols': ['DDD'], 'missing_labels': ['DDD']}
+>>> membership.mask(market.assign_coords(timestamp=pd.bdate_range("2024-01-04", periods=4)))
+Traceback (most recent call last):
+  ...
+ValueError: DemoIndex: the membership panel of DemoIndex does not cover 2 date(s) (2024-01-08..2024-01-09); extend the membership store or narrow the window, since unknown membership is not 'not a member'
+>>> membership.mask(market.assign_coords(symbol=[1, 2, 3]))
+Traceback (most recent call last):
+  ...
+ValueError: DemoIndex: none of the 3 symbol(s) of the panel is on the symbol axis of DemoIndex's store (labels [1, 2, 3] of type int64); every cell would be masked. Check that both are on the same axis (an integer permaticker against a text one).
 ```
-
-所有数据变量按同样方式遮蔽，布尔标志位也不例外：在指数之外，标志位是未定义的，所以会变成 NaN。
 
 这种遮蔽用于训练或分析面板，绝不用于回测的 `price_dataset`：被剔除出指数的股票仍有报价、仍可卖出，所以它的价格必须保留。回测中，成分改为遮蔽预测：把模型包装成 `quantlab.model.predefined.membership_mask` 中的 `MembershipMaskedPredictor(model, membership)`，它在该 bar 日期的 `is_member` 为假时把预测置为 NaN（见 [backtest.md](backtest.md#限定为指数成分股)）。
 
@@ -420,19 +411,10 @@ ValueError: as_of_date must be an ISO YYYY-MM-DD string, got '2020/01/02'. The t
 ['AAPL', 'MSFT']
 ```
 
-`UniverseMask` 会检查参数。把两个面板的顺序传反会抛出：
-
-```python
->>> UniverseMask(membership, market)
-Traceback (most recent call last):
-  ...
-ValueError: UniverseMask: the membership panel must carry an 'is_member' variable, got ['close']. Passing the two panels in the wrong order is the usual cause.
-```
-
 实时抓取失败时，`UniverseCatalog.build()` 拒绝使用缓存的变更日志快照，除非传 `allow_stale=True`，因为写盘后的过期表和新鲜表看起来一模一样。任何已知类别没有行时，`save()` 拒绝覆盖原表。目录还承载着采集量守卫，它在发出任何请求之前给一次下载估价；见 `acquisition` 指南。
 
 变更日志只从某个起点开始记录纳入和剔除。日志里有剔除、却没有对应纳入记录的标的，其 `start_date` 会取抓取器的覆盖起点，含义是"在数据源覆盖的最早日期它已经是成分"，并不是它真实的加入日期。
 
 ## 另请参阅
 
-`universe` 指南介绍价格与流动性过滤器，它回答的问题与指数成分不同，二者可以组合使用。`dataset` 指南介绍面板所继承的数据集基类，`wrds_crsp` 介绍 CRSP 参考层，`acquisition` 介绍采集量守卫。类文档字符串：`quantlab.dataset.raw.IndexConstituentDataset`、`quantlab.dataset.constituent`、`quantlab.universe.UniverseCatalog`、`quantlab.universe.IndexMembershipFetcher`、`quantlab.dataset._support.masking.UniverseMask`。
+`universe` 指南介绍价格与流动性过滤器，它回答的问题与指数成分不同，二者可以组合使用。`dataset` 指南介绍面板所继承的数据集基类，`wrds_crsp` 介绍 CRSP 参考层，`acquisition` 介绍采集量守卫。类文档字符串：`quantlab.dataset.raw.IndexConstituentDataset`、`quantlab.dataset.constituent`、`quantlab.universe.UniverseCatalog`、`quantlab.universe.IndexMembershipFetcher`。

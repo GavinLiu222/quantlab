@@ -336,8 +336,8 @@ records the decision.
 
 The membership is also written as a panel on the same `(timestamp, PERMNO)`
 axes, whose `is_member` variable is true where a security was a member on
-that date, which `UniverseMask` applies to a price panel. See
-[Universes](universes.md) for how masks are applied.
+that date; its `mask` sets a panel's cells to NaN where the security is not a
+member. See [Universes](universes.md) for how masks are applied.
 
 `scripts/wrds/nbbo.py --index sp500|nasdaq100` resolves the same membership
 and maps each PERMNO to the tickers it traded under over the window, so the

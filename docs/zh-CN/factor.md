@@ -540,7 +540,7 @@ style_features = RosterFactor(RosterConfig(factor=styles, roster=membership))
 
 ### 按指数成员资格屏蔽因子
 
-名单包含所有曾经的成员，所以按名单读到的特征，在 t 时对当时不是成员的标的也有值，其中包括以后才进指数的标的。截面模型（GATs、MASTER）把 t 时所有特征有限的标的都当作上下文，所以只按名单读时，它在 t 的截面里会有未来成员，这是用未来信息做的选择。`MembershipMaskedFactor`（`quantlab.factor.predefined.membership_mask`）包装任意因子，凡是标的在该 bar 当天不是成员的格子都设为 NaN（`IndexConstituentDataset.is_member_at`），与 `MembershipMaskedLabel`、`MembershipMaskedPredictor` 的规则相同；非成员在 t 没有有限特征，就不进该 bar 的截面。它的配置是 `MembershipMaskedFactorConfig`：`factor` 是被包装的因子，`membership` 是点时成员资格。屏蔽的是算好的因子，绝不是价格：被包装因子在未屏蔽的价格上计算，所以在 t 进指数的标的，t 的值来自它完整的价格历史，从 t 起就在截面里。对进指数不满一个窗口的标的，模型的特征窗口里进指数之前的 bar 是 NaN。成员资格面板不覆盖的日期会抛出异常，warm-up 的 bar 也算在内；面板的标的全都不在成员资格存储的 symbol 轴上（整数 permaticker 轴对文本轴）时也会抛出异常，否则整个面板都会被屏蔽。输出沿用被包装因子的名字；和 `RosterFactor` 一样是因子视图，保留被包装因子的所有标的，`build` 和 `extend` 抛出异常。表格模型只拟合标签经成员屏蔽后有值的格子，所以对它们没有影响。
+名单包含所有曾经的成员，所以按名单读到的特征，在 t 时对当时不是成员的标的也有值，其中包括以后才进指数的标的。截面模型（GATs、MASTER）把 t 时所有特征有限的标的都当作上下文，所以只按名单读时，它在 t 的截面里会有未来成员，这是用未来信息做的选择。`MembershipMaskedFactor`（`quantlab.factor.predefined.membership_mask`）包装任意因子，凡是标的在该 bar 当天不是成员的格子都设为 NaN（成员资格的 `IndexConstituentDataset.mask`），`MembershipMaskedLabel`、`MembershipMaskedPredictor` 也通过同一个方法应用这条规则；非成员在 t 没有有限特征，就不进该 bar 的截面。它的配置是 `MembershipMaskedFactorConfig`：`factor` 是被包装的因子，`membership` 是点时成员资格。屏蔽的是算好的因子，绝不是价格：被包装因子在未屏蔽的价格上计算，所以在 t 进指数的标的，t 的值来自它完整的价格历史，从 t 起就在截面里。对进指数不满一个窗口的标的，模型的特征窗口里进指数之前的 bar 是 NaN。成员资格面板不覆盖的日期会抛出异常，warm-up 的 bar 也算在内；面板的标的全都不在成员资格存储的 symbol 轴上（整数 permaticker 轴对文本轴）时也会抛出异常，否则整个面板都会被屏蔽。输出沿用被包装因子的名字；和 `RosterFactor` 一样是因子视图，保留被包装因子的所有标的，`build` 和 `extend` 抛出异常。表格模型只拟合标签经成员屏蔽后有值的格子，所以对它们没有影响。
 
 ```python
 from quantlab.factor.config import MembershipMaskedFactorConfig

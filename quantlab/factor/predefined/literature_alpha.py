@@ -9,8 +9,8 @@ in-time universe applies that universe to the input panel before constructing
 this factor.
 
 Every characteristic has a ``*_raw`` output and a cross-sectional ``*_rank``
-output.  KunQuant's ``Rank`` ignores NaN, so a panel masked by
-``UniverseMask`` is ranked only over the valid members at each timestamp.
+output.  KunQuant's ``Rank`` ignores NaN, so a panel masked by its membership
+(``IndexConstituentDataset.mask``) is ranked only over the valid members at each timestamp.
 Inputs and windows are configurable through ``FactorConfig.kwargs``; selected
 ``factor_names`` prune unused inputs and graph branches.
 

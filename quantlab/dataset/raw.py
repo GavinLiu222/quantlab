@@ -1704,3 +1704,57 @@ class IndexConstituentDataset(RawDataset):
             .astype(bool)
             .assign_coords(timestamp=timestamps.values)
         )
+
+    def mask(self, panel: xr.Dataset, *, owner: str | None = None) -> xr.Dataset:
+        """Return ``panel`` with every cell of a symbol that is not a member on its bar's date NaN.
+
+        This is the membership rule every masked factor, label and
+        prediction applies (``MembershipMaskedFactor``,
+        ``MembershipMaskedLabel``, ``MembershipMaskedPredictor``): a cell is
+        kept when ``is_member_at`` is true for its bar and symbol. A panel
+        without bars is returned as it is.
+
+        Parameters
+        ----------
+        panel : xr.Dataset
+            A panel on ``(timestamp, symbol)``.
+        owner : str, optional
+            Who asks, named in the error messages; defaults to this class.
+
+        Returns
+        -------
+        xr.Dataset
+            ``panel``, NaN where the symbol is not a member on the bar's date.
+
+        Raises
+        ------
+        ValueError
+            If a bar's date lies outside the membership panel, or no symbol
+            of ``panel`` is on the membership store's symbol axis (an integer
+            permaticker against a text one), which would mask every cell.
+
+        Examples
+        --------
+        With ``membership`` the ``DemoPanel`` of ``is_member_at``'s example
+        and ``panel`` a panel of ones on ``AAA`` and ``BBB`` over its three bars:
+
+        >>> membership.mask(panel)["x"].to_pandas()
+        symbol      AAA  BBB
+        timestamp
+        2024-01-02  1.0  1.0
+        2024-01-03  1.0  NaN
+        2024-01-04  1.0  NaN
+        """
+        if panel.sizes.get("timestamp", 0) == 0:
+            return panel
+        owner = owner or type(self).__name__
+        symbols = pd.Index(panel["symbol"].values)
+        if len(symbols) and not symbols.isin(self.stored_symbols()).any():
+            raise ValueError(
+                f"{owner}: none of the {len(symbols)} symbol(s) of the panel is on the "
+                f"symbol axis of {type(self).__name__}'s store (labels {symbols[:3].tolist()} "
+                f"of type {symbols.dtype}); every cell would be masked. Check that both are "
+                f"on the same axis (an integer permaticker against a text one)."
+            )
+        member = self.is_member_at(panel["timestamp"].values, panel["symbol"].values, owner=owner)
+        return panel.where(member)

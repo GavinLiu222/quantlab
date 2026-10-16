@@ -429,16 +429,13 @@ def test_the_sidecar_is_read_once_per_instance(converted, monkeypatch):
 
 
 def test_label_falls_back_without_raising_when_the_sidecar_is_absent(tmp_path):
-    """The display contract (T-03.11-30): three call sites reach `label()`, and
-    NONE of them may break because an audit file is missing.
+    """The display contract (T-03.11-30): the call sites that reach `label()`
+    may NOT break because an audit file is missing.
 
-    The three are `quantlab/dataset/_support/masking.py:262`,
-    `quantlab/backtest/engine_vectorbt.py:303` and `quantlab/model/base.py`'s
+    They are `quantlab/backtest/engine_vectorbt.py:303` and `quantlab/model/base.py`'s
     `_spell` (entered from both the `missing` and the `extra` branch of
-    `predict_panel`); between them they render six human-visible messages. The
-    two counts are different numbers, and it is the CALL SITE count the design
-    rests on -- `browse_zarr`'s refusal and the `--symbols` CLI help name this
-    class in prose without ever calling it.
+    `predict_panel`). `browse_zarr`'s refusal and the `--symbols` CLI help name
+    this class in prose without ever calling it.
 
     `as_of` still raises -- it is the strict, single-value question. `label` is
     the display entry point and answers with the digits.
@@ -673,8 +670,8 @@ def test_label_falls_back_when_the_sidecar_never_parses(tmp_path, payload):
     `RecursionError` is the one that was escaping (G-03.11-3 / WR-01): it is a
     `RuntimeError` subclass, so neither the `payload` property's original
     `(OSError, ValueError)` nor `label()`'s tuple caught it, and it walked out
-    of all three bare call sites -- `quantlab/dataset/_support/masking.py:262`,
-    `backtest/engine_vectorbt.py:303` mid-simulation, and `base/model.py:1315`
+    of the bare call sites -- `backtest/engine_vectorbt.py:303` mid-simulation
+    and `base/model.py:1315`
     via `_spell` on the happy path.
     """
     lookup, _ = _written_bytes(tmp_path, payload)
