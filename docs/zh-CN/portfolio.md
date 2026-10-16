@@ -549,7 +549,7 @@ rule = ActiveRiskOptimizer(ActiveRiskConfig(
 ))
 ```
 
-`BlackLittermanOptimizer`（`quantlab.portfolio.predefined.black_litterman`，ADR 0047）是在 Black-Litterman 后验上做均值方差的规则，基于 `posterior` 实现。配置类 `BlackLittermanConfig` 在 `MeanVarianceConfig` 之上加了 `market`（权重因子，声明方式同 `benchmark`，通常是名单成分上的 `MembershipCapWeight`）、`market_weight`（它的输出名，默认 `"benchmark_weight"`）和 `tau`（必填且为正：先验的协方差是风险模型协方差的 `tau` 倍；取协方差估计窗口长度的倒数，或按惯例取 0.025 到 0.05）。在风险模型的因子空间里，收益为 `r = B f + e`，先验 `f ~ N(pi_f, tau F)`、`e ~ N(pi_e, tau diag(D))`，`Sigma = B F B' + diag(D)` 是该 bar 在预期收益标签跨度上的预测。标的观点是 `expected_return` 模型在有预测的候选上给出的 `mu`：可以是跨度上的总收益（`views_relative_to_prior=False`，默认），也可以是加在该标的均衡收益 `pi` 上的 alpha（`views_relative_to_prior=True`；`pi` 按后验协方差计价，所以会随 `omega` 和哪些标的有观点而略有变化）。按 IC 缩放的模型（`GrinoldExpectedReturn`、`ZScoreExpectedReturn`）给出的是截面中心化的 alpha，当总收益用会把每个有观点的标的拉向零收益；以这种方式构造时规则会发出警告。`omega` 决定每个观点的不确定度 `omega_j`：`"he_litterman"`（默认，`tau Sigma_jj`）、`"idzorek"`（`tau (1 - C)/C Sigma_jj`，即 Walters 给出的 Idzorek 置信度 `C = confidence` 的闭式解，须在 `(0, 1]` 内：取 1 时后验落在观点上，接近 0 时停在先验）或 `"specific"`（`tau D_j`，特异方差）；其他 `omega` 下设置 `confidence` 会被拒绝。观点已经来自按 IC 缩放的模型时，不要再按 IC 缩放 `Omega`：Grinold 的 `ic * sigma * z` 本身就是对收益单位得分（`sigma z / IC`）取 `C = IC^2` 的 Idzorek 观点的单标的后验，再收缩一次就把 IC 算了两遍；用按 IC 缩放的模型时应取 alpha 观点和接近 1 的置信度，`confidence = IC^2`（即 Grinold 的收缩）留给尚未按 IC 缩放的观点。一次贝叶斯更新给出后验均值和后验协方差 `Sigma + M`（`M` 是后验均值的不确定度）；它在因子维度上求解（一次 `K x K` 求解，不做标的乘标的的求逆），后验协方差是对角加秩 `2K`，正是风险项读取的因子形式。规则在这两者上优化，均值方差的字段全部照常生效。均衡收益为 `pi = risk_aversion * (Sigma + M) * w`，`w` 是市场在被覆盖标的上的权重、重新归一到和为一：它使市场组合在规则实际优化所用的协方差下最优，因此没有观点时（`M = tau Sigma`）决定出的组合就是市场组合，观点等于 `pi` 时也不变（在约束允许的范围内：`max_names`、`candidate_top_k`、低于某个市场权重的上限，或相对非市场组合的换手惩罚都会使它偏离）。当 `Omega` 趋于 0、且市场持有的每个被覆盖标的都有观点时，`pi` 趋于 `risk_aversion * Sigma * w`；没有观点的市场标的（锁定、不可交易或无预测）保留它在 `M` 中的份额。它拆为 `pi_f = risk_aversion * F x`（`x = B' w`，由 `market_exposures` 给出；比名单更宽的市场须连同 `market_weights` 一起覆写它）和 `pi_e = pi - B pi_f`。每个可选标的都是候选：没有观点的标的取其均衡收益，加上相关标的的观点带来的变动；`candidate_top_k` 按后验排序。规则在构造时拒绝：没有 `expected_return`（没有观点）、协方差估计器不是 `FactorRiskStoreEstimator`（先验与后验须用同一个预测计价风险）、缺少 `market` 或 `market_weight`、`tau` 不为正、未知的 `omega`、`"idzorek"` 下缺少 `confidence` 或其不在 `(0, 1]` 内、其他 `omega` 下设置了 `confidence`，以及带 `reference_weights` 的子类（主动风险的参照项 `lambda Sigma b` 就是均衡先验本身）。近似回测不支持它。
+`BlackLittermanOptimizer`（`quantlab.portfolio.predefined.black_litterman`，ADR 0047）是在 Black-Litterman 后验上做均值方差的规则，基于 `posterior` 实现。配置类 `BlackLittermanConfig` 在 `MeanVarianceConfig` 之上加了 `market`（权重因子，声明方式同 `benchmark`，通常是名单成分上的 `MembershipCapWeight`）、`market_weight`（它的输出名，默认 `"benchmark_weight"`）和 `tau`（必填且为正：先验的协方差是风险模型协方差的 `tau` 倍；取协方差估计窗口长度的倒数，或按惯例取 0.025 到 0.05）。在风险模型的因子空间里，收益为 `r = B f + e`，先验 `f ~ N(pi_f, tau F)`、`e ~ N(pi_e, tau diag(D))`，`Sigma = B F B' + diag(D)` 是该 bar 在预期收益标签跨度上的预测。标的观点是 `expected_return` 模型在有预测的候选上给出的 `mu`：可以是跨度上的总收益（`views_relative_to_prior=False`，默认），也可以是加在该标的均衡收益 `pi` 上的 alpha（`views_relative_to_prior=True`；`pi` 按后验协方差计价，所以会随 `omega` 和哪些标的有观点而略有变化）。按 IC 缩放的模型（`GrinoldExpectedReturn`、`ZScoreExpectedReturn`）给出的是截面中心化的 alpha，当总收益用会把每个有观点的标的拉向零收益；以这种方式构造时规则会发出警告。`omega` 决定每个观点的不确定度 `omega_j`：`"he_litterman"`（默认，`tau Sigma_jj`）、`"idzorek"`（`tau (1 - C)/C Sigma_jj`，即 Walters 给出的 Idzorek 置信度 `C = confidence` 的闭式解，须在 `(0, 1]` 内：取 1 时后验落在观点上，接近 0 时停在先验）或 `"specific"`（`tau D_j`，特异方差）；其他 `omega` 下设置 `confidence` 会被拒绝。观点已经来自按 IC 缩放的模型时，不要再按 IC 缩放 `Omega`：Grinold 的 `ic * sigma * z` 本身就是对收益单位得分（`sigma z / IC`）取 `C = IC^2` 的 Idzorek 观点的单标的后验，再收缩一次就把 IC 算了两遍；用按 IC 缩放的模型时应取 alpha 观点和接近 1 的置信度，`confidence = IC^2`（即 Grinold 的收缩）留给尚未按 IC 缩放的观点。一次贝叶斯更新给出后验均值和后验协方差 `Sigma + M`（`M` 是后验均值的不确定度）；它在因子维度上求解（一次 `K x K` 求解，不做标的乘标的的求逆），后验协方差是对角加秩 `2K`，正是风险项读取的因子形式。规则在这两者上优化，均值方差的字段全部照常生效。均衡收益为 `pi = risk_aversion * (Sigma + M) * w`，`w` 是市场在被覆盖标的上的权重、重新归一到和为一：它使市场组合在规则实际优化所用的协方差下最优，因此没有观点时（`M = tau Sigma`）决定出的组合就是市场组合，观点等于 `pi` 时也不变（在约束允许的范围内：`max_names`、`candidate_top_k`、低于某个市场权重的上限，或相对非市场组合的换手惩罚都会使它偏离）。当 `Omega` 趋于 0、且市场持有的每个被覆盖标的都有观点时，`pi` 趋于 `risk_aversion * Sigma * w`；没有观点的市场标的（锁定、不可交易或无预测）保留它在 `M` 中的份额。它拆为 `pi_f = risk_aversion * F x`（`x = B' w`，由 `market_exposures` 给出；比名单更宽的市场须连同 `market_weights` 一起覆写它）和 `pi_e = pi - B pi_f`。每个可选标的都是候选：没有观点的标的取其均衡收益，加上相关标的的观点带来的变动；`candidate_top_k` 按后验排序。规则在构造时拒绝：完全没有观点（没有 `expected_return` 也没有用户观点）、协方差估计器不是 `FactorRiskStoreEstimator`（先验与后验须用同一个预测计价风险）、缺少 `market` 或 `market_weight`、`tau` 不为正、未知的 `omega`、`"idzorek"` 下缺少 `confidence` 或其不在 `(0, 1]` 内、其他 `omega` 下设置了 `confidence`，以及带 `reference_weights` 的子类（主动风险的参照项 `lambda Sigma b` 就是均衡先验本身）。近似回测不支持它。
 
 ```python
 from quantlab.factor.config import MembershipCapWeightConfig
@@ -567,6 +567,33 @@ rule = BlackLittermanOptimizer(BlackLittermanConfig(
     expected_return=RawExpectedReturn(RawExpectedReturnConfig()),
     risk_aversion=20.0, weight_cap=0.05, tau=0.05, omega="idzorek", confidence=0.5,
     market=MembershipCapWeight(MembershipCapWeightConfig(dataset=daily, membership=us3000)),
+))
+```
+
+用户观点（每个是一个 `ReturnView`）有 `factor_views`（每个是一个 `FactorReturnView`，按风险模型中的因子名，对某个风险模型因子的收益 `f_k` 给出观点；或一个 `RelativeFactorReturnView`，对一个因子收益减另一个因子收益 `f_k - f_l` 给出观点，例如“价值因子每年比动量多赚 2%”，由 `outperformer` 和 `underperformer` 指定）和 `market_views`（每个是一个 `MarketReturnView`，对市场组合收益 `x' f` 给出观点，`x = B' w`，忽略市场的特异收益）。观点是年化收益，线性换算到跨度上（乘以 `span / 252`）：可以是常数（`annual_return`），也可以是从 zarr store 按时点读取的序列（`store`、`variable`，一个在 `timestamp` 上的变量），某个 bar 上的取值是日期不晚于该 bar 的最后一个有限值；每次读取都会记入运行的数据记录。它的不确定度是 Idzorek 置信度 `confidence` `C`（观点方差为 `tau (1 - C)/C p' F p`，`p` 是它在因子收益上的行；取 1 时后验落在观点上），或标准差 `std`，与收益一样按年化给出、按同样方式换算（`(std * span / 252)^2`）。某个 bar 上尚未知道的观点，或针对该 bar 预测中没有的因子的观点，在该 bar 上不参与。所有观点是一次贝叶斯更新（用户观点先更新因子先验，所用形式允许方差为零，标的观点再在其上更新）；后验协方差仍是秩 `2K` 加对角的形式。`expected_return` 可选：没有它时规则不读取任何预测，`expected_return_label` 不设置，跨度由 `span`（以 bar 计）给出；有它时，若同时设置了 `span`，须与标签的跨度一致。规则在构造时还拒绝：有 `expected_return` 而没有 `expected_return_label`（或反过来）、没有 `expected_return` 时缺少 `span`、`factor_views` 中既不是 `FactorReturnView` 也不是 `RelativeFactorReturnView` 的项（或 `market_views` 中不是 `MarketReturnView` 的项），以及指向风险模型中不存在的因子的因子观点；`bind` 拒绝与标签跨度不同的 `span`。观点本身拒绝：两个因子相同的相对观点、`annual_return` 与 `store` 不是恰好设置一个、有 `variable` 而没有 `store`（或反过来）、`confidence` 与 `std` 不是恰好设置一个、`confidence` 不在 `(0, 1]` 内，以及 `std` 不为正。
+
+```python
+from quantlab.portfolio.config import (
+    FactorReturnViewConfig, MarketReturnViewConfig, RelativeFactorReturnViewConfig,
+)
+from quantlab.portfolio.predefined.black_litterman import (
+    FactorReturnView, MarketReturnView, RelativeFactorReturnView,
+)
+
+rule = BlackLittermanOptimizer(BlackLittermanConfig(
+    covariance=FactorRiskStoreEstimator(FactorRiskStoreEstimatorConfig(risk_model=use4)),
+    risk_aversion=20.0, weight_cap=0.05, tau=0.05, span=5,
+    market=MembershipCapWeight(MembershipCapWeightConfig(dataset=daily, membership=us3000)),
+    # 账面市值比因子每年赚 2%，置信度 50%。
+    factor_views=(
+        FactorReturnView(FactorReturnViewConfig(factor="style_book_to_price", annual_return=0.02, confidence=0.5)),
+        # 动量因子每年比规模因子多赚 1%，误差约每年 2%。
+        RelativeFactorReturnView(RelativeFactorReturnViewConfig(
+            outperformer="style_momentum", underperformer="style_size", annual_return=0.01, std=0.02,
+        )),
+    ),
+    # 市场在每个 bar 上赚序列给出的收益，误差约每年 4%。
+    market_views=(MarketReturnView(MarketReturnViewConfig(store="views/market.zarr", variable="annual_return", std=0.04)),),
 ))
 ```
 

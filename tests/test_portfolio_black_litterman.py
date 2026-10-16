@@ -1,4 +1,4 @@
-"""``BlackLittermanOptimizer``: the equilibrium prior, model views, their Omega, the posterior (#340, #341).
+"""``BlackLittermanOptimizer``: the equilibrium prior, model and user views, their Omega, the posterior (#340-#342).
 
 What is locked here, and what turns it red:
 
@@ -24,6 +24,18 @@ What is locked here, and what turns it red:
   Omega, confidence, an active-risk reference) raises at construction,
   naming the field.
 - A backtest run on a factor risk model completes and rebuilds identically.
+- The user's factor and market views, alone and with symbol views, in the
+  confidence and standard-deviation forms, equal a dense augmented
+  Black-Litterman on ``z = (f, e)`` written out here (every view one row of
+  ``P`` on ``z``, one update); a fully confident market view puts the
+  market's factor return on it; a view on a factor the bar lacks is left
+  out.
+- A store series is read point-in-time (a value dated after the bar never
+  reaches it, a NaN carries the last value forward) and logged to the
+  data recorder.
+- Each refusal of a view, and of a rule's user views, span and label,
+  raises naming the field; a backtest with user views only (no expected
+  return model) completes and rebuilds identically.
 
 Everything is synthetic, CPU-only and offline.
 """
@@ -39,13 +51,22 @@ import xarray as xr
 from quantlab.portfolio.config import (
     BlackLittermanConfig,
     FactorRiskStoreEstimatorConfig,
+    FactorReturnViewConfig,
     GrinoldExpectedReturnConfig,
     LedoitWolfEstimatorConfig,
+    MarketReturnViewConfig,
     PredictionExpectedReturnConfig,
+    RelativeFactorReturnViewConfig,
     RawExpectedReturnConfig,
     ZScoreExpectedReturnConfig,
 )
-from quantlab.portfolio.predefined.black_litterman import BlackLittermanOptimizer
+from quantlab.portfolio.predefined.black_litterman import (
+    BlackLittermanOptimizer,
+    FactorReturnView,
+    MarketReturnView,
+    RelativeFactorReturnView,
+    ReturnView,
+)
 from quantlab.portfolio.predefined.expected_return import (
     GrinoldExpectedReturn,
     PredictionExpectedReturn,
@@ -360,3 +381,363 @@ def test_a_black_litterman_backtest_runs_on_a_factor_risk_model_and_rebuilds(tmp
     )
     again = BacktestRun.open(original.run_dir).rebuild_backtester().run()
     np.testing.assert_array_equal(again.weights["weight"].values, weights.values)
+
+
+# --- the user's views (#342) ---------------------------------------------------------
+
+
+class _Model:
+    """A stand-in factor risk model: only its factor names are read at construction."""
+
+    factor_names = ("market", "pair")
+
+
+def _augmented(prediction, user=(), omega="he_litterman", confidence=None, relative=False):
+    """The dense augmented Black-Litterman on ``z = (f, e)``: ``(posterior mean, posterior covariance)``.
+
+    ``user`` holds ``(row on f, annual return, ("confidence", C) or ("std", s))``;
+    every view is one row of ``P`` on ``z``, all blended in one update.
+    """
+    forecast = _forecast()
+    b = forecast.exposures
+    f = forecast.factor_covariance * SPAN
+    d = forecast.specific_variance * SPAN
+    n, k = b.shape
+    sigma = b @ f @ b.T + np.diag(d)
+    w = MARKET / MARKET.sum()
+    x = b.T @ w
+    viewed = np.flatnonzero(np.isfinite(prediction))
+    rows = [np.concatenate([b[j], np.eye(n)[j]]) for j in viewed]
+    omegas = list(_omega(sigma, viewed, omega, confidence)) if len(viewed) else []
+    q_user = []
+    for row, annual, (kind, value) in user:
+        rows.append(np.concatenate([row, np.zeros(n)]))
+        prior = row @ f @ row
+        omegas.append(TAU * (1 - value) / value * prior if kind == "confidence" else (value * SPAN / 252) ** 2)
+        q_user.append(annual * SPAN / 252)
+    p = np.asarray(rows).reshape(len(rows), k + n)
+    prior_cov = TAU * np.block([[f, np.zeros((k, n))], [np.zeros((n, k)), np.diag(d)]])
+    prior_precision = np.linalg.inv(prior_cov)
+    inv_omega = np.diag(1.0 / np.asarray(omegas)) if omegas else np.zeros((0, 0))
+    post_cov = np.linalg.inv(prior_precision + p.T @ inv_omega @ p)
+    a = np.concatenate([b, np.eye(n)], axis=1)
+    m = a @ post_cov @ a.T
+    pi = DELTA * (sigma + m) @ w
+    pi_f = DELTA * f @ x
+    z0 = np.concatenate([pi_f, pi - b @ pi_f])
+    q_symbol = np.asarray(prediction, dtype=float)[viewed] + (pi[viewed] if relative else 0.0)
+    q = np.concatenate([q_symbol, q_user])
+    mean = a @ post_cov @ (prior_precision @ z0 + p.T @ inv_omega @ q)
+    return mean, sigma + m
+
+
+NO_VIEWS = np.full(len(SYMBOLS), np.nan)
+MARKET_X = _forecast().exposures.T @ (MARKET / MARKET.sum())
+
+
+def _views_rule(factor_views=(), market_views=(), **overrides):
+    params = dict(
+        covariance=_Fixed(FactorRiskStoreEstimatorConfig(risk_model=_Model())),
+        factor_views=tuple(factor_views),
+        market_views=tuple(market_views),
+    )
+    params.update(overrides)
+    return _rule(**params)
+
+
+def _user_only(**overrides):
+    return _views_rule(expected_return=None, expected_return_label=None, span=SPAN, **overrides)
+
+
+PAIR = FactorReturnView(FactorReturnViewConfig(factor="pair", annual_return=0.08, confidence=0.6))
+PAIR_STD = FactorReturnView(FactorReturnViewConfig(factor="pair", annual_return=-0.05, std=0.03))
+MARKET_VIEW = MarketReturnView(MarketReturnViewConfig(annual_return=0.12, std=0.04))
+MARKET_CONFIDENT = MarketReturnView(MarketReturnViewConfig(annual_return=0.02, confidence=0.3))
+PAIR_OVER_MARKET = RelativeFactorReturnView(RelativeFactorReturnViewConfig(
+    outperformer="pair", underperformer="market", annual_return=0.03, confidence=0.7,
+))
+MARKET_OVER_PAIR = RelativeFactorReturnView(RelativeFactorReturnViewConfig(
+    outperformer="market", underperformer="pair", annual_return=0.01, std=0.02,
+))
+
+
+@pytest.mark.parametrize(
+    "factor_views, market_views, user",
+    [
+        ([PAIR], [], [([0.0, 1.0], 0.08, ("confidence", 0.6))]),
+        ([PAIR_STD], [], [([0.0, 1.0], -0.05, ("std", 0.03))]),
+        ([], [MARKET_VIEW], [(MARKET_X, 0.12, ("std", 0.04))]),
+        ([], [MARKET_CONFIDENT], [(MARKET_X, 0.02, ("confidence", 0.3))]),
+        ([PAIR_OVER_MARKET], [], [([-1.0, 1.0], 0.03, ("confidence", 0.7))]),
+        ([MARKET_OVER_PAIR], [], [([1.0, -1.0], 0.01, ("std", 0.02))]),
+        (
+            [PAIR_OVER_MARKET, PAIR],
+            [MARKET_CONFIDENT],
+            [
+                ([-1.0, 1.0], 0.03, ("confidence", 0.7)),
+                ([0.0, 1.0], 0.08, ("confidence", 0.6)),
+                (MARKET_X, 0.02, ("confidence", 0.3)),
+            ],
+        ),
+        (
+            [PAIR, PAIR_STD],
+            [MARKET_VIEW],
+            [
+                ([0.0, 1.0], 0.08, ("confidence", 0.6)),
+                ([0.0, 1.0], -0.05, ("std", 0.03)),
+                (MARKET_X, 0.12, ("std", 0.04)),
+            ],
+        ),
+    ],
+)
+@pytest.mark.parametrize("with_symbol_views", [False, True])
+def test_factor_and_market_views_equal_the_augmented_reference(
+    factor_views, market_views, user, with_symbol_views
+):
+    user = [(np.asarray(row, dtype=float), annual, kind) for row, annual, kind in user]
+    if with_symbol_views:
+        rule = _views_rule(factor_views, market_views)
+        prediction = PREDICTION
+    else:
+        rule = _user_only(factor_views=tuple(factor_views), market_views=tuple(market_views))
+        prediction = NO_VIEWS
+    inputs = rule.problem_inputs(_bar(prediction))
+    mean, covariance = _augmented(prediction, user)
+    np.testing.assert_allclose(inputs.expected_return, mean, rtol=1e-9, atol=1e-14)
+    np.testing.assert_allclose(inputs.covariance, covariance, rtol=1e-9, atol=1e-14)
+
+
+@pytest.mark.parametrize(
+    "omega, confidence, relative", [("idzorek", 0.4, True), ("specific", None, False)]
+)
+def test_user_views_compose_with_each_omega_and_view_type(omega, confidence, relative):
+    rule = _views_rule(
+        [PAIR], [MARKET_VIEW], omega=omega, confidence=confidence, views_relative_to_prior=relative
+    )
+    inputs = rule.problem_inputs(_bar(PREDICTION))
+    user = [(np.array([0.0, 1.0]), 0.08, ("confidence", 0.6)), (MARKET_X, 0.12, ("std", 0.04))]
+    mean, covariance = _augmented(PREDICTION, user, omega, confidence, relative)
+    np.testing.assert_allclose(inputs.expected_return, mean, rtol=1e-9, atol=1e-14)
+    np.testing.assert_allclose(inputs.covariance, covariance, rtol=1e-9, atol=1e-14)
+
+
+def test_a_fully_confident_market_view_puts_the_market_on_it():
+    view = MarketReturnView(MarketReturnViewConfig(annual_return=0.10, confidence=1.0))
+    inputs = _user_only(market_views=(view,)).problem_inputs(_bar(NO_VIEWS))
+    w = MARKET / MARKET.sum()
+    # The market's specific part is neglected: its factor part x' f lands on the view.
+    _, symbols_covariance = _augmented(NO_VIEWS, [(MARKET_X, 0.10, ("confidence", 1 - 1e-12))])
+    assert inputs.symbols.tolist() == SYMBOLS
+    forecast = _forecast()
+    pi = DELTA * symbols_covariance @ w
+    specific_part = w @ (pi - forecast.exposures @ (DELTA * forecast.factor_covariance * SPAN @ MARKET_X))
+    np.testing.assert_allclose(w @ inputs.expected_return - specific_part, 0.10 * SPAN / 252, rtol=1e-6)
+
+
+def test_a_view_on_a_factor_the_bar_lacks_is_left_out():
+    absent = FactorReturnView(FactorReturnViewConfig(factor="pair", annual_return=0.5, std=0.01))
+
+    class _MarketOnly(_Fixed):
+        def estimate(self, context, volatility=None):
+            full = _forecast()
+            return FactorRiskForecast(
+                symbols=full.symbols, factor_names=("market",), exposures=full.exposures[:, :1],
+                factor_covariance=full.factor_covariance[:1, :1],
+                specific_variance=full.specific_variance,
+            )
+
+    covariance = _MarketOnly(FactorRiskStoreEstimatorConfig(risk_model=_Model()))
+    with_view = _views_rule([absent], covariance=covariance)
+    without = _rule(covariance=covariance)
+    np.testing.assert_array_equal(
+        with_view.problem_inputs(_bar(PREDICTION)).expected_return,
+        without.problem_inputs(_bar(PREDICTION)).expected_return,
+    )
+
+
+def _series_store(path, dates, values):
+    xr.Dataset(
+        {"view": ("timestamp", np.asarray(values, dtype=float))},
+        coords={"timestamp": pd.DatetimeIndex(dates)},
+    ).to_zarr(path, mode="w")
+    return str(path)
+
+
+def test_a_store_series_is_read_point_in_time(tmp_path):
+    # The bar is 2024-03-01: the value dated that day is known, the one after is not.
+    store = _series_store(
+        tmp_path / "view.zarr",
+        ["2024-02-27", "2024-02-29", "2024-03-01", "2024-03-04"],
+        [0.03, np.nan, 0.07, 9.0],
+    )
+    view = MarketReturnView(MarketReturnViewConfig(store=store, variable="view", std=0.04))
+    inputs = _user_only(market_views=(view,)).problem_inputs(_bar(NO_VIEWS))
+    mean, _ = _augmented(NO_VIEWS, [(MARKET_X, 0.07, ("std", 0.04))])
+    np.testing.assert_allclose(inputs.expected_return, mean, rtol=1e-9, atol=1e-14)
+    # A NaN carries the last finite value forward; before the first value there is no view.
+    assert view.annual_return_at(pd.Timestamp("2024-02-29")) == 0.03
+    assert np.isnan(view.annual_return_at(pd.Timestamp("2024-02-26")))
+    # A value dated after the bar never reaches it.
+    store = _series_store(tmp_path / "late.zarr", ["2024-03-04"], [9.0])
+    late = MarketReturnView(MarketReturnViewConfig(store=store, variable="view", std=0.04))
+    no_view = _user_only(market_views=(late,)).problem_inputs(_bar(NO_VIEWS))
+    np.testing.assert_allclose(no_view.expected_return, _augmented(NO_VIEWS)[0], rtol=1e-9, atol=1e-14)
+
+
+def test_the_store_series_read_is_recorded(tmp_path):
+    from quantlab.runs.record import DataRecorder
+
+    store = _series_store(tmp_path / "view.zarr", ["2024-02-27", "2024-03-04"], [0.03, 9.0])
+    view = MarketReturnView(MarketReturnViewConfig(store=store, variable="view", std=0.04))
+    with DataRecorder() as recorder:
+        view.annual_return_at(pd.Timestamp("2024-03-01"))
+    (entry,) = recorder.records[f"MarketReturnView:{store}"]
+    assert entry["n_timestamps"] == 1
+
+
+@pytest.mark.parametrize(
+    "config, field",
+    [
+        (dict(confidence=0.5), "annual_return"),
+        (dict(annual_return=0.1, store="x.zarr", variable="v", confidence=0.5), "annual_return"),
+        (dict(annual_return=float("nan"), confidence=0.5), "annual_return"),
+        (dict(store="x.zarr", confidence=0.5), "variable"),
+        (dict(annual_return=0.1, variable="v", confidence=0.5), "variable"),
+        (dict(annual_return=0.1), "confidence and std"),
+        (dict(annual_return=0.1, confidence=0.5, std=0.1), "confidence and std"),
+        (dict(annual_return=0.1, confidence=0.0), "confidence"),
+        (dict(annual_return=0.1, confidence=1.5), "confidence"),
+        (dict(annual_return=0.1, std=0.0), "std"),
+        (dict(annual_return=0.1, std=float("nan")), "std"),
+    ],
+)
+def test_a_misconfigured_view_is_refused_naming_the_field(config, field):
+    with pytest.raises(ValueError, match=field):
+        MarketReturnView(MarketReturnViewConfig(**config))
+    with pytest.raises(ValueError, match=field):
+        FactorReturnView(FactorReturnViewConfig(factor="pair", **config))
+    with pytest.raises(ValueError, match=field):
+        RelativeFactorReturnView(
+            RelativeFactorReturnViewConfig(outperformer="pair", underperformer="market", **config)
+        )
+
+
+def test_a_relative_view_on_one_factor_is_refused_and_the_base_is_abstract():
+    with pytest.raises(ValueError, match="outperformer and underperformer"):
+        RelativeFactorReturnView(RelativeFactorReturnViewConfig(
+            outperformer="pair", underperformer="pair", annual_return=0.01, std=0.02,
+        ))
+    with pytest.raises(TypeError):
+        ReturnView(MarketReturnViewConfig(annual_return=0.01, std=0.02))
+    assert all(
+        isinstance(view, ReturnView) for view in (PAIR, MARKET_VIEW, PAIR_OVER_MARKET)
+    )
+
+
+def test_a_relative_view_on_a_factor_the_bar_lacks_is_left_out():
+    class _MarketOnly(_Fixed):
+        def estimate(self, context, volatility=None):
+            full = _forecast()
+            return FactorRiskForecast(
+                symbols=full.symbols, factor_names=("market",), exposures=full.exposures[:, :1],
+                factor_covariance=full.factor_covariance[:1, :1],
+                specific_variance=full.specific_variance,
+            )
+
+    covariance = _MarketOnly(FactorRiskStoreEstimatorConfig(risk_model=_Model()))
+    with_view = _views_rule([PAIR_OVER_MARKET], covariance=covariance)
+    without = _rule(covariance=covariance)
+    np.testing.assert_array_equal(
+        with_view.problem_inputs(_bar(PREDICTION)).expected_return,
+        without.problem_inputs(_bar(PREDICTION)).expected_return,
+    )
+
+
+@pytest.mark.parametrize(
+    "overrides, field",
+    [
+        (dict(expected_return=None, expected_return_label=None, span=SPAN), "no views"),
+        (dict(expected_return=None, span=SPAN, market_views=(MARKET_VIEW,)), "expected_return_label"),
+        (dict(expected_return_label=None, market_views=(MARKET_VIEW,)), "expected_return_label"),
+        (dict(expected_return=None, expected_return_label=None, market_views=(MARKET_VIEW,)), "span"),
+        (dict(span=0), "span"),
+        (dict(span=2.5), "span"),
+        (dict(factor_views=(FactorReturnView(FactorReturnViewConfig(factor="value", annual_return=0.1, std=0.1)),)), "value"),
+        (dict(factor_views=(MARKET_VIEW,)), "factor_views"),
+        (
+            dict(factor_views=(RelativeFactorReturnView(RelativeFactorReturnViewConfig(
+                outperformer="pair", underperformer="value", annual_return=0.1, std=0.1,
+            )),)),
+            "value",
+        ),
+        (dict(market_views=(PAIR_OVER_MARKET,)), "market_views"),
+        (dict(market_views=(PAIR,)), "market_views"),
+    ],
+)
+def test_a_misconfigured_user_view_rule_is_refused(overrides, field):
+    params = _params(covariance=_Fixed(FactorRiskStoreEstimatorConfig(risk_model=_Model())))
+    params.update(overrides)
+    with pytest.raises(ValueError, match=field):
+        BlackLittermanOptimizer(BlackLittermanConfig(**params))
+
+
+def test_bind_refuses_a_span_other_than_the_label_s():
+    rule = BlackLittermanOptimizer(BlackLittermanConfig(**_params(span=SPAN + 1)))
+    with pytest.raises(ValueError, match="span"):
+        rule.bind(_specs({"ret_5": SPAN}))
+    assert rule.span is None
+    same = BlackLittermanOptimizer(BlackLittermanConfig(**_params(span=SPAN)))
+    same.bind(_specs({"ret_5": SPAN}))
+    assert same.span == SPAN
+
+
+def test_without_symbol_views_the_rule_reads_no_prediction():
+    rule = _user_only(market_views=(MARKET_VIEW,))
+    bar = _bar(PREDICTION)
+    bar = dataclasses.replace(bar, predictions=xr.Dataset(coords={"symbol": SYMBOLS}))
+    mean, _ = _augmented(NO_VIEWS, [(MARKET_X, 0.12, ("std", 0.04))])
+    np.testing.assert_allclose(rule.problem_inputs(bar).expected_return, mean, rtol=1e-9, atol=1e-14)
+    assert rule.ranking_label(["fwd_ret_1", "ret_5"]) == "fwd_ret_1"
+
+
+def test_a_backtest_with_user_views_only_runs_and_rebuilds(tmp_path):
+    def constructor(dataset_config):
+        close = xr.open_zarr(dataset_config.zarr_file_path)["adjClose"].load()
+        times = close["timestamp"].values
+        model = _factor_risk_model(tmp_path, dataset_config, times)
+        caps = np.linspace(1.0, 2.0, close.sizes["symbol"])
+        market = xr.DataArray(
+            np.tile(caps / caps.sum(), (close.sizes["timestamp"], 1)),
+            dims=close.dims, coords=close.coords,
+        )
+        store = _series_store(tmp_path / "market_view.zarr", times[::3], np.linspace(0.02, 0.1, len(times[::3])))
+        return BlackLittermanOptimizer(BlackLittermanConfig(
+            covariance=FactorRiskStoreEstimator(FactorRiskStoreEstimatorConfig(risk_model=model)),
+            risk_aversion=3.0, weight_cap=0.6, tau=0.05, span=1,
+            factor_views=(FactorReturnView(FactorReturnViewConfig(
+                factor=model.factor_names[-1], annual_return=0.05, confidence=0.5,
+            )),),
+            market_views=(MarketReturnView(MarketReturnViewConfig(store=store, variable="view", std=0.05)),),
+            market=_benchmark(market, tmp_path / "market.zarr"),
+        ))
+
+    backtester, _, _ = _backtester(tmp_path, constructor, output_dir=str(tmp_path / "runs"))
+    original = backtester.run()
+    assert original.metrics["portfolio_construction"]["failed_bar_count"] == 0
+    weights = original.weights["weight"]
+    rebalance = np.isfinite(weights.values).all(axis=1)
+    assert rebalance.any()
+    np.testing.assert_allclose(weights.values[rebalance].sum(axis=1), 1.0, atol=1e-9)
+    saved = backtester.get_config()["constructor"]
+    assert saved["expected_return"] is None and len(saved["market_views"]) == 1
+    again = BacktestRun.open(original.run_dir).rebuild_backtester().run()
+    np.testing.assert_array_equal(again.weights["weight"].values, weights.values)
+
+
+def test_two_fully_confident_views_on_one_return_hold_the_bar():
+    from quantlab.portfolio.base import PortfolioConstructionError
+
+    sure = MarketReturnView(MarketReturnViewConfig(annual_return=0.10, confidence=1.0))
+    rule = _user_only(market_views=(sure, sure))
+    with pytest.raises(PortfolioConstructionError, match="singular"):
+        rule.problem_inputs(_bar(NO_VIEWS))

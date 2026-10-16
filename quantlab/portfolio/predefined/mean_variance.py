@@ -411,6 +411,10 @@ class MeanVarianceOptimizer(PortfolioConstructor):
     """
 
     config_cls = MeanVarianceConfig
+    #: Whether the rule needs an ``expected_return`` model; a rule with
+    #: views of its own (Black-Litterman) may go without one, and then
+    #: reads no prediction.
+    _requires_expected_return = True
 
     def __init__(self, config: MeanVarianceConfig):
         """Initialize the optimiser; see the class docstring for parameters."""
@@ -419,7 +423,8 @@ class MeanVarianceOptimizer(PortfolioConstructor):
             raise ValueError(
                 f"direction must be 'long_only' or 'long_short', got {config.direction!r}"
             )
-        if not isinstance(config.expected_return, ExpectedReturnModel):
+        optional = config.expected_return is None and not self._requires_expected_return
+        if not optional and not isinstance(config.expected_return, ExpectedReturnModel):
             raise TypeError(
                 f"expected_return must be an ExpectedReturnModel, got "
                 f"{type(config.expected_return).__name__}"
@@ -761,9 +766,13 @@ class MeanVarianceOptimizer(PortfolioConstructor):
             )
         config = self.config
         symbols = context.symbols
-        prediction = np.asarray(
-            context.predictions[config.expected_return_label].sel(symbol=symbols).values,
-            dtype=np.float64,
+        prediction = (
+            np.full(len(symbols), np.nan)
+            if config.expected_return is None
+            else np.asarray(
+                context.predictions[config.expected_return_label].sel(symbol=symbols).values,
+                dtype=np.float64,
+            )
         )
         current_all = np.asarray(
             context.current_weights.sel(symbol=symbols).values, dtype=np.float64

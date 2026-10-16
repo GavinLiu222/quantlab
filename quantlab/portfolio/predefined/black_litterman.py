@@ -26,20 +26,395 @@ the decided book is the market, and views equal to ``pi`` leave it there.
 ``pi`` splits as ``pi_f = delta F x`` and ``pi_e = pi - B pi_f``, ``x =
 B' w`` the market's factor exposures (``market_exposures``).
 
+The user's views (``ReturnView``: ``FactorReturnView``,
+``RelativeFactorReturnView``, ``MarketReturnView``) are views on the factor
+returns alone: a factor view says ``f_k = q``, a relative one ``f_k - f_l =
+q``, a market view ``x' f = q``
+(the market's specific return neglected), ``q`` an annualised return times
+``span / 252``, with variance ``tau (1 - C)/C p' F p`` (Idzorek's
+confidence ``C``, ``p`` the view's row) or the squared standard deviation,
+converted the same way. They update the factor prior first, ``N(pi_f, tau
+F)`` to ``N(f_1, F_1)``, in the form that takes a zero variance; the
+symbol views then update that, which is the one Bayes update over all the
+views, since the views' errors are independent. A view is constant or a
+series read point-in-time from a store, the last finite value dated at or
+before the bar; a view not known yet at a bar, or on a factor the bar's
+forecast lacks, is left out at that bar.
+
 The approximate backtest does not run this rule.
 """
 
+import math
 import warnings
+from abc import ABC, abstractmethod
+from collections.abc import Sequence
 
 import numpy as np
 import pandas as pd
+import xarray as xr
 
-from quantlab.portfolio.base import InputDeclaration, PortfolioConstructionError, PortfolioContext
-from quantlab.portfolio.config import BlackLittermanConfig
+from quantlab.portfolio.base import (
+    InputDeclaration,
+    PortfolioConstructionError,
+    PortfolioConstructor,
+    PortfolioContext,
+    _Configured,
+)
+from quantlab.portfolio.config import (
+    BlackLittermanConfig,
+    FactorReturnViewConfig,
+    MarketReturnViewConfig,
+    RelativeFactorReturnViewConfig,
+    ReturnViewConfig,
+)
 from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn, ZScoreExpectedReturn
 from quantlab.portfolio.predefined.factor_risk import FactorRiskStoreEstimator
 from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
 from quantlab.risk.base import FactorRiskForecast
+from quantlab.runs.prediction_panel import LabelSpec
+from quantlab.runs.record import record_read
+
+#: Bars in a year: an annualised view times ``span / BARS_PER_YEAR`` is a view over the span.
+BARS_PER_YEAR = 252
+
+
+class ReturnView(_Configured, ABC):
+    """Base class of the user's views of a ``BlackLittermanOptimizer``: one portfolio's return.
+
+    A view says ``p' f = q``, ``f`` the risk model's factor returns: a
+    subclass says what ``p`` is (``row``) and which risk-model factors it
+    names (``risk_factors``). The value and its uncertainty are shared: an
+    annualised return, a constant (``annual_return``) or a series read
+    point-in-time from a zarr store (``store``, ``variable``), whose value
+    at a bar is the last finite one dated at or before the bar, each read
+    logged to the open ``DataRecorder``; the uncertainty is Idzorek's
+    ``confidence`` or a standard deviation ``std``.
+
+    Parameters
+    ----------
+    config : ReturnViewConfig
+        An instance of the subclass's ``config_cls``.
+
+    Raises
+    ------
+    ValueError
+        If not exactly one of ``annual_return`` and ``store`` is set,
+        ``annual_return`` is not finite, ``variable`` is missing with
+        ``store`` or set without it, not exactly one of ``confidence`` and
+        ``std`` is set, ``confidence`` is outside ``(0, 1]`` or ``std`` is
+        not positive.
+
+    Examples
+    --------
+    >>> from quantlab.portfolio.config import MarketReturnViewConfig
+    >>> view = MarketReturnView(MarketReturnViewConfig(annual_return=0.06, confidence=0.5))
+    >>> view.annual_return_at(pd.Timestamp("2024-03-01"))
+    0.06
+    >>> view.variance(prior=4e-4, tau=0.05, span=5)
+    2e-05
+    """
+
+    def __init__(self, config: ReturnViewConfig):
+        """Check the view's value and uncertainty; see the class docstring."""
+        super().__init__(config)
+        owner = type(self).__name__
+        if (config.annual_return is None) == (config.store is None):
+            raise ValueError(
+                f"{owner} takes exactly one of annual_return (a constant) and store (a series), "
+                f"got annual_return={config.annual_return!r}, store={config.store!r}"
+            )
+        if config.annual_return is not None and not math.isfinite(config.annual_return):
+            raise ValueError(f"{owner}'s annual_return must be finite, got {config.annual_return}")
+        if (config.store is None) != (config.variable is None):
+            raise ValueError(
+                f"{owner}'s variable names the store's series: set it with store and only "
+                f"then, got store={config.store!r}, variable={config.variable!r}"
+            )
+        if (config.confidence is None) == (config.std is None):
+            raise ValueError(
+                f"{owner} takes exactly one of confidence and std, got "
+                f"confidence={config.confidence!r}, std={config.std!r}"
+            )
+        if config.confidence is not None and not 0 < config.confidence <= 1:
+            raise ValueError(f"{owner}'s confidence must be in (0, 1], got {config.confidence}")
+        if config.std is not None and not config.std > 0:
+            raise ValueError(f"{owner}'s std must be positive, got {config.std}")
+        self._series: xr.Dataset | None = None
+
+    @property
+    def store_path(self) -> str | None:
+        """The store the series is read from, ``None`` for a constant view.
+
+        Examples
+        --------
+        >>> view.store_path is None
+        True
+        """
+        return self.config.store
+
+    def _read(self, start, end) -> xr.Dataset:
+        """Read the series from the store over ``start`` to ``end``."""
+        rows = xr.open_zarr(self.config.store)[[self.config.variable]]
+        return rows.sel(timestamp=slice(start, end)).load()
+
+    def annual_return_at(self, timestamp) -> float:
+        """Return the view's annualised return known at ``timestamp``, NaN before the first.
+
+        Parameters
+        ----------
+        timestamp : pd.Timestamp or np.datetime64
+            The bar.
+
+        Returns
+        -------
+        float
+            The constant, or the series' last finite value dated at or
+            before ``timestamp``.
+
+        Examples
+        --------
+        With ``view`` reading a series whose first value is dated
+        2024-03-04:
+
+        >>> view.annual_return_at(pd.Timestamp("2024-03-01"))  # doctest: +SKIP
+        nan
+        """
+        if self.config.annual_return is not None:
+            return float(self.config.annual_return)
+        if self._series is None:
+            self._series = self._read(None, None)
+        rows = self._series.sel(timestamp=slice(None, timestamp))
+        record_read(self, rows, store=self.config.store, reread_range=self._read)
+        values = np.asarray(rows[self.config.variable].values, dtype=np.float64)
+        finite = values[np.isfinite(values)]
+        return float(finite[-1]) if finite.size else math.nan
+
+    @property
+    def risk_factors(self) -> tuple[str, ...]:
+        """The risk-model factors the view names, checked against the risk model; none by default.
+
+        Examples
+        --------
+        >>> view.risk_factors
+        ()
+        """
+        return ()
+
+    @abstractmethod
+    def row(self, factor_names: Sequence[str], market_exposures: np.ndarray) -> np.ndarray | None:
+        """Return the view's row ``p`` on the bar's factor returns, ``None`` when the bar cannot price it.
+
+        Parameters
+        ----------
+        factor_names : Sequence[str]
+            The factors of the bar's forecast.
+        market_exposures : np.ndarray
+            The market's exposure to each of them.
+
+        Returns
+        -------
+        np.ndarray or None
+            ``p`` with the view ``p' f = q``; ``None`` when the bar's
+            forecast cannot price it.
+
+        Examples
+        --------
+        >>> view.row(("market", "value"), np.array([1.0, 0.2]))
+        array([1. , 0.2])
+        """
+
+    def variance(self, prior: float, tau: float, span: int) -> float:
+        """Return the view's variance over the span.
+
+        Parameters
+        ----------
+        prior : float
+            ``p' F p``, the viewed return's variance over the span.
+        tau : float
+            The rule's ``tau``.
+        span : int
+            The span in bars.
+
+        Returns
+        -------
+        float
+            ``tau (1 - C)/C prior`` with a confidence ``C``, else ``(std *
+            span / 252) ** 2``.
+
+        Examples
+        --------
+        >>> view.variance(prior=4e-4, tau=0.05, span=5)
+        2e-05
+        """
+        confidence = self.config.confidence
+        if confidence is not None:
+            return tau * (1.0 - confidence) / confidence * prior
+        return (self.config.std * span / BARS_PER_YEAR) ** 2
+
+
+class MarketReturnView(ReturnView):
+    """The user's view on the market portfolio's return, for ``BlackLittermanOptimizer``.
+
+    A ``ReturnView`` whose row is the market's factor exposures ``x = B'
+    w``: the market's specific return is neglected.
+
+    Parameters
+    ----------
+    config : MarketReturnViewConfig
+        The view's value and its uncertainty.
+
+    Raises
+    ------
+    ValueError
+        As ``ReturnView``.
+
+    Examples
+    --------
+    >>> from quantlab.portfolio.config import MarketReturnViewConfig
+    >>> view = MarketReturnView(MarketReturnViewConfig(annual_return=0.06, std=0.04))
+    >>> view.row(("market", "value"), np.array([1.0, 0.2]))
+    array([1. , 0.2])
+    """
+
+    config_cls = MarketReturnViewConfig
+
+    def row(self, factor_names: Sequence[str], market_exposures: np.ndarray) -> np.ndarray:
+        """Return the market's exposures ``x``.
+
+        Examples
+        --------
+        >>> view.row(("market",), np.array([0.9]))
+        array([0.9])
+        """
+        return np.asarray(market_exposures, dtype=np.float64)
+
+
+def _unit_rows(factor_names: Sequence[str], weights: dict[str, float]) -> np.ndarray | None:
+    """Return the row with ``weights`` on the named factors, ``None`` when one is not among ``factor_names``."""
+    names = list(factor_names)
+    if any(name not in names for name in weights):
+        return None
+    row = np.zeros(len(names))
+    for name, weight in weights.items():
+        row[names.index(name)] = weight
+    return row
+
+
+class FactorReturnView(ReturnView):
+    """The user's view on one risk-model factor's return, for ``BlackLittermanOptimizer``.
+
+    A ``ReturnView`` on the factor ``factor`` (its name in the risk model):
+    the view's row is that factor's unit vector, and a bar whose forecast
+    lacks the factor leaves the view out.
+
+    Parameters
+    ----------
+    config : FactorReturnViewConfig
+        The factor, the view's value and its uncertainty.
+
+    Raises
+    ------
+    ValueError
+        As ``ReturnView``.
+
+    Examples
+    --------
+    >>> from quantlab.portfolio.config import FactorReturnViewConfig
+    >>> view = FactorReturnView(FactorReturnViewConfig(factor="value", annual_return=0.02, std=0.01))
+    >>> view.row(("market", "value"), np.array([1.0, 0.2]))
+    array([0., 1.])
+    >>> view.row(("market",), np.array([1.0])) is None
+    True
+    """
+
+    config_cls = FactorReturnViewConfig
+
+    @property
+    def risk_factors(self) -> tuple[str, ...]:
+        """``(factor,)``.
+
+        Examples
+        --------
+        >>> view.risk_factors
+        ('value',)
+        """
+        return (self.config.factor,)
+
+    def row(self, factor_names: Sequence[str], market_exposures: np.ndarray) -> np.ndarray | None:
+        """Return the view's row on the factor returns: ``factor``'s unit vector, ``None`` without it.
+
+        Examples
+        --------
+        >>> view.row(("value", "market"), np.zeros(2))
+        array([1., 0.])
+        """
+        return _unit_rows(factor_names, {self.config.factor: 1.0})
+
+
+class RelativeFactorReturnView(ReturnView):
+    """The user's view on one risk-model factor's return less another's, for ``BlackLittermanOptimizer``.
+
+    A ``ReturnView`` on ``f_outperformer - f_underperformer``: "value earns
+    2% a year more than momentum". Its row is ``+1`` on ``outperformer``
+    and ``-1`` on ``underperformer``; a bar whose forecast lacks either
+    leaves the view out.
+
+    Parameters
+    ----------
+    config : RelativeFactorReturnViewConfig
+        The two factors, the view's value and its uncertainty.
+
+    Raises
+    ------
+    ValueError
+        If ``outperformer`` and ``underperformer`` are one factor, and as
+        ``ReturnView``.
+
+    Examples
+    --------
+    >>> from quantlab.portfolio.config import RelativeFactorReturnViewConfig
+    >>> view = RelativeFactorReturnView(RelativeFactorReturnViewConfig(
+    ...     outperformer="value", underperformer="momentum", annual_return=0.02, confidence=0.5,
+    ... ))
+    >>> view.row(("market", "momentum", "value"), np.zeros(3))
+    array([ 0., -1.,  1.])
+    >>> view.risk_factors
+    ('value', 'momentum')
+    """
+
+    config_cls = RelativeFactorReturnViewConfig
+
+    def __init__(self, config: RelativeFactorReturnViewConfig):
+        """Check the two factors differ, then as ``ReturnView``."""
+        super().__init__(config)
+        if config.outperformer == config.underperformer:
+            raise ValueError(
+                f"RelativeFactorReturnView's outperformer and underperformer are both "
+                f"{config.outperformer!r}; a view on one factor is a FactorReturnView"
+            )
+
+    @property
+    def risk_factors(self) -> tuple[str, ...]:
+        """``(outperformer, underperformer)``.
+
+        Examples
+        --------
+        >>> view.risk_factors
+        ('value', 'momentum')
+        """
+        return (self.config.outperformer, self.config.underperformer)
+
+    def row(self, factor_names: Sequence[str], market_exposures: np.ndarray) -> np.ndarray | None:
+        """Return ``+1`` on ``outperformer`` and ``-1`` on ``underperformer``, ``None`` without either.
+
+        Examples
+        --------
+        >>> view.row(("value", "momentum"), np.zeros(2))
+        array([ 1., -1.])
+        """
+        return _unit_rows(
+            factor_names, {self.config.outperformer: 1.0, self.config.underperformer: -1.0}
+        )
 
 
 class BlackLittermanOptimizer(MeanVarianceOptimizer):
@@ -49,10 +424,13 @@ class BlackLittermanOptimizer(MeanVarianceOptimizer):
     candidates are every selectable symbol (tradable, not locked, covered by
     the forecast, with every bounded exposure): a symbol without a view gets
     its equilibrium return plus what the views on correlated symbols move
-    it by. The views are the ``expected_return`` model's ``mu`` on the
-    predicted candidates over the span, each a total return or, with
+    it by. The symbol views are the ``expected_return`` model's ``mu`` on
+    the predicted candidates over the span, each a total return or, with
     ``views_relative_to_prior``, an alpha added to the symbol's equilibrium
-    return; ``omega`` sets their uncertainty. The market's
+    return; ``omega`` sets their uncertainty. The user's views are
+    ``factor_views`` (``FactorReturnView``, ``RelativeFactorReturnView``)
+    and ``market_views`` (``MarketReturnView``). Without ``expected_return`` the rule reads no
+    prediction and its span is ``span``. The market's
     weights are ``market``'s output ``market_weight`` at the bar on the
     symbols the forecast covers (NaN counts as 0), renormalised to sum to
     one. ``candidate_top_k`` ranks the posterior expected return. Every other
@@ -63,13 +441,20 @@ class BlackLittermanOptimizer(MeanVarianceOptimizer):
     ----------
     config : BlackLittermanConfig
         ``MeanVarianceConfig``'s fields, the ``market`` factor, its
-        ``market_weight`` output, ``tau``, ``omega`` (with ``confidence``)
-        and ``views_relative_to_prior``.
+        ``market_weight`` output, ``tau``, ``omega`` (with ``confidence``),
+        ``views_relative_to_prior``, ``span`` and the user's views.
 
     Raises
     ------
     ValueError
-        If ``expected_return`` is missing (no views), ``covariance`` is not
+        If there are no views (no ``expected_return`` and no user views),
+        ``expected_return`` and ``expected_return_label`` are not set
+        together, ``span`` is missing without ``expected_return`` or not a
+        positive integer, a ``factor_views`` entry is not a ``FactorReturnView``
+        or ``RelativeFactorReturnView`` or a ``market_views`` one not a
+        ``MarketReturnView``, a factor view names a factor the risk model
+        lacks, ``bind`` finds a ``span`` other than
+        the label's, ``covariance`` is not
         a ``FactorRiskStoreEstimator``, ``market`` is missing or lacks
         ``market_weight``, ``tau`` is not positive, ``omega`` is unknown,
         ``confidence`` is missing or outside ``(0, 1]`` with ``"idzorek"``
@@ -106,14 +491,52 @@ class BlackLittermanOptimizer(MeanVarianceOptimizer):
     """
 
     config_cls = BlackLittermanConfig
+    _requires_expected_return = False
 
     def __init__(self, config: BlackLittermanConfig):
         """Check the views, the covariance estimator, the market, ``tau`` and ``omega``; see the class docstring."""
-        if config.expected_return is None:
+        if config.expected_return is None and not config.factor_views and not config.market_views:
             raise ValueError(
-                "BlackLittermanOptimizer has no views: set expected_return, the model whose "
-                "expected returns are the symbol views"
+                "BlackLittermanOptimizer has no views: set expected_return (the symbol views), "
+                "factor_views or market_views"
             )
+        if (config.expected_return is None) != (config.expected_return_label is None):
+            raise ValueError(
+                f"expected_return and expected_return_label give the symbol views together: "
+                f"set both or neither, got expected_return_label="
+                f"{config.expected_return_label!r} and expected_return="
+                f"{type(config.expected_return).__name__}"
+            )
+        span = config.span
+        if span is None:
+            if config.expected_return is None:
+                raise ValueError(
+                    "without expected_return the rule has no label to read its span from: set span"
+                )
+        elif isinstance(span, bool) or not isinstance(span, (int, np.integer)) or span < 1:
+            raise ValueError(f"span must be a positive integer or None, got {span!r}")
+        for field, views, classes in (
+            ("factor_views", config.factor_views, (FactorReturnView, RelativeFactorReturnView)),
+            ("market_views", config.market_views, (MarketReturnView,)),
+        ):
+            for view in views:
+                if not isinstance(view, classes):
+                    raise ValueError(
+                        f"{field} holds {' or '.join(cls.__name__ for cls in classes)}, got "
+                        f"{type(view).__name__}"
+                    )
+        risk_model = getattr(getattr(config.covariance, "config", None), "risk_model", None)
+        if risk_model is not None and config.factor_views:
+            names = tuple(risk_model.factor_names)
+            unknown = [
+                name for view in config.factor_views for name in view.risk_factors
+                if name not in names
+            ]
+            if unknown:
+                raise ValueError(
+                    f"factor_views names {unknown}, which the risk model's factors {list(names)} "
+                    f"do not include"
+                )
         if not isinstance(config.covariance, FactorRiskStoreEstimator):
             raise ValueError(
                 f"BlackLittermanOptimizer's covariance must be a FactorRiskStoreEstimator, got "
@@ -171,6 +594,51 @@ class BlackLittermanOptimizer(MeanVarianceOptimizer):
         True
         """
         return super().declared_inputs().merged(InputDeclaration(factors=(self.config.market,)))
+
+    def ranking_label(self, names: Sequence[str]) -> str:
+        """Return ``expected_return_label``, or without symbol views the first label.
+
+        Examples
+        --------
+        >>> rule.ranking_label(["ret_1", "ret_5"])  # doctest: +SKIP
+        'ret_5'
+        """
+        if self.config.expected_return_label is None:
+            return PortfolioConstructor.ranking_label(self, names)
+        return super().ranking_label(names)
+
+    def bind(self, labels: Sequence[LabelSpec]) -> None:
+        """Read the span: the expected-return label's, or ``span`` without symbol views.
+
+        Parameters
+        ----------
+        labels : Sequence[LabelSpec]
+            The specs of the predicted labels; not read without
+            ``expected_return``.
+
+        Raises
+        ------
+        ValueError
+            If ``span`` is set and differs from the label's span, and as
+            ``MeanVarianceOptimizer.bind``.
+
+        Examples
+        --------
+        >>> rule.bind([LabelSpec(name="ret_5", scale="raw", delay=1, span=5)])  # doctest: +SKIP
+        >>> rule.span  # doctest: +SKIP
+        5
+        """
+        config = self.config
+        if config.expected_return is None:
+            self._span = int(config.span)
+            return
+        super().bind(labels)
+        if config.span is not None and int(config.span) != self._span:
+            label_span, self._span = self._span, None
+            raise ValueError(
+                f"span={config.span} differs from the span of expected_return_label "
+                f"{config.expected_return_label!r}, {label_span} bars; the two must match"
+            )
 
     def market_weights(self, context: PortfolioContext, forecast: FactorRiskForecast) -> np.ndarray:
         """Return the market's weights on the forecast's symbols, summing to one.
@@ -308,12 +776,28 @@ class BlackLittermanOptimizer(MeanVarianceOptimizer):
         keep = np.ones(len(specific))
         keep[rows] = omega / (omega + tau_specific[rows])
         specific_posterior = tau_specific * keep  # the diagonal of M
-        # The posterior factor covariance (I + tau F H)^-1 tau F, H the views' precision on f.
+        tau_factor = tau * factor_covariance
+        # The user's views update the factor prior first: F_1 = tau F - G P tau F,
+        # G = tau F P' (P tau F P' + Omega_u)^-1, which takes a zero Omega_u.
+        user_rows, user_q, user_omega = self._user_views(context, estimate, x, tau_factor)
+        prior_factor = tau_factor
+        if len(user_q):
+            spread = user_rows @ tau_factor @ user_rows.T + np.diag(user_omega)
+            try:
+                gain = np.linalg.solve(spread, user_rows @ tau_factor).T
+            except np.linalg.LinAlgError as error:
+                raise PortfolioConstructionError(
+                    f"the user views at {context.timestamp} cannot be blended: two fully "
+                    f"confident views on one return, or a confident view on a factor without "
+                    f"variance, leave P tau F P' + Omega singular ({error})"
+                ) from error
+            prior_factor = tau_factor - gain @ user_rows @ tau_factor
+            prior_factor = (prior_factor + prior_factor.T) / 2
+        # The posterior factor covariance (I + F_1 H)^-1 F_1, H the symbol views' precision on f.
         viewed_exposures = exposures[rows]
         precision = viewed_exposures.T @ (viewed_exposures / (omega + tau_specific[rows])[:, None])
-        tau_factor = tau * factor_covariance
-        system = np.eye(len(tau_factor)) + tau_factor @ precision
-        factor_posterior = np.linalg.solve(system, tau_factor)
+        system = np.eye(len(tau_factor)) + prior_factor @ precision
+        factor_posterior = np.linalg.solve(system, prior_factor)
         factor_posterior = (factor_posterior + factor_posterior.T) / 2
         shrunk_exposures = keep[:, None] * exposures  # M = U F_post U' + diag(...), U = diag(keep) B
 
@@ -333,9 +817,12 @@ class BlackLittermanOptimizer(MeanVarianceOptimizer):
             q = q + pi[rows]
 
         # The posterior mean of f, then of e, then of r = B f + e.
+        factor_prior_mean = pi_factor
+        if len(user_q):
+            factor_prior_mean = pi_factor + gain @ (user_q - user_rows @ pi_factor)
         surprise = (q - pi_specific[rows]) / (omega + tau_specific[rows])
         factor_mean = np.linalg.solve(
-            system, pi_factor + tau_factor @ (viewed_exposures.T @ surprise)
+            system, factor_prior_mean + prior_factor @ (viewed_exposures.T @ surprise)
         )
         specific_mean = keep * pi_specific
         specific_mean[rows] += (1.0 - keep[rows]) * (q - viewed_exposures @ factor_mean)
@@ -355,5 +842,39 @@ class BlackLittermanOptimizer(MeanVarianceOptimizer):
         )
         return mean[position], forecast, np.ones(len(symbols), dtype=bool)
 
+    def _user_views(
+        self,
+        context: PortfolioContext,
+        estimate: FactorRiskForecast,
+        market_exposures: np.ndarray,
+        tau_factor: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return the user views known at the bar: their rows on ``f``, values and variances over the span."""
+        span = self._span
+        rows, values, variances = [], [], []
+        for view in (*self.config.factor_views, *self.config.market_views):
+            row = view.row(estimate.factor_names, market_exposures)
+            if row is None:
+                continue
+            annual = view.annual_return_at(context.timestamp)
+            if not math.isfinite(annual):
+                continue
+            prior = float(row @ tau_factor @ row) / self.config.tau
+            rows.append(row)
+            values.append(annual * span / BARS_PER_YEAR)
+            variances.append(view.variance(prior, self.config.tau, span))
+        k = len(estimate.factor_names)
+        return (
+            np.asarray(rows, dtype=np.float64).reshape(len(rows), k),
+            np.asarray(values, dtype=np.float64),
+            np.asarray(variances, dtype=np.float64),
+        )
 
-__all__ = ["BlackLittermanOptimizer"]
+
+__all__ = [
+    "BlackLittermanOptimizer",
+    "FactorReturnView",
+    "MarketReturnView",
+    "RelativeFactorReturnView",
+    "ReturnView",
+]

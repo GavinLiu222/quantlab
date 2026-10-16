@@ -8,7 +8,7 @@ exposes it as ``self.config``. They are frozen; a rule's covariance estimator is
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
-from quantlab.core.component import component
+from quantlab.core.component import Component, component
 from quantlab.core.config import FrozenConfig
 
 if TYPE_CHECKING:
@@ -318,7 +318,8 @@ class BlackLittermanConfig(MeanVarianceConfig):
     """Config of ``BlackLittermanOptimizer``: ``MeanVarianceConfig``, the market and ``tau``.
 
     The optimiser blends the equilibrium return of ``market`` with the views
-    of ``expected_return`` by Bayes' rule and optimises on the posterior
+    (the symbol views of ``expected_return``, the user's ``factor_views`` and
+    ``market_views``) by Bayes' rule and optimises on the posterior
     expected return and covariance; ``risk_aversion`` is the equilibrium's
     ``delta`` too. ``covariance`` must be a ``FactorRiskStoreEstimator``.
 
@@ -337,11 +338,24 @@ class BlackLittermanConfig(MeanVarianceConfig):
     ('benchmark_weight', 0.05, 'he_litterman', False)
     """
 
+    #: The label whose prediction gives the symbol views, with
+    #: ``expected_return``; ``None`` without symbol views.
+    expected_return_label: str | None = None
     #: How ``expected_return_label``'s prediction becomes the symbol views,
     #: one per predicted candidate, over the span (a total return or an
-    #: alpha, ``views_relative_to_prior``). Required: a rule without views
-    #: is refused.
+    #: alpha, ``views_relative_to_prior``). ``None``: no symbol views, only
+    #: the user's.
     expected_return: "ExpectedReturnModel" = component(default=None)
+    #: The span in bars of the expected return and the covariance. Required
+    #: without ``expected_return``; with it the span is the label's, and a
+    #: ``span`` set here must equal it.
+    span: int | None = None
+    #: The user's views on risk-model factors' returns: absolute
+    #: (``FactorReturnView``) or one factor less another
+    #: (``RelativeFactorReturnView``).
+    factor_views: tuple[Component, ...] = component(many=True, default=())
+    #: The user's views on the market portfolio's return (``MarketReturnView``).
+    market_views: tuple[Component, ...] = component(many=True, default=())
     #: The factor giving the market portfolio's weights, the equilibrium's
     #: ``w`` (``MembershipCapWeight`` over the roster's membership, say).
     market: "Factor" = component(default=None)
@@ -364,3 +378,96 @@ class BlackLittermanConfig(MeanVarianceConfig):
     #: True: a symbol view is an alpha added to the symbol's equilibrium
     #: return. False: it is the total return over the span.
     views_relative_to_prior: bool = False
+
+    def __post_init__(self):
+        """Store the user views as tuples."""
+        super().__post_init__()
+        # A rebuild hands the components over as a list.
+        object.__setattr__(self, "factor_views", tuple(self.factor_views))
+        object.__setattr__(self, "market_views", tuple(self.market_views))
+
+
+@dataclass(frozen=True, kw_only=True)
+class ReturnViewConfig(FrozenConfig):
+    """The fields every user view of a ``BlackLittermanOptimizer`` shares: its value and uncertainty.
+
+    The view is an annualised return, ``annual_return`` or the series
+    ``variable`` of the zarr store ``store`` on ``timestamp`` (exactly one
+    of the two), with ``confidence`` or ``std`` (exactly one). Each view
+    config subclasses it with what the view is on.
+
+    Examples
+    --------
+    >>> cfg = MarketReturnViewConfig(annual_return=0.06, confidence=0.5)
+    >>> isinstance(cfg, ReturnViewConfig), cfg.store is None, cfg.std is None
+    (True, True, True)
+    """
+
+    #: The annualised return, constant at every bar.
+    annual_return: float | None = None
+    #: A zarr store holding the annualised return as a series on
+    #: ``timestamp``; the value at a bar is the last finite one dated at or
+    #: before it.
+    store: str | None = None
+    #: The store's variable holding the series; required with ``store``.
+    variable: str | None = None
+    #: Idzorek's confidence ``C`` in ``(0, 1]``: the view's variance is
+    #: ``tau (1 - C)/C`` times the prior variance of the viewed return.
+    confidence: float | None = None
+    #: The view's standard deviation, annualised like the return and
+    #: converted to the span the same way (times ``span / 252``); positive.
+    std: float | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class MarketReturnViewConfig(ReturnViewConfig):
+    """Config of ``MarketReturnView``: a view on the market portfolio's return.
+
+    ``ReturnViewConfig``'s fields only.
+
+    Examples
+    --------
+    >>> MarketReturnViewConfig(annual_return=0.06, std=0.04).annual_return
+    0.06
+    """
+
+
+@dataclass(frozen=True, kw_only=True)
+class FactorReturnViewConfig(ReturnViewConfig):
+    """Config of ``FactorReturnView``: a view on one risk-model factor's return.
+
+    ``ReturnViewConfig``'s fields and the factor, by its name in the risk
+    model.
+
+    Examples
+    --------
+    >>> cfg = FactorReturnViewConfig(factor="style_book_to_price", annual_return=0.02, std=0.01)
+    >>> cfg.factor, cfg.confidence is None
+    ('style_book_to_price', True)
+    """
+
+    #: The factor's name in the risk model (``FactorRiskModel.factor_names``).
+    factor: str
+
+
+@dataclass(frozen=True, kw_only=True)
+class RelativeFactorReturnViewConfig(ReturnViewConfig):
+    """Config of ``RelativeFactorReturnView``: a view on one factor's return less another's.
+
+    ``ReturnViewConfig``'s fields and the two factors, by their names in
+    the risk model: the view is ``f_outperformer - f_underperformer``.
+
+    Examples
+    --------
+    >>> cfg = RelativeFactorReturnViewConfig(
+    ...     outperformer="style_book_to_price", underperformer="style_momentum",
+    ...     annual_return=0.02, confidence=0.5,
+    ... )
+    >>> cfg.outperformer, cfg.underperformer
+    ('style_book_to_price', 'style_momentum')
+    """
+
+    #: The factor expected to earn ``annual_return`` more than the other.
+    outperformer: str
+    #: The factor it is measured against.
+    underperformer: str
