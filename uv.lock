@@ -1698,6 +1698,20 @@ wheels = [
 ]
 
 [[package]]
+name = "mosek"
+version = "11.2.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/06/66/a61915b7303c32fb249062b97928e42ae806f7699bef83d7c77ed42b8bff/mosek-11.2.6-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:a8d2e16c1df692e129195913f0e3d8916ef1894b1ae30681406ca873cdf4e343", size = 8795585, upload-time = "2026-10-08T16:57:51.115Z" },
+    { url = "https://files.pythonhosted.org/packages/eb/65/60f42f51a1c26dcfce77aaa96792da8234d7ff12b5e1d05e81fa5d4b06fa/mosek-11.2.6-cp39-abi3-manylinux2014_x86_64.whl", hash = "sha256:258a44f60eb87c62ccee6c561cc24892b7856d8ae0a81eba5aae495a37322562", size = 15365407, upload-time = "2026-10-08T16:57:55.841Z" },
+    { url = "https://files.pythonhosted.org/packages/74/0f/77790be437be25d6f2a1e17340d5715a78d4d55ab7bdc6934f7aef1e4efb/mosek-11.2.6-cp39-abi3-manylinux_2_27_aarch64.whl", hash = "sha256:841fea3592011de82f5b1a9b2cb745af02d27337fc352766a0d80ac4a112e8f0", size = 9912458, upload-time = "2026-10-08T16:57:59.246Z" },
+    { url = "https://files.pythonhosted.org/packages/d8/c1/848b614f77d76a65f47d3b6e6ccdf54376285e8b201dd7cdc0f12170bede/mosek-11.2.6-cp39-abi3-win_amd64.whl", hash = "sha256:c7e9647e6d1b727e112c70d30316b9fde5993fac14d2fed74738435f96783bc2", size = 11207340, upload-time = "2026-10-08T16:58:02.424Z" },
+]
+
+[[package]]
 name = "mpmath"
 version = "1.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3042,6 +3056,7 @@ all = [
     { name = "botocore" },
     { name = "cvxpy" },
     { name = "mlflow-skinny" },
+    { name = "mosek" },
     { name = "protobuf" },
     { name = "pytabkit" },
     { name = "wandb" },
@@ -3056,6 +3071,7 @@ mlflow = [
 ]
 optimize = [
     { name = "cvxpy" },
+    { name = "mosek" },
 ]
 tabkit = [
     { name = "pytabkit" },
@@ -3090,6 +3106,8 @@ requires-dist = [
     { name = "matplotlib", specifier = ">=3.11.1" },
     { name = "mlflow-skinny", marker = "extra == 'all'", specifier = ">=3.0" },
     { name = "mlflow-skinny", marker = "extra == 'mlflow'", specifier = ">=3.0" },
+    { name = "mosek", marker = "extra == 'all'", specifier = ">=11.2.6" },
+    { name = "mosek", marker = "extra == 'optimize'", specifier = ">=11.2.6" },
     { name = "numba", specifier = ">=0.67.0" },
     { name = "numpy", specifier = ">=2.3.2" },
     { name = "pandas", specifier = ">=3.0.5" },

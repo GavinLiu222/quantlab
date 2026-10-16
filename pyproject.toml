@@ -65,7 +65,7 @@ Issues = "https://github.com/ZhaorongDai/quantlab/issues"
 # quantlab.acquisition.massive
 massive = ["boto3>=1.43.110", "botocore>=1.43.110"]
 # quantlab.portfolio.predefined.mean_variance
-optimize = ["cvxpy>=1.9.3"]
+optimize = ["cvxpy>=1.9.3", "mosek>=11.2.6"]
 # quantlab.model.predefined.realmlp and xgb_td
 tabkit = ["pytabkit>=1.7.3"]
 # quantlab.tracking.wandb
@@ -75,6 +75,7 @@ all = [
     "botocore>=1.43.110",
     "cvxpy>=1.9.3",
     "mlflow-skinny>=3.0",
+    "mosek>=11.2.6",
     "protobuf>=7",
     "pytabkit>=1.7.3",
     "wandb>=0.29.0",
