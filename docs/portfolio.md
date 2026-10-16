@@ -324,6 +324,8 @@ array([0.4  , 0.399, 0.   , 0.201])
 
 A symbol without a finite, positive volatility prediction has no risk estimate. It is treated like a symbol without enough history, as described under [Covariance estimators](#covariance-estimators).
 
+The covariance estimator must take volatilities: `FactorRiskStoreEstimator` does not, since the factor risk model's forecast is its own, so `volatility_label` with it is refused when the optimiser is constructed.
+
 One predictor has to supply both labels. A `ModelEnsemble` of a return model and a volatility model does this: a label that only one member predicts is passed through unchanged and keeps that member's scale (see [Models](model.md)).
 
 ### Long-short and the candidate pool

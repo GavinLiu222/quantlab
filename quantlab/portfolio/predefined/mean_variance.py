@@ -394,8 +394,10 @@ class MeanVarianceOptimizer(PortfolioConstructor):
         If ``direction`` or ``calibration`` is unknown, ``ic`` is missing
         for ``"grinold"``, ``weight_cap`` is not in ``(0, 1]``,
         ``risk_aversion`` or ``turnover_penalty`` is negative,
-        ``candidate_top_k`` is not a positive integer, or ``solver`` is not
-        an installed cvxpy solver.
+        ``candidate_top_k`` is not a positive integer, ``volatility_label``
+        is set with a covariance estimator that does not take volatilities
+        (``FactorRiskStoreEstimator``), or ``solver`` is not an installed
+        cvxpy solver.
 
     Examples
     --------
@@ -476,6 +478,12 @@ class MeanVarianceOptimizer(PortfolioConstructor):
         ):
             raise ValueError(
                 f"candidate_top_k must be a positive integer or None, got {top_k!r}"
+            )
+        if config.volatility_label is not None and not config.covariance.takes_volatility:
+            raise ValueError(
+                f"volatility_label={config.volatility_label!r} asks the covariance estimator "
+                f"for volatilities in place of its own, which "
+                f"{type(config.covariance).__name__} does not take; leave volatility_label unset"
             )
         if config.solver is not None and config.solver not in cp.installed_solvers():
             raise ValueError(

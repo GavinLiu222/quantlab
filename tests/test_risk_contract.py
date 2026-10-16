@@ -236,3 +236,18 @@ def test_use4_labels_industries_by_name_and_styles_without_their_prefix(planted_
 def planted_use4():
     prices, exposures, _, _ = _plant()
     return _use4(prices, exposures)
+
+
+def test_an_optimiser_asking_the_store_estimator_for_a_volatility_is_refused_at_construction(model):
+    from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig
+    from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
+    from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
+
+    params = dict(expected_return_label="ret_1", volatility_label="vol_1", ic=0.05, risk_aversion=5.0, weight_cap=0.2)
+    with pytest.raises(ValueError, match="volatility_label.*FactorRiskStoreEstimator"):
+        MeanVarianceOptimizer(MeanVarianceConfig(
+            covariance=FactorRiskStoreEstimator(FactorRiskStoreEstimatorConfig(risk_model=model)), **params
+        ))
+    MeanVarianceOptimizer(MeanVarianceConfig(
+        covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=20)), **params
+    ))

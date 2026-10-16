@@ -65,6 +65,8 @@ class FactorRiskStoreEstimator(CovarianceEstimator):
     """
 
     config_cls = FactorRiskStoreEstimatorConfig
+    #: The model's forecast is its own; a volatility forecast does not replace it.
+    takes_volatility = False
 
     def declared_inputs(self) -> InputDeclaration:
         """The factor risk model, whose exposures and estimate row ``estimate`` reads from the context; no return window.

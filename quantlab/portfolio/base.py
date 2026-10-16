@@ -887,6 +887,11 @@ class CovarianceEstimator(_Configured, ABC):
     (True, 60)
     """
 
+    #: Whether ``estimate`` takes per-symbol volatilities in place of its
+    #: own: a rule asking for them (``volatility_label``) refuses an
+    #: estimator that does not, when it is constructed.
+    takes_volatility: bool = True
+
     def declared_inputs(self) -> InputDeclaration:
         """What ``estimate`` reads from a context: its return window, its risk model.
 
