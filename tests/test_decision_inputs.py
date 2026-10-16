@@ -5,8 +5,8 @@ halt, a late listing and a delisting; no vectorbt):
 
 - On every rebalance bar, the context ``weights()`` built equals ``context()``
   at that bar given the replayed holdings, value for value (top-n,
-  mean-variance with Ledoit-Wolf, a rule declaring a factor and one reading a
-  factor risk model's exposures), and
+  mean-variance with Ledoit-Wolf, a rule declaring a factor, one reading a
+  factor risk model's exposures and one reading a market portfolio's rows), and
   ``decide`` on it returns the panel's row.
 - ``context()`` puts a held symbol without a prediction on the bar's symbols,
   locked where it cannot trade.
@@ -152,6 +152,44 @@ class _RiskModel:
         return xr.Dataset({"size": np.log(_price()).sel(timestamp=slice(first, last))})
 
 
+#: The last bar the stand-in market store covers, before the estimate store's end.
+MARKET_END = TS[-14]
+
+
+def _market_rows():
+    """The stand-in market store: the market's exposures to ``a`` and ``b`` and its covered share."""
+    bars = TS[TS <= MARKET_END]
+    rng = np.random.default_rng(10)
+    return xr.Dataset(
+        {
+            "market_exposure": (("timestamp", "factor"), rng.normal(size=(len(bars), 2))),
+            "covered_share": ("timestamp", rng.uniform(0.9, 1.0, len(bars))),
+        },
+        coords={"timestamp": bars, "factor": ["a", "b"]},
+    )
+
+
+class _MarketStore(_EstimateStore):
+    """Stands in for a ``MarketPortfolio``'s ``RiskStore``: the rows of ``_market_rows``, reads recorded."""
+
+    def store_range(self):
+        return TS[0].date().isoformat(), MARKET_END.date().isoformat()
+
+    def read(self, start, end):
+        self.calls.append((pd.Timestamp(start), pd.Timestamp(end)))
+        assert pd.Timestamp(start) >= TS[0] and pd.Timestamp(end) <= MARKET_END + pd.Timedelta(1, "D")
+        return _market_rows().sel(timestamp=slice(start, end))
+
+
+class _Market:
+    """Stands in for a ``MarketPortfolio`` over ``risk``: its config names the risk model, its store the rows."""
+
+    def __init__(self, risk):
+        self.config = type("Config", (), {"risk_model": risk})()
+        self.market = _MarketStore()
+        self.market.calls = []
+
+
 class _Recording:
     """Records every context ``construct`` is handed."""
 
@@ -182,6 +220,13 @@ class _WithRiskModel(_TopN):
         return InputDeclaration(risk_model=self.risk)
 
 
+class _WithMarket(_TopN):
+    risk = market = None
+
+    def declared_inputs(self):
+        return InputDeclaration(risk_model=self.risk, market=self.market)
+
+
 def _rule(kind):
     if kind == "mean_variance":
         rule = _MeanVariance(
@@ -195,12 +240,14 @@ def _rule(kind):
             )
         )
     else:
-        rule = {"factor": _WithFactor, "risk": _WithRiskModel}.get(kind, _TopN)(
+        rule = {"factor": _WithFactor, "risk": _WithRiskModel, "market": _WithMarket}.get(kind, _TopN)(
             TopNConfig(direction="long_only", top_n=3)
         )
-    if kind == "risk":
+    if kind in ("risk", "market"):
         rule.risk = _RiskModel()
         rule.risk.calls = []
+    if kind == "market":
+        rule.market = _Market(rule.risk)
     rule.bind(SPECS)
     rule.seen = []
     return rule
@@ -210,7 +257,7 @@ def _assert_same_context(built: PortfolioContext, looped: PortfolioContext):
     assert built.timestamp == looped.timestamp
     for name in (
         "predictions", "tradable", "current_weights", "returns", "staleness", "factors",
-        "risk_exposures", "risk_estimate",
+        "risk_exposures", "risk_estimate", "market",
     ):
         a, b = getattr(built, name), getattr(looped, name)
         if b is None:
@@ -219,7 +266,7 @@ def _assert_same_context(built: PortfolioContext, looped: PortfolioContext):
             xr.testing.assert_identical(a, b)
 
 
-@pytest.mark.parametrize("kind", ["top_n", "mean_variance", "factor", "risk"])
+@pytest.mark.parametrize("kind", ["top_n", "mean_variance", "factor", "risk", "market"])
 def test_context_reproduces_every_rebalance_bar_of_weights(kind):
     rule = _rule(kind)
     inputs = _inputs(rule)
@@ -242,10 +289,14 @@ def test_context_reproduces_every_rebalance_bar_of_weights(kind):
         assert all(c.returns.sizes["timestamp"] == 20 for c in looped)
     if kind == "factor":
         assert all(c.factors is not None for c in looped)
-    if kind == "risk":
+    if kind in ("risk", "market"):
         assert all(c.factors is None and c.risk_exposures is not None for c in looped)
     else:
         assert all(c.risk_exposures is None for c in looped)
+    if kind == "market":
+        assert any(c.market is not None for c in looped)
+    else:
+        assert all(c.market is None for c in looped)
 
 
 def test_a_risk_models_exposures_are_read_once_over_the_panel_and_reindexed():
@@ -305,6 +356,67 @@ def test_a_risk_models_estimate_rows_are_read_once_over_the_scheduled_bars_and_r
     calls = len(rule.risk.estimate.calls)
     assert _inputs(rule).context(late, predictions.sel(timestamp=late), held).risk_estimate is None
     assert len(rule.risk.estimate.calls) == calls
+
+
+def test_a_market_portfolios_rows_are_read_once_over_the_scheduled_bars():
+    rule = _rule("market")
+    predictions = _predictions()
+    _inputs(rule).weights(predictions)
+    scheduled = TS[WARMUP:][schedule(BARS, PERIODS)]
+    # One request from the first scheduled bar to the store's end, never one per bar.
+    ((first, last),) = rule.market.market.calls
+    assert first == scheduled[0] and last.normalize() == MARKET_END
+    stored = _market_rows()
+    covered = [c for c in rule.seen if c.timestamp <= MARKET_END]
+    assert covered and len(covered) < len(rule.seen)
+    for context in covered:
+        xr.testing.assert_identical(context.market, stored.sel(timestamp=context.timestamp, drop=True))
+    # A bar past the store has no market row.
+    assert all(c.market is None for c in rule.seen if c.timestamp > MARKET_END)
+
+    # One bar reads its own row; a bar past the store reads nothing and has none.
+    t = TS[WARMUP + 3]
+    held = xr.DataArray([0.4], dims="symbol", coords={"symbol": ["S1"]})
+    context = _inputs(rule).context(t, predictions.sel(timestamp=t), held)
+    assert rule.market.market.calls[-1] == (t, t)
+    xr.testing.assert_identical(context.market, stored.sel(timestamp=t, drop=True))
+    late = TS[-5]
+    calls = len(rule.market.market.calls)
+    assert _inputs(rule).context(late, predictions.sel(timestamp=late), held).market is None
+    assert len(rule.market.market.calls) == calls
+
+
+def test_a_decision_panel_holds_the_market_rows_of_its_bars():
+    rule = _rule("market")
+    predictions = _predictions()
+    inputs = _inputs(rule)
+    bars = [TS[WARMUP + 2], TS[WARMUP + 5], TS[-3]]
+
+    panel = inputs.panel(predictions.sel(timestamp=bars))
+
+    stored = _market_rows()
+    assert panel.market_rows.timestamp.values.tolist() == stored.timestamp.values[
+        np.isin(stored.timestamp.values, bars)].tolist()
+    xr.testing.assert_identical(panel.market_rows, stored.sel(timestamp=bars[:2]))
+    assert inputs.panel(predictions.sel(timestamp=[TS[-3]])).market_rows is None
+    assert _inputs(_rule("risk")).panel(predictions.sel(timestamp=bars)).market_rows is None
+
+
+def test_a_market_portfolio_is_declared_with_its_own_risk_model():
+    risk, other = _RiskModel(), _RiskModel()
+    market = _Market(risk)
+
+    assert InputDeclaration(risk_model=risk, market=market).market is market
+    with pytest.raises(ValueError, match="declared with its own risk model"):
+        InputDeclaration(market=market)
+    with pytest.raises(ValueError, match="declared with its own risk model"):
+        InputDeclaration(risk_model=other, market=market)
+    merged = InputDeclaration(lookback_bars=3).merged(InputDeclaration(risk_model=risk, market=market))
+    assert merged.market is market and merged.risk_model is risk
+    with pytest.raises(ValueError, match="two different market portfolios"):
+        InputDeclaration(risk_model=risk, market=market).merged(
+            InputDeclaration(risk_model=risk, market=_Market(risk))
+        )
 
 
 def test_a_held_symbol_without_a_prediction_joins_the_bar_locked():

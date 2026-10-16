@@ -67,6 +67,7 @@ from quantlab.runs.prediction_panel import LabelSpec
 if TYPE_CHECKING:
     from quantlab.factor.base import Factor
     from quantlab.risk.base import FactorRiskModel, ReturnCovariance
+    from quantlab.risk.market import MarketPortfolio
 
 class PortfolioConstructionError(RuntimeError):
     """A rule could not decide a bar: the optimisation failed, was infeasible or had no solution.
@@ -146,6 +147,14 @@ class PortfolioContext:
         where a symbol has none. With ``risk_exposures`` it is everything
         ``FactorRiskModel.forecast`` reads. ``None`` when the rule declares
         no risk model or the store has no row at the bar.
+    market : xr.Dataset or None
+        The market row at the bar of the market portfolio the rule declares
+        (``InputDeclaration.market``, a ``quantlab.risk.market.MarketPortfolio``):
+        ``market_exposure`` on ``factor``, the whole market's exposures to
+        its risk model's factors, and ``covered_share``; with the forecast and
+        the symbols' market weights, ``covariance_with_market`` gives each
+        symbol's covariance with the market. ``None`` when the rule declares
+        none or the store has no row at the bar.
 
     Examples
     --------
@@ -172,6 +181,7 @@ class PortfolioContext:
     staleness: xr.DataArray | None = None
     risk_exposures: xr.Dataset | None = None
     risk_estimate: xr.Dataset | None = None
+    market: xr.Dataset | None = None
 
     @property
     def symbols(self) -> np.ndarray:
@@ -242,6 +252,11 @@ class DecisionPanel:
         their own ``timestamp`` axis: bar ``t``'s row is its context's
         ``risk_estimate``, and a bar without one has none. ``None`` when the
         rule declares no risk model or the store has no row at the bars.
+    market_rows : xr.Dataset or None
+        The declared market portfolio's rows at the bars it has a row for,
+        on their own ``timestamp`` axis: bar ``t``'s row is its context's
+        ``market``. ``None`` when the rule declares no market portfolio or
+        the store has no row at the bars.
 
     Examples
     --------
@@ -271,6 +286,7 @@ class DecisionPanel:
     factors: xr.Dataset | None = None
     risk_exposures: xr.Dataset | None = None
     risk_estimates: xr.Dataset | None = None
+    market_rows: xr.Dataset | None = None
 
     def _last_priced(self) -> np.ndarray:
         """``[rows, symbols]``: the row of each symbol's last real price at or before each row, -1 for none."""
@@ -409,12 +425,19 @@ class InputDeclaration:
         ``context.risk_estimate``, taken from the model
         (``FactorRiskModel.exposures``, its ``estimate`` store), never
         computed as a factor.
+    market : MarketPortfolio or None
+        The market portfolio (``quantlab.risk.market.MarketPortfolio``) whose
+        row at each bar the rule reads from ``context.market``: the whole
+        market's exposures to ``risk_model``'s factors and its covered share.
+        Declared with its own risk model as ``risk_model``, so the row and
+        the bar's forecast price risk the same way.
 
     Raises
     ------
     ValueError
-        If ``lookback_bars`` is negative or ``history_bars`` below
-        ``lookback_bars + 1``.
+        If ``lookback_bars`` is negative, ``history_bars`` below
+        ``lookback_bars + 1``, or ``market`` is declared without its risk
+        model as ``risk_model``.
 
     Examples
     --------
@@ -430,9 +453,10 @@ class InputDeclaration:
     history_bars: int | None = None
     factors: "tuple[Factor, ...]" = ()
     risk_model: "FactorRiskModel | None" = None
+    market: "MarketPortfolio | None" = None
 
     def __post_init__(self):
-        """Default ``history_bars`` to ``lookback_bars + 1`` and check both."""
+        """Default ``history_bars`` to ``lookback_bars + 1`` and check both; check the market's risk model."""
         if self.lookback_bars < 0:
             raise ValueError(f"lookback_bars must be >= 0, got {self.lookback_bars}")
         if self.history_bars is None:
@@ -443,17 +467,26 @@ class InputDeclaration:
                 f"got {self.history_bars}"
             )
         object.__setattr__(self, "factors", tuple(self.factors))
+        if self.market is not None and not (
+            self.risk_model is not None and self.risk_model == self.market.config.risk_model
+        ):
+            given = "no risk_model" if self.risk_model is None else f"risk_model {self.risk_model!r}"
+            raise ValueError(
+                "a market portfolio is declared with its own risk model as risk_model; got "
+                f"{given} for a market portfolio over {self.market.config.risk_model!r}"
+            )
 
     def merged(self, other: "InputDeclaration") -> "InputDeclaration":
         """Return the declaration of what either reads.
 
         The longer window and price history, the factors of both (one
-        declared by both is listed once), and the risk model either names.
+        declared by both is listed once), and the risk model and the market
+        portfolio either names.
 
         Raises
         ------
         ValueError
-            If both name a risk model and they differ.
+            If both name a risk model, or a market portfolio, and they differ.
 
         Examples
         --------
@@ -468,11 +501,14 @@ class InputDeclaration:
             self.risk_model == other.risk_model
         ):
             raise ValueError("two different factor risk models are declared; a rule reads one")
+        if self.market is not None and other.market is not None and not (self.market == other.market):
+            raise ValueError("two different market portfolios are declared; a rule reads one")
         return InputDeclaration(
             lookback_bars=max(self.lookback_bars, other.lookback_bars),
             history_bars=max(self.history_bars, other.history_bars),
             factors=tuple(factors),
             risk_model=self.risk_model if self.risk_model is not None else other.risk_model,
+            market=self.market if self.market is not None else other.market,
         )
 
 

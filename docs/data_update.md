@@ -53,7 +53,10 @@ no price copy cut to the roster: SEP is brought up by the raw stage and the memb
 `universe` stage, both before the `factors` stage. The `universe` stage also brings up the
 common-stock membership (`universe/sharadar/sharadar_common_stock_membership`, every security of SEP from
 its first to its last priced bar, `CommonStockConstituentDataset`, see the
-[constituent guide](constituent.md)), allowed to fail. WRDS data is not in the
+[constituent guide](constituent.md)), allowed to fail. After the USE4 stores, the `risk` stage
+extends `risk/market_portfolio` (`MarketPortfolio`: the common-stock cap-weighted market's exposures
+to the USE4 factors and its covered share, the whole-market part of the Black-Litterman equilibrium;
+see the [portfolio guide](portfolio.md#the-market-portfolio)), allowed to fail. WRDS data is not in the
 daily update; run `scripts/wrds/*.py` when the vendor publishes.
 
 The last stage, `intraday`, runs once `done` is written (`after_done: true`: its steps are added

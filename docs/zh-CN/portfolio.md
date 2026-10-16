@@ -33,6 +33,7 @@
 | `factors` | 规则声明的因子（`declared_inputs().factors`）在这根 bar 上的值；没有声明时为 `None`。 |
 | `risk_exposures` | 规则声明的因子风险模型（`declared_inputs().risk_model`）在这根 bar 上的暴露，按模型给出的口径（`FactorRiskModel.exposures`：按 `exposure_data_strategy` 读暴露因子的 store 或现算）；没有声明时为 `None`。 |
 | `risk_estimate` | 同一模型的 estimate store 在这根 bar 上的那一行，即它对下一根 bar 风险的预测：`factor_covariance` 在 `(factor_i, factor_j)` 上，`specific_risk` 在 `symbol` 上。规则没有声明风险模型、或 store 在这根 bar 上没有行时为 `None`。 |
+| `market` | 规则声明的市场组合（`declared_inputs().market`，一个 `MarketPortfolio`）在这根 bar 上的那一行：`factor` 上的 `market_exposure`，即全市场对风险模型各因子的暴露，以及 `covered_share`。规则没有声明、或 store 在这根 bar 上没有行时为 `None`。 |
 
 规则为每个标的返回一个权重：
 
@@ -487,6 +488,34 @@ array([0.4, 0.4, 0. , 0.2])
 - 它声明模型（`declared_inputs().risk_model`），不声明任何因子。回测从模型本身取暴露，即 `model.exposures(start, end)`，与模型的 store、因子归因和偏差统计同一来源：`exposure_data_strategy="read"` 时读暴露因子的 store（此时 store 须覆盖回测区间），`"cal"` 时现算。它把这根 bar 上的值放进 `context.risk_exposures`，并把 estimate store 在这根 bar 上的那一行放进 `context.risk_estimate`：对一个面板在调仓 bar 上读一次，`context` 每根 bar 读一次，预加载时在窗口上读一次。store 在某根 bar 上没有行时为 `None`，估计器会拒绝这根 bar。
 
 覆盖规则是模型的，因子归因和偏差统计用的也是这一条：在这根 bar 上有全部暴露和特异风险、且不暴露于缺协方差因子的标的（这样的因子不进入预测）。它不读收益窗口，所以没有停牌过滤，锁定的持仓和其他持仓一样计入风险。模型的 store 必须覆盖回测区间。
+
+### 市场组合
+
+`MarketPortfolio(MarketPortfolioConfig(risk_model=model, cap_weight=market_weight, path=...))`（`quantlab.risk.market`）存的是 Black-Litterman 均衡里属于全市场的那部分（ADR 0047），这样在名单上做决策时不需要市场其余部分的任何数据。`cap_weight` 是每根 bar 上市场权重的因子，输出名为 `cap_weight_name`（默认 `"benchmark_weight"`）：在普通股成员资格上算的 `MembershipCapWeight`（见 [constituent.md](constituent.md)），权重之和为 1。在模型 estimate store 的每根 bar 上，用预测 `model.forecast(row, exposures)`（模型的覆盖规则）和它所覆盖标的上的权重，它的 store（`market`，一个 `RiskStore`：`compute`、`build`、`extend`、`read`）保存一行：
+
+- `factor` 上的 `market_exposure`：市场对模型 `factor_names` 的暴露 `x = B' w / s`，当根 bar 没有协方差的因子为 0；
+- `covered_share`：`s`，市场权重落在被覆盖标的上的份额。预测未覆盖标的上的权重被丢掉，其余按 `s` 重新归一化。
+
+没有任何被覆盖标的有权重的 bar 为 NaN。所有量都是单 bar 收益的。
+
+规则连同它的风险模型一起声明它：`InputDeclaration(risk_model=model, market=market)`（声明市场组合却不声明它自己的风险模型会被拒绝），并从 `context.market` 读这根 bar 的那一行，读法和 `context.risk_estimate` 相同：面板的调仓 bar 一次读完，`context` 每根 bar 读一次，预加载窗口读一次，近似回测里是 `DecisionPanel.market_rows`。每个标的与市场的单 bar 协方差就是 `covariance_with_market(forecast, context.market, weights)`，即预测标的上的 `B F x + D w / s`，`weights` 是它们在这根 bar 上的市场权重（把市值权重因子声明为因子即可读到）：它等于稠密的 `Sigma w` 的对应行，用名单自己的预测算出，所以均衡和预测对风险的计价一致。
+
+```python
+>>> import numpy as np, xarray as xr
+>>> from quantlab.risk.base import FactorRiskForecast
+>>> from quantlab.risk.market import covariance_with_market
+>>> forecast = FactorRiskForecast(
+...     symbols=np.array(["AAA", "BBB"]), factor_names=("market",),
+...     exposures=np.array([[1.0], [0.5]]), factor_covariance=np.array([[0.04]]),
+...     specific_variance=np.array([0.01, 0.02]),
+... )
+>>> row = xr.Dataset({"market_exposure": ("factor", [0.8]), "covered_share": 1.0}, coords={"factor": ["market"]})
+>>> covariance_with_market(forecast, row, np.array([0.6, 0.4])).round(4)
+array([0.038, 0.024])
+
+```
+
+共享 store 是 `risk/market_portfolio`，由共享的 USE4 模型和普通股成员资格计算，每日数据更新在 `risk` 阶段里、USE4 store 之后延长它。
 
 ## 完整示例
 

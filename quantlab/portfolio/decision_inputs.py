@@ -52,7 +52,9 @@ stores, factor attribution and bias statistics read, never computed as a
 declared factor. Its estimate store's rows (the factor covariance and
 specific risks forecast at each bar) are read here as well, beside the
 exposures, so a covariance estimator turns the context into the model's
-forecast and reads no store itself.
+forecast and reads no store itself. A declared market portfolio's rows (the
+whole market's factor exposures and covered share, ``quantlab.risk.market``)
+are read the same way as the estimate rows.
 
 This module imports the portfolio and data base classes, the Execution
 module and the backtest-run reader, never the backtest, model, factor or
@@ -75,6 +77,7 @@ from loguru import logger
 from quantlab.dataset.base import InsufficientHistoryError, MarketDataset
 from quantlab.portfolio.base import DecisionPanel, PortfolioConstructor, PortfolioContext
 from quantlab.risk.base import ESTIMATE_VARIABLES
+from quantlab.risk.market import MARKET_VARIABLES
 from quantlab.runs.backtest_run import BacktestRun
 from quantlab.execution.rules import ExecutionBook, ExecutionSettings
 from quantlab.utils.date_range import last_moment
@@ -101,6 +104,9 @@ class PanelReads:
         A declared factor risk model's exposures and its estimate store's
         rows (``None`` when the store has none in the range); both ``None``
         without a declared risk model.
+    market_rows : xr.Dataset or None
+        A declared market portfolio's rows (``None`` when the store has none
+        in the range, or none is declared).
 
     Examples
     --------
@@ -113,6 +119,7 @@ class PanelReads:
     factors: xr.Dataset | None = None
     risk_exposures: xr.Dataset | None = None
     risk_estimates: xr.Dataset | None = None
+    market_rows: xr.Dataset | None = None
 
 
 def _price_window(
@@ -192,11 +199,13 @@ class _Preload:
     dataset's bars over the same range, which every bar's warm-up is counted
     on as ``bar_before`` counts it; ``tradable``, ``factors`` and
     ``risk_exposures`` the window's bars, on every symbol; ``risk_estimates``
-    the estimate store's rows of the window's bars it holds.
+    and ``market_rows`` the estimate and market stores' rows of the window's
+    bars they hold.
     """
 
     def __init__(
-        self, first, last, history_bars, prices, calendar, tradable, factors, risk_exposures, risk_estimates
+        self, first, last, history_bars, prices, calendar, tradable, factors, risk_exposures, risk_estimates,
+        market_rows,
     ):
         """Hold the window's reads; see the class docstring."""
         self.first, self.last = first, last
@@ -207,9 +216,10 @@ class _Preload:
         self.factors = factors
         self.risk_exposures = risk_exposures
         self.risk_estimates = risk_estimates
+        self.market_rows = market_rows
 
     def bar(self, t: pd.Timestamp, symbols):
-        """Return the bar's prices window, tradability, factors, exposures and estimate row on ``symbols``.
+        """Return the bar's prices window, tradability, factors, exposures, estimate row on ``symbols`` and market row.
 
         Each as ``context`` reads it from the sources, bar by bar.
 
@@ -237,7 +247,8 @@ class _Preload:
             tradable,
             _at(self.factors, t, symbols),
             _at(self.risk_exposures, t, symbols),
-            _estimate_at(self.risk_estimates, t, symbols),
+            _row_at(self.risk_estimates, t, symbols),
+            _row_at(self.market_rows, t, None),
         )
 
 
@@ -248,12 +259,36 @@ def _at(panel: xr.Dataset | None, t: pd.Timestamp, symbols) -> xr.Dataset | None
     return panel.reindex(timestamp=[t]).isel(timestamp=0, drop=True).reindex(symbol=symbols)
 
 
-def _estimate_at(rows: xr.Dataset | None, t: pd.Timestamp, symbols) -> xr.Dataset | None:
-    """Return the estimate row at ``t`` on ``symbols`` (every symbol for None), or None where there is no row."""
+def _row_at(rows: xr.Dataset | None, t: pd.Timestamp, symbols) -> xr.Dataset | None:
+    """Return a store's row at ``t`` (an estimate or market row) on ``symbols`` (every symbol for None), or None where there is no row."""
     if rows is None or t not in rows.indexes["timestamp"]:
         return None
     row = rows.sel(timestamp=t, drop=True)
     return row if symbols is None else row.reindex(symbol=symbols)
+
+
+def _stored_rows(store, first, last, variables) -> xr.Dataset | None:
+    """Return ``variables`` of a ``RiskStore``'s rows from ``first`` to ``last``, loaded, or None.
+
+    One ``read`` over the part of the range the store's recorded range
+    covers; ``None`` when that is empty or nothing is recorded.
+    """
+    covered = store.store_range()
+    if covered is None:
+        return None
+    start = max(pd.Timestamp(first), pd.Timestamp(covered[0]))
+    end = min(pd.Timestamp(last), last_moment(covered[1]))
+    if start > end:
+        return None
+    return store.read(start, end)[list(variables)].load()
+
+
+def _at_bars(rows: xr.Dataset | None, timestamps: pd.DatetimeIndex) -> xr.Dataset | None:
+    """Return the rows of ``rows`` at ``timestamps``, or None when it has none there."""
+    if rows is None:
+        return None
+    at_bars = np.isin(rows.timestamp.values, timestamps.values)
+    return rows.isel(timestamp=at_bars) if at_bars.any() else None
 
 
 class DecisionInputs:
@@ -574,10 +609,8 @@ class DecisionInputs:
         exposures = estimates = None
         if self.declared.risk_model is not None:
             exposures = reads.risk_exposures.reindex(timestamp=timestamps, symbol=symbols)
-            estimates = reads.risk_estimates
-            if estimates is not None:
-                at_bars = np.isin(estimates.timestamp.values, timestamps.values)
-                estimates = estimates.isel(timestamp=at_bars) if at_bars.any() else None
+            estimates = _at_bars(reads.risk_estimates, timestamps)
+        market_rows = _at_bars(reads.market_rows, timestamps)
         return DecisionPanel(
             timestamps=timestamps,
             symbols=symbols,
@@ -589,6 +622,7 @@ class DecisionInputs:
             factors=factors,
             risk_exposures=exposures,
             risk_estimates=estimates,
+            market_rows=market_rows,
         )
 
     def panel_reads(self, first, last, *, prices: xr.Dataset | None = None) -> "PanelReads":
@@ -643,6 +677,7 @@ class DecisionInputs:
             factors=None if factors is None else factors.load(),
             risk_exposures=None if exposures is None else exposures.load(),
             risk_estimates=None if exposures is None else self._risk_estimates(first, last, None),
+            market_rows=self._market_rows(first, last),
         )
 
     def history_prices(self, first, last) -> xr.Dataset:
@@ -789,6 +824,11 @@ class DecisionInputs:
             if len(rebalancing)
             else None
         )
+        market_rows = (
+            self._market_rows(pd.Timestamp(rebalancing[0]), pd.Timestamp(rebalancing[-1]))
+            if len(rebalancing)
+            else None
+        )
         valuation = prices[self.valuation_column]
         book = _Book(
             np.asarray(prices[self.fill_column].values, dtype=np.float64),
@@ -816,7 +856,8 @@ class DecisionInputs:
                 valuation.isel(timestamp=slice(max(0, position + 1 - history_bars), position + 1)),
                 None if factors is None else factors.isel(timestamp=t, drop=True),
                 None if risk_exposures is None else risk_exposures.isel(timestamp=t, drop=True),
-                _estimate_at(risk_estimates, bar, None),
+                _row_at(risk_estimates, bar, None),
+                _row_at(market_rows, bar, None),
             )
             decision = self.constructor.decide(context)
             label = pd.Timestamp(timestamps[t]).isoformat()
@@ -915,7 +956,7 @@ class DecisionInputs:
             current_weights.reindex(symbol=symbols, fill_value=0.0).values, dtype=np.float64
         )
         if self._preload is not None:
-            prices, tradable, factors, risk_exposures, risk_estimate = self._preload.bar(t, symbols)
+            prices, tradable, factors, risk_exposures, risk_estimate, market = self._preload.bar(t, symbols)
             if not prices.sizes["timestamp"] or pd.Timestamp(prices.timestamp.values[-1]) != t:
                 raise ValueError(f"{t} is not a bar of the price dataset")
             return self._context(
@@ -927,6 +968,7 @@ class DecisionInputs:
                 factors,
                 risk_exposures,
                 risk_estimate,
+                market,
             )
         prices = self._prices(t, t, symbols, warn=False)
         if not prices.sizes["timestamp"] or pd.Timestamp(prices.timestamp.values[-1]) != t:
@@ -953,7 +995,8 @@ class DecisionInputs:
             prices[self.valuation_column],
             factors,
             risk_exposures,
-            _estimate_at(self._risk_estimates(t, t, symbols), t, None),
+            _row_at(self._risk_estimates(t, t, symbols), t, None),
+            _row_at(self._market_rows(t, t), t, None),
         )
 
     @contextmanager
@@ -1038,6 +1081,7 @@ class DecisionInputs:
             None if factors is None else factors.load(),
             None if risk_exposures is None else risk_exposures.load(),
             self._risk_estimates(first, last, None),
+            self._market_rows(first, last),
         )
         try:
             yield self
@@ -1045,7 +1089,8 @@ class DecisionInputs:
             self._preload = None
 
     def _context(
-        self, timestamp, predictions, tradable, current, valuation_price, factors, risk_exposures, risk_estimate
+        self, timestamp, predictions, tradable, current, valuation_price, factors, risk_exposures, risk_estimate,
+        market,
     ) -> PortfolioContext:
         """Build a context from checked inputs: the one builder of both entries.
 
@@ -1069,6 +1114,7 @@ class DecisionInputs:
             staleness=staleness,
             risk_exposures=risk_exposures,
             risk_estimate=risk_estimate,
+            market=market,
         )
 
     def _scheduled(self, timestamps: pd.DatetimeIndex) -> np.ndarray:
@@ -1169,12 +1215,16 @@ class DecisionInputs:
         model = self.declared.risk_model
         if model is None:
             return None
-        covered = model.estimate.store_range()
-        if covered is None:
-            return None
-        start = max(first, pd.Timestamp(covered[0]))
-        end = min(last, last_moment(covered[1]))
-        if start > end:
-            return None
-        rows = model.estimate.read(start, end)[list(ESTIMATE_VARIABLES)]
-        return (rows if symbols is None else rows.reindex(symbol=symbols)).load()
+        rows = _stored_rows(model.estimate, first, last, ESTIMATE_VARIABLES)
+        return rows if rows is None or symbols is None else rows.reindex(symbol=symbols)
+
+    def _market_rows(self, first: pd.Timestamp, last: pd.Timestamp) -> xr.Dataset | None:
+        """Return the declared market portfolio's rows from ``first`` to ``last``, or None.
+
+        One ``RiskStore.read`` of its store, over the part of the range its
+        recorded range covers (``None`` when that is empty or nothing is
+        declared), loaded: ``MARKET_VARIABLES`` only. A bar it has no row
+        for gets no market row.
+        """
+        market = self.declared.market
+        return None if market is None else _stored_rows(market.market, first, last, MARKET_VARIABLES)
