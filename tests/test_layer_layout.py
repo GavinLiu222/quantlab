@@ -91,7 +91,7 @@ def test_the_approximate_rule_implementations_import_no_solver():
     root = REPO_ROOT / "quantlab/portfolio/predefined/approximate"
     files = sorted(root.rglob("*.py"))
     # Positive control: the implementations and the kernels are seen.
-    assert {path.name for path in files} >= {"top_n.py", "mean_variance.py", "covariance.py", "mean_variance_kernels.py"}
+    assert {path.name for path in files} >= {"top_n.py", "mean_variance.py", "black_litterman.py", "covariance.py", "mean_variance_kernels.py"}
     offenders = {
         str(path.relative_to(root)): sorted(
             name for name in _resolved_imports(path) if _is_or_under(name, "cvxpy")
@@ -114,6 +114,7 @@ def test_importing_the_portfolio_root_and_rules_loads_no_numba():
         "import quantlab.portfolio.predefined.approximate.top_n\n"
         "import quantlab.portfolio.predefined.approximate.mean_variance\n"
         "import quantlab.portfolio.predefined.approximate.covariance\n"
+        "import quantlab.portfolio.predefined.approximate.black_litterman\n"
         "import quantlab.portfolio.approximate, quantlab.backtest.approximate\n"
         "print('numba' in sys.modules)\n"
     )

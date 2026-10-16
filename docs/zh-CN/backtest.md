@@ -531,6 +531,7 @@ np.True_
 - `TopNConstructor`，只做多和多空；
 - `MeanVarianceOptimizer`，只做多或多空、任意预期收益模型、有无换手惩罚、`candidate_top_k`、`volatility_label` 和 `max_names`，协方差估计器为 `LedoitWolfEstimator` 或 `FactorRiskStoreEstimator`（见[近似回测中的均值-方差](portfolio.md#近似回测中的均值-方差)）；
 - 不设跟踪误差上限的 `ActiveRiskOptimizer`。
+- `BlackLittermanOptimizer`，支持每种观点类型和每个 `omega` 选项（见下文）。
 
 每个配置字段要么被读取，要么被忽略，要么必须保持默认值。被忽略的：`solver`、`min_trade`（不模拟，见上文）、`exposure_factors`（只通过 `exposure_bounds` 起作用）和 `mip_gap`（混合整数求解器的间隙；近似回测不解混合整数规划）。以下情况在读任何数据之前就被拒绝，消息会写明规则、估计器或字段：其他规则（`TopkDropoutConstructor`、自定义规则）、受支持规则或估计器的子类（它可能做出不同的决策）、其他协方差估计器、跟踪误差上限、`exposure_bounds`，以及近似回测不认识且不是默认值的字段（以后给规则配置加的字段不会被悄悄近似掉）。
 
@@ -539,10 +540,18 @@ np.True_
 >>> from quantlab.portfolio.predefined.topk_dropout import TopkDropoutConstructor
 >>> approximate.run(predictions, TopkDropoutConstructor(TopkDropoutConfig(direction="long_only", topk=2, n_drop=1)))
 Traceback (most recent call last):
-ValueError: USEquityApproximateBacktest cannot run TopkDropoutConstructor: TopkDropoutConstructor has no approximate implementation: the approximate backtest runs TopNConstructor, MeanVarianceOptimizer, ActiveRiskOptimizer, as those exact classes; backtest it with a backtest run
+ValueError: USEquityApproximateBacktest cannot run TopkDropoutConstructor: TopkDropoutConstructor has no approximate implementation: the approximate backtest runs TopNConstructor, MeanVarianceOptimizer, ActiveRiskOptimizer, BlackLittermanOptimizer, as those exact classes; backtest it with a backtest run
 ```
 
 在 us3000 规模的合成数据上（价格轴 10,000 只标的，其中 3,000 只有价格，收益来自 60 个因子，最大的协方差特征值约为特定方差的 4,500 倍和 110 倍，60 bar 的 Ledoit-Wolf 窗口），模拟盘的均值-方差规则（风险厌恶 20、`weight_cap` 0.05、`turnover_penalty` 0.002）在 67 次日度调仓、10 bp 成本下用时 1.0 秒，`run()` 用时 532 秒（每个 bar 平均迭代 4.6 次）；净值相差在 5e-4 以内，年化收益相差在 0.25 个百分点以内。
+
+#### 近似回测中的 Black-Litterman
+
+`BlackLittermanOptimizer` 走均值-方差实现，在核函数之前逐 bar 计算后验（`quantlab/portfolio/predefined/approximate/black_litterman.py`）。每个 bar 上，规则自己的算式（`BlackLittermanOptimizer.moments`，逐 bar 的 `posterior` 也调用它）拿到：该 bar 由因子风险库给出的低秩协方差（限于被覆盖的标的和当期有方差的因子）、市场在这些标的上的权重（`market_weight`，NaN 记 0，再归一化），以及标的观点；后验协方差以核函数本来就读的因子形式交给核函数，秩为 `2K`（预测的因子及其后验副本；用户观点已并入后验因子协方差）。每个可选标的都是候选，`candidate_top_k` 按后验排序，与逐 bar 相同。
+
+支持的字段：近似回测支持的全部均值-方差字段，加上 `market`、`market_weight`、`tau`、`omega`、`confidence`、`views_relative_to_prior`、`span`（没有 `expected_return` 时使用；这里 `expected_return` 可选）、`factor_views` 和 `market_views`（常数或库中序列，每个 bar 点时读取）。保留：每种观点类型和 `omega` 选项、以后验协方差定价的均衡收益，以及逐 bar 规则拒绝的 bar（市场在被覆盖标的上没有权重，或用户观点无法融合）照常持有，与回测运行一样。除上文近似回测通常的差距外还放弃：因子风险库的覆盖用近似版本（两个保留因子之间缺失的协方差记 0，见 [portfolio.md](portfolio.md#近似回测中的均值-方差)），且某 bar 上方差为 0 的因子在该 bar 视为不存在，所以对它的观点会被略去，而逐 bar 规则遇到完全确信的这种观点会拒绝。
+
+在合成因子风险库上（`tests/test_backtest_approximate_black_litterman.py`：14 个标的、五个因子、市场排除四个标的），权重与严格求解的回测运行相差在 9e-5（L1）以内，净值在 3e-4 以内，覆盖：各 `omega` 下的模型观点（每种都分别作为 alpha 和作为总收益）、多空、与模型观点并存的用户观点和只有用户观点，以及带换手惩罚和 `candidate_top_k`；测试对两者都锁定 1e-3。耗时（us3000 形状的核函数基准：67 个 bar、3,000 个候选、60 个因子、风险厌恶 20、`weight_cap` 0.05、`turnover_penalty` 0.002，前向求解，M1 Pro 串行）：67 个 bar 的后验共 0.35 到 0.9 秒；在秩 `2K` 的后验上求解 1.2 到 1.6 秒，相同 `mu` 下秩 `K` 为 0.8 到 1.0 秒（每个 bar 都是 15 次迭代）。一个分块的后验协方差在面板的标的轴上每个标的有 `2K` 个暴露，是先验的两倍，所以分块这部分内存翻倍；需要时调小 `chunk_bars`。
 
 #### 分块与求解
 

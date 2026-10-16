@@ -89,6 +89,23 @@ _RULES: Mapping[str, tuple[Mapping[str, str], str]] = {
         },
         "mean_variance",
     ),
+    "quantlab.portfolio.predefined.black_litterman.BlackLittermanOptimizer": (
+        {
+            **_MEAN_VARIANCE_FIELDS,
+            # The span without symbol views (expected_return, optional here).
+            "span": SUPPORTED,
+            "market": SUPPORTED,
+            "market_weight": SUPPORTED,
+            "tau": SUPPORTED,
+            "omega": SUPPORTED,
+            "confidence": SUPPORTED,
+            "views_relative_to_prior": SUPPORTED,
+            # The user's views, every ReturnView: their arithmetic is the per-bar rule's.
+            "factor_views": SUPPORTED,
+            "market_views": SUPPORTED,
+        },
+        "black_litterman",
+    ),
 }
 
 LEDOIT_WOLF = "quantlab.portfolio.predefined.ledoit_wolf.LedoitWolfEstimator"
@@ -277,7 +294,7 @@ def implementation(rule):
     'quantlab.portfolio.predefined.approximate.top_n'
     >>> implementation(TopkDropoutConstructor(TopkDropoutConfig(direction="long_only", topk=3, n_drop=1)))
     Traceback (most recent call last):
-    ValueError: TopkDropoutConstructor has no approximate implementation: the approximate backtest runs TopNConstructor, MeanVarianceOptimizer, ActiveRiskOptimizer, as those exact classes
+    ValueError: TopkDropoutConstructor has no approximate implementation: the approximate backtest runs TopNConstructor, MeanVarianceOptimizer, ActiveRiskOptimizer, BlackLittermanOptimizer, as those exact classes
     """
     refused = _refusal(rule)
     if refused is not None:

@@ -121,12 +121,17 @@ def _problem(rule, panel: DecisionPanel) -> PanelProblem:
         volatility = _prediction(panel, config.volatility_label) / np.sqrt(span)
         low_rank = estimate_all(config.covariance, panel, volatility)
     low_rank = low_rank.scaled(span)
-    prediction = _prediction(panel, config.expected_return_label)
     selectable = np.asarray(panel.tradable, dtype=bool) & low_rank.covered
-    predicted = selectable & np.isfinite(prediction)
     model = config.expected_return
-    sigma = np.sqrt(low_rank.variance) if model.needs_sigma else None
-    expected = model.expected_returns(prediction, sigma, predicted)
+    if model is None:
+        # A rule without symbol views (Black-Litterman on the user's views alone) reads no prediction.
+        predicted = np.zeros_like(selectable)
+        expected = np.zeros(selectable.shape)
+    else:
+        prediction = _prediction(panel, config.expected_return_label)
+        predicted = selectable & np.isfinite(prediction)
+        sigma = np.sqrt(low_rank.variance) if model.needs_sigma else None
+        expected = model.expected_returns(prediction, sigma, predicted)
     reference = None
     if rule.import_path == ACTIVE_RISK:
         # The benchmark's weights at each bar, as the per-bar rule's reference_weights reads them.

@@ -41,7 +41,8 @@ series read point-in-time from a store, the last finite value dated at or
 before the bar; a view not known yet at a bar, or on a factor the bar's
 forecast lacks, is left out at that bar.
 
-The approximate backtest does not run this rule.
+The approximate backtest runs this rule (``quantlab.portfolio.predefined.approximate.black_litterman``),
+handing ``moments`` each bar's arrays.
 """
 
 import math
@@ -757,16 +758,104 @@ class BlackLittermanOptimizer(MeanVarianceOptimizer):
         True
         """
         exposures, factor_covariance, specific = estimate.factor_form()
-        tau, delta = self.config.tau, self.config.risk_aversion
         weights = self.market_weights(context, estimate)
         x = self.market_exposures(context, estimate, weights)
         position = pd.Index(estimate.symbols).get_indexer(symbols)
         viewed = np.isfinite(expected_return)
         rows = position[viewed]
+        variance = None if self.config.omega == "specific" else estimate.subset(rows).variance
+        mean, factor_posterior, keep, specific_posterior = self.moments(
+            context.timestamp, estimate.factor_names, (exposures, factor_covariance, specific),
+            (weights, x), rows, variance, np.asarray(expected_return, dtype=np.float64)[viewed],
+        )
+        k = len(estimate.factor_names)
+        covariance = np.zeros((2 * k, 2 * k))
+        covariance[:k, :k] = factor_covariance
+        covariance[k:, k:] = factor_posterior
+        forecast = FactorRiskForecast(
+            symbols=estimate.symbols,
+            factor_names=tuple(estimate.factor_names)
+            + tuple(f"{name} (posterior)" for name in estimate.factor_names),
+            exposures=np.concatenate([exposures, keep[:, None] * exposures], axis=1),
+            factor_covariance=covariance,
+            specific_variance=specific + specific_posterior,
+        )
+        return mean[position], forecast, np.ones(len(symbols), dtype=bool)
+
+    def moments(
+        self,
+        timestamp,
+        factor_names: Sequence[str],
+        factor_form: tuple[np.ndarray, np.ndarray, np.ndarray],
+        market: tuple[np.ndarray, np.ndarray],
+        rows: np.ndarray,
+        variance: np.ndarray | None,
+        views: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Return the posterior on one bar's arrays: the mean, the factor covariance and the diagonal parts of ``M``.
+
+        The model's arithmetic (see the module docstring) on the bar's
+        forecast in factor form, shared by ``posterior`` and the approximate
+        backtest's implementation of the rule, which hands it each bar's
+        arrays; the user's views known at ``timestamp`` are read here.
+
+        Parameters
+        ----------
+        timestamp : pd.Timestamp or np.datetime64
+            The bar, at which the user's views are read.
+        factor_names : Sequence[str]
+            The forecast's factors.
+        factor_form : tuple of np.ndarray
+            ``(B, F, D)`` over the forecast's ``n`` symbols on the span:
+            ``[n, k]`` exposures, ``[k, k]`` factor covariance, ``[n]``
+            specific variances.
+        market : tuple of np.ndarray
+            ``(w, x)``: the market's weights on the ``n`` symbols, summing to
+            one, and its factor exposures.
+        rows : np.ndarray
+            The viewed symbols' positions among the ``n``.
+        variance : np.ndarray or None
+            ``Sigma_jj`` of each viewed symbol; not read (``None``) with
+            ``omega="specific"``.
+        views : np.ndarray
+            The expected return model's ``mu`` of each viewed symbol.
+
+        Returns
+        -------
+        mean : np.ndarray
+            ``[n]``: the posterior expected return.
+        factor_posterior : np.ndarray
+            ``[k, k]``: the posterior covariance of ``f``, ``F_post``.
+        keep : np.ndarray
+            ``[n]``: how much of each symbol's specific prior variance a view
+            keeps, so ``M = U F_post U' + diag(specific)``, ``U = diag(keep) B``.
+        specific : np.ndarray
+            ``[n]``: the diagonal of ``M``.
+
+        Raises
+        ------
+        PortfolioConstructionError
+            If the user's views cannot be blended (two fully confident views
+            on one return, or a confident view on a factor without variance).
+
+        Examples
+        --------
+        With no views the mean is the equilibrium ``delta (1 + tau) Sigma w``:
+
+        >>> mean, _, keep, _ = rule.moments(
+        ...     day, forecast.factor_names, forecast.factor_form(), (w, forecast.exposures.T @ w),
+        ...     np.array([], dtype=int), np.array([]), np.array([]),
+        ... )  # doctest: +SKIP
+        >>> np.allclose(mean, 3.0 * 1.05 * forecast.covariance @ w), bool((keep == 1).all())  # doctest: +SKIP
+        (True, True)
+        """
+        exposures, factor_covariance, specific = factor_form
+        weights, x = market
+        tau, delta = self.config.tau, self.config.risk_aversion
         if self.config.omega == "specific":
             omega = tau * specific[rows]
         else:
-            omega = tau * estimate.subset(rows).variance  # He-Litterman, tau Sigma_jj
+            omega = tau * variance  # He-Litterman, tau Sigma_jj
             if self.config.omega == "idzorek":  # scaled by (1 - C) / C
                 confidence = self.config.confidence
                 omega = omega * ((1.0 - confidence) / confidence)
@@ -779,7 +868,7 @@ class BlackLittermanOptimizer(MeanVarianceOptimizer):
         tau_factor = tau * factor_covariance
         # The user's views update the factor prior first: F_1 = tau F - G P tau F,
         # G = tau F P' (P tau F P' + Omega_u)^-1, which takes a zero Omega_u.
-        user_rows, user_q, user_omega = self._user_views(context, estimate, x, tau_factor)
+        user_rows, user_q, user_omega = self._user_views(timestamp, factor_names, x, tau_factor)
         prior_factor = tau_factor
         if len(user_q):
             spread = user_rows @ tau_factor @ user_rows.T + np.diag(user_omega)
@@ -787,7 +876,7 @@ class BlackLittermanOptimizer(MeanVarianceOptimizer):
                 gain = np.linalg.solve(spread, user_rows @ tau_factor).T
             except np.linalg.LinAlgError as error:
                 raise PortfolioConstructionError(
-                    f"the user views at {context.timestamp} cannot be blended: two fully "
+                    f"the user views at {timestamp} cannot be blended: two fully "
                     f"confident views on one return, or a confident view on a factor without "
                     f"variance, leave P tau F P' + Omega singular ({error})"
                 ) from error
@@ -812,7 +901,7 @@ class BlackLittermanOptimizer(MeanVarianceOptimizer):
         pi_factor = delta * factor_covariance @ x
         pi_specific = pi - exposures @ pi_factor
         # The views, here because an alpha view is added to pi.
-        q = np.asarray(expected_return, dtype=np.float64)[viewed]
+        q = views
         if self.config.views_relative_to_prior:
             q = q + pi[rows]
 
@@ -827,25 +916,12 @@ class BlackLittermanOptimizer(MeanVarianceOptimizer):
         specific_mean = keep * pi_specific
         specific_mean[rows] += (1.0 - keep[rows]) * (q - viewed_exposures @ factor_mean)
         mean = exposures @ factor_mean + specific_mean
-
-        k = len(estimate.factor_names)
-        covariance = np.zeros((2 * k, 2 * k))
-        covariance[:k, :k] = factor_covariance
-        covariance[k:, k:] = factor_posterior
-        forecast = FactorRiskForecast(
-            symbols=estimate.symbols,
-            factor_names=tuple(estimate.factor_names)
-            + tuple(f"{name} (posterior)" for name in estimate.factor_names),
-            exposures=np.concatenate([exposures, shrunk_exposures], axis=1),
-            factor_covariance=covariance,
-            specific_variance=specific + specific_posterior,
-        )
-        return mean[position], forecast, np.ones(len(symbols), dtype=bool)
+        return mean, factor_posterior, keep, specific_posterior
 
     def _user_views(
         self,
-        context: PortfolioContext,
-        estimate: FactorRiskForecast,
+        timestamp,
+        factor_names: Sequence[str],
         market_exposures: np.ndarray,
         tau_factor: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -853,17 +929,17 @@ class BlackLittermanOptimizer(MeanVarianceOptimizer):
         span = self._span
         rows, values, variances = [], [], []
         for view in (*self.config.factor_views, *self.config.market_views):
-            row = view.row(estimate.factor_names, market_exposures)
+            row = view.row(factor_names, market_exposures)
             if row is None:
                 continue
-            annual = view.annual_return_at(context.timestamp)
+            annual = view.annual_return_at(timestamp)
             if not math.isfinite(annual):
                 continue
             prior = float(row @ tau_factor @ row) / self.config.tau
             rows.append(row)
             values.append(annual * span / BARS_PER_YEAR)
             variances.append(view.variance(prior, self.config.tau, span))
-        k = len(estimate.factor_names)
+        k = len(factor_names)
         return (
             np.asarray(rows, dtype=np.float64).reshape(len(rows), k),
             np.asarray(values, dtype=np.float64),
