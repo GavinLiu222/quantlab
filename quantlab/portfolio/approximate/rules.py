@@ -47,6 +47,10 @@ _MEAN_VARIANCE_FIELDS = {
     "exposure_factors": IGNORED,
     "exposure_bounds": DEFAULT,
     "solver": IGNORED,
+    # The name-count cap is solved by the per-bar rule only.
+    "max_names": DEFAULT,
+    # Read only with max_names, which must be unset.
+    "mip_gap": IGNORED,
 }
 
 ACTIVE_RISK = "quantlab.portfolio.predefined.active_risk.ActiveRiskOptimizer"

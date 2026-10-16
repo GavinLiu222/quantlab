@@ -161,6 +161,23 @@ class MeanVarianceConfig(FrozenConfig):
     #: every symbol currently held; the rest get 0.0. ``None`` optimises
     #: over every tradable symbol.
     candidate_top_k: int | None = None
+    #: The largest name count of the book decided at each bar: the symbols
+    #: with a non-zero weight, locked positions included. Each bar is then
+    #: solved exactly as a mixed-integer program (one boolean per
+    #: candidate), so ``solver`` must solve mixed-integer conic programs
+    #: (``"MOSEK"``, which needs a licence); names the solve leaves out
+    #: get exactly 0, a held one closed in full whatever ``min_trade``.
+    #: Long-only, ``weight_cap * max_names`` must be at least 1 (near 1 the
+    #: weights are all near the cap). ``"long_only"`` only for now. With
+    #: ``candidate_top_k`` the program is solved on the pool, faster.
+    #: ``None``: no cap, a convex program.
+    max_names: int | None = None
+    #: The relative optimality gap the mixed-integer solve with
+    #: ``max_names`` stops at, in ``(0, 1)``: the book's objective is
+    #: within this fraction of the best book's. Passed to MOSEK
+    #: (``MSK_DPAR_MIO_TOL_REL_GAP``) or GUROBI (``MIPGap``). ``None``
+    #: keeps the solver's default (1e-4 for MOSEK). No time limit is set.
+    mip_gap: float | None = None
     #: The label whose prediction gives each symbol's volatility over the
     #: span, such as ``Volatility``; it must have the expected-return
     #: label's span and a ``"raw"`` scale. The covariance is then these

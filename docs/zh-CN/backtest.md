@@ -531,7 +531,7 @@ np.True_
 - `MeanVarianceOptimizer`，只做多或多空、两种校准、有无换手惩罚、`candidate_top_k` 和 `volatility_label`，协方差估计器为 `LedoitWolfEstimator` 或 `FactorRiskStoreEstimator`（见[近似回测中的均值-方差](portfolio.md#近似回测中的均值-方差)）；
 - 不设跟踪误差上限的 `ActiveRiskOptimizer`。
 
-每个配置字段要么被读取，要么被忽略，要么必须保持默认值。被忽略的：`solver`、`min_trade`（不模拟，见上文）和 `exposure_factors`（只通过 `exposure_bounds` 起作用）。以下情况在读任何数据之前就被拒绝，消息会写明规则、估计器或字段：其他规则（`TopkDropoutConstructor`、自定义规则）、受支持规则或估计器的子类（它可能做出不同的决策）、其他协方差估计器、跟踪误差上限、`exposure_bounds`，以及近似回测不认识且不是默认值的字段（以后给规则配置加的字段不会被悄悄近似掉）。
+每个配置字段要么被读取，要么被忽略，要么必须保持默认值。被忽略的：`solver`、`min_trade`（不模拟，见上文）、`exposure_factors`（只通过 `exposure_bounds` 起作用）和 `mip_gap`（只配合 `max_names` 起作用）。以下情况在读任何数据之前就被拒绝，消息会写明规则、估计器或字段：其他规则（`TopkDropoutConstructor`、自定义规则）、受支持规则或估计器的子类（它可能做出不同的决策）、其他协方差估计器、跟踪误差上限、`exposure_bounds`、持仓数上限（`max_names`），以及近似回测不认识且不是默认值的字段（以后给规则配置加的字段不会被悄悄近似掉）。
 
 ```python
 >>> from quantlab.portfolio.config import TopkDropoutConfig

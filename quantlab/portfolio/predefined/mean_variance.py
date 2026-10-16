@@ -46,6 +46,13 @@ if TYPE_CHECKING:
     from quantlab.risk.base import ReturnCovariance
 
 _SOLVED = (cp.OPTIMAL, cp.OPTIMAL_INACCURATE)
+#: The cvxpy solvers that solve mixed-integer second-order cone programs, the program ``max_names`` poses.
+_MIXED_INTEGER_SOLVERS = ("MOSEK", "GUROBI", "CPLEX", "XPRESS", "COPT", "SCIP")
+#: How ``mip_gap`` reaches each solver it is passed to.
+_MIP_GAP_OPTIONS = {
+    "MOSEK": lambda gap: {"mosek_params": {"MSK_DPAR_MIO_TOL_REL_GAP": gap}},
+    "GUROBI": lambda gap: {"MIPGap": gap},
+}
 
 
 @dataclass(frozen=True)
@@ -292,6 +299,14 @@ class MeanVarianceOptimizer(PortfolioConstructor):
     fell out of the top can still be closed at its turnover cost. The
     z-score is taken over every candidate before the pool is cut.
 
+    With ``max_names`` set (long-only), at most that many symbols hold a
+    weight, locked positions included: each bar is solved exactly as a
+    mixed-integer program (one boolean per candidate, ``w <= weight_cap *
+    z``, ``sum(z) <= max_names`` less the locked names), names it leaves out
+    get exactly 0, and a held one is closed whatever ``min_trade``. A bar
+    whose locked positions leave no room, or whose solve is not optimal,
+    raises ``PortfolioConstructionError``.
+
     The solver's solution is cleaned of its round-off: projected onto the
     feasible set long-only (the nearest weights summing to one within
     ``[0, weight_cap]``), clipped and rescaled to dollar neutrality and a
@@ -327,7 +342,8 @@ class MeanVarianceOptimizer(PortfolioConstructor):
         ``expected_return_label``, ``covariance``, ``risk_aversion``,
         ``calibration``, ``ic``, ``turnover_penalty``, ``weight_cap``,
         ``direction``, ``candidate_top_k``, ``volatility_label``,
-        ``exposure_factors``, ``exposure_bounds`` and ``solver``.
+        ``exposure_factors``, ``exposure_bounds``, ``max_names``, ``mip_gap``
+        and ``solver``.
 
     Raises
     ------
@@ -337,8 +353,12 @@ class MeanVarianceOptimizer(PortfolioConstructor):
         ``risk_aversion`` or ``turnover_penalty`` is negative,
         ``candidate_top_k`` is not a positive integer, ``volatility_label``
         is set with a covariance estimator that does not take volatilities
-        (``FactorRiskStoreEstimator``), or ``solver`` is not an installed
-        cvxpy solver.
+        (``FactorRiskStoreEstimator``), ``solver`` is not an installed
+        cvxpy solver, ``max_names`` is not a positive integer, is set
+        long-short or with ``weight_cap * max_names < 1``, or with a solver
+        that cannot solve mixed-integer conic programs, or ``mip_gap`` is
+        outside ``(0, 1)``, set without ``max_names`` or for a solver it is
+        not passed to.
 
     Examples
     --------
@@ -431,6 +451,7 @@ class MeanVarianceOptimizer(PortfolioConstructor):
                 f"solver {config.solver!r} is not an installed cvxpy solver; installed: "
                 f"{cp.installed_solvers()}"
             )
+        self._check_name_cap(config)
         declared = [
             name for factor in config.exposure_factors for name in factor.get_factor_names()
         ]
@@ -460,6 +481,43 @@ class MeanVarianceOptimizer(PortfolioConstructor):
                     f"its upper one, got ({lower}, {upper})"
                 )
         self._span: int | None = None
+
+    @staticmethod
+    def _check_name_cap(config: MeanVarianceConfig) -> None:
+        """Refuse a bad ``max_names`` or ``mip_gap``, and a solver that cannot solve the program they pose."""
+        names, gap = config.max_names, config.mip_gap
+        if gap is not None:
+            if names is None:
+                raise ValueError(
+                    f"mip_gap={gap!r} bounds a mixed-integer solve, which only max_names poses; "
+                    f"set max_names or leave mip_gap unset"
+                )
+            if isinstance(gap, bool) or not isinstance(gap, (int, float)) or not 0 < gap < 1:
+                raise ValueError(f"mip_gap must be in (0, 1) or None, got {gap!r}")
+        if names is None:
+            return
+        if isinstance(names, bool) or not isinstance(names, (int, np.integer)) or names < 1:
+            raise ValueError(f"max_names must be a positive integer or None, got {names!r}")
+        if config.direction != "long_only":
+            raise ValueError(
+                f"max_names is supported for direction='long_only' only, got {config.direction!r}"
+            )
+        if config.weight_cap * names < 1 - 1e-12:
+            raise ValueError(
+                f"weight_cap * max_names = {config.weight_cap} * {names} is below 1: "
+                f"a long-only book of {names} names cannot be fully invested under the cap"
+            )
+        mixed_integer = [name for name in _MIXED_INTEGER_SOLVERS if name in cp.installed_solvers()]
+        if config.solver not in mixed_integer:
+            raise ValueError(
+                f"max_names is solved as a mixed-integer program, which solver "
+                f"{config.solver!r} cannot solve; set solver to an installed mixed-integer "
+                f"conic solver: {mixed_integer}"
+            )
+        if gap is not None and config.solver not in _MIP_GAP_OPTIONS:
+            raise ValueError(
+                f"mip_gap is passed to {sorted(_MIP_GAP_OPTIONS)} only, not to {config.solver!r}"
+            )
 
     def declared_inputs(self) -> InputDeclaration:
         """The covariance estimator's declaration, merged with the ``exposure_factors``.
@@ -770,17 +828,21 @@ class MeanVarianceOptimizer(PortfolioConstructor):
         locked_sum = float(inputs.locked_weights.sum())
         if long_only:
             total = 1.0 - locked_sum
+            slots = self._free_slots(inputs, total)
+            reach = n if slots is None else min(n, slots)
+            excluded = np.zeros(n, dtype=bool)
             if total <= 1e-12:
                 solution = np.zeros(n)
-            elif n == 0 or n * config.weight_cap < total - 1e-12:
+            elif n == 0 or reach * config.weight_cap < total - 1e-12:
                 raise PortfolioConstructionError(
-                    f"infeasible: {n} candidate symbol(s) cannot hold {total:.4g} of the "
+                    f"infeasible: {reach} candidate symbol(s) cannot hold {total:.4g} of the "
                     f"book under weight_cap={config.weight_cap}"
+                    + ("" if slots is None else f" and max_names={config.max_names}")
                 )
             else:
-                solution = self._solve(inputs, total)
+                solution, excluded = self._solve(inputs, total, slots=slots)
             if config.min_trade:
-                solution = self._skip_small_trades(solution, inputs.current_weights, total)
+                solution = self._skip_small_trades(solution, inputs.current_weights, total, excluded)
         else:
             gross = 1.0 - float(np.abs(inputs.locked_weights).sum())
             if gross < -1e-12:
@@ -795,7 +857,7 @@ class MeanVarianceOptimizer(PortfolioConstructor):
                     f"exposure of {locked_sum:.4g} within a gross of {max(gross, 0.0):.4g} "
                     f"and weight_cap={config.weight_cap}"
                 )
-            solution = self._solve(inputs, -locked_sum, max(gross, 0.0))
+            solution, _ = self._solve(inputs, -locked_sum, max(gross, 0.0))
 
         row = pd.Series(0.0, index=context.symbols)
         row[inputs.symbols] = solution
@@ -812,9 +874,33 @@ class MeanVarianceOptimizer(PortfolioConstructor):
             weights.attrs["events"] = events
         return weights
 
-    def _skip_small_trades(self, solution: np.ndarray, current: np.ndarray, total: float) -> np.ndarray:
-        """Keep the current weight wherever the solved change is below ``min_trade`` (long-only)."""
-        small = np.abs(solution - current) < self.config.min_trade
+    def _free_slots(self, inputs: MeanVarianceInputs, total: float) -> int | None:
+        """The names ``max_names`` leaves the candidates once the locked positions take theirs; ``None`` without a cap."""
+        names = self.config.max_names
+        if names is None:
+            return None
+        locked = int((inputs.locked_weights != 0).sum())
+        shown = inputs.locked_symbols.tolist()[:5]
+        if locked > names:
+            raise PortfolioConstructionError(
+                f"the locked positions {shown} are {locked} names, above max_names={names}"
+            )
+        if locked == names and total > 1e-12:
+            raise PortfolioConstructionError(
+                f"the locked positions {shown} are {locked} names, which leaves no room for "
+                f"the {total:.4g} of the book they do not hold under max_names={names}"
+            )
+        return names - locked
+
+    def _skip_small_trades(
+        self, solution: np.ndarray, current: np.ndarray, total: float, excluded: np.ndarray
+    ) -> np.ndarray:
+        """Keep the current weight wherever the solved change is below ``min_trade`` (long-only).
+
+        A name the ``max_names`` solve left out (``excluded``) is closed in
+        full, however small its holding, so the name count holds.
+        """
+        small = (np.abs(solution - current) < self.config.min_trade) & ~excluded
         # A traded target below min_trade is a residue or a sliver: close it.
         kept = np.where(small, current, np.where(solution < self.config.min_trade, 0.0, solution))
         excess = kept.sum() - total
@@ -829,8 +915,17 @@ class MeanVarianceOptimizer(PortfolioConstructor):
                 kept[sells] = solution[sells]
         return kept
 
-    def _solve(self, inputs: MeanVarianceInputs, total: float, gross: float = 1.0) -> np.ndarray:
-        """Solve for the candidates' weights: summing to ``total``, within ``gross`` long-short."""
+    def _solve(
+        self, inputs: MeanVarianceInputs, total: float, gross: float = 1.0, slots: int | None = None
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Solve for the candidates' weights: summing to ``total``, within ``gross`` long-short.
+
+        With ``slots`` (long-only), at most that many candidates get a
+        weight: one boolean per candidate ``z``, ``w <= weight_cap * z`` and
+        ``sum(z) <= slots``, a mixed-integer program. Returns the weights
+        and the candidates the solve left out (``z`` rounding to 0), whose
+        weights are exactly 0; the projection then runs on the kept ones.
+        """
         config = self.config
         n = len(inputs.symbols)
         w = cp.Variable(n)
@@ -853,8 +948,16 @@ class MeanVarianceOptimizer(PortfolioConstructor):
             objective = objective - config.turnover_penalty * cp.norm1(
                 w - inputs.current_weights
             )
+        chosen, options = None, {}
+        if slots is not None:
+            chosen = cp.Variable(n, boolean=True)
+            if config.mip_gap is not None:
+                options = _MIP_GAP_OPTIONS[config.solver](config.mip_gap)
         if config.direction == "long_only":
-            constraints = [cp.sum(w) == total, w >= 0, w <= config.weight_cap]
+            cap = config.weight_cap if chosen is None else config.weight_cap * chosen
+            constraints = [cp.sum(w) == total, w >= 0, w <= cap]
+            if chosen is not None:
+                constraints.append(cp.sum(chosen) <= slots)
         else:
             constraints = [
                 cp.sum(w) == total,
@@ -869,13 +972,26 @@ class MeanVarianceOptimizer(PortfolioConstructor):
         constraints += risk_definition + list(self.risk_constraints(risk))
         problem = cp.Problem(cp.Maximize(objective), constraints)
         try:
-            problem.solve(solver=config.solver)
+            problem.solve(solver=config.solver, **options)
         except (cp.error.SolverError, ValueError, ArithmeticError) as exc:
             # cvxpy raises ValueError for non-finite problem data.
             raise PortfolioConstructionError(f"the solver failed: {exc}") from exc
+        if chosen is not None and problem.status != cp.OPTIMAL:
+            # A mixed-integer solve that is not optimal stopped short of its gap.
+            raise PortfolioConstructionError(
+                f"the mixed-integer solve ended without an optimal solution: status {problem.status!r}"
+            )
         if problem.status not in _SOLVED or w.value is None:
             raise PortfolioConstructionError(f"no solution: status {problem.status!r}")
         values = np.asarray(w.value, dtype=np.float64)
+        excluded = np.zeros(n, dtype=bool)
+        if chosen is not None:
+            # The solver's integer tolerance leaves residues up to weight_cap times it on the
+            # names it left out: exactly 0, and the projection runs on the kept names only.
+            excluded = np.asarray(chosen.value, dtype=np.float64) < 0.5
+            weights = np.zeros(n)
+            weights[~excluded] = _project_capped_simplex(values[~excluded], config.weight_cap, total)
+            return weights, excluded
         if config.direction == "long_only":
-            return _project_capped_simplex(values, config.weight_cap, total)
-        return _clean_long_short(values, config.weight_cap, total, gross)
+            return _project_capped_simplex(values, config.weight_cap, total), excluded
+        return _clean_long_short(values, config.weight_cap, total, gross), excluded
