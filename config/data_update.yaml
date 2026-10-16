@@ -90,3 +90,12 @@ stages:
       # map rows changed, then appends every day both stores above now hold (about 10 s a day; a store
       # far behind is caught up by scripts/massive/permaticker_bars.py --workers N).
       - update: {store: market/massive/massive_permaticker_bars_1m, allow_failure: true}
+      # The daily factors of the one-minute bars, on the whole market (common stocks), in dependency
+      # order: the per-session statistics, their 20-session means and the neutralized means, then the
+      # rank composites of the statistics. They hold the day only for their readers, so they wait
+      # with the minute store and a failure does not hold anything.
+      - extend: {store: factors/market/intraday_stats, allow_failure: true}
+      - extend: {store: factors/market/intraday_stats_20d, allow_failure: true}
+      - extend: {store: factors/market/intraday_stats_20d_neutral, allow_failure: true}
+      - extend: {store: factors/market/intraday_signals, allow_failure: true}
+      - extend: {store: factors/market/intraday_low_corr, allow_failure: true}
