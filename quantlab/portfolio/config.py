@@ -311,3 +311,43 @@ class ActiveRiskConfig(MeanVarianceConfig):
     #: Cap on the forecast active volatility over the expected-return label's
     #: span; ``None`` for none.
     tracking_error: float | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class BlackLittermanConfig(MeanVarianceConfig):
+    """Config of ``BlackLittermanOptimizer``: ``MeanVarianceConfig``, the market and ``tau``.
+
+    The optimiser blends the equilibrium return of ``market`` with the views
+    of ``expected_return`` by Bayes' rule and optimises on the posterior
+    expected return and covariance; ``risk_aversion`` is the equilibrium's
+    ``delta`` too. ``covariance`` must be a ``FactorRiskStoreEstimator``.
+
+    Examples
+    --------
+    With ``use4`` a built ``Use4RiskModel`` and ``cap_weight`` a
+    ``MembershipCapWeight`` over the roster's membership:
+
+    >>> cfg = BlackLittermanConfig(
+    ...     expected_return_label="ret_5",
+    ...     covariance=FactorRiskStoreEstimator(FactorRiskStoreEstimatorConfig(risk_model=use4)),
+    ...     expected_return=RawExpectedReturn(RawExpectedReturnConfig()),
+    ...     risk_aversion=10.0, weight_cap=0.05, market=cap_weight, tau=0.05,
+    ... )
+    >>> cfg.market_weight, cfg.tau
+    ('benchmark_weight', 0.05)
+    """
+
+    #: How ``expected_return_label``'s prediction becomes the symbol views,
+    #: one per predicted candidate, each a total return over the span.
+    #: Required: a rule without views is refused.
+    expected_return: "ExpectedReturnModel" = component(default=None)
+    #: The factor giving the market portfolio's weights, the equilibrium's
+    #: ``w`` (``MembershipCapWeight`` over the roster's membership, say).
+    market: "Factor" = component(default=None)
+    #: The market factor's output holding the weights.
+    market_weight: str = "benchmark_weight"
+    #: The scale of the prior's uncertainty: the equilibrium return's
+    #: covariance is ``tau`` times the risk model's. One over the length of
+    #: the window the covariance is estimated from, or 0.025 to 0.05 by
+    #: convention; positive.
+    tau: float

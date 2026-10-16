@@ -110,7 +110,7 @@ def test_importing_the_portfolio_root_and_rules_loads_no_numba():
         "import quantlab.portfolio.base, quantlab.portfolio.decision_inputs\n"
         "import quantlab.portfolio.predefined.top_n, quantlab.portfolio.predefined.mean_variance\n"
         "import quantlab.portfolio.predefined.active_risk, quantlab.portfolio.predefined.ledoit_wolf\n"
-        "import quantlab.portfolio.predefined.factor_risk\n"
+        "import quantlab.portfolio.predefined.factor_risk, quantlab.portfolio.predefined.black_litterman\n"
         "import quantlab.portfolio.predefined.approximate.top_n\n"
         "import quantlab.portfolio.predefined.approximate.mean_variance\n"
         "import quantlab.portfolio.predefined.approximate.covariance\n"

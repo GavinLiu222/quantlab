@@ -549,6 +549,27 @@ rule = ActiveRiskOptimizer(ActiveRiskConfig(
 ))
 ```
 
+`BlackLittermanOptimizer` (`quantlab.portfolio.predefined.black_litterman`, ADR 0047) is a mean-variance rule on a Black-Litterman posterior, built on `posterior`. Its config `BlackLittermanConfig` is `MeanVarianceConfig` plus `market` (a weight factor, declared like `benchmark`: usually `MembershipCapWeight` over the roster's membership), `market_weight` (its output, default `"benchmark_weight"`) and `tau` (required, positive: the prior's covariance is `tau` times the risk model's; one over the length of the covariance's estimation window, or 0.025 to 0.05 by convention). In the risk model's factor space, returns are `r = B f + e` with prior `f ~ N(pi_f, tau F)` and `e ~ N(pi_e, tau diag(D))`, `Sigma = B F B' + diag(D)` the bar's forecast over the expected-return label's span. The symbol views are the `expected_return` model's `mu` on the predicted candidates, each a total return, with He-Litterman uncertainty `omega_j = tau Sigma_jj`. One Bayes update gives the posterior mean and the posterior covariance `Sigma + M`, `M` the uncertainty of the posterior mean; it is solved on the factor dimension (one `K x K` solve, no symbol-by-symbol inverse), and the posterior covariance is diagonal plus rank `2K`, the factor form the risk term reads. The rule optimises on both, with every mean-variance field. The equilibrium return is `pi = risk_aversion * (Sigma + M) * w`, `w` the market's weights on the covered symbols renormalised to sum to one: the return that makes the market optimal under the covariance the rule optimises on, so with no views (`M = tau Sigma`) the decided book is the market, and views equal to `pi` leave it there (where the constraints allow: `max_names`, `candidate_top_k`, a cap below a market weight or a turnover penalty from a book other than the market move it). As `Omega` tends to 0 with a view on every covered symbol the market holds, `pi` tends to `risk_aversion * Sigma * w`; a market symbol without a view (locked, not tradable or without a prediction) keeps its share of `M`. Its split is `pi_f = risk_aversion * F x` with `x = B' w` (`market_exposures`; a market wider than the roster overrides it together with `market_weights`) and `pi_e = pi - B pi_f`. Every selectable symbol is a candidate: one without a view gets its equilibrium return plus what views on correlated symbols move it by, and `candidate_top_k` ranks the posterior. The rule refuses, when it is constructed: no `expected_return` (no views), a covariance estimator other than `FactorRiskStoreEstimator` (the prior and the posterior price risk from one forecast), a missing `market` or `market_weight`, a `tau` that is not positive, and a subclass with a `reference_weights` (an active-risk reference prices `lambda Sigma b`, the equilibrium again). The approximate backtest does not run it.
+
+```python
+from quantlab.factor.config import MembershipCapWeightConfig
+from quantlab.factor.predefined.membership_cap_weight import MembershipCapWeight
+from quantlab.portfolio.config import (
+    BlackLittermanConfig, FactorRiskStoreEstimatorConfig, RawExpectedReturnConfig,
+)
+from quantlab.portfolio.predefined.black_litterman import BlackLittermanOptimizer
+from quantlab.portfolio.predefined.expected_return import RawExpectedReturn
+from quantlab.portfolio.predefined.factor_risk import FactorRiskStoreEstimator
+
+rule = BlackLittermanOptimizer(BlackLittermanConfig(
+    expected_return_label="ret_1",
+    covariance=FactorRiskStoreEstimator(FactorRiskStoreEstimatorConfig(risk_model=use4)),
+    expected_return=RawExpectedReturn(RawExpectedReturnConfig()),
+    risk_aversion=20.0, weight_cap=0.05, tau=0.05,
+    market=MembershipCapWeight(MembershipCapWeightConfig(dataset=daily, membership=us3000)),
+))
+```
+
 Do not override `decide`: it is the one decision path a backtest and an executor share. A rule holds no assembly code; `DecisionInputs` builds its contexts.
 
 The approximate backtest (see [Sweep with the approximate backtest](backtest.md#sweep-with-the-approximate-backtest)) runs the shipped rules it has its own implementations of, chosen by their exact class: a new rule, or a subclass of a shipped one, runs in backtest runs and is refused there. To sweep it, add its implementation to `quantlab/portfolio/predefined/approximate` (a module with a `decide(rule, panel, prices, stopping)` function) and its field table to `quantlab/portfolio/approximate.py`.

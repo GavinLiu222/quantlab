@@ -549,6 +549,27 @@ rule = ActiveRiskOptimizer(ActiveRiskConfig(
 ))
 ```
 
+`BlackLittermanOptimizer`（`quantlab.portfolio.predefined.black_litterman`，ADR 0047）是在 Black-Litterman 后验上做均值方差的规则，基于 `posterior` 实现。配置类 `BlackLittermanConfig` 在 `MeanVarianceConfig` 之上加了 `market`（权重因子，声明方式同 `benchmark`，通常是名单成分上的 `MembershipCapWeight`）、`market_weight`（它的输出名，默认 `"benchmark_weight"`）和 `tau`（必填且为正：先验的协方差是风险模型协方差的 `tau` 倍；取协方差估计窗口长度的倒数，或按惯例取 0.025 到 0.05）。在风险模型的因子空间里，收益为 `r = B f + e`，先验 `f ~ N(pi_f, tau F)`、`e ~ N(pi_e, tau diag(D))`，`Sigma = B F B' + diag(D)` 是该 bar 在预期收益标签跨度上的预测。标的观点是 `expected_return` 模型在有预测的候选上给出的 `mu`，每个都是总收益，不确定度按 He-Litterman 取 `omega_j = tau Sigma_jj`。一次贝叶斯更新给出后验均值和后验协方差 `Sigma + M`（`M` 是后验均值的不确定度）；它在因子维度上求解（一次 `K x K` 求解，不做标的乘标的的求逆），后验协方差是对角加秩 `2K`，正是风险项读取的因子形式。规则在这两者上优化，均值方差的字段全部照常生效。均衡收益为 `pi = risk_aversion * (Sigma + M) * w`，`w` 是市场在被覆盖标的上的权重、重新归一到和为一：它使市场组合在规则实际优化所用的协方差下最优，因此没有观点时（`M = tau Sigma`）决定出的组合就是市场组合，观点等于 `pi` 时也不变（在约束允许的范围内：`max_names`、`candidate_top_k`、低于某个市场权重的上限，或相对非市场组合的换手惩罚都会使它偏离）。当 `Omega` 趋于 0、且市场持有的每个被覆盖标的都有观点时，`pi` 趋于 `risk_aversion * Sigma * w`；没有观点的市场标的（锁定、不可交易或无预测）保留它在 `M` 中的份额。它拆为 `pi_f = risk_aversion * F x`（`x = B' w`，由 `market_exposures` 给出；比名单更宽的市场须连同 `market_weights` 一起覆写它）和 `pi_e = pi - B pi_f`。每个可选标的都是候选：没有观点的标的取其均衡收益，加上相关标的的观点带来的变动；`candidate_top_k` 按后验排序。规则在构造时拒绝：没有 `expected_return`（没有观点）、协方差估计器不是 `FactorRiskStoreEstimator`（先验与后验须用同一个预测计价风险）、缺少 `market` 或 `market_weight`、`tau` 不为正，以及带 `reference_weights` 的子类（主动风险的参照项 `lambda Sigma b` 就是均衡先验本身）。近似回测不支持它。
+
+```python
+from quantlab.factor.config import MembershipCapWeightConfig
+from quantlab.factor.predefined.membership_cap_weight import MembershipCapWeight
+from quantlab.portfolio.config import (
+    BlackLittermanConfig, FactorRiskStoreEstimatorConfig, RawExpectedReturnConfig,
+)
+from quantlab.portfolio.predefined.black_litterman import BlackLittermanOptimizer
+from quantlab.portfolio.predefined.expected_return import RawExpectedReturn
+from quantlab.portfolio.predefined.factor_risk import FactorRiskStoreEstimator
+
+rule = BlackLittermanOptimizer(BlackLittermanConfig(
+    expected_return_label="ret_1",
+    covariance=FactorRiskStoreEstimator(FactorRiskStoreEstimatorConfig(risk_model=use4)),
+    expected_return=RawExpectedReturn(RawExpectedReturnConfig()),
+    risk_aversion=20.0, weight_cap=0.05, tau=0.05,
+    market=MembershipCapWeight(MembershipCapWeightConfig(dataset=daily, membership=us3000)),
+))
+```
+
 不要重写 `decide`：它是回测与执行器共用的唯一决策路径。规则不含组装代码，它的 context 由 `DecisionInputs` 构造。
 
 近似回测（见[用近似回测做参数扫描](backtest.md#用近似回测做参数扫描)）只运行它有自己实现的那些内置规则，按确切类选择：新规则或内置规则的子类可以在回测运行中使用，在近似回测中会被拒绝。要扫描它，就在 `quantlab/portfolio/predefined/approximate` 里加上它的实现（一个含 `decide(rule, panel, prices, stopping)` 函数的模块），并在 `quantlab/portfolio/approximate.py` 里加上它的字段表。
