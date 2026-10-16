@@ -55,6 +55,8 @@ stages:
       - extend: {store: factors/market/alpha158_neutral, allow_failure: true}
       - extend: {store: factors/market/beta_spy, allow_failure: true}
       - extend: {store: factors/market/beta_spy_neutral, allow_failure: true}
+      # The next-bar open-to-open return of the whole market, read as MembershipMaskedLabel on a universe.
+      - extend: {store: labels/market/ret_1, allow_failure: true}
   - name: universe
     steps:
       - update: universe/us3000/membership_estu
