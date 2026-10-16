@@ -21,7 +21,7 @@ Examples
 ...     kwargs={"price_store": "/data/quantlab/market/sharadar/sharadar_sep_1d/sharadar_sep_1d.zarr"},
 ... ))
 >>> members.update().panel("2026-10-14", "2026-10-15")["is_member"].sum("symbol").values
-array([5272, 5271])
+array([4661, 4600])
 """
 
 from __future__ import annotations
@@ -48,10 +48,12 @@ class CommonStockConstituentDataset(IndexConstituentDataset):
     day is the store's last bar (no ``as_of`` needed). The coverage starts at
     the store's first bar.
 
-    One case moves history: a security not priced on the store's last bars
-    (a halt at the store's end) ends on its last priced bar until it trades
-    again; an ``update()`` after that rewrites the halt's days in the window
-    it rebuilds (the current year) to member.
+    A security without a price on the store's last bars (a halt or a late
+    print at the store's end) is not a member on them: whether it trades
+    again is not known yet. ``update()`` appends the new bars and keeps the
+    stored ones, so those days stay non-member once it trades again (what
+    was known at the time), while a build from scratch reads them as a halt
+    inside the interval.
 
     Parameters
     ----------

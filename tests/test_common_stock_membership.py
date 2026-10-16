@@ -102,3 +102,27 @@ def test_market_cap_weights_on_the_membership_sum_to_one(tmp_path):
     )["benchmark_weight"]
 
     np.testing.assert_allclose(weight.sum("symbol").values, 1.0)
+
+
+def test_a_halt_at_the_stores_end_stays_a_non_member_after_the_update(tmp_path):
+    """What was known at the build is kept: the update appends, a from-scratch build fills the halt."""
+    store = tmp_path / "sep.zarr"
+    close = np.full((len(DAYS), 2), 10.0)  # SYNTHETIC
+    close[6:8, 1] = np.nan  # 202 unpriced on bars 6-7, the old store's last two
+
+    def write(n_days):
+        xr.Dataset(
+            {"close": (("timestamp", "symbol"), close[:n_days])},
+            coords={"timestamp": DAYS[:n_days], "symbol": np.asarray(SYMBOLS[:2], np.int64)},
+        ).to_zarr(store, mode="w")
+
+    write(8)
+    _members(tmp_path, store).update()
+    write(len(DAYS))
+
+    updated = _members(tmp_path, store).update().panel(DAYS[0], DAYS[-1])["is_member"].sel(symbol=202)
+    rebuilt = _members(tmp_path / "again", store).from_raw_data().get_xarray_dataset()["is_member"].sel(symbol=202)
+
+    assert updated.sel(timestamp=DAYS[6:8]).values.tolist() == [False, False]
+    assert updated.sel(timestamp=DAYS[8:]).values.all()
+    assert rebuilt.sel(timestamp=DAYS).values.all()

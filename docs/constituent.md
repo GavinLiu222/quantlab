@@ -212,7 +212,7 @@ timestamp
 2024-01-04  True  False
 ```
 
-Whether a security without a price on the store's last bars is halted or delisted is not known yet: its interval ends on its last priced bar until it trades again, and the `update()` after that rewrites the halt's days in the window it rebuilds (the current year) to member. The shared store is `universe/sharadar/sharadar_common_stock_membership`, brought up by the daily data update (see [data_update.md](data_update.md)).
+A security without a price on the store's last bars (a halt, or a late print) is not a member on them, since whether it trades again is not known yet. `update()` appends the new bars and keeps the stored ones, so those days stay non-member once it trades again (what was known at the time), while a build from scratch reads them as a halt inside the interval. The shared store is `universe/sharadar/sharadar_common_stock_membership`, brought up by the daily data update (see [data_update.md](data_update.md)).
 
 ### Mask a panel to the members of each bar
 

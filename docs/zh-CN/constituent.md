@@ -212,7 +212,7 @@ timestamp
 2024-01-04  True  False
 ```
 
-store 最后几根 bar 上没有价格的证券，此时还不知道是停牌还是退市：它的区间先止于最后一根有价格的 bar，等它重新交易后，下一次 `update()` 会把它重建的窗口（当年）里停牌的那些天改写为成员。共享 store 是 `universe/sharadar/sharadar_common_stock_membership`，由每日数据更新维护（见 [data_update.md](../data_update.md)）。
+store 最后几根 bar 上没有价格的证券（停牌或数据晚到）在这些 bar 上不是成员，因为此时还不知道它是否会再交易。`update()` 只追加新 bar、保留已存的 bar，所以它重新交易后这些天仍不是成员（保留当时所知），而从头构建会把它们读成区间内的停牌。共享 store 是 `universe/sharadar/sharadar_common_stock_membership`，由每日数据更新维护（见 [data_update.md](../data_update.md)）。
 
 ### 把面板屏蔽到每根 bar 的成员
 
