@@ -22,7 +22,6 @@ from quantlab.core.config import FrozenConfig
 if TYPE_CHECKING:
     from quantlab.dataset.base import MarketDataset
     from quantlab.factor.base import Factor
-    from quantlab.risk.base import FactorRiskModel
 
 #: The regression weights ``Use4RiskConfig.weighting`` may name.
 REGRESSION_WEIGHTINGS = ("sqrt_cap", "cap", "equal")
@@ -328,36 +327,3 @@ class Use4RiskConfig(FactorRiskConfig):
     #: Our choice.
     min_observations: int = 21
 
-
-@dataclass(kw_only=True, frozen=True)
-class MarketPortfolioConfig(FrozenConfig):
-    """Config of ``quantlab.risk.market.MarketPortfolio``: the market portfolio priced by a factor risk model.
-
-    ``risk_model`` is the factor risk model whose forecasts price the
-    market, and ``cap_weight`` the factor of the market portfolio's weights
-    at each bar, its output ``cap_weight_name`` (``MembershipCapWeight`` over
-    the common-stock membership: the weights of a bar sum to 1); both are
-    component fields, so ``to_dict()`` nests their configs.
-
-    Examples
-    --------
-    With ``use4`` a ``Use4RiskModel`` and ``market_weight`` a
-    ``MembershipCapWeight`` over the common-stock membership:
-
-    >>> cfg = MarketPortfolioConfig(risk_model=use4, cap_weight=market_weight,
-    ...                             path="risk/market_portfolio/market_portfolio.zarr")
-    >>> cfg.cap_weight_name
-    'benchmark_weight'
-    """
-
-    #: The factor risk model the market is priced by.
-    risk_model: "FactorRiskModel" = component()
-    #: The factor of the market portfolio's weights at each bar.
-    cap_weight: "Factor" = component()
-    #: The output of ``cap_weight`` holding the weights.
-    cap_weight_name: str = "benchmark_weight"
-    #: Path of the Zarr store of the market rows.
-    path: str | None = None
-
-    #: Dotted import path of the class; filled by the market portfolio.
-    name: str | None = None

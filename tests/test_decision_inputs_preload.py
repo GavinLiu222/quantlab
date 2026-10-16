@@ -59,7 +59,7 @@ def _holdings(rule, inputs, predictions):
     return {c.timestamp: c.current_weights for c in rule.seen}
 
 
-@pytest.mark.parametrize("kind", ["top_n", "mean_variance", "factor", "risk", "market"])
+@pytest.mark.parametrize("kind", ["top_n", "mean_variance", "factor", "risk"])
 def test_every_preloaded_context_equals_the_unpreloaded_one(kind):
     rule = _rule(kind)
     inputs = _inputs(rule)
@@ -85,9 +85,6 @@ def test_every_preloaded_context_equals_the_unpreloaded_one(kind):
         assert all(c.risk_exposures is not None for c in preloaded.values())
     if kind == "factor":
         assert all(c.factors is not None for c in preloaded.values())
-    if kind == "market":
-        assert any(c.market is not None for c in preloaded.values())
-        assert any(c.market is None for c in preloaded.values())  # past the store
 
 
 def test_a_preload_on_a_short_history_counts_the_history_as_context_does():

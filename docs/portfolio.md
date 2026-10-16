@@ -33,7 +33,6 @@ A rule has one method to implement, `construct(context)`. The `PortfolioContext`
 | `factors` | The values at the bar of the factors the rule declares (`declared_inputs().factors`), or `None`. |
 | `risk_exposures` | The exposures at the bar of the factor risk model the rule declares (`declared_inputs().risk_model`), as the model gives them (`FactorRiskModel.exposures`: read from the exposures factor's store or computed, per `exposure_data_strategy`), or `None`. |
 | `risk_estimate` | The same model's estimate store row at the bar, its forecast of the next bar's risk: `factor_covariance` on `(factor_i, factor_j)` and `specific_risk` on `symbol`. It is `None` when the rule declares no risk model or the store has no row at the bar. |
-| `market` | The row at the bar of the market portfolio the rule declares (`declared_inputs().market`, a `MarketPortfolio`): `market_exposure` on `factor`, the whole market's exposures to the risk model's factors, and `covered_share`. It is `None` when the rule declares none or the store has no row at the bar. |
 
 A rule returns one weight per symbol:
 
@@ -488,34 +487,6 @@ array([0.4, 0.4, 0. , 0.2])
 - It declares the model (`declared_inputs().risk_model`), and no factor. The backtest takes the model's exposures from the model, `model.exposures(start, end)`, the source its stores, factor attribution and bias statistics read: from the exposures factor's store under `exposure_data_strategy="read"`, which must then cover the backtest, computed under `"cal"`. It puts their values at the bar in `context.risk_exposures`, and the estimate store's row at the bar in `context.risk_estimate`: read once over a panel's rebalance bars, once per bar for `context`, once over a preloaded window. A bar the store has no row for gets `None`, and the estimator refuses it.
 
 Coverage is the model's rule, the one factor attribution and the bias statistics use: a symbol with every exposure and a specific risk at the bar, not exposed to a factor without a covariance there (such a factor leaves the forecast). It reads no return window, so it has no staleness filter, and a locked position is priced like any other. The model's stores must cover the backtest. [Factor risk model](developer-guide/risk-model.md) describes `Use4RiskModel` and compares it with Ledoit-Wolf in a mean-variance backtest.
-
-### The market portfolio
-
-`MarketPortfolio(MarketPortfolioConfig(risk_model=model, cap_weight=market_weight, path=...))` (`quantlab.risk.market`) stores the whole-market part of a Black-Litterman equilibrium (ADR 0047), so a decision on a roster needs nothing of the rest of the market. `cap_weight` is the factor of the market's weights at each bar, its output `cap_weight_name` (default `"benchmark_weight"`): `MembershipCapWeight` over the common-stock membership (see [constituent.md](constituent.md)), whose weights sum to 1. At each bar of the model's estimate store, with the forecast `model.forecast(row, exposures)` (the model's coverage rule) and the weights on the symbols it covers, its store (`market`, a `RiskStore`: `compute`, `build`, `extend`, `read`) holds one row:
-
-- `market_exposure` on `factor`: the market's exposures `x = B' w / s` to the model's `factor_names`, 0 to a factor without a covariance at the bar;
-- `covered_share`: `s`, the share of the market's weight on covered symbols. A weight on a symbol the forecast does not cover is dropped and the rest renormalised by `s`.
-
-A bar where no covered symbol has weight is NaN. Every quantity is of one-bar returns.
-
-A rule declares it with its risk model, `InputDeclaration(risk_model=model, market=market)` (a market declared without its own risk model is refused), and reads the bar's row from `context.market`, read as `context.risk_estimate` is: once over a panel's rebalance bars, once per bar for `context`, once over a preloaded window, and as `DecisionPanel.market_rows` in the approximate backtest. Each symbol's one-bar covariance with the market is then `covariance_with_market(forecast, context.market, weights)`, `B F x + D w / s` on the forecast's symbols, with `weights` their market weights at the bar (the cap-weight factor declared as a factor): the row of the dense `Sigma w`, computed from the roster's own forecast, so the equilibrium and the forecast price risk the same way.
-
-```python
->>> import numpy as np, xarray as xr
->>> from quantlab.risk.base import FactorRiskForecast
->>> from quantlab.risk.market import covariance_with_market
->>> forecast = FactorRiskForecast(
-...     symbols=np.array(["AAA", "BBB"]), factor_names=("market",),
-...     exposures=np.array([[1.0], [0.5]]), factor_covariance=np.array([[0.04]]),
-...     specific_variance=np.array([0.01, 0.02]),
-... )
->>> row = xr.Dataset({"market_exposure": ("factor", [0.8]), "covered_share": 1.0}, coords={"factor": ["market"]})
->>> covariance_with_market(forecast, row, np.array([0.6, 0.4])).round(4)
-array([0.038, 0.024])
-
-```
-
-The shared store is `risk/market_portfolio`, from the shared USE4 model and the common-stock membership, extended by the daily data update in its `risk` stage, after the USE4 stores.
 
 ## A full example
 

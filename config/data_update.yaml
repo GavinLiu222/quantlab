@@ -72,10 +72,6 @@ stages:
   - name: risk
     steps:
       - extend: risk/use4
-      # The common-stock cap-weighted market's USE4 exposures and covered share (MarketPortfolio, the
-      # whole-market part of the Black-Litterman equilibrium); reads the risk model and the common-stock
-      # membership, so it runs after both.
-      - extend: {store: risk/market_portfolio, allow_failure: true}
   # Intraday trades, run once `done` is written (`after_done`), so a late, slow or failed Massive day
   # never holds the paper trading; none of its stores is in `ready`, and each step does at most five days
   # (a store far behind is caught up by a run of its own). The Trade bars need Massive's files of t (published the
