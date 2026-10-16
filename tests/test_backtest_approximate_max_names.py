@@ -1,22 +1,27 @@
-"""The approximate backtest under ``max_names`` (#329): a local solve of the name-count cap, long-only.
+"""The approximate backtest under ``max_names`` (#329, long-short #330): a local solve of the name-count cap.
 
 The approximate backtest projects each gradient step onto the sparse
-feasible set (the names whose zeroing costs most kept, the capped simplex on
-them), without momentum, so every decided book holds at most ``max_names``
-names; it is a local optimum, compared with ``run()``'s exact mixed-integer
-solve. On the mean-variance store of ``test_backtest_approximate``:
+feasible set (the names whose zeroing costs most kept, the projection run
+again on them), without momentum, so every decided book holds at most
+``max_names`` names; it is a local optimum, compared with ``run()``'s exact
+mixed-integer solve. On the mean-variance store of
+``test_backtest_approximate``:
 
 - every decided bar holds at most ``max_names`` names, fully invested under
   the cap, without and with a turnover penalty and with ``candidate_top_k``,
   and for ``ActiveRiskOptimizer``, where the uncapped books hold more (runs
   without a mixed-integer solver);
 - a cap at least the candidate count gives the uncapped weights;
-- long-short ``max_names`` is refused before any data is read;
+- long-short (#330), long and short names counted together: every decided
+  book holds at most ``max_names`` names, dollar-neutral within a gross of
+  one and the cap, both sides held, without and with a turnover penalty,
+  where the uncapped books hold more;
 - against ``run()`` solved by MOSEK on the same predictions (skipped
   without a licensed mixed-integer solver): the mean name overlap at least
   80% and the value within the bound below; without a turnover penalty or
   ``candidate_top_k`` each bar's objective reads no holdings, and its median
-  relative gap to the exact book's is at most 5% (#326's bars).
+  relative gap to the exact book's is at most 5% (#326's bars); long-short,
+  the names (on the same side) and the value to the same bounds.
 """
 
 import numpy as np
@@ -47,6 +52,14 @@ OBJECTIVE_BOUND = 5e-2
 #: The value's relative gap to the run's over the 68-bar window: a different name for a few
 #: bars compounds (measured 1.5e-2 to 5.1e-2 over the three cases).
 VALUE_BOUND = 6e-2
+
+#: Long-short: 6 names at a 25% cap, where the uncapped books hold 8 to 14.
+LONG_SHORT_NAMES = 6
+#: Long-short rule overrides of each capped case (without a penalty the bars are solved apart).
+LONG_SHORT_CASES = {
+    "long_short": {},
+    "long_short_penalty": {"turnover_penalty": 1e-3},
+}
 
 #: Rule overrides of each capped case (no turnover penalty: bars solved apart).
 CAP_CASES = {
@@ -116,42 +129,77 @@ def test_active_risk_books_hold_at_most_max_names(mvo_store, predictions):  # no
     assert capped.metrics["converged"] is True
 
 
-def test_long_short_max_names_is_refused_before_any_read(mvo_store, monkeypatch):  # noqa: F811
-    backtest = _approximate(mvo_store, 1)
-    rule = _mvo(direction="long_short", weight_cap=CAP, max_names=NAMES, solver=SOLVER or "MOSEK")
+def _long_short(names=None, **overrides):
+    capped = {} if names is None else dict(max_names=names, solver=SOLVER or "MOSEK")
+    return _mvo(direction="long_short", weight_cap=CAP, risk_aversion=RISK_AVERSION, **capped, **overrides)
 
-    def refuse(*args, **kwargs):
-        raise AssertionError("the price dataset was read")
 
-    monkeypatch.setattr(type(backtest.config.price_dataset), "panel", refuse)
-    with pytest.raises(ValueError, match="max_names.*long-only"):
-        backtest.run(None, rule)
+@pytest.mark.parametrize("name", sorted(LONG_SHORT_CASES))
+def test_every_decided_long_short_book_holds_at_most_max_names(mvo_store, predictions, name):  # noqa: F811
+    overrides = LONG_SHORT_CASES[name]
+    capped = _approximate(mvo_store, 1, cost=0.0).run(predictions, _long_short(LONG_SHORT_NAMES, **overrides))
+    uncapped = _approximate(mvo_store, 1, cost=0.0).run(predictions, _long_short(**overrides))
+
+    weights = capped.weights.values
+    assert (_names(capped.weights) <= LONG_SHORT_NAMES).all()
+    np.testing.assert_allclose(weights.sum(axis=1), 0.0, atol=1e-9)
+    assert (np.abs(weights).sum(axis=1) <= 1.0 + 1e-9).all()
+    assert (np.abs(weights) <= CAP + 1e-12).all()
+    # Both sides are held, and the cap binds: the uncapped rule holds more names on all but the
+    # first bars (under the penalty its book builds up from cash: 3 names, then 6).
+    assert ((weights > 0).any(axis=1) & (weights < 0).any(axis=1)).all()
+    assert (_names(uncapped.weights) > LONG_SHORT_NAMES).mean() > 0.9
+    assert capped.metrics["converged"] is True
+
+
+def _exact_and_approximate(store, rule_factory, tag):
+    if SOLVER is None:
+        pytest.skip("no licensed mixed-integer solver (MOSEK)")
+    result = _mvo_run(store, rule_factory(), 1, tag, 1, fees=0.0)
+    run_predictions = BacktestRun.open(result.run_dir).predictions()
+    account = _approximate(store, 1, cost=0.0).run(run_predictions, rule_factory())
+    return result, account
+
+
+def _overlap(result, account, names) -> np.ndarray:
+    """Per decided bar, the share of the run's names the approximate book holds on the same side."""
+    weights = result.weights.transpose("timestamp", "symbol")
+    exact = weights["weight"].values[weights["decided"].values]
+    held = np.abs(exact) > 1e-9
+    assert result.metrics["portfolio_construction"]["failed_bar_count"] == 0
+    assert (held.sum(axis=1) <= names).all()
+    shared = (held & (np.sign(exact) == np.sign(account.weights.values))).sum(axis=1)
+    return shared / np.maximum(held.sum(axis=1), 1)
 
 
 @pytest.fixture(scope="module", params=sorted(CAP_CASES))
 def exact_case(request, mvo_store):  # noqa: F811
-    if SOLVER is None:
-        pytest.skip("no licensed mixed-integer solver (MOSEK)")
     overrides = CAP_CASES[request.param]
-    result = _mvo_run(mvo_store, _capped(**overrides), 1, f"max_names_{request.param}", 1, fees=0.0)
-    run_predictions = BacktestRun.open(result.run_dir).predictions()
-    account = _approximate(mvo_store, 1, cost=0.0).run(run_predictions, _capped(**overrides))
-    return result, account
+    return _exact_and_approximate(mvo_store, lambda: _capped(**overrides), f"max_names_{request.param}")
+
+
+@pytest.fixture(scope="module", params=sorted(LONG_SHORT_CASES))
+def exact_long_short_case(request, mvo_store):  # noqa: F811
+    overrides = LONG_SHORT_CASES[request.param]
+    return _exact_and_approximate(
+        mvo_store, lambda: _long_short(LONG_SHORT_NAMES, **overrides), f"max_names_{request.param}"
+    )
 
 
 @needs_solver
 def test_the_names_and_value_are_within_the_bounds_of_the_exact_run(exact_case):
     result, account = exact_case
-    weights = result.weights.transpose("timestamp", "symbol")
-    decided = weights["decided"].values
-    exact = weights["weight"].values[decided]
-    approximate = account.weights.values
 
-    assert result.metrics["portfolio_construction"]["failed_bar_count"] == 0
-    assert ((np.abs(exact) > 1e-9).sum(axis=1) <= NAMES).all()
-    shared = ((np.abs(exact) > 1e-9) & (approximate > 0)).sum(axis=1)
-    overlap = shared / np.maximum((np.abs(exact) > 1e-9).sum(axis=1), 1)
-    assert overlap.mean() >= OVERLAP_BOUND
+    assert _overlap(result, account, NAMES).mean() >= OVERLAP_BOUND
+    run_value = result.simulation.value.values / result.simulation.value.values[0]
+    np.testing.assert_allclose(account.value.values, run_value, rtol=VALUE_BOUND, atol=0)
+
+
+@needs_solver
+def test_long_short_names_and_value_are_within_the_bounds_of_the_exact_run(exact_long_short_case):
+    result, account = exact_long_short_case
+
+    assert _overlap(result, account, LONG_SHORT_NAMES).mean() >= OVERLAP_BOUND
     run_value = result.simulation.value.values / result.simulation.value.values[0]
     np.testing.assert_allclose(account.value.values, run_value, rtol=VALUE_BOUND, atol=0)
 

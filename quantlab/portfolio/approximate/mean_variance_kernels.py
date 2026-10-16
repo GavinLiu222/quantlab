@@ -23,10 +23,11 @@ steps. The covariance products are reused through their linearity (one per
 trial step). The prox is the capped simplex (long-only) or ``{sum(w) = 0,
 |w|_1 <= gross, |w| <= cap}`` (long-short), with the L1 pull toward the
 holdings; both are found by safeguarded Newton steps on their multipliers.
-With a name-count cap (long-only) the prox keeps the names whose zeroing
-costs it most and the momentum is off (``_solve_bar``). A bar stops when
-its gradient-mapping residual is at most ``tolerance`` times the largest
-entry of its starting gradient, or after ``max_iterations``.
+With a name-count cap the prox keeps the names whose zeroing costs it
+most (long and short names counted together) and the momentum is off
+(``_solve_bar``). A bar stops when its gradient-mapping residual is at most
+``tolerance`` times the largest entry of its starting gradient, or after
+``max_iterations``.
 
 The parallel driver uses numba's thread pool: ``numba.set_num_threads(n)``
 or ``NUMBA_NUM_THREADS`` caps it (on the training server, keep it within the
@@ -229,36 +230,46 @@ def _project_long_short(values, cap, anchor, threshold, gross, multipliers, out,
 
 
 @njit(cache=True)
-def _project_sparse_long_only(values, cap, anchor, threshold, slots, multipliers, out, kept, keys):
-    """The long-only prox kept on at most ``slots`` names: those whose zeroing costs the prox most.
+def _project_sparse(values, cap, anchor, threshold, long_only, gross, slots, multipliers, out, moving, kept, keys):
+    """The rule's prox kept on at most ``slots`` names: those whose zeroing costs the prox most.
 
-    The capped-simplex prox is found first; when it holds more than
-    ``slots`` names, each candidate's cost of zeroing is the prox's
-    objective ``1/2 (w - u)^2 + threshold |w - anchor|`` (``u`` the values
-    at the prox's shift) at 0 less at its prox weight, the ``slots``
-    costliest are kept (a stable sort, so ties keep the column order), and
-    the prox runs again with the others' caps at 0 (``kept`` and ``keys``
-    are scratch for those caps and the costs). ``multipliers`` holds the two
-    projections' shifts. Keeping the costliest names at the first shift is
-    not the exact projection onto the sparse set, so a step need not lower
-    the objective and the kept names may swap back and forth; such a bar
-    stops at ``max_iterations``, reported unconverged.
+    The prox over every candidate is found first (``_project_long_only`` or
+    ``_project_long_short``); when it holds more than ``slots`` names, each
+    candidate's cost of zeroing is the prox's per-entry objective ``1/2 (w -
+    u)^2 + g |w| + threshold |w - anchor|`` (``u`` the values at the prox's
+    shift, ``g`` its gross multiplier, 0 long-only) at 0 less at its prox
+    weight, the ``slots`` costliest are kept (a stable sort, so ties keep
+    the column order), long and short names alike, and the prox runs again
+    with the others' caps at 0 (``kept`` and ``keys`` are scratch for those
+    caps and the costs). ``multipliers[0:2]`` hold the first projection's
+    state, ``multipliers[2:4]`` the second's. Keeping the costliest names at
+    the first projection's multipliers is not the exact projection onto the
+    sparse set, so a step need not lower the objective and the kept names
+    may swap back and forth; such a bar stops at ``max_iterations``,
+    reported unconverged.
     """
     m = values.shape[0]
-    multipliers[0] = _project_long_only(values, cap, anchor, threshold, multipliers[0], out)
+    first = multipliers[0:2]
+    second = multipliers[2:4]
+    if long_only:
+        first[0] = _project_long_only(values, cap, anchor, threshold, first[0], out)
+        gross_multiplier = 0.0
+    else:
+        _project_long_short(values, cap, anchor, threshold, gross, first, out, moving)
+        gross_multiplier = first[1]
     count = 0
     for i in range(m):
-        if out[i] > 0.0:
+        if out[i] != 0.0:
             count += 1
     if count <= slots:
         return
-    tau = multipliers[0]
+    tau = first[0]
     for i in range(m):
         if cap[i] > 0.0:
             u = values[i] - tau
             at_zero = 0.5 * u * u + threshold * abs(anchor[i])
             gap = out[i] - u
-            at_prox = 0.5 * gap * gap + threshold * abs(out[i] - anchor[i])
+            at_prox = 0.5 * gap * gap + gross_multiplier * abs(out[i]) + threshold * abs(out[i] - anchor[i])
             keys[i] = at_prox - at_zero
         else:
             keys[i] = np.inf
@@ -266,18 +277,21 @@ def _project_sparse_long_only(values, cap, anchor, threshold, slots, multipliers
     kept[:] = 0.0
     for n in range(slots):
         kept[order[n]] = cap[order[n]]
-    multipliers[1] = _project_long_only(values, kept, anchor, threshold, multipliers[1], out)
+    if long_only:
+        second[0] = _project_long_only(values, kept, anchor, threshold, second[0], out)
+    else:
+        _project_long_short(values, kept, anchor, threshold, gross, second, out, moving)
 
 
 @njit(cache=True)
 def _prox(values, cap, anchor, threshold, long_only, gross, multipliers, out, moving, slots, kept, keys):
     """The rule's prox: long-only on the capped simplex, long-short on the gross ball; ``multipliers`` carries their state.
 
-    With ``slots > 0`` (long-only only) on the capped simplex's books of at
-    most ``slots`` names (``_project_sparse_long_only``).
+    With ``slots > 0`` on that set's books of at most ``slots`` names, long
+    and short names counted together (``_project_sparse``).
     """
-    if long_only and slots > 0:
-        _project_sparse_long_only(values, cap, anchor, threshold, slots, multipliers, out, kept, keys)
+    if slots > 0:
+        _project_sparse(values, cap, anchor, threshold, long_only, gross, slots, multipliers, out, moving, kept, keys)
     elif long_only:
         multipliers[0] = _project_long_only(values, cap, anchor, threshold, multipliers[0], out)
     else:
@@ -301,7 +315,7 @@ def _solve_bar(mu, cap, ut, specific, bound, start, anchor, settings, out):
     ``settings`` is ``(risk_aversion, penalty, long_only, gross, tolerance,
     max_iterations, max_names)``, ``max_names`` 0 for no name-count cap.
 
-    With ``max_names`` (long-only) every prox is the sparse one, the first
+    With ``max_names`` every prox is the sparse one, the first
     iterate is a projected gradient step from ``start`` (so a start of
     equal entries, such as cash, ranks the names by its gradient rather than
     by column order), and there is no momentum: on the non-convex set
@@ -314,10 +328,11 @@ def _solve_bar(mu, cap, ut, specific, bound, start, anchor, settings, out):
     load = np.empty(k)
     ceiling = max(risk_aversion * bound, 1e-300)
     curvature = ceiling / 8.0
-    multipliers = np.zeros(2)
+    # The prox's state; [2:4] the sparse prox's second projection (_project_sparse).
+    multipliers = np.zeros(4)
     multipliers[0] = np.nan if long_only else 0.0
     if long_only:
-        multipliers[1] = np.nan
+        multipliers[2] = np.nan
     moving = np.zeros(m, dtype=np.bool_)
     kept = np.empty(m)
     keys = np.empty(m)

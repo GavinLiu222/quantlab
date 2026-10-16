@@ -174,10 +174,10 @@ def solve(rule, problem: _Problem, prices: PanelPrices | None = None, stopping: 
     ``stopping``. Long-only on the capped simplex, long-short on ``sum(w) =
     0``, ``|w|_1 <= 1``, ``|w| <= weight_cap``.
 
-    With ``max_names`` (long-only) every bar's book holds at most that many
-    names: each projection keeps the names whose zeroing costs it most and
-    projects onto the capped simplex on them, the first step ranks the
-    names by the gradient at the start (the holdings, or cash for bars
+    With ``max_names`` every bar's book holds at most that many names, long
+    and short counted together: each projection keeps the names whose
+    zeroing costs it most and projects again on them, the first step ranks
+    the names by the gradient at the start (the holdings, or cash for bars
     solved at once), and the steps have no momentum. That is a local
     optimum of the mixed-integer program a backtest run solves exactly.
 

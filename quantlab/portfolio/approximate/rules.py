@@ -47,7 +47,7 @@ _MEAN_VARIANCE_FIELDS = {
     "exposure_factors": IGNORED,
     "exposure_bounds": DEFAULT,
     "solver": IGNORED,
-    # Long-only only (see refusal); solved locally, by projected gradient on the sparse set.
+    # Solved locally, by projected gradient on the sparse set.
     "max_names": SUPPORTED,
     # A mixed-integer solver's gap; the approximate backtest solves no mixed-integer program.
     "mip_gap": IGNORED,
@@ -207,10 +207,9 @@ def refusal(rule) -> str | None:
 
     Read from the rule's exact class and config alone, so it is answered
     before any data is read: a rule (or covariance estimator) the package has
-    no implementation for, a subclass of one, a field refused or unknown
-    and not at its default, and ``max_names`` long-short.
-    (``volatility_label`` with a factor risk model is refused when the
-    optimiser is constructed.)
+    no implementation for, a subclass of one, and a field refused or unknown
+    and not at its default. (``volatility_label`` with a factor risk model
+    is refused when the optimiser is constructed.)
 
     Parameters
     ----------
@@ -241,11 +240,6 @@ def refusal(rule) -> str | None:
     found = _field_refusal(name, rule.config, entry[0])
     if found is not None:
         return found
-    if getattr(rule.config, "max_names", None) is not None and rule.config.direction != "long_only":
-        return (
-            f"{name}'s max_names ({rule.config.max_names!r}) is handled by the approximate backtest "
-            f"long-only only, not {rule.config.direction!r}"
-        )
     covariance = getattr(rule.config, "covariance", None)
     if covariance is None:
         return None

@@ -221,13 +221,9 @@ def test_mip_gap_without_max_names_is_refused():
         MeanVarianceOptimizer(MeanVarianceConfig(**_params(max_names=None, solver="CLARABEL", mip_gap=0.01)))
 
 
-def test_the_approximate_backtest_takes_max_names_long_only_only():
+def test_the_approximate_backtest_takes_max_names_in_both_directions():
     assert refusal(MeanVarianceOptimizer(MeanVarianceConfig(**_params()))) is None
-    long_short = MeanVarianceOptimizer(MeanVarianceConfig(**_params(direction="long_short")))
-    assert refusal(long_short) == (
-        "MeanVarianceOptimizer's max_names (3) is handled by the approximate backtest long-only only, "
-        "not 'long_short'"
-    )
+    assert refusal(MeanVarianceOptimizer(MeanVarianceConfig(**_params(direction="long_short")))) is None
 
 
 def test_max_names_and_mip_gap_round_trip_through_the_config():
