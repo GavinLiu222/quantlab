@@ -225,3 +225,95 @@ def test_an_approximate_posterior_widening_the_candidates_prices_a_name_without_
     np.testing.assert_allclose(
         approximate.decide(rule, panel, posterior=widened).weights[:, 5], CAP, atol=1e-4
     )
+
+
+# --- a replaced covariance ------------------------------------------------------------
+
+
+def _dense_long_only(mu, covariance, risk_aversion=5.0, cap=CAP):
+    """The long-only mean-variance book, solved densely: the reference."""
+    import cvxpy as cp
+
+    w = cp.Variable(len(mu))
+    objective = cp.Maximize(w @ mu - risk_aversion / 2 * cp.quad_form(w, cp.psd_wrap(covariance)))
+    cp.Problem(objective, [cp.sum(w) == 1, w >= 0, w <= cap]).solve(solver="CLARABEL")
+    return np.asarray(w.value)
+
+
+def _replacement(symbols):
+    """A factor-form covariance unlike the Ledoit-Wolf one: two factors, AAA and BBB loading on one together."""
+    from quantlab.risk.base import FactorRiskForecast
+
+    n = len(symbols)
+    exposures = np.zeros((n, 2))
+    exposures[:, 0] = 1.0
+    exposures[:2, 1] = 3.0
+    return FactorRiskForecast(
+        symbols=np.asarray(symbols),
+        factor_names=("market", "pair"),
+        exposures=exposures,
+        factor_covariance=np.array([[0.002, 0.0], [0.0, 0.004]]),
+        specific_variance=np.linspace(0.001, 0.003, n),
+    )
+
+
+class _ReplacedEstimate(MeanVarianceOptimizer):
+    """Optimises on ``_replacement`` instead of the estimator's covariance, recording ``mu``."""
+
+    seen: dict = {}
+
+    def posterior(self, context, symbols, expected_return, estimate, candidates):
+        _ReplacedEstimate.seen["mu"] = expected_return
+        return expected_return, _replacement(estimate.symbols), candidates
+
+
+def test_a_replaced_factor_form_estimate_is_the_one_the_book_is_solved_on():
+    context = _context(seed=6, prediction=np.array([2.0, 1.5, 0.5, 0.0, -0.5, -1.0]))
+    rule = _rule(_ReplacedEstimate)
+    replaced = rule.construct(context).values
+    mu = _ReplacedEstimate.seen["mu"]
+
+    reference = _dense_long_only(mu, _replacement(SYMBOLS).covariance)
+    np.testing.assert_allclose(replaced, reference, atol=1e-5)
+    # The pair factor makes AAA and BBB a risky pair: the book differs from the estimator's.
+    assert np.abs(replaced - _rule().construct(context).values).sum() > 0.05
+
+
+def test_an_approximate_posterior_of_larger_rank_is_solved_on_its_covariance():
+    from quantlab.portfolio.approximate import LowRankCovariance, Stopping
+
+    rule, panel = _rule(), _panel(PREDICTION)
+    seen = {}
+
+    def larger(rule, panel, problem):
+        low = problem.low_rank
+        bars, symbols, k = low.exposures.shape
+        factor = low.factor_covariance if low.factor_covariance is not None else np.broadcast_to(np.eye(k), (bars, k, k))
+        extra = np.zeros((bars, symbols, 2))
+        extra[:, :2, 0] = 0.3  # AAA and BBB move together
+        extra[:, 2:4, 1] = 0.2  # so do CCC and DDD
+        covariance = np.zeros((bars, k + 2, k + 2))
+        covariance[:, :k, :k] = factor
+        covariance[:, k:, k:] = 0.01 * np.eye(2)
+        widened = LowRankCovariance(
+            covered=low.covered,
+            exposures=np.concatenate([low.exposures, extra * low.covered[..., None]], axis=2),
+            factor_covariance=covariance,
+            specific_variance=low.specific_variance,
+        )
+        seen["problem"] = dataclasses.replace(problem, low_rank=widened)
+        return seen["problem"]
+
+    weights = approximate.decide(
+        rule, panel, posterior=larger, stopping=Stopping(tolerance=1e-9, max_iterations=200_000)
+    ).weights
+    problem = seen["problem"]
+    low = problem.low_rank
+    for bar in range(len(weights)):
+        on = problem.predicted[bar]
+        b = low.exposures[bar][on]
+        dense = b @ low.factor_covariance[bar] @ b.T + np.diag(low.specific_variance[bar][on])
+        reference = _dense_long_only(problem.expected_return[bar][on], dense)
+        np.testing.assert_allclose(weights[bar][on], reference, atol=1e-4)
+        np.testing.assert_array_equal(weights[bar][~on], 0.0)
+    assert np.abs(weights - approximate.decide(rule, panel).weights).sum() > 0.01

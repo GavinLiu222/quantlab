@@ -274,7 +274,10 @@ def decide(
         problem)`` returns the ``PanelProblem`` to solve, its ``mu``, its
         covariance (of any rank) and its candidates (``predicted``) replaced
         as the rule's per-bar ``posterior`` replaces them; ``candidate_top_k``
-        ranks the returned ``mu``. ``None`` (the default) solves the problem
+        ranks the returned ``mu``. Unlike the per-bar hook's NaN, the
+        problem's ``expected_return`` is 0.0 off the candidates, so a hook
+        tells a symbol without a prediction apart by ``predicted``.
+        ``None`` (the default) solves the problem
         as it is. An approximate implementation of a rule built on the
         optimiser passes its own.
 
