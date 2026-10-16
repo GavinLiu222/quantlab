@@ -115,11 +115,17 @@ class TopkDropoutConstructor(PortfolioConstructor):
         if label is not None and label not in names:
             raise ValueError(f"score_label {label!r} is not one of the predicted labels {names}")
 
-    def _score_label(self, predictions: xr.Dataset) -> str:
-        """``score_label``, or the first prediction variable when it is None."""
+    def ranking_label(self, names: Sequence[str]) -> str:
+        """Return ``score_label``, or the first predicted label when it is None.
+
+        Examples
+        --------
+        >>> TopkDropoutConstructor(TopkDropoutConfig("long_only", 2, 1, score_label="ret_1")).ranking_label(["ret_5", "ret_1"])
+        'ret_1'
+        """
         if self.config.score_label is not None:
             return self.config.score_label
-        return str(next(iter(predictions.data_vars)))
+        return str(names[0])
 
     def _side(
         self,
@@ -195,7 +201,7 @@ class TopkDropoutConstructor(PortfolioConstructor):
         array([ 0. , -0.5,  0. ,  0.5])
         """
         symbols = context.symbols
-        scores = np.asarray(context.predictions[self._score_label(context.predictions)].sel(symbol=symbols).values, dtype=np.float64)
+        scores = np.asarray(context.predictions[self.ranking_label(list(context.predictions.data_vars))].sel(symbol=symbols).values, dtype=np.float64)
         current = np.asarray(context.current_weights.sel(symbol=symbols).values, dtype=np.float64)
         tradable = np.asarray(context.tradable.values, dtype=bool)
         locked = np.asarray(context.locked.values, dtype=bool)

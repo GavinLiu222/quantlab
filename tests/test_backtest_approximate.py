@@ -1299,3 +1299,39 @@ def test_over_the_window_the_value_gap_stays_within_the_event_bound(event_case):
     _, result, account = event_case
 
     assert _value_gap(result, account).max() <= EVENT_VALUE_BOUND
+
+
+# --------------------------------------------------------------------------
+# The attribution ranks by the label the rule reads (#320)
+# --------------------------------------------------------------------------
+
+
+def _volatility_first_model(store, tag):
+    """`_volatility_model` with its labels swapped: `vol_1` first, so the first label is not the expected return."""
+    model = _volatility_model(store, tag)
+    return ReturnAndVolatilityHead(
+        dataclasses.replace(model.config, labels=list(reversed(model.config.labels)))
+    )
+
+
+def test_a_mean_variance_attribution_ranks_by_the_expected_return_label(mvo_store):
+    model = _volatility_first_model(mvo_store, "ranking_label")
+    assert [name for label in model.labels for name in label.get_factor_names()] == ["vol_1", "fwd_ret_1"]
+
+    result = _tight_run(mvo_store, _mvo(), "ranking_label", FEES, model=model)
+    account = _approximate(mvo_store, 1).run(BacktestRun.open(result.run_dir).predictions(), _mvo())
+
+    assert result.metrics["attribution"]["score_label"] == "fwd_ret_1"
+    assert account.metrics["attribution"]["score_label"] == "fwd_ret_1"
+
+
+def test_each_rule_names_the_label_it_ranks_by():
+    names = ["vol_1", "fwd_ret_1"]
+
+    assert _mvo().ranking_label(names) == "fwd_ret_1"
+    assert TopNConstructor(TopNConfig(direction="long_only", top_n=2)).ranking_label(names) == "vol_1"
+    assert (
+        TopNConstructor(TopNConfig(direction="long_only", top_n=2, score_label="fwd_ret_1")).ranking_label(names)
+        == "fwd_ret_1"
+    )
+    assert TopkDropoutConstructor(TopkDropoutConfig(direction="long_only", topk=2, n_drop=1)).ranking_label(names) == "vol_1"

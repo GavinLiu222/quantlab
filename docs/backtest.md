@@ -651,7 +651,7 @@ sorted(parts)
 # ['costs', 'selection', 'total', 'universe']
 ```
 
-The rebalance bars are the weight rows with a finite target, so a bar the portfolio rule held after a failure is held here too. The *universe* of a rebalance bar is every symbol with a finite score (the prediction the portfolio rule ranks by: the constructor's `score_label`, else the first predicted label) and a fill price on the next bar. Held equally weighted from that fill to the next rebalance's fill, without costs and with a delisted holding settled at its last valuation as the engine settles it, it gives the *equal-weighted universe* curve. The excess is split into three parts of annualised log growth that add up to the total exactly:
+The rebalance bars are the weight rows with a finite target, so a bar the portfolio rule held after a failure is held here too. The *universe* of a rebalance bar is every symbol with a finite score (the prediction the portfolio rule ranks by, its `ranking_label`: a top-n rule's `score_label`, else the first predicted label; a mean-variance rule's `expected_return_label`) and a fill price on the next bar. Held equally weighted from that fill to the next rebalance's fill, without costs and with a delisted holding settled at its last valuation as the engine settles it, it gives the *equal-weighted universe* curve. The excess is split into three parts of annualised log growth that add up to the total exactly:
 
 - `universe`: the equal-weighted universe over the benchmark, earned or lost whatever is picked;
 - `selection`: the same target weights simulated without fees or slippage, over the equal-weighted universe: what the scores and the portfolio rule add;

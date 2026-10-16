@@ -143,9 +143,8 @@ class _Simulation:
 
 
 def _score_label(constructor: PortfolioConstructor, predictions: xr.Dataset) -> str:
-    """The label the universe is ranked by: the rule's ``score_label``, else the first predicted, as a run's attribution reads it."""
-    label = getattr(constructor.config, "score_label", None)
-    return str(label or next(iter(predictions.data_vars)))
+    """The label the universe is ranked by: the rule's ``ranking_label``, as a run's attribution reads it."""
+    return constructor.ranking_label([str(name) for name in predictions.data_vars])
 
 
 def _returns(value: np.ndarray, timestamps: np.ndarray) -> xr.DataArray:

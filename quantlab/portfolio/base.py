@@ -1024,6 +1024,29 @@ class PortfolioConstructor(_Configured, ABC):
         """
         return InputDeclaration()
 
+    def ranking_label(self, names: Sequence[str]) -> str:
+        """Return the predicted label the rule ranks the symbols by.
+
+        A run's attribution ranks its universe and score groups by it. The
+        default is the first label; a rule reading one label by name
+        answers with that label.
+
+        Parameters
+        ----------
+        names : Sequence[str]
+            The predicted labels, in the predictor's order.
+
+        Returns
+        -------
+        str
+
+        Examples
+        --------
+        >>> rule.ranking_label(["ret_5", "ret_1"])
+        'ret_5'
+        """
+        return str(names[0])
+
     def bind(self, labels: Sequence[LabelSpec]) -> None:
         """Check the label specs and read from them what the rule needs.
 

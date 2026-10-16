@@ -617,6 +617,16 @@ class MeanVarianceOptimizer(PortfolioConstructor):
         """
         return self._span
 
+    def ranking_label(self, names: Sequence[str]) -> str:
+        """Return ``expected_return_label``: the scores the optimiser ranks by.
+
+        Examples
+        --------
+        >>> optimizer.ranking_label(["vol_5", "ret_5"])
+        'ret_5'
+        """
+        return self.config.expected_return_label
+
     def bind(self, labels: Sequence[LabelSpec]) -> None:
         """Check the specs hold the optimiser's labels and read the span.
 

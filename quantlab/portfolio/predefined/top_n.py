@@ -118,11 +118,17 @@ class TopNConstructor(PortfolioConstructor):
                 f"score_label {label!r} is not one of the predicted labels {names}"
             )
 
-    def _score_label(self, predictions: xr.Dataset) -> str:
-        """``score_label``, or the first prediction variable when it is None."""
+    def ranking_label(self, names: Sequence[str]) -> str:
+        """Return ``score_label``, or the first predicted label when it is None.
+
+        Examples
+        --------
+        >>> TopNConstructor(TopNConfig(direction="long_only", top_n=2, score_label="ret_1")).ranking_label(["ret_5", "ret_1"])
+        'ret_1'
+        """
         if self.config.score_label is not None:
             return self.config.score_label
-        return str(next(iter(predictions.data_vars)))
+        return str(names[0])
 
     def _book(
         self, scores: np.ndarray, tradable: np.ndarray, current: np.ndarray, timestamp
@@ -205,7 +211,7 @@ class TopNConstructor(PortfolioConstructor):
         array([ 0.5, -0.5,  0. ,  0. ])
         """
         symbols = context.symbols
-        scores = context.predictions[self._score_label(context.predictions)]
+        scores = context.predictions[self.ranking_label(list(context.predictions.data_vars))]
         row, tied = self._book(
             np.asarray(scores.sel(symbol=symbols).values, dtype=np.float64),
             np.asarray(context.tradable.values, dtype=bool),
@@ -265,7 +271,7 @@ class TopNConstructor(PortfolioConstructor):
                [0.5, 0. , 0.5, 0. ]])
         """
         scores = np.asarray(
-            panel.predictions[self._score_label(panel.predictions)]
+            panel.predictions[self.ranking_label(list(panel.predictions.data_vars))]
             .transpose("timestamp", "symbol")
             .sel(symbol=panel.symbols)
             .values,

@@ -2277,9 +2277,9 @@ class BaseBacktester(Component, ABC):
 
         The universe of a rebalance bar is every symbol with a finite score
         and a fill price on the next bar, the score being the prediction the
-        portfolio rule ranks by (the constructor's ``score_label``, else the
-        first predicted label). The rebalance bars are the decided bars of
-        ``simulation.rebalances``, so a bar the rule held after a failure is
+        portfolio rule ranks by (the constructor's ``ranking_label``; the
+        first predicted label without a constructor). The rebalance bars are
+        the decided bars of ``simulation.rebalances``, so a bar the rule held after a failure is
         held here too. ``quantlab.runs.backtest_attribution`` gives the
         equal-weighted universe curve and the curves of ``ATTRIBUTION_GROUPS`` score groups,
         delisted holdings settled at their last valuation as the engine
@@ -2296,8 +2296,8 @@ class BaseBacktester(Component, ABC):
         fill_column = self.MARKET.fill_price_column  # type: ignore[union-attr]
         valuation_column = self.MARKET.valuation_price_column  # type: ignore[union-attr]
         constructor = getattr(self.config, "constructor", None)
-        label = getattr(getattr(constructor, "config", None), "score_label", None)
-        label = label or next(iter(predictions.data_vars))
+        names = [str(name) for name in predictions.data_vars]
+        label = names[0] if constructor is None else constructor.ranking_label(names)
         fill = prices[fill_column].transpose("timestamp", "symbol").values
         valuation = prices[valuation_column].transpose("timestamp", "symbol").values
         scores = predictions[label].transpose("timestamp", "symbol").values
