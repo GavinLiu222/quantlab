@@ -1662,7 +1662,10 @@ class IndexConstituentDataset(RawDataset):
         Raises
         ------
         ValueError
-            If a timestamp's date lies outside the membership panel.
+            If a timestamp's date lies outside the membership panel, or none
+            of ``symbols`` is on the membership store's symbol axis (an
+            integer permaticker against a text one), which would answer
+            every symbol as a non-member.
 
         Examples
         --------
@@ -1680,6 +1683,14 @@ class IndexConstituentDataset(RawDataset):
         """
         timestamps = pd.DatetimeIndex(np.asarray(timestamps))
         symbols = np.asarray(symbols)
+        owner = owner or type(self).__name__
+        if len(symbols) and not pd.Index(symbols).isin(self.stored_symbols()).any():
+            raise ValueError(
+                f"{owner}: none of the {len(symbols)} symbol(s) asked about is on the "
+                f"symbol axis of {type(self).__name__}'s store (labels {symbols[:3].tolist()} "
+                f"of type {symbols.dtype}); every one would be a non-member. Check that both "
+                f"are on the same axis (an integer permaticker against a text one)."
+            )
         if len(timestamps) == 0:
             return xr.DataArray(
                 np.zeros((0, len(symbols)), dtype=bool),
@@ -1691,7 +1702,7 @@ class IndexConstituentDataset(RawDataset):
         uncovered = days.unique().difference(pd.DatetimeIndex(is_member["timestamp"].values))
         if len(uncovered):
             raise ValueError(
-                f"{owner or type(self).__name__}: the membership panel of "
+                f"{owner}: the membership panel of "
                 f"{type(self).__name__} does not cover {len(uncovered)} "
                 f"date(s) ({uncovered[0].date()}..{uncovered[-1].date()}); "
                 f"extend the membership store or narrow the window, since "
@@ -1747,14 +1758,5 @@ class IndexConstituentDataset(RawDataset):
         """
         if panel.sizes.get("timestamp", 0) == 0:
             return panel
-        owner = owner or type(self).__name__
-        symbols = pd.Index(panel["symbol"].values)
-        if len(symbols) and not symbols.isin(self.stored_symbols()).any():
-            raise ValueError(
-                f"{owner}: none of the {len(symbols)} symbol(s) of the panel is on the "
-                f"symbol axis of {type(self).__name__}'s store (labels {symbols[:3].tolist()} "
-                f"of type {symbols.dtype}); every cell would be masked. Check that both are "
-                f"on the same axis (an integer permaticker against a text one)."
-            )
         member = self.is_member_at(panel["timestamp"].values, panel["symbol"].values, owner=owner)
         return panel.where(member)

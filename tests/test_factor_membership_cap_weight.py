@@ -11,6 +11,7 @@ The caps of symbols 1..4 over 30 business days; ``1`` is always a member,
 
 import numpy as np
 import pandas as pd
+import pytest
 import xarray as xr
 
 from quantlab.core.component import rebuild
@@ -67,3 +68,11 @@ def test_the_factor_rebuilds_from_its_config(tmp_path):
     xr.testing.assert_identical(
         again.compute(_day(BARS[0]), _day(BARS[-1])), factor.compute(_day(BARS[0]), _day(BARS[-1]))
     )
+
+
+def test_caps_on_another_symbol_axis_are_refused(tmp_path):
+    membership = _membership(tmp_path, [(1, COVERAGE_START, None), (2, COVERAGE_START, None)])
+    factor = MembershipCapWeight(MembershipCapWeightConfig(dataset=_caps(tmp_path), membership=membership))
+
+    with pytest.raises(ValueError, match="MembershipCapWeight: none of the 4 symbol"):
+        factor.compute(_day(BARS[0]), _day(BARS[-1]))

@@ -102,3 +102,15 @@ def test_the_wrappers_mask_as_the_membership_does(membership):
     xr.testing.assert_identical(MembershipMaskedLabel(_Stub(panel), membership).read(None, None), expected)
     xr.testing.assert_identical(MembershipMaskedPredictor(_Stub(panel), membership).predict_window(None, None),
                                 expected)
+
+
+def test_is_member_at_refuses_symbols_on_another_axis(membership):
+    with pytest.raises(ValueError, match="Caller: none of the 2 symbol"):
+        membership.is_member_at(BARS, [1, 2], owner="Caller")
+
+
+def test_is_member_at_answers_a_symbol_missing_from_the_store_as_not_a_member(membership):
+    member = membership.is_member_at(BARS, ["A", "ZZZ"])
+
+    assert member.sel(symbol="ZZZ").values.tolist() == [False, False, False]
+    assert member.sel(symbol="A").values.tolist() == [True, True, True]
