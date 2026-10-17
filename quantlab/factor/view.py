@@ -299,6 +299,17 @@ class FactorView(Factor):
         """
         raise self._no_store("extend")
 
+    def rewind(self, end) -> Self:
+        """Refused: a view has no store; rewind the wrapped store with its owner.
+
+        Examples
+        --------
+        >>> view.rewind("2024-01-15")
+        Traceback (most recent call last):
+        ValueError: RosterFactor.rewind(): a view has no store of its own; ...
+        """
+        raise self._no_store("rewind")
+
     def write_rows(self, rows: xr.Dataset, start, end) -> Self:
         """Refused: a view has no store; write the rows with the store's owner.
 

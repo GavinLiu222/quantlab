@@ -94,9 +94,9 @@ The factor holds no panel after `compute`; each call reads the dataset again thr
 
 ## Common tasks
 
-### Build, read and extend a factor store
+### Build, read, extend and rewind a factor store
 
-`build(start, end)` writes `compute(start, end)` as the store at `store_path`, replacing what was there, and records the range beside it, in `<store>.range.json`. `read(start, end)` returns a range from the store, opened lazily, and refuses one the recorded range does not contain. `extend(end)` computes the bars after the recorded end, warmed from the dataset, appends them and moves the recorded end. It uses `XrBackend.widen_and_append`, so the timestamp, symbol and variable axes widen to fit and the append checks described in the backend guide apply.
+`build(start, end)` writes `compute(start, end)` as the store at `store_path`, replacing what was there, and records the range beside it, in `<store>.range.json`. `read(start, end)` returns a range from the store, opened lazily, and refuses one the recorded range does not contain. `extend(end)` computes the bars after the recorded end, warmed from the dataset, appends them and moves the recorded end. It uses `XrBackend.widen_and_append`, so the timestamp, symbol and variable axes widen to fit and the append checks described in the backend guide apply. `rewind(end)` is its inverse: it drops the bars after an `end` inside the recorded range and moves the recorded end back, keeping the symbol and variable axes, so the next `extend` computes those bars again (for bars computed from inputs that were wrong). It refuses an `end` at or past the recorded end or before its start, and a view, as `extend` does.
 
 ```python
 >>> factor.build("2024-01-21", "2024-02-29").store_range()
@@ -113,6 +113,13 @@ ValueError: Momentum.read(): the store at data/factors/momentum.zarr covers 2024
 >>> stored = xr.open_zarr("data/factors/momentum.zarr")
 >>> stored.sizes["timestamp"], str(stored["timestamp"].values[-1])[:10]
 (60, '2024-03-20')
+>>> factor.rewind("2024-03-01").store_range()
+('2024-01-21', '2024-03-01')
+>>> stored = xr.open_zarr("data/factors/momentum.zarr")
+>>> stored.sizes["timestamp"], str(stored["timestamp"].values[-1])[:10]
+(41, '2024-03-01')
+>>> factor.extend("2024-03-20").store_range()
+('2024-01-21', '2024-03-20')
 ```
 
 `store_range()` is `None` for a store that `build` did not write, and `read` and `extend` refuse such a store. A KunQuant factor answers these calls in batch mode only. The range, the order of `build` and `extend` and their refusals are kept by `quantlab.backend.ranged.RangedStore`, the module a factor risk model's stores are written through too (see the backend guide); a factor supplies its `compute`, its owner rule and the fill values of widened cells. A factor without `file_path` is refused by `build`, `extend` and `read` with `ValueError: Momentum.build(): the store has no path in the config.` A factor with a store declares it with `store_uses()` (a `StoreUse` of its store, `owns` with the factor as the handle, or `reads` for a factor pinned to some of the store's variables; a view declares the wrapped store), which is what the live day and the daily data update extend. Rows computed elsewhere (a chunk computed in a worker process) are written by the same rules through the factor's public chunk-write entry: `write_rows(rows, start, end)` and `append_rows(rows, end)` are the write halves of `build` and `extend`, `extendable_range(end)` returns the recorded range or raises `extend`'s refusals before anything is computed, and `refuse_unless_owner(method)` is the owner guard every write runs (a view refuses every one of them with `a view has no store of its own`). A chunked build of a store that does not fit in memory writes through these entries; see [Build a store that does not fit in memory](#build-a-store-that-does-not-fit-in-memory).

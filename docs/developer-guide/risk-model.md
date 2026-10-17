@@ -40,10 +40,12 @@ It writes two stores, one row per bar:
 
 Each store follows the factor lifecycle: `compute(start, end)` returns
 rows, `build(start, end)` writes them, `extend(end)` appends the bars after
-the recorded range and `read(start, end)` returns a range of the store. A
-read outside the range recorded beside the store raises `ValueError`. Every
-row depends only on a bounded window of bars ending at that bar, so a store
-built in one go and one built and then extended are identical, row for row.
+the recorded range, `rewind(end)` drops the bars after an earlier end so the
+next `extend` computes them again, and `read(start, end)` returns a range of
+the store. A read outside the range recorded beside the store raises
+`ValueError`. Every row depends only on a bounded window of bars ending at
+that bar, so a store built in one go and one built and then extended are
+identical, row for row.
 Changing an estimate parameter therefore rebuilds only the estimate store.
 
 A store (`RiskStore`) is written through `quantlab.backend.ranged.RangedStore`,

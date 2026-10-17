@@ -552,6 +552,35 @@ class RiskStore:
         self._ranged.extend(end)
         return self
 
+    def rewind(self, end: Date) -> Self:
+        """Drop the bars after ``end`` and end the recorded range there (``RangedStore.rewind``).
+
+        The next ``extend`` computes the dropped bars again.
+
+        Parameters
+        ----------
+        end : str, datetime.date or pd.Timestamp
+            The new end of the store's range, inside it and before its end.
+
+        Returns
+        -------
+        RiskStore
+            ``self``, for chaining.
+
+        Raises
+        ------
+        ValueError
+            If the store has no path or no recorded range, or ``end`` is not
+            inside the recorded range and before its end.
+
+        Examples
+        --------
+        >>> model.regression.rewind("2024-04-15").store_range()
+        ('2024-01-01', '2024-04-15')
+        """
+        self._ranged.rewind(end)
+        return self
+
     def read(self, start: Date, end: Date) -> xr.Dataset:
         """Return the store from ``start`` to ``end``, both inclusive.
 

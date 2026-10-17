@@ -63,7 +63,7 @@ The run directory is the strategy's recipe: `config.json` rebuilds the backteste
    must already hold t, or the day is refused before anything is extended. A store that
    already reaches t is left alone, so the next run finishes a run that was interrupted.
    Afterwards each store must hold t. What the loop asks of a store's handle is
-   `RangedStoreHandle` (`store_range()`, `extend(end)`, in `quantlab.core.store_uses`); a factor and a
+   `RangedStoreHandle` (`store_range()`, `extend(end)`, and `rewind(end)` for redoing bars, in `quantlab.core.store_uses`); a factor and a
    `RiskStore` both answer it and both write through `quantlab.backend.ranged.RangedStore`.
 4. **The prediction.** The run's model (for an index strategy, the
    `MembershipMaskedPredictor`) loads the checkpoint and predicts `predict_window(t, t)`.

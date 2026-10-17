@@ -95,6 +95,9 @@ class RangedStoreHandle(Protocol):
     def extend(self, end):
         """Append the bars after the recorded range up to ``end``."""
 
+    def rewind(self, end):
+        """Drop the bars after ``end``, inside the recorded range, and end the range there."""
+
 
 @dataclasses.dataclass(frozen=True)
 class StoreUse:
@@ -153,7 +156,7 @@ class StoreUse:
         if self.handle is not None and not isinstance(self.handle, RangedStoreHandle):
             raise TypeError(
                 f"StoreUse({self.path!r}, {self.relation!r}): {type(self.handle).__name__} "
-                f"lacks a member of RangedStoreHandle (store_range, extend)"
+                f"lacks a member of RangedStoreHandle (store_range, extend, rewind)"
             )
 
     @property

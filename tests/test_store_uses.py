@@ -230,7 +230,9 @@ def test_a_store_use_refuses_an_unknown_relation_and_an_owned_store_without_hand
     with pytest.raises(TypeError, match="lacks a member of RangedStoreHandle"):
         StoreUse("x.zarr", READS, handle=object())
     with pytest.raises(ValueError, match="names no store"):
-        StoreUse(None, OWNS, handle=SimpleNamespace(store_range=lambda: None, extend=lambda end: None))
+        StoreUse(None, OWNS, handle=SimpleNamespace(
+            store_range=lambda: None, extend=lambda end: None, rewind=lambda end: None
+        ))
 
 
 def test_the_walk_refuses_a_declaration_of_anything_else():

@@ -1150,6 +1150,80 @@ class XrBackend(DataBackend):
         _swap_index_coordinate(target, dim, values)
         return self
 
+    def shorten_axis(self, path: str, last, dim: str = "timestamp") -> Self:
+        """Drop the labels of the store's ``dim`` axis after ``last``, in place.
+
+        A write killed midway is settled first (``_recover_interrupted_writes``),
+        and the axis is then read without the consolidated metadata, so a
+        shortening killed midway is finished by running it again; with no
+        label after ``last`` nothing is written. The index coordinate of
+        ``dim`` is cut first, then every other array carrying ``dim``, and
+        the metadata is consolidated again. No stored chunk is rewritten:
+        the cut cells stay in the axis's last chunk until the axis grows over
+        them, and an append writes every cell it adds. Cutting the coordinate
+        is the commit: a process killed after it leaves arrays longer than
+        their axis, which the next writing call cuts back. The other axes are
+        untouched. Do not run this while another process reads the store.
+
+        Parameters
+        ----------
+        path : str
+            Directory of the Zarr store.
+        last : label
+            The last label of ``dim`` kept (a ``pd.Timestamp`` on the time
+            axis); the axis is ordered.
+        dim : str, default "timestamp"
+            The axis to shorten.
+
+        Raises
+        ------
+        FileNotFoundError
+            If no store exists at ``path``.
+
+        Examples
+        --------
+        >>> import tempfile
+        >>> from pathlib import Path
+        >>> import numpy as np
+        >>> import pandas as pd
+        >>> import xarray as xr
+        >>> from quantlab.backend.zarr import XrBackend
+        >>> panel = xr.Dataset(
+        ...     {"close": (("timestamp", "symbol"), np.arange(6.0).reshape(3, 2))},
+        ...     coords={"timestamp": pd.date_range("2024-01-02", periods=3),
+        ...             "symbol": np.array(["AAA", "BBB"], dtype=object)},
+        ... )
+        >>> path = str(Path(tempfile.mkdtemp()) / "prices.zarr")
+        >>> _ = XrBackend().to_internal(panel).append(path)
+        >>> _ = XrBackend().shorten_axis(path, pd.Timestamp("2024-01-03"))
+        >>> xr.open_zarr(path)["close"].values.tolist()
+        [[0.0, 1.0], [2.0, 3.0]]
+        """
+        import zarr
+
+        target = Path(path)
+        if not target.exists():
+            raise FileNotFoundError(f"File {path} does not exist.")
+        _recover_interrupted_writes(target)
+        with xr.open_zarr(path, consolidated=False) as opened:
+            labels = opened[dim].values
+        length = int((labels <= np.asarray(last, dtype=labels.dtype)).sum())
+        if length == len(labels):
+            return self
+        group = zarr.open_group(str(target), mode="r+", use_consolidated=False)
+        group[dim].resize((length,))
+        for name, array in group.arrays():
+            dims = _dimension_names(array) or []
+            if name == dim or dim not in dims:
+                continue
+            shape = list(array.shape)
+            shape[dims.index(dim)] = length
+            array.resize(tuple(shape))
+        zarr_format = group.metadata.zarr_format
+        if _is_consolidated(target, zarr_format):
+            zarr.consolidate_metadata(str(target), zarr_format=zarr_format)
+        return self
+
     def widen_and_append(
         self,
         path: str,
@@ -2105,13 +2179,13 @@ def _recover_interrupted_writes(store: Path) -> None:
 
 
 def _recover_axis_extension(store: Path) -> list[str]:
-    """Cut back arrays an ``extend_symbol_axis`` killed midway left too long.
+    """Cut back arrays an ``extend_symbol_axis`` or a ``shorten_axis`` killed midway left too long.
 
-    The extension resizes every array on the axis first and swaps the
-    coordinate last, so an array longer along a dimension than that
-    dimension's index coordinate belongs to an extension that never
-    committed. It is resized back to the coordinate's length; the cells it
-    gained were never part of the store. Run after
+    An extension resizes every array on the axis first and swaps the
+    coordinate last; a shortening cuts the coordinate first and the arrays
+    after. Either way an array longer along a dimension than that
+    dimension's index coordinate belongs to a write that the coordinate
+    says is not there. It is resized back to the coordinate's length. Run after
     ``_recover_index_coordinate_swap``, which settles the coordinate itself.
 
     Returns
@@ -2136,8 +2210,8 @@ def _recover_axis_extension(store: Path) -> list[str]:
         if tuple(shape) != tuple(array.shape):
             logger.warning(
                 f"XrBackend: '{name}' of {store} is longer than its axis, left "
-                f"by an extension killed before its commit; cutting it back to "
-                f"{tuple(shape)}."
+                f"by an axis extension or shortening killed midway; cutting it back "
+                f"to {tuple(shape)}."
             )
             zarr.open_array(str(store / name), mode="r+").resize(tuple(shape))
             cut.append(str(name))

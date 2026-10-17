@@ -4,7 +4,8 @@ A *ranged store* answers a request for a date range only inside the range it
 was built for, which is recorded beside it in ``<store>.range.json``.
 ``build(start, end)`` replaces the store with the rows of the range and
 records it, ``extend(end)`` appends the rows after the recorded range and
-moves its end, and a reader asks ``check_covers(start, end)`` before it opens
+moves its end, ``rewind(end)`` drops the rows after an earlier end and moves
+the end back, and a reader asks ``check_covers(start, end)`` before it opens
 the store. Every row is computed by the ``compute`` function the store is
 given, so a store built in one go and one built then extended are equal
 whenever a row depends only on a bounded window of bars ending at its own.
@@ -249,13 +250,7 @@ class RangedStore:
         """
         path = self._require_path("extend")
         self._check_guard("extend")
-        recorded = self.store_range()
-        if recorded is None:
-            raise ValueError(
-                f"{self.owner}.extend(): the store at {path} has no recorded range; "
-                f"write it with build(start, end) first."
-            )
-        recorded_start, recorded_end = recorded
+        recorded_start, recorded_end = self._recorded("extend")
         if last_moment(end) <= last_moment(recorded_end):
             raise ValueError(
                 f"{self.owner}.extend(): the store at {path} already covers "
@@ -308,13 +303,75 @@ class RangedStore:
         >>> store.store_range()
         ('2024-01-01', '2024-01-10')
         """
-        recorded_start, _ = self.extendable_range(end)
+        recorded_start, recorded_end = self.extendable_range(end)
         with Timer(f"{self.owner}: extend"):
+            # Bars past the recorded end are a rewind killed before its cut.
+            XrBackend().shorten_axis(self.store_path, last_moment(recorded_end))
             if rows.sizes["timestamp"]:
                 XrBackend().to_internal(rows).widen_and_append(
                     self.store_path, fill_values=self._fill_values
                 )
             self._record(recorded_start, end)
+
+    def rewind(self, end) -> None:
+        """Drop the bars after ``end`` and end the recorded range there: the inverse of ``extend``.
+
+        The bars up to ``end`` stay as they are, and the symbol and variable
+        axes keep every label, so the next ``extend`` computes the dropped
+        bars again. The range is recorded first, then the store's time axis
+        shortened in place (``XrBackend.shorten_axis``): a rewind killed
+        between the two leaves bars past the recorded end, which no read
+        reaches and the next ``extend`` drops before it appends.
+
+        Parameters
+        ----------
+        end : str, datetime.date or pd.Timestamp
+            The new end of the store's range, inside it and before its end.
+
+        Raises
+        ------
+        ValueError
+            If the store has no path, the guard refuses the write, the store
+            has no recorded range, ``end`` is not before the recorded end, or
+            ``end`` is before the recorded start.
+
+        Examples
+        --------
+        >>> store.build("2024-01-01", "2024-01-31")
+        >>> store.rewind("2024-01-15")
+        >>> store.store_range()
+        ('2024-01-01', '2024-01-15')
+        >>> store.rewind("2024-01-15")
+        Traceback (most recent call last):
+        ValueError: Rows.rewind(): the store at rows.zarr covers 2024-01-01 to 2024-01-15; ...
+        """
+        path = self._require_path("rewind")
+        self._check_guard("rewind")
+        recorded_start, recorded_end = self._recorded("rewind")
+        if last_moment(end) >= last_moment(recorded_end):
+            raise ValueError(
+                f"{self.owner}.rewind(): the store at {path} covers {recorded_start} to "
+                f"{recorded_end}; rewind() keeps the bars up to an earlier end, got end {end!r}."
+            )
+        if last_moment(end) < pd.Timestamp(recorded_start):
+            raise ValueError(
+                f"{self.owner}.rewind(): the store at {path} covers {recorded_start} to "
+                f"{recorded_end}; rewind() cannot end before its start, got end {end!r}. "
+                f"Rebuild it with build(start, end)."
+            )
+        with Timer(f"{self.owner}: rewind"):
+            self._record(recorded_start, end)
+            XrBackend().shorten_axis(path, last_moment(end))
+
+    def _recorded(self, method: str) -> tuple[str, str]:
+        """Return the recorded range, or raise naming ``method`` when none is recorded."""
+        recorded = self.store_range()
+        if recorded is None:
+            raise ValueError(
+                f"{self.owner}.{method}(): the store at {self.store_path} has no recorded range; "
+                f"write it with build(start, end) first."
+            )
+        return recorded
 
     def _require_path(self, method: str) -> str:
         """Return the path, or raise if the store has none."""

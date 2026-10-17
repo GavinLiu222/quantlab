@@ -4,11 +4,12 @@ A factor's store (``Factor``) and a factor risk model's stores (``RiskStore``)
 are written and read by date range through one ``RangedStore``
 (``quantlab/backend/ranged.py``): ``build(start, end)`` replaces the store and
 records the range in ``<store>.range.json``, ``read`` answers only inside it,
-``extend(end)`` appends the bars after it, and every refusal says the same
-thing in the same words. The suite runs over both adapters on one planted
-market (a pass-through factor of the exposures, and the regression store of
-the minimal ``MarketModel`` of ``test_risk_contract``), then over
-``RangedStore`` alone for its guard and its fill values.
+``extend(end)`` appends the bars after it, ``rewind(end)`` drops them back
+to an earlier end, and every refusal says the same thing in the same words.
+The suite runs over both adapters on one planted market (a pass-through
+factor of the exposures, and the regression store of the minimal
+``MarketModel`` of ``test_risk_contract``), then over ``RangedStore`` alone
+for its guard, its fill values and a rewind killed midway.
 
 The ``.range.json`` file is the one the shared stores hold today, so a store
 built before this module keeps reading and extending without a rebuild.
@@ -186,6 +187,60 @@ def test_extend_refuses_a_store_without_a_recorded_range(adapter):
     )
 
 
+def test_rewind_drops_the_later_bars_and_extend_computes_them_again(adapter):
+    store, _ = adapter
+    store.build(START, END)
+
+    assert store.rewind(MIDDLE) is store
+
+    assert store.store_range() == (START, MIDDLE)
+    stored = xr.open_zarr(store.store_path)["timestamp"].values
+    assert pd.Timestamp(stored[-1]) == pd.Timestamp(MIDDLE)
+    _same(store.read(START, MIDDLE).load(), store.compute(START, MIDDLE))
+    store.extend(END)
+    assert store.store_range() == (START, END)
+    _same(store.read(START, END).load(), store.compute(START, END))
+
+
+def test_rewind_refuses_an_end_the_store_does_not_go_past(adapter):
+    store, owner = adapter
+    store.build(START, MIDDLE)
+
+    for end in (MIDDLE, END):
+        with pytest.raises(ValueError) as refused:
+            store.rewind(end)
+        assert str(refused.value) == (
+            f"{owner}.rewind(): the store at {store.store_path} covers {START} to "
+            f"{MIDDLE}; rewind() keeps the bars up to an earlier end, got end {end!r}."
+        )
+    assert store.store_range() == (START, MIDDLE)
+
+
+def test_rewind_refuses_an_end_before_the_recorded_start(adapter):
+    store, owner = adapter
+    store.build(_day(10), MIDDLE)
+
+    with pytest.raises(ValueError) as refused:
+        store.rewind(START)
+    assert str(refused.value) == (
+        f"{owner}.rewind(): the store at {store.store_path} covers {_day(10)} to "
+        f"{MIDDLE}; rewind() cannot end before its start, got end {START!r}. Rebuild it "
+        f"with build(start, end)."
+    )
+    assert store.store_range() == (_day(10), MIDDLE)
+
+
+def test_rewind_refuses_a_store_without_a_recorded_range(adapter):
+    store, owner = adapter
+
+    with pytest.raises(ValueError) as refused:
+        store.rewind(MIDDLE)
+    assert str(refused.value) == (
+        f"{owner}.rewind(): the store at {store.store_path} has no recorded range; "
+        f"write it with build(start, end) first."
+    )
+
+
 def test_a_rebuild_replaces_the_store_and_its_range(adapter):
     store, _ = adapter
     store.build(START, END)
@@ -201,12 +256,13 @@ def test_a_rebuild_replaces_the_store_and_its_range(adapter):
 # -- no path ----------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("method", ["build", "extend", "read"])
+@pytest.mark.parametrize("method", ["build", "extend", "rewind", "read"])
 def test_a_store_without_a_path_is_refused(pathless, method):
     store, owner = pathless
     call = {
         "build": lambda: store.build(START, MIDDLE),
         "extend": lambda: store.extend(END),
+        "rewind": lambda: store.rewind(START),
         "read": lambda: store.read(START, MIDDLE),
     }[method]
 
@@ -255,7 +311,8 @@ def test_the_guard_refuses_a_write_before_anything_is_computed(tmp_path):
                          (lambda: store.write(_rows("2024-01-01", "2024-01-05"),
                                               "2024-01-01", "2024-01-05"), "build"),
                          (lambda: store.append(_rows("2024-01-08", "2024-01-10"),
-                                               "2024-01-10"), "extend")):
+                                               "2024-01-10"), "extend"),
+                         (lambda: store.rewind("2024-01-05"), "rewind")):
         with pytest.raises(ValueError, match=f"no {method}"):
             call()
     assert computed == []
@@ -293,6 +350,53 @@ def test_cells_a_widening_creates_take_the_fill_values(tmp_path):
     assert stored["flag"].sel(symbol="b").values.tolist() == [False] * 5 + [True] * 3
 
 
+def test_rewind_keeps_the_symbols_a_widening_added(tmp_path):
+    store = RangedStore(str(tmp_path / "x.zarr"), "Thing", _rows)
+    store.write(_rows("2024-01-01", "2024-01-05"), "2024-01-01", "2024-01-05")
+    store.append(_rows("2024-01-08", "2024-01-10", symbols=("a", "b", "c")), "2024-01-10")
+
+    store.rewind("2024-01-05")
+
+    stored = xr.open_zarr(tmp_path / "x.zarr").load()
+    assert store.store_range() == ("2024-01-01", "2024-01-05")
+    assert stored["symbol"].values.tolist() == ["a", "b", "c"]
+    assert pd.DatetimeIndex(stored["timestamp"].values).equals(pd.bdate_range("2024-01-01", "2024-01-05"))
+    assert np.isnan(stored["x"].sel(symbol="c").values).all()
+    store.append(_rows("2024-01-08", "2024-01-10", symbols=("a", "b", "c")), "2024-01-10")
+    assert xr.open_zarr(tmp_path / "x.zarr")["x"].sel(timestamp="2024-01-10").values.tolist() == [1.0] * 3
+
+
+def test_extend_finishes_a_rewind_killed_after_it_recorded_the_range(tmp_path):
+    # The rewind records the range first: a kill before the cut leaves bars past it,
+    # which no read reaches and the next extend drops before appending.
+    store = RangedStore(str(tmp_path / "x.zarr"), "Thing", _rows)
+    store.build("2024-01-01", "2024-01-31")
+    store._record("2024-01-01", "2024-01-05")
+
+    store.extend("2024-01-12")
+
+    stored = xr.open_zarr(tmp_path / "x.zarr")
+    assert pd.DatetimeIndex(stored["timestamp"].values).equals(pd.bdate_range("2024-01-01", "2024-01-12"))
+    assert store.store_range() == ("2024-01-01", "2024-01-12")
+
+
+def test_extend_finishes_a_rewind_killed_inside_the_cut(tmp_path):
+    # Killed after the time coordinate was cut, before the other arrays and the
+    # consolidated metadata: the arrays are cut back to their axis on the next write.
+    import zarr
+
+    store = RangedStore(str(tmp_path / "x.zarr"), "Thing", _rows)
+    store.build("2024-01-01", "2024-01-31")
+    store._record("2024-01-01", "2024-01-05")
+    zarr.open_array(str(tmp_path / "x.zarr" / "timestamp"), mode="r+").resize((5,))
+
+    store.extend("2024-01-12")
+
+    stored = xr.open_zarr(tmp_path / "x.zarr")
+    assert pd.DatetimeIndex(stored["timestamp"].values).equals(pd.bdate_range("2024-01-01", "2024-01-12"))
+    assert stored["x"].shape == (10, 2)
+
+
 def test_check_covers_answers_as_a_read(tmp_path):
     store = RangedStore(str(tmp_path / "x.zarr"), "Thing", _rows)
     store.build("2024-01-01", "2024-01-10")
@@ -326,6 +430,16 @@ def test_a_view_declares_the_store_it_reads_without_owning_it(tmp_path):
     assert declared.handle is view and declared.relation == "reads"
     assert declared.path == owner.store_path and view.store_path is None
     assert declared.handle.store_range() == owner.store_range()
+
+
+def test_a_view_refuses_to_rewind_the_store_it_reads(tmp_path):
+    owner = _factor(tmp_path)
+    owner.build(START, MIDDLE)
+    view = FactorView(FactorViewConfig(factor=owner))
+
+    with pytest.raises(ValueError, match=r"FactorView\.rewind\(\): a view has no store of its own"):
+        view.rewind(_day(10))
+    assert owner.store_range() == (START, MIDDLE)
 
 
 def test_a_factor_risk_model_declares_its_two_stores_in_extension_order(tmp_path):

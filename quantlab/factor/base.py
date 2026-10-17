@@ -675,6 +675,41 @@ class Factor(Component, ABC):
         self._ranged_store().extend(end)
         return self
 
+    def rewind(self, end: "str | datetime.date | pd.Timestamp") -> Self:
+        """Drop the bars after ``end`` and end the recorded range there: the inverse of ``extend``.
+
+        The bars up to ``end`` stay as they are and the symbol and variable
+        axes keep every label, so the next ``extend`` computes the dropped
+        bars again (``quantlab.backend.ranged.RangedStore.rewind``). Only the
+        factor owning its store may rewind it (``refuse_unless_owner``).
+
+        Parameters
+        ----------
+        end : str, datetime.date or pd.Timestamp
+            The new end of the store's range, inside it and before its end.
+
+        Returns
+        -------
+        Self
+            ``self``, for chaining.
+
+        Raises
+        ------
+        ValueError
+            If the factor has no store path, does not own its store, the
+            store has no recorded range, or ``end`` is not inside the
+            recorded range and before its end.
+
+        Examples
+        --------
+        >>> factor.build("2024-01-01", "2024-03-31").rewind("2024-02-29").store_range()
+        ('2024-01-01', '2024-02-29')
+        >>> factor.extend("2024-03-31").store_range()
+        ('2024-01-01', '2024-03-31')
+        """
+        self._ranged_store().rewind(end)
+        return self
+
     def write_rows(
         self,
         rows: xr.Dataset,

@@ -233,7 +233,7 @@ XrBackend()
 
 ### 按日期区间维护存储
 
-`RangedStore`（`quantlab.backend.ranged`）用一个计算日期区间各行的函数写出存储，并把它覆盖的区间记录在旁边的 `<store>.range.json` 中（`{"start": ..., "end": ...}`）。`build(start, end)` 替换存储及其区间，`extend(end)` 计算记录终点之后的行并追加（`widen_and_append`，各轴按需加宽），读取方在打开存储前调用 `check_covers(start, end)`。因子的存储和因子风险模型的存储都通过它写出；各自只提供计算函数和消息里使用的名字，因子另外提供拒绝写入的规则（`guard`，只有存储的拥有者能写）和加宽单元格的填充值。`write(rows, start, end)` 和 `append(rows, end)` 是 `build` 与 `extend` 的写入一半，用于在别处算好的行（工作进程里算出的一块）。
+`RangedStore`（`quantlab.backend.ranged`）用一个计算日期区间各行的函数写出存储，并把它覆盖的区间记录在旁边的 `<store>.range.json` 中（`{"start": ..., "end": ...}`）。`build(start, end)` 替换存储及其区间，`extend(end)` 计算记录终点之后的行并追加（`widen_and_append`，各轴按需加宽），`rewind(end)` 删掉区间内某个更早终点之后的行并把记录终点移回（`XrBackend.shorten_axis`：原地截短时间轴，其他轴不变），读取方在打开存储前调用 `check_covers(start, end)`。因子的存储和因子风险模型的存储都通过它写出；各自只提供计算函数和消息里使用的名字，因子另外提供拒绝写入的规则（`guard`，只有存储的拥有者能写）和加宽单元格的填充值。`write(rows, start, end)` 和 `append(rows, end)` 是 `build` 与 `extend` 的写入一半，用于在别处算好的行（工作进程里算出的一块）。
 
 ```python
 >>> import numpy as np, pandas as pd, xarray as xr
@@ -254,6 +254,12 @@ ValueError: Rows.read(): the store at rows.zarr covers 2024-01-01 to 2024-01-10,
 >>> store.extend("2024-01-31")
 >>> store.store_range()
 ('2024-01-01', '2024-01-31')
+>>> store.rewind("2024-01-15")
+>>> store.store_range(), xr.open_zarr("rows.zarr").sizes["timestamp"]
+(('2024-01-01', '2024-01-15'), 11)
+>>> store.rewind("2024-01-15")
+Traceback (most recent call last):
+ValueError: Rows.rewind(): the store at rows.zarr covers 2024-01-01 to 2024-01-15; rewind() keeps the bars up to an earlier end, got end '2024-01-15'.
 ```
 
 ## 扩展

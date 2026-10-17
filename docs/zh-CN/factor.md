@@ -94,9 +94,9 @@ UserWarning: Momentum.compute(): 20 warm-up bar(s) are needed before '2024-01-05
 
 ## 常见任务
 
-### 构建、读取和扩充因子存储
+### 构建、读取、扩充和回退因子存储
 
-`build(start, end)` 把 `compute(start, end)` 写成 `store_path` 处的存储（替换原有内容），并把区间记录在它旁边的 `<store>.range.json` 中。`read(start, end)` 惰性地从存储返回一个区间；记录的区间不包含所请求的区间时拒绝。`extend(end)` 计算记录终点之后的 bar（从数据集取预热历史），追加到存储，并把记录的终点后移。它调用 `XrBackend.widen_and_append`，因此 timestamp、symbol 和变量三个轴会按需加宽，后端指南中描述的追加检查同样适用。
+`build(start, end)` 把 `compute(start, end)` 写成 `store_path` 处的存储（替换原有内容），并把区间记录在它旁边的 `<store>.range.json` 中。`read(start, end)` 惰性地从存储返回一个区间；记录的区间不包含所请求的区间时拒绝。`extend(end)` 计算记录终点之后的 bar（从数据集取预热历史），追加到存储，并把记录的终点后移。它调用 `XrBackend.widen_and_append`，因此 timestamp、symbol 和变量三个轴会按需加宽，后端指南中描述的追加检查同样适用。`rewind(end)` 是它的逆操作：删掉记录区间内某个 `end` 之后的 bar，把记录的终点移回 `end`，symbol 和变量轴保持不变，下一次 `extend` 会重新计算这些 bar（用于输入数据有误时重算）。`end` 不早于记录终点、或早于记录起点时拒绝，视图也拒绝，与 `extend` 相同。
 
 ```python
 >>> factor.build("2024-01-21", "2024-02-29").store_range()
@@ -113,6 +113,13 @@ ValueError: Momentum.read(): the store at data/factors/momentum.zarr covers 2024
 >>> stored = xr.open_zarr("data/factors/momentum.zarr")
 >>> stored.sizes["timestamp"], str(stored["timestamp"].values[-1])[:10]
 (60, '2024-03-20')
+>>> factor.rewind("2024-03-01").store_range()
+('2024-01-21', '2024-03-01')
+>>> stored = xr.open_zarr("data/factors/momentum.zarr")
+>>> stored.sizes["timestamp"], str(stored["timestamp"].values[-1])[:10]
+(41, '2024-03-01')
+>>> factor.extend("2024-03-20").store_range()
+('2024-01-21', '2024-03-20')
 ```
 
 不是由 `build` 写出的存储，`store_range()` 返回 `None`，`read` 和 `extend` 都会拒绝这样的存储。KunQuant 因子只在 batch 模式下应答这些调用。区间、`build` 与 `extend` 的步骤顺序和它们的拒绝信息由 `quantlab.backend.ranged.RangedStore` 维护，因子风险模型的存储也通过这个模块写出（见存储后端指南）；因子只提供它的 `compute`、拥有者规则和加宽单元格的填充值。没有 `file_path` 的因子调用 `build`、`extend` 和 `read` 会抛出 `ValueError: Momentum.build(): the store has no path in the config.` 有存储的因子用 `store_uses()` 声明它（一个 `StoreUse`：拥有存储时为 `owns`，handle 是因子自己；只钉住部分变量时为 `reads`；视图声明被包装的存储），实盘日和每日数据更新扩充的就是这些声明。在别处算好的行（例如工作进程算出的一块）通过因子公开的分块写入接口按同样的规则写入：`write_rows(rows, start, end)` 和 `append_rows(rows, end)` 分别是 `build` 和 `extend` 的写入一半，`extendable_range(end)` 在计算任何东西之前返回已记录的区间或抛出 `extend` 的拒绝信息，`refuse_unless_owner(method)` 是每次写入都会运行的拥有者检查（视图对其中每一个都以 `a view has no store of its own` 拒绝）。放不进内存的存储由分块构建通过这些接口写入，见[构建放不进内存的存储](#构建放不进内存的存储)。

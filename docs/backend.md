@@ -233,7 +233,7 @@ XrBackend()
 
 ### Keep a store by date range
 
-`RangedStore` (`quantlab.backend.ranged`) writes a store from a function computing the rows of a date range and records the range it covers beside it, in `<store>.range.json` (`{"start": ..., "end": ...}`). `build(start, end)` replaces the store and its range, `extend(end)` computes the rows after the recorded end and appends them (`widen_and_append`, so the axes widen), and a reader asks `check_covers(start, end)` before it opens the store. A factor's store and a factor risk model's stores are written through one; each supplies its compute function and the name its messages give, and a factor also the rule refusing a write (`guard`, only the store's owner writes it) and the fill values of widened cells. `write(rows, start, end)` and `append(rows, end)` are the write halves of `build` and `extend`, for rows computed elsewhere (a chunk computed in a worker process).
+`RangedStore` (`quantlab.backend.ranged`) writes a store from a function computing the rows of a date range and records the range it covers beside it, in `<store>.range.json` (`{"start": ..., "end": ...}`). `build(start, end)` replaces the store and its range, `extend(end)` computes the rows after the recorded end and appends them (`widen_and_append`, so the axes widen), `rewind(end)` drops the rows after an earlier end inside the range and moves the recorded end back (`XrBackend.shorten_axis`: the time axis is cut in place, the other axes kept), and a reader asks `check_covers(start, end)` before it opens the store. A factor's store and a factor risk model's stores are written through one; each supplies its compute function and the name its messages give, and a factor also the rule refusing a write (`guard`, only the store's owner writes it) and the fill values of widened cells. `write(rows, start, end)` and `append(rows, end)` are the write halves of `build` and `extend`, for rows computed elsewhere (a chunk computed in a worker process).
 
 ```python
 >>> import numpy as np, pandas as pd, xarray as xr
@@ -254,6 +254,12 @@ ValueError: Rows.read(): the store at rows.zarr covers 2024-01-01 to 2024-01-10,
 >>> store.extend("2024-01-31")
 >>> store.store_range()
 ('2024-01-01', '2024-01-31')
+>>> store.rewind("2024-01-15")
+>>> store.store_range(), xr.open_zarr("rows.zarr").sizes["timestamp"]
+(('2024-01-01', '2024-01-15'), 11)
+>>> store.rewind("2024-01-15")
+Traceback (most recent call last):
+ValueError: Rows.rewind(): the store at rows.zarr covers 2024-01-01 to 2024-01-15; rewind() keeps the bars up to an earlier end, got end '2024-01-15'.
 ```
 
 ## Extending
