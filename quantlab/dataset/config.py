@@ -815,6 +815,28 @@ class SharadarInsidersConfig(SharadarDatasetConfig):
 
 
 @dataclass(kw_only=True, frozen=True)
+class SharadarActionsConfig(SharadarDatasetConfig):
+    """Config of the Sharadar corporate-actions panel (ACTIONS) on the permaticker axis.
+
+    The universe fields work as for a price panel, on SEP's TICKERS rows
+    (ACTIONS' tickers are mapped through them); the default category filter
+    is domestic common stock.
+
+    Examples
+    --------
+    >>> cfg = SharadarActionsConfig(
+    ...     zarr_file_path="/data/zarrs/sharadar_actions_1d.zarr",
+    ...     raw_data_dir_path="/data/downloads/sharadar",
+    ... )
+    >>> cfg.table
+    'actions'
+    """
+
+    #: Always ACTIONS.
+    table: str = "actions"
+
+
+@dataclass(kw_only=True, frozen=True)
 class SharadarHoldingsConfig(SharadarDatasetConfig):
     """Config of the Sharadar 13F institutional-ownership panel (SF3A) on the permaticker axis.
 

@@ -15,8 +15,8 @@ windows by ``SharadarClient``, not the symbol-batched hive tree an
 and no config factory: ``registry.run()`` refuses it, and the download and the
 daily update are ``scripts/sharadar/download.py`` and
 ``scripts/sharadar/update.py``. ``registry.convert()`` builds the SEP and SFP
-stores, the SF1 fundamentals stores, and the DAILY, EVENTS, insider (SF2)
-and 13F ownership (SF3A) stores; the S&P 500 membership panel (a
+stores, the SF1 fundamentals stores, and the DAILY, EVENTS, insider (SF2),
+13F ownership (SF3A) and corporate-actions (ACTIONS) stores; the S&P 500 membership panel (a
 constituent dataset), the industry panel (built from TICKERS and ACTIONS
 together, not from one table) and the fiscal-year history panel (SF1's ARY
 rows, which the fundamentals stores refuse) are built by the scripts.
@@ -33,6 +33,7 @@ Examples
 """
 
 from quantlab.acquisition.base import Capability, SourceDescriptor, register_source
+from quantlab.dataset.sharadar.actions import SharadarActionsDataset
 from quantlab.dataset.sharadar.daily import SharadarDailyDataset
 from quantlab.dataset.sharadar.events import SharadarEventsDataset
 from quantlab.dataset.sharadar.fundamentals import SharadarFundamentalsDataset
@@ -121,11 +122,13 @@ SHARADAR_SOURCE = register_source(
                 market="us_equity", frequency="1d", data_type="sf3b",
                 earliest_available="2013-06-30", entitlement=_ENTITLEMENT,
             ),
-            # Raw only: dividends, splits and spinoffs feed the price panels.
+            # Corporate actions by family, on the effective date; dividends,
+            # splits and spinoffs also feed the price panels.
             Capability(
                 market="us_equity",
                 frequency="1d",
                 data_type="actions",
+                dataset_cls=SharadarActionsDataset,
                 earliest_available="1998-01-01",
                 entitlement=_ENTITLEMENT,
             ),
