@@ -1,23 +1,30 @@
-"""Trade bars mapped onto permatickers once and kept in a store of their own.
+"""Stores on the Massive ticker mapped onto permatickers once and kept in a store of their own.
 
-``PermatickerTradeBarDataset`` maps the Trade bar store's ticker columns to
-permatickers through the Ticker map on every read: for each session day it
-reads that day's map rows, picks the store's ticker columns and reorders
-them. Over years of one-minute bars that is most of the cost of a read.
-``MappedTradeBarDataset`` does the mapping once: its store holds the view's
-panel, the same variables on ``(timestamp, symbol)`` with ``symbol`` the
-int64 permaticker, and ``panel`` reads the store.
+A ``PermatickerDataset`` view (``quantlab.dataset.massive.permaticker_bars``)
+maps a store's ticker columns to permatickers through the Ticker map on
+every read: for each session day it reads that day's map rows, picks the
+store's ticker columns and reorders them. Over years of one-minute bars
+that is most of the cost of a read. ``MappedPermatickerDataset`` does the
+mapping once: its store holds the view's panel, the same variables on
+``(timestamp, symbol)`` with ``symbol`` the int64 permaticker, and
+``panel`` reads the store. There is one per view:
+``MappedTradeBarDataset`` keeps the Trade bars
+(``massive_permaticker_bars_1m``) and ``MappedDayBarDataset`` Massive's Day
+aggregates (``massive_permaticker_day_bars_1d``, #353).
 
 The store is the view's cache, so it is only as current as the Ticker map
 it was mapped with. A sidecar, ``<store>.permaticker_map.json``, records a
-digest of each stored day's mapped rows (``ticker``, ``permaticker``).
+digest of each stored day's mapped rows (``ticker``, ``permaticker``) and,
+per day, the number of stored tickers the map could not place
+(``unplaced()``): their bars are in no column, never guessed onto one.
 ``update()`` brings the store up to date in two steps:
 
 1. a stored day whose map rows changed since it was written (a rebuilt map:
    a rule change, a Sharadar restatement) is mapped again and written over
    its own bars, in place;
-2. the days the Trade bar store and the Ticker map both hold after the
-   store's last are mapped and appended, ``BATCH_DAYS`` days per write.
+2. the days the store on the Massive ticker and the Ticker map both hold
+   after the store's last are mapped and appended, ``BATCH_DAYS`` days per
+   write.
 
 A permaticker met for the first time is appended at the end of the symbol
 axis without rewriting what is stored (ADR 0032); over earlier days it reads
@@ -28,7 +35,8 @@ changed; ``update()`` rewrites them.
 
 Examples
 --------
-With ``bars`` the permaticker view of the whole-market store::
+With ``bars`` the permaticker view of the whole-market Trade bar store and
+``days`` that of the Day aggregate store::
 
     mapped = MappedTradeBarDataset(MappedTradeBarsConfig(
         source=bars, zarr_file_path="/data/massive_permaticker_bars_1m.zarr",
@@ -36,6 +44,9 @@ With ``bars`` the permaticker view of the whole-market store::
     mapped.update(workers=8)                       # build, or catch up
     panel = mapped.panel("2020-03-02", "2020-03-03")
     daily = mapped.resample("1d").panel("2020-03-02", "2020-03-06")
+    mapped_days = MappedDayBarDataset(MappedDayBarsConfig(
+        source=days, zarr_file_path="/data/massive_permaticker_day_bars_1d.zarr",
+    )).update()
 """
 
 from __future__ import annotations
@@ -44,7 +55,7 @@ import hashlib
 import json
 from datetime import date
 from pathlib import Path
-from typing import Self
+from typing import ClassVar, Self
 
 import numpy as np
 import pandas as pd
@@ -56,10 +67,15 @@ from loguru import logger
 from quantlab.backend.zarr import XrBackend
 from quantlab.core.component import rebuild
 from quantlab.dataset.base import MarketDataset
-from quantlab.dataset.config import MappedTradeBarsConfig
-from quantlab.dataset.massive.permaticker_bars import PermatickerTradeBarDataset
+from quantlab.dataset.config import MappedDayBarsConfig, MappedTradeBarsConfig
+from quantlab.dataset.massive.day_bars import DAY_BAR_RESAMPLE_HOW
+from quantlab.dataset.massive.permaticker_bars import (
+    PermatickerDataset,
+    PermatickerDayBarDataset,
+    PermatickerTradeBarDataset,
+)
 from quantlab.dataset.massive.ticker_map import RULES_VERSION
-from quantlab.dataset.massive.trade_bars import TRADE_BAR_RESAMPLE_HOW, no_trade_fills
+from quantlab.dataset.massive.trade_bars import TRADE_BAR_RESAMPLE_HOW
 from quantlab.utils.atomic import write_json_atomically
 from quantlab.utils.date_range import last_moment
 
@@ -88,40 +104,48 @@ def day_digests(rows: pl.DataFrame) -> dict[str, str]:
     return digests
 
 
-def map_days(source: PermatickerTradeBarDataset, first: str, last: str) -> tuple[xr.Dataset, dict[str, str]]:
-    """Return the view's panel of ``first``..``last`` and the digests of the map rows it was mapped with.
+def map_days(
+    source: PermatickerDataset, first: str, last: str
+) -> tuple[xr.Dataset, dict[str, str], dict[str, int]]:
+    """Return the view's panel of ``first``..``last``, the map digests it was mapped with and the unplaced counts.
 
     The digests are read before the bars are mapped: a map that changes in
     between leaves the older digests recorded, so the days are mapped again
-    later rather than kept with a digest their bars do not match.
+    later rather than kept with a digest their bars do not match. The
+    counts are ``{day: n}`` of the stored tickers the map could not place
+    (``PermatickerDataset.unplaced``).
 
     Examples
     --------
-    >>> panel, digests = map_days(bars, "2024-11-27", "2024-11-27")
-    >>> list(digests)
-    ['2024-11-27']
+    >>> panel, digests, unplaced = map_days(bars, "2024-11-27", "2024-11-27")
+    >>> list(digests), unplaced
+    (['2024-11-27'], {'2024-11-27': 1})
     """
     digests = day_digests(source.ticker_map.read(first, last))
-    return source.panel(first, last), digests
+    unplaced = {day.isoformat(): n for day, n in source.unplaced(first, last).items()}
+    return source.panel(first, last), digests, unplaced
 
 
-def _map_days(config: dict, first: str, last: str) -> tuple[xr.Dataset, dict[str, str]]:
+def _map_days(config: dict, first: str, last: str) -> tuple[xr.Dataset, dict[str, str], dict[str, int]]:
     """``map_days`` in a worker process, the view rebuilt from its saved config."""
     return map_days(rebuild(config), first, last)
 
 
-class MappedTradeBarDataset(MarketDataset):
-    """Trade bars on permatickers, read from a store the view writes; see the module docstring.
+class MappedPermatickerDataset(MarketDataset):
+    """A permaticker view's panel, read from a store the view writes; see the module docstring.
+
+    A subclass names the view it keeps (``SOURCE_CLS``) and how many days a
+    write appends (``BATCH_DAYS``).
 
     Parameters
     ----------
-    config : MappedTradeBarsConfig
+    config : MappedTradeBarsConfig or MappedDayBarsConfig
         The view (``source``) and the store (``zarr_file_path``).
 
     Raises
     ------
     ValueError
-        If ``source`` is not a ``PermatickerTradeBarDataset`` of its own bars.
+        If ``source`` is not a ``SOURCE_CLS`` of its own bars.
 
     Examples
     --------
@@ -130,31 +154,24 @@ class MappedTradeBarDataset(MarketDataset):
     [101, 202, 303, 404, 505]
     """
 
-    # Narrower type annotation for readers and type checkers only.
-    config: MappedTradeBarsConfig
+    #: The permaticker view the store is written from.
+    SOURCE_CLS: ClassVar[type]
 
-    #: The config class used to rebuild this dataset from a saved config.
-    config_cls = MappedTradeBarsConfig
+    #: Session days mapped and appended per write.
+    BATCH_DAYS: ClassVar[int]
 
-    #: ``resample(freq)`` aggregates each variable as the Trade bars do.
-    DEFAULT_RESAMPLE_HOW = TRADE_BAR_RESAMPLE_HOW
-
-    #: Session days mapped and appended per write: a whole-market day is
-    #: about 0.8 GB, and a batch mapped in a worker travels back pickled.
-    BATCH_DAYS = 2
-
-    def _normalize_config(self, config: MappedTradeBarsConfig) -> MappedTradeBarsConfig:
+    def _normalize_config(self, config):
         """Return ``config`` with ``name`` set, refusing a source of another kind."""
-        if not isinstance(config.source, PermatickerTradeBarDataset):
+        if not isinstance(config.source, self.SOURCE_CLS):
             raise ValueError(
-                f"{self.class_name}: source must be a PermatickerTradeBarDataset, got "
+                f"{self.class_name}: source must be a {self.SOURCE_CLS.__name__}, got "
                 f"{type(config.source).__name__}."
             )
         if config.source.config.resample_freq is not None:
             raise ValueError(
-                f"{self.class_name}: source must read the one-minute bars; resample this dataset instead."
+                f"{self.class_name}: source must read its store's own bars; resample this dataset instead."
             )
-        return MappedTradeBarsConfig(
+        return self.config_cls(
             source=config.source,
             zarr_file_path=str(config.zarr_file_path),
             resample_freq=config.resample_freq,
@@ -166,7 +183,7 @@ class MappedTradeBarDataset(MarketDataset):
         """Nothing to set up: the store is opened per read."""
 
     @property
-    def source(self) -> PermatickerTradeBarDataset:
+    def source(self) -> PermatickerDataset:
         """The permaticker view the store is written from.
 
         Examples
@@ -224,13 +241,37 @@ class MappedTradeBarDataset(MarketDataset):
             return {day: "" for day in payload.get("days", {})}
         return dict(payload["days"])
 
-    def _record(self, days: dict[str, str]) -> None:
-        """Write the sidecar."""
+    def _recorded_unplaced(self) -> dict[str, int]:
+        """Return the sidecar's ``{day: unplaced count}``; empty without a store."""
+        if not self.sidecar_path.exists():
+            return {}
+        return dict(json.loads(self.sidecar_path.read_text()).get("unplaced", {}))
+
+    def _record(self, days: dict[str, str], unplaced: dict[str, int]) -> None:
+        """Write the sidecar: each stored day's digest and unplaced count (days with none left out)."""
+        unplaced = {day: n for day, n in unplaced.items() if day in days and n}
         write_json_atomically(
             self.sidecar_path,
-            {"rules_version": RULES_VERSION, "days": dict(sorted(days.items()))},
+            {
+                "rules_version": RULES_VERSION,
+                "days": dict(sorted(days.items())),
+                "unplaced": dict(sorted(unplaced.items())),
+            },
             indent=0,
         )
+
+    def unplaced(self) -> dict[date, int]:
+        """Return ``{day: count}`` of the stored tickers the map could not place, per stored day.
+
+        Recorded when the day was mapped; a day on which every ticker was
+        placed is left out. Their bars are in no column of the store.
+
+        Examples
+        --------
+        >>> mapped.unplaced()   # ZZZ, a test symbol no security ever held
+        {datetime.date(2024, 11, 27): 1, datetime.date(2024, 11, 29): 1}
+        """
+        return {date.fromisoformat(day): int(n) for day, n in sorted(self._recorded_unplaced().items())}
 
     def stored_days(self) -> list[date]:
         """Return the session days the store holds, oldest first.
@@ -300,9 +341,7 @@ class MappedTradeBarDataset(MarketDataset):
         11
         """
         return type(self)(
-            MappedTradeBarsConfig(
-                source=self.source, zarr_file_path=self.store_path, resample_freq=freq, resample_how=how
-            )
+            self.config_cls(source=self.source, zarr_file_path=self.store_path, resample_freq=freq, resample_how=how)
         )
 
     def copy(self) -> Self:
@@ -315,7 +354,7 @@ class MappedTradeBarDataset(MarketDataset):
         (True, False)
         """
         return type(self)(
-            MappedTradeBarsConfig(
+            self.config_cls(
                 source=self.source.copy(),
                 zarr_file_path=self.store_path,
                 resample_freq=self.config.resample_freq,
@@ -323,37 +362,37 @@ class MappedTradeBarDataset(MarketDataset):
             )
         )
 
-    # -- the Trade bars' market rules ---------------------------------------------
+    # -- the source store's market rules ------------------------------------------
 
     def resample_labels(self, timestamps: np.ndarray, freq: str) -> np.ndarray:
-        """Return the bars the Trade bar dataset cuts ``timestamps`` into."""
+        """Return the bars the source store's dataset cuts ``timestamps`` into."""
         return self.source.resample_labels(timestamps, freq)
 
     def _to_kunquant(self, data: xr.Dataset, data_columns: tuple[str, ...]) -> tuple[dict, np.ndarray, np.ndarray]:
-        """Export the columns as the Trade bar dataset does."""
+        """Export the columns as the source store's dataset does."""
         return self.source._to_kunquant(data, data_columns)
 
     # -- writing ------------------------------------------------------------------
 
     def _available_days(self, end) -> list[date]:
-        """Return the session days the Trade bar store and the Ticker map both hold, up to ``end``."""
-        converted = self.source.trade_bars.converted_through()
+        """Return the session days the source store and the Ticker map both hold, up to ``end``."""
+        converted = self.source.stored_through()
         if converted is None:
             return []
         last = converted if end is None else min(converted, pd.Timestamp(end).date())
         mapped = set(self.source.ticker_map.days())
-        sessions = pd.DatetimeIndex(self.source.trade_bars._calendar())
+        sessions = pd.DatetimeIndex(self.source.ticker_bars._calendar())
         session_days = sorted({d for d in pd.DatetimeIndex(self.source.resample_labels(sessions.values, "1d")).date})
         return [d for d in session_days if d <= last and d in mapped]
 
     def update(self, end=None, workers: int = 1) -> Self:
-        """Bring the store up to date with the Trade bar store and the Ticker map.
+        """Bring the store up to date with the source store and the Ticker map.
 
         First every stored day whose map rows changed since it was written
         is mapped again and written over its own bars; then the session days
-        after the store's last that both the Trade bar store and the Ticker
+        after the store's last that both the source store and the Ticker
         map hold, up to ``end``, are mapped and appended, ``BATCH_DAYS`` per
-        write. Without a store this builds it from the Trade bar store's
+        write. Without a store this builds it from the source store's
         first day. The sidecar is written after every write, so an
         interrupted update resumes where it stopped.
 
@@ -397,16 +436,18 @@ class MappedTradeBarDataset(MarketDataset):
         if not days:
             return self
         batches = [days[i : i + self.BATCH_DAYS] for i in range(0, len(days), self.BATCH_DAYS)]
-        fills = no_trade_fills()
+        fills = self.source.no_bar_fills()
         digests = dict(recorded)
+        unplaced = self._recorded_unplaced()
 
-        def write(batch: list[date], mapped: tuple[xr.Dataset, dict[str, str]]) -> None:
-            panel, now = mapped
+        def write(batch: list[date], mapped: tuple[xr.Dataset, dict[str, str], dict[str, int]]) -> None:
+            panel, now, missed = mapped
             if panel.sizes["timestamp"]:
                 XrBackend().to_internal(panel).widen_and_append(self.store_path, fill_values=fills)
             for day in batch:
                 digests[day.isoformat()] = now.get(day.isoformat(), "")
-            self._record(digests)
+                unplaced[day.isoformat()] = missed.get(day.isoformat(), 0)
+            self._record(digests, unplaced)
             logger.info(f"{self.class_name}: stored {batch[0]}..{batch[-1]} ({panel.sizes['symbol']} permatickers)")
 
         if workers <= 1:
@@ -430,10 +471,11 @@ class MappedTradeBarDataset(MarketDataset):
         if not changed:
             return
         logger.warning(f"{self.class_name}: the Ticker map changed on {len(changed)} stored day(s); mapping them again.")
-        fills = no_trade_fills()
+        fills = self.source.no_bar_fills()
         digests = dict(recorded)
+        unplaced = self._recorded_unplaced()
         for day in changed:
-            panel, mapped_with = map_days(self.source, day, day)
+            panel, mapped_with, missed = map_days(self.source, day, day)
             stored = self.stored_symbols()
             added = sorted(int(s) for s in set(panel["symbol"].values.tolist()) - set(stored))
             if added:
@@ -448,4 +490,71 @@ class MappedTradeBarDataset(MarketDataset):
                 self.store_path, region={"timestamp": slice(int(rows[0]), int(rows[-1]) + 1), "symbol": slice(0, len(axis))}
             )
             digests[day] = mapped_with.get(day, "")
-            self._record(digests)
+            unplaced[day] = missed.get(day, 0)
+            self._record(digests, unplaced)
+
+
+class MappedTradeBarDataset(MappedPermatickerDataset):
+    """Trade bars on permatickers, read from a store the view writes; see the module docstring.
+
+    Parameters
+    ----------
+    config : MappedTradeBarsConfig
+        The view (``source``, a ``PermatickerTradeBarDataset``) and the store.
+
+    Examples
+    --------
+    >>> mapped = MappedTradeBarDataset(MappedTradeBarsConfig(source=bars, zarr_file_path="mapped.zarr"))
+    >>> mapped.update().panel("2024-11-27", "2024-11-30")["symbol"].values.tolist()
+    [101, 202, 303, 404, 505]
+    """
+
+    # Narrower type annotation for readers and type checkers only.
+    config: MappedTradeBarsConfig
+
+    #: The config class used to rebuild this dataset from a saved config.
+    config_cls = MappedTradeBarsConfig
+
+    #: ``resample(freq)`` aggregates each variable as the Trade bars do.
+    DEFAULT_RESAMPLE_HOW = TRADE_BAR_RESAMPLE_HOW
+
+    SOURCE_CLS = PermatickerTradeBarDataset
+
+    #: Session days mapped and appended per write: a whole-market day is
+    #: about 0.8 GB, and a batch mapped in a worker travels back pickled.
+    BATCH_DAYS = 2
+
+
+class MappedDayBarDataset(MappedPermatickerDataset):
+    """Massive's Day aggregates on permatickers, read from a store the view writes (#353).
+
+    The store ``massive_permaticker_day_bars_1d`` holds the raw ``open``,
+    ``high``, ``low``, ``close``, ``volume`` and ``n_trades`` of every
+    security the Ticker map places, unadjusted.
+
+    Parameters
+    ----------
+    config : MappedDayBarsConfig
+        The view (``source``, a ``PermatickerDayBarDataset``) and the store.
+
+    Examples
+    --------
+    >>> mapped = MappedDayBarDataset(MappedDayBarsConfig(source=days, zarr_file_path="mapped.zarr"))
+    >>> mapped.update().panel("2024-11-27", "2024-11-30")["close"].sel(symbol=303).values.tolist()   # RRR, then RRS
+    [30.0, 31.0]
+    """
+
+    # Narrower type annotation for readers and type checkers only.
+    config: MappedDayBarsConfig
+
+    #: The config class used to rebuild this dataset from a saved config.
+    config_cls = MappedDayBarsConfig
+
+    #: ``resample(freq)`` aggregates each variable as the Day aggregates do.
+    DEFAULT_RESAMPLE_HOW = DAY_BAR_RESAMPLE_HOW
+
+    SOURCE_CLS = PermatickerDayBarDataset
+
+    #: Session days mapped and appended per write: a whole-market day is
+    #: about 0.6 MB, so a year goes in one write.
+    BATCH_DAYS = 250

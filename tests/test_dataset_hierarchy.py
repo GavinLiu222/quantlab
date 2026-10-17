@@ -31,8 +31,8 @@ from conftest import WHOLE_STORE
 from quantlab.dataset.bad_prints import BadPrintMaskedDataset
 from quantlab.dataset.base import BaseDataset, MarketDataset
 from quantlab.dataset.config import BaseDatasetConfig, ConstituentDatasetConfig, DatasetConfig
-from quantlab.dataset.massive.mapped_bars import MappedTradeBarDataset
-from quantlab.dataset.massive.permaticker_bars import PermatickerTradeBarDataset
+from quantlab.dataset.massive.mapped_bars import MappedDayBarDataset, MappedPermatickerDataset, MappedTradeBarDataset
+from quantlab.dataset.massive.permaticker_bars import PermatickerDayBarDataset, PermatickerTradeBarDataset
 from quantlab.dataset.memory import FrameDataset
 from quantlab.dataset.merged import MergedDataset
 from quantlab.dataset.raw import IndexConstituentDataset, RawDataset, RawMarketDataset
@@ -77,8 +77,10 @@ NOT_RAW = (
     MergedDataset,
     BadPrintMaskedDataset,
     PermatickerTradeBarDataset,
+    PermatickerDayBarDataset,
     FrameDataset,
     MappedTradeBarDataset,
+    MappedDayBarDataset,
 )
 
 # The market-only `DatasetConfig` fields that must NOT be on the shared
@@ -144,10 +146,10 @@ def test_a_dataset_that_builds_no_store_has_no_build_path(cls) -> None:
     assert "_refuse" not in dir(cls)
 
 
-def test_only_the_mapped_store_keeps_its_own_update() -> None:
-    """``MappedTradeBarDataset.update`` writes its store from its source view; no other non-raw dataset has one."""
-    assert "update" in MappedTradeBarDataset.__dict__
-    assert [cls.__name__ for cls in NOT_RAW if hasattr(cls, "update")] == ["MappedTradeBarDataset"]
+def test_only_the_mapped_stores_keep_their_own_update() -> None:
+    """``MappedPermatickerDataset.update`` writes its store from its source view; no other non-raw dataset has one."""
+    assert "update" in MappedPermatickerDataset.__dict__
+    assert [cls.__name__ for cls in NOT_RAW if hasattr(cls, "update")] == ["MappedTradeBarDataset", "MappedDayBarDataset"]
 
 
 def test_the_raw_roots_own_the_build_path_and_their_abstract_methods() -> None:

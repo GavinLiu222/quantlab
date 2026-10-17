@@ -344,6 +344,32 @@ daily = mapped.resample("1d").panel("2020-03-02", "2020-03-06")
 mapped = load_component("/data/quantlab/market/massive/massive_permaticker_bars_1m")   # the shared one
 ```
 
-The store is the view's cache, so it is only as current as the map it was mapped with. The sidecar `<store>.permaticker_map.json` holds a digest of each stored day's mapped `(ticker, permaticker)` rows and the map's rules version. `update(end=None, workers=1)` first maps again every stored day whose rows changed (a rebuilt map: new rules or a Sharadar restatement) and writes it over its own bars; then it maps the session days that both the Trade bar store and the map hold after the store's last, up to `end`, and appends them `BATCH_DAYS` (2) at a time. With `workers` above 1, that many processes map batches ahead of the writes. The sidecar is written after every write, so an interrupted update resumes where it stopped. A permaticker met for the first time is appended at the end of the symbol axis without rewriting what is stored ([ADR 0032](adr/0032-a-stores-symbol-axis-grows-at-its-end.md)) and reads as a column without a trade (NaN prices, zero volumes) before, as the view gives it. `panel` refuses a range holding a day whose map rows no longer match the sidecar (`ValueError: MappedTradeBarDataset: the Ticker map changed on 1 stored day(s) since they were mapped, ...; run update() to map them again.`), so a read never returns bars mapped by a map that has since changed. A store without its sidecar is refused by `update`.
+The store is the view's cache, so it is only as current as the map it was mapped with. The sidecar `<store>.permaticker_map.json` holds a digest of each stored day's mapped `(ticker, permaticker)` rows, the map's rules version and, per day, the number of stored tickers the map could not place that day (`unplaced()` returns `{day: count}`, days with none left out): their bars are in no column, never guessed onto a security. `update(end=None, workers=1)` first maps again every stored day whose rows changed (a rebuilt map: new rules or a Sharadar restatement) and writes it over its own bars; then it maps the session days that both the Trade bar store and the map hold after the store's last, up to `end`, and appends them `BATCH_DAYS` (2) at a time. With `workers` above 1, that many processes map batches ahead of the writes. The sidecar is written after every write, so an interrupted update resumes where it stopped. A permaticker met for the first time is appended at the end of the symbol axis without rewriting what is stored ([ADR 0032](adr/0032-a-stores-symbol-axis-grows-at-its-end.md)) and reads as a column without a trade (NaN prices, zero volumes) before, as the view gives it. `panel` refuses a range holding a day whose map rows no longer match the sidecar (`ValueError: MappedTradeBarDataset: the Ticker map changed on 1 stored day(s) since they were mapped, ...; run update() to map them again.`), so a read never returns bars mapped by a map that has since changed. A store without its sidecar is refused by `update`.
 
 The shared store is `<data-dir>/market/massive/massive_permaticker_bars_1m/`, beside its `README.md` and `component.json`. `scripts/massive/permaticker_bars.py --data-dir ... --workers N` writes the folder when it is missing and builds or catches up the store; the daily data update brings it up to date after the Ticker map (an `update` step, [data_update.md](data_update.md)).
+
+## Day aggregates on permatickers
+
+The view and the mapped store above are not specific to the Trade bars: `PermatickerDataset` maps any store on the Massive ticker axis through the Ticker map, and `MappedPermatickerDataset` keeps a view's panel in a store, with the sidecar, the refusal of a changed map and the remapping by `update` described above. `PermatickerDayBarDataset` is the view of the Day aggregate store, and `MappedDayBarDataset` keeps it as `massive_permaticker_day_bars_1d` (#353):
+
+```python
+from quantlab.core.store_folder import load_component
+from quantlab.dataset.config import MappedDayBarsConfig
+from quantlab.dataset.massive.mapped_bars import MappedDayBarDataset
+from quantlab.dataset.massive.permaticker_bars import PermatickerDayBarDataset
+
+view = PermatickerDayBarDataset(days, ticker_map)   # the MassiveDayBarDataset above
+mapped = MappedDayBarDataset(MappedDayBarsConfig(
+    source=view,
+    zarr_file_path="/data/quantlab/market/massive/massive_permaticker_day_bars_1d/massive_permaticker_day_bars_1d.zarr",
+))
+mapped.update()                                     # build, or append the new days
+panel = mapped.panel("2024-11-26", "2024-11-29")    # symbol: int64 permatickers
+mapped.unplaced()                                   # {day: tickers the map could not place}
+
+mapped = load_component("/data/quantlab/market/massive/massive_permaticker_day_bars_1d")   # the shared one
+```
+
+The variables are the Day aggregates' (`open`, `high`, `low`, `close`, `volume`, `n_trades`), raw: not adjusted for splits or dividends. One bar per trading day labelled with its date, as SEP's bars. The mapping rules are the view's: a security that changed ticker is one column, a reused ticker goes each day to the permaticker that held it that day, two tickers of one permaticker keep the busier, and a permaticker without a ticker on a day reads as a column without a bar (NaN prices, zero `volume` and `n_trades`). A ticker the map cannot place on a day is counted in the sidecar, not guessed. `update(end=None)` appends `BATCH_DAYS` (250) days per write. A store built a day at a time equals one built at once.
+
+The shared store is `<data-dir>/market/massive/massive_permaticker_day_bars_1d/`, beside its `README.md` and `component.json`. `scripts/massive/permaticker_day_bars.py --data-dir ...` writes the folder when it is missing (the view over the `massive_day_bars_1d` and `massive_ticker_map` folders) and builds or catches up the store, printing the unplaced ticker-days; the daily data update brings it up to date after the Ticker map (an `update` step, [data_update.md](data_update.md)). SEP stays the daily price of research, backtests and trading.
