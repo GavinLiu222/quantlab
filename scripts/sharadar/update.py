@@ -5,8 +5,9 @@ over the library: steps 1 and 2 are the Sharadar raw-tier refresh
 (``quantlab.acquisition.sharadar.refresh``, through
 ``quantlab.acquisition.registry.refresh_raw_tier``), step 3 is
 ``quantlab.dataset.sharadar.stores.update_stores``. With ``--no-pull`` only
-step 3 runs; the daily update (``scripts/data_update/update.py``) refreshes
-the raw tier in a step of its own and runs this script so. One run:
+step 3 runs. The daily update (``scripts/data_update/update.py``) does not run
+this script: it calls the same two library functions in a ``refresh`` and a
+``sharadar_stores`` step. One run:
 
 1. pulls TICKERS whole (new listings and ticker changes), INDICATORS whole
    (units and the 8-K event codes), SP500 and SF3A whole (they are
@@ -119,8 +120,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--no-pull",
         action="store_true",
         help=(
-            "Pull nothing: update the stores from the raw tier on disk (the "
-            "daily update refreshes the raw tier in a step of its own)."
+            "Pull nothing: update the stores from the raw tier on disk."
         ),
     )
     parser.add_argument(

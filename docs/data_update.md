@@ -20,18 +20,21 @@ root `--data-dir`. Each step is one action on one store folder (paths relative t
 | action | what it does |
 |--------|--------------|
 | `refresh` | keeps a vendor's raw tier current from its watermarks: `{vendor: ..., <options>}` calls `quantlab.acquisition.registry.refresh_raw_tier` with the vendor's options (Sharadar: `trading_days`; Massive: `endpoints`, `end`; FRED: `series`, `start`); raw files only; it raises when a part (a table, an endpoint, a series) failed, and its result names every part |
+| `sharadar_stores` | brings every Sharadar store up from the raw tier in the update's own process (`quantlab.dataset.sharadar.stores.update_stores`): `{rebuild_dropped: ..., keep_dropped: [...]}`; it raises when a store failed, after trying every store, and its result counts the stores updated, built and rebuilt |
 | `benchmarks` | `scripts/sharadar/price_return_benchmark.py --refresh` for the listed tickers (`market/benchmarks/`) |
 | `update` | rebuilds the dataset of a store folder from its `component.json` and calls `update()` |
 | `mirror` | appends a source dataset's new bars to a store that copies its variables (`quantlab.backtest.live.mirror_new_bars`) |
 | `extend` | rebuilds the folder's component from its `component.json` and extends every store it declares it owns, written by date range, to t (`Component.store_uses()`, the `owns` uses: a factor's store, or a factor risk model's regression and estimate stores, in that order); the step's result names each store, `extended to <t>` or `current` |
 | `run` | runs any script under the repository: `{script: ..., args: [...], writes: [...], reads: [...]}`; `{data_dir}` and `{download_dir}` in `args` are filled in (other braces are kept) |
 
-Any other action is an error, in a run and in `--check`. A `benchmarks` or `run` step
+Any other action is an error, in a run and in `--check`. A `benchmarks`, `sharadar_stores` or `run` step
 lists in `writes` the store folders, or folder prefixes ending in `/`, it writes (the shipped file:
-`market/sharadar/` and `universe/sharadar/` for the `scripts/sharadar/update.py` step, `market/benchmarks/` for
-`benchmarks`); `refresh` writes raw files only; `update`, `extend` and `mirror` write their `store`. A `run` step may list
-in `reads` the folders or prefixes it reads; the others' reads come from their components.
-`--check` orders every step's reads against the later steps' writes.
+`market/sharadar/` and `universe/sharadar/` for `sharadar_stores`, which writes those two when it lists none,
+`market/benchmarks/` for `benchmarks`); `refresh` writes raw files only and takes no `writes`; `update`, `extend`
+and `mirror` write their `store`. A `run` step may list in `reads` the folders or prefixes it reads; the others'
+reads come from their components. `--check` refuses a step whose options its action does not take (for `refresh`,
+a vendor that is not registered or registers no raw-tier refresh, or an option its refresh does not take, such as
+`writes` or a missing FRED `start`), and orders every step's reads against the later steps' writes.
 
 A step with `allow_failure: true` that raises is recorded as failed and the run goes on; whether
 the day is ready is still decided by the `ready` stores. A stage with `after_done: true` runs only
@@ -45,9 +48,8 @@ is extended only by its owner (`owns_store()`), never by a factor view pinned to
 outputs; `extend` refuses a component that declares no ranged store or does not own one.
 
 The shipped file updates what the us3000 paper trading reads, plus the base data: every Sharadar
-table (a `refresh` step for the raw tier, then `scripts/sharadar/update.py --no-pull --rebuild-dropped`,
-which brings every Sharadar store up from it, `quantlab.dataset.sharadar.stores.update_stores`; a
-failed refresh no longer keeps the stores from being brought up to what the raw tier holds), the FRED
+table (a `refresh` step for the raw tier, then a `sharadar_stores` step with `rebuild_dropped: true`,
+which brings every Sharadar store up from it), the FRED
 3-month T-bill rate (a `refresh` step, then `update` of its store), the price-return benchmarks, the Barra exposures, the us3000
 membership, the us3000 alphas and the USE4 risk stores. The us3000 alphas read Sharadar SEP on
 the membership's roster (`RosterDataset`, see the [dataset guide](dataset.md)), so the update keeps
@@ -62,6 +64,13 @@ factors, Form 3/4, 13-F, reference tickers, ticker events, and a daily Float sna
 endpoint's watermark (see "REST pulls" in the [Massive guide](massive.md));
 it writes raw files only and is allowed to fail. WRDS data is not in the
 daily update; run `scripts/wrds/*.py` when the vendor publishes.
+
+Two failures are handled differently from when the raw stage pulled and updated Sharadar in one
+`scripts/sharadar/update.py` step and FRED in one download-and-update step. A failed Sharadar pull (one table the vendor refused or timed out) no longer stops the store
+update: the `refresh` step is recorded as failed and the `sharadar_stores` step still brings every store up to
+what the raw tier holds; whether the day is ready is decided by the `ready` stores. A FRED series that could
+not be downloaded is now a failed step (the `refresh` step raises naming the series, and the step is
+allowed to fail), where it was only logged; the `update` of its store still runs on what is on disk.
 
 The last stage, `intraday`, runs once `done` is written (`after_done: true`: its steps are added
 to the status file afterwards, the state kept), so nothing waiting for `done` waits for it. It brings

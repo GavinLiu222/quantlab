@@ -10,6 +10,9 @@ holding ``<stem>.zarr``, its README.md and a ``component.json``: the component's
   (``quantlab.acquisition.registry.refresh_raw_tier``: Sharadar's table plan, Massive's REST
   endpoints, FRED's series), the step's other keys passed to the vendor's refresh; it
   raises when a part failed;
+- ``sharadar_stores``: bring every Sharadar store up from the raw tier
+  (``quantlab.dataset.sharadar.stores.update_stores``, ``rebuild_dropped`` and
+  ``keep_dropped`` passed on); it raises when a store failed;
 - ``benchmarks``: ``scripts/sharadar/price_return_benchmark.py --refresh``;
 - ``update``: ``update()`` the dataset of a store folder;
 - ``mirror``: append a source dataset's new bars to a store copying its variables
@@ -21,8 +24,9 @@ holding ``<stem>.zarr``, its README.md and a ``component.json``: the component's
   ``{download_dir}`` are filled in.
 
 A step may list ``writes``: the store folders or folder prefixes (``market/wrds/``) it
-writes; ``benchmarks`` and ``run`` steps say so there, ``refresh`` writes raw files only,
-the others write their ``store``. A ``run`` step may also list ``reads``. ``--check`` orders every step's
+writes; ``benchmarks`` and ``run`` steps say so there, ``sharadar_stores`` writes
+``market/sharadar/`` and ``universe/sharadar/`` unless it says otherwise, ``refresh``
+writes raw files only and takes no ``writes``, the others write their ``store``. A ``run`` step may also list ``reads``. ``--check`` orders every step's
 reads against the later steps' writes. A step with ``allow_failure: true`` that raises is
 recorded as failed and the run goes on; whether the day is ready is still decided by the
 ``ready`` stores. A stage with ``after_done: true`` runs only once ``done`` is written (its
@@ -49,13 +53,15 @@ Usage::
 ``SHARADAR_API_KEY`` must be set for the raw stage. ``--stage NAME`` runs only the
 named stages (repeatable), without the retry; ``--dry-run`` prints the plan;
 ``--check`` downloads and computes nothing: it rebuilds every step's component and
-checks that a factor owns its store, that no step reads a store a later step writes and
-that the first stage writes the calendar and ready stores, and exits 1 listing the
-problems.
+checks that every step's options are ones its action takes (a ``refresh`` step's those of
+its vendor's registered refresh), that a factor owns its store, that no step reads a
+store a later step writes and that the first stage writes the calendar and ready stores,
+and exits 1 listing the problems.
 """
 
 import argparse
 import datetime
+import inspect
 import json
 import os
 import subprocess
@@ -75,6 +81,7 @@ from quantlab.backtest.live import mirror_new_bars
 from quantlab.core.store_uses import OWNS, StoreUse, walk_store_uses
 from quantlab.core.store_folder import COMPONENT_FILE, load_component
 from quantlab.dataset.base import BaseDataset
+from quantlab.dataset.sharadar.stores import MARKET_FOLDER, UNIVERSE_FOLDER, missing_stores, update_stores
 from quantlab.utils.cli import add_output_dir_args, resolve_output_dirs
 from quantlab.utils.jsonable import to_jsonable
 
@@ -82,7 +89,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 NEW_YORK = ZoneInfo("America/New_York")
 STATUS_FILE = "update_status.json"
 #: The actions a step may name; each is a method of ``Update``.
-ACTIONS = ("refresh", "benchmarks", "update", "mirror", "extend", "run")
+ACTIONS = ("refresh", "sharadar_stores", "benchmarks", "update", "mirror", "extend", "run")
 #: The actions whose step writes the folder named by its ``store``.
 STORE_ACTIONS = ("update", "extend", "mirror")
 #: The exit status of each final state.
@@ -205,7 +212,7 @@ class Update:
 
     # -- actions ------------------------------------------------------------------
 
-    def refresh(self, vendor: str, writes: list | None = None, **options) -> str:
+    def refresh(self, vendor: str, **options) -> str:
         """Refresh ``vendor``'s raw tier under the download root; raise when a part failed."""
         if self.dry_run:
             return "would refresh"
@@ -213,6 +220,22 @@ class Update:
         if result.failed:
             raise RuntimeError(f"{vendor}: {len(result.failed)} part(s) not refreshed: {result.summary()}")
         return result.summary()
+
+    def sharadar_stores(self, rebuild_dropped: bool = False, keep_dropped: list | tuple = (),
+                        writes: list | None = None) -> str:
+        """Bring every Sharadar store up from the raw tier; raise when a store failed."""
+        if self.dry_run:
+            return "would update the Sharadar stores"
+        if missing := missing_stores(self.data_dir):
+            raise RuntimeError(f"no store {[str(p) for p in missing]}; run scripts/sharadar/download.py first")
+        outcome = update_stores(self.download_dir, self.data_dir, rebuild_dropped=rebuild_dropped,
+                                keep_dropped=tuple(keep_dropped))
+        for line in outcome.lines():
+            logger.info(line)
+        if outcome.failed:
+            raise RuntimeError(f"{len(outcome.failed)} store(s) not updated: {list(outcome.failed)}")
+        counts = {"updated": outcome.updated, "built": outcome.built, "rebuilt": outcome.rebuilt}
+        return ", ".join(f"{len(names)} {state}" for state, names in counts.items() if names) or "no store"
 
     def benchmarks(self, tickers: list, writes: list | None = None) -> str:
         """Rebuild the price-return benchmarks of ``tickers`` from the SFP store."""
@@ -306,7 +329,30 @@ class Update:
         """The store folders (or folder prefixes, ending in /) a step writes."""
         if "writes" in kwargs:
             return list(kwargs["writes"])
+        if action == "sharadar_stores":
+            return [f"{MARKET_FOLDER.as_posix()}/", f"{UNIVERSE_FOLDER.as_posix()}/"]
         return [kwargs["store"]] if action in STORE_ACTIONS else []
+
+    def check_options(self, where: str, action: str, kwargs: dict) -> list[str]:
+        """Whether a step's options are ones its action takes; a refresh's, its vendor's refresh."""
+        try:
+            inspect.signature(getattr(self, action)).bind(**kwargs)
+        except TypeError as error:
+            return [f"{where}: {error}"]
+        if action != "refresh":
+            return []
+        options = {key: value for key, value in kwargs.items() if key != "vendor"}
+        try:
+            descriptor = DataSourceRegistry.get(kwargs["vendor"])
+        except ValueError:
+            return [f"{where}: vendor {kwargs['vendor']!r} is not registered"]
+        if descriptor.raw_tier_refresh is None:
+            return [f"{where}: {kwargs['vendor']} registers no raw-tier refresh"]
+        try:
+            inspect.signature(descriptor.raw_tier_refresh).bind(self.download_dir, **options)
+        except TypeError as error:
+            return [f"{where}: {kwargs['vendor']}'s refresh does not take these options: {error}"]
+        return []
 
     def check_component(self, where: str, action: str, key: str, relative: str) -> tuple[list[str], set[Path]]:
         """Rebuild the component a step names under ``key``; its problems and the stores it reads."""
@@ -340,6 +386,7 @@ class Update:
                 if action not in ACTIONS:
                     problems.append(f"{where}: unknown action; one of {ACTIONS}")
                     continue
+                problems += self.check_options(where, action, kwargs)
                 reads: set[Path] = set()
                 keys = {"update": ("store",), "extend": ("store",), "mirror": ("source",)}
                 for key in keys.get(action, ()):

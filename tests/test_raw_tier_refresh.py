@@ -241,3 +241,79 @@ def test_a_part_is_either_refreshed_or_failed():
         RefreshedPart("news")
     with pytest.raises(ValueError):
         RefreshedPart("news", "3 pages", error="HTTP 503")
+
+
+def test_the_sharadar_stores_step_updates_the_stores_in_process(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from quantlab.dataset.sharadar.stores import StoreResult, StoreState, StoreUpdate
+
+    update = _update_script()
+    calls = []
+
+    def fake_update_stores(download_dir, data_dir, **options):
+        calls.append((download_dir, data_dir, options))
+        return StoreUpdate((StoreResult(Path("sharadar_sep_1d.zarr"), StoreState.UPDATED),))
+
+    monkeypatch.setattr(update, "update_stores", fake_update_stores)
+    monkeypatch.setattr(update, "missing_stores", lambda data_dir: [])
+    run = update.Update({"stages": []}, tmp_path / "data", tmp_path / "downloads", dry_run=False)
+
+    result = run.sharadar_stores(rebuild_dropped=True, writes=["market/sharadar/"])
+
+    assert calls == [(tmp_path / "downloads", tmp_path / "data",
+                      {"rebuild_dropped": True, "keep_dropped": ()})]
+    assert result == "1 updated"
+
+
+def test_the_sharadar_stores_step_fails_when_a_store_failed(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from quantlab.dataset.sharadar.stores import StoreResult, StoreState, StoreUpdate
+
+    update = _update_script()
+    monkeypatch.setattr(update, "update_stores", lambda *a, **k: StoreUpdate((
+        StoreResult(Path("sharadar_sep_1d.zarr"), StoreState.UPDATED),
+        StoreResult(Path("sharadar_sf1_arq.zarr"), StoreState.FAILED, error="boom"),
+    )))
+    monkeypatch.setattr(update, "missing_stores", lambda data_dir: [])
+    run = update.Update({"stages": []}, tmp_path / "data", tmp_path / "downloads", dry_run=False)
+
+    with pytest.raises(RuntimeError, match="1 store\\(s\\) not updated: \\['sharadar_sf1_arq.zarr'\\]"):
+        run.sharadar_stores()
+
+
+def test_the_plan_updates_the_sharadar_stores_without_a_script():
+    from pathlib import Path
+
+    import yaml
+
+    update = _update_script()
+    plan = yaml.safe_load((Path(update.REPO_ROOT) / "config" / "data_update.yaml").read_text())
+    raw = [update.parse_step(step) for step in plan["stages"][0]["steps"]]
+
+    assert [action for action, _, _ in raw][:2] == ["refresh", "sharadar_stores"]
+    assert not any(kwargs.get("script") == "scripts/sharadar/update.py" for _, kwargs, _ in raw)
+
+
+def test_check_validates_refresh_and_store_steps(tmp_path):
+    update = _update_script()
+    plan = {"calendar": "market/sharadar/sharadar_sep_1d", "stages": [{"name": "raw", "steps": [
+        {"refresh": {"vendor": "sharadar", "trading_days": 5}},
+        {"refresh": {"vendor": "nosuch"}},
+        {"refresh": {"vendor": "tiingo"}},
+        {"refresh": {"vendor": "massive", "writes": ["market/massive/"]}},
+        {"refresh": {"vendor": "fred", "series": ["DTB3"]}},
+        {"sharadar_stores": {"rebuild_dropped": True, "writes": ["market/sharadar/"]}},
+        {"sharadar_stores": {"rebuild": True}},
+    ]}]}
+
+    problems = update.Update(plan, tmp_path, tmp_path, dry_run=True).check()
+
+    assert not any("refresh sharadar" in p for p in problems)
+    assert any("refresh nosuch" in p and "not registered" in p for p in problems)
+    assert any("refresh tiingo" in p and "no raw-tier refresh" in p for p in problems)
+    assert any("refresh massive" in p and "writes" in p for p in problems)
+    assert any("refresh fred" in p and "start" in p for p in problems)
+    assert sum("sharadar_stores" in p for p in problems) == 1
+    assert any("sharadar_stores" in p and "rebuild" in p for p in problems)
