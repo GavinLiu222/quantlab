@@ -209,6 +209,43 @@ def test_a_delisting_carries_its_reason_and_a_merger_and_spinoff_their_counterpa
     assert panel["delisting"].attrs["unit"] == "USD millions"
 
 
+def test_a_counterparty_ticker_with_two_permatickers_is_left_nan_and_counted(tmp_path, today):
+    import json
+
+    actions = [
+        # DUP is the ticker of two securities in TICKERS: which one bought AAA cannot be told.
+        _action("2024-01-05", "acquisitionby", "AAA", 1200.0, contraticker="DUP"),  # SYNTHETIC
+        _action("2024-01-08", "mergerfrom", "AAA", 300.0, contraticker="BBB"),  # SYNTHETIC
+    ]
+    vendor = FakeVendor(
+        {
+            "stocks": (SEP_COLUMNS, [sep_row(t, d, 10.0) for t in ("AAA", "BBB") for d in DAYS]),
+            "tickers": (
+                TICKERS_COLUMNS,
+                [
+                    tickers_row("SEP", 101, "AAA"),  # SYNTHETIC
+                    tickers_row("SEP", 202, "BBB"),  # SYNTHETIC
+                    tickers_row("SEP", 501, "DUP"),  # SYNTHETIC
+                    tickers_row("SEP", 502, "DUP"),  # SYNTHETIC
+                ],
+            ),
+            "actions": (ACTIONS_COLUMNS, actions),
+        }
+    )
+    panel = _panel(tmp_path, _bulk(vendor, tmp_path / "dl"))
+
+    assert _shown(panel, "acquisition") == {"2024-01-05": 1200.0}
+    assert _shown(panel, "acquisition_counterparty") == {}
+    assert _shown(panel, "merger_counterparty") == {"2024-01-08": 202.0}
+    report = json.loads((tmp_path / "sharadar_actions_1d.zarr.counterparties.json").read_text())
+    assert report["owner"] == "SharadarActionsDataset"
+    [entry] = report["unmapped"]
+    assert (entry["contraticker"], entry["rows"], entry["first_date"], entry["last_date"]) == (
+        "DUP", 1, "2024-01-05", "2024-01-05",
+    )
+    assert "501" in entry["reason"] and "502" in entry["reason"]
+
+
 def test_an_action_name_no_family_knows_refuses_the_build_naming_it(tmp_path, today):
     actions = [
         _action("2024-01-04", "dividend", "AAA", 0.25),  # SYNTHETIC

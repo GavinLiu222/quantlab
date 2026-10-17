@@ -62,7 +62,11 @@ a string, to meaning). A counterparty is the permaticker SEP's TICKERS rows
 give the row's ``contraticker`` as of the raw file's pull, like the row's
 own ticker (``quantlab.dataset.sharadar.permatickers``); NaN when it maps to
 no SEP security (a private acquirer, a fund, ``N/A``), and the smallest one
-when a day has several. ACTIONS is keyed by SEP's tickers and also holds
+when a day has several. A ``contraticker`` TICKERS gives to several
+permatickers is not guessed either: the counterparty is NaN and the rows are
+counted in ``<store>.counterparties.json`` (``{"owner", "unmapped":
+[{"contraticker", "first_date", "last_date", "rows", "reason"}]}``, deleted
+when there are none), with a warning. ACTIONS is keyed by SEP's tickers and also holds
 funds' rows; a row mapping to no SEP security is left out. The panel covers
 the whole market's common stock by default (SEP's category filter).
 
@@ -87,14 +91,17 @@ Build the store and read a quarter's dividends::
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import polars as pl
+from loguru import logger
 
 from quantlab.dataset.config import SharadarActionsConfig
 from quantlab.dataset.sharadar.filings import FilingPanelDataset
 from quantlab.dataset.sharadar.permatickers import PermatickerResolver
 from quantlab.dataset.sharadar.tables import scan_raw_table
 from quantlab.dataset.sharadar.universe import universe
+from quantlab.utils.atomic import write_json_atomically
 from quantlab.utils.timer import Timer
 
 #: How the vendor fills an unused contra column.
@@ -245,6 +252,9 @@ for _variable in VARIABLES:
 for _action in IGNORED:
     FAMILIES[_action] = ()
 
+#: The suffix of the report of the counterparties left NaN (``<store>.counterparties.json``).
+COUNTERPARTIES_SUFFIX = ".counterparties.json"
+
 #: The actions whose ``contraticker`` is mapped to a counterparty permaticker.
 _WITH_COUNTERPARTY: tuple[str, ...] = tuple(
     sorted({a for v in VARIABLES if v.how == "counterparty" for a in v.read})
@@ -303,11 +313,13 @@ class SharadarActionsDataset(FilingPanelDataset):
         ------
         ValueError
             If ACTIONS holds an action name ``FAMILIES`` does not know, or a
-            raw ticker has two permatickers.
+            row's own ticker has two permatickers (a counterparty's is left
+            NaN and counted in ``counterparties_path``).
         """
         root = self.config.raw_data_dir_path
         calendar = self._trading_calendar()
         resolver = PermatickerResolver(root, self.TABLE)
+        several: dict[str, list[int]] = {}
 
         def annotate(path, frame: pl.LazyFrame) -> pl.LazyFrame:
             """Add the row's and its counterparty's permatickers, both as of the file's pull."""
@@ -319,9 +331,11 @@ class SharadarActionsDataset(FilingPanelDataset):
                 .get_column("contraticker")
                 .to_list()
             )
-            mapped = resolver.resolve(
-                path, [t for t in contras if t is not None and t != _NOT_APPLICABLE]
-            )
+            contras = [t for t in contras if t is not None and t != _NOT_APPLICABLE]
+            # Which of several securities was the other side cannot be told: NaN, counted.
+            ambiguous = resolver.several_permatickers(path, contras)
+            several.update(ambiguous)
+            mapped = resolver.resolve(path, [t for t in contras if t not in ambiguous])
             pairs = pl.DataFrame(
                 {"contraticker": list(mapped), "counterparty": list(mapped.values())},
                 schema={"contraticker": pl.String, "counterparty": pl.Int64},
@@ -353,12 +367,57 @@ class SharadarActionsDataset(FilingPanelDataset):
             )
             frame = self._restore_splits(frame)
             frame = frame.filter(pl.col("permaticker").is_in(universe(self.config)))
+            self._report_counterparties(frame, several)
             return (
                 calendar.place(self._filings(frame), drop_earlier=True)
                 .group_by(pl.col("permaticker").alias("symbol"), "available")
                 .agg(self._combine())
                 .sort("symbol", "available")
             )
+
+    @property
+    def counterparties_path(self) -> str:
+        """The report of the counterparties left NaN (``<store>.counterparties.json``).
+
+        Examples
+        --------
+        With ``config`` a ``SharadarActionsConfig`` of the store ``sharadar_actions_1d.zarr``::
+
+            SharadarActionsDataset(config).counterparties_path
+            # '.../sharadar_actions_1d.zarr.counterparties.json'
+        """
+        return f"{self.config.zarr_file_path}{COUNTERPARTIES_SUFFIX}"
+
+    def _report_counterparties(self, frame: pl.DataFrame, several: dict[str, list[int]]) -> None:
+        """Write the panel's rows whose counterparty ticker has several permatickers, or delete the report."""
+        rows = frame.filter(
+            pl.col("action").is_in(_WITH_COUNTERPARTY) & pl.col("contraticker").is_in(list(several))
+        )
+        path = Path(self.counterparties_path)
+        if rows.height == 0:
+            path.unlink(missing_ok=True)
+            return
+        summary = (
+            rows.group_by("contraticker")
+            .agg(pl.col("date").min().alias("first"), pl.col("date").max().alias("last"), pl.len().alias("rows"))
+            .sort("contraticker")
+        )
+        entries = [
+            {
+                "contraticker": ticker,
+                "first_date": str(first)[:10],
+                "last_date": str(last)[:10],
+                "rows": int(count),
+                "reason": f"TICKERS gives it to several permatickers ({several[ticker]})",
+            }
+            for ticker, first, last, count in summary.iter_rows()
+        ]
+        logger.warning(
+            f"{self.class_name}: {rows.height} ACTIONS row(s) name a counterparty ticker of several "
+            f"permatickers ({', '.join(e['contraticker'] for e in entries[:5])}); their counterparty "
+            f"is NaN, see {path}."
+        )
+        write_json_atomically(path, {"owner": self.class_name, "unmapped": entries}, indent=2)
 
     @staticmethod
     def _restore_splits(frame: pl.DataFrame) -> pl.DataFrame:

@@ -633,6 +633,38 @@ class PermatickerResolver:
                 f"guessing which company a row belongs to; re-pull TICKERS."
             )
 
+    def several_permatickers(self, path: str | Path, tickers: Iterable[str]) -> dict[str, list[int]]:
+        """Return those of ``tickers`` that ``resolve`` would refuse for ``path``, each with its permatickers.
+
+        A ticker is refused when the TICKERS snapshot of the file's pull, or
+        current TICKERS for a ticker the snapshot does not hold, gives it to
+        several permatickers. A caller that can leave such a ticker unmapped
+        (an ACTIONS counterparty) asks this first and resolves the rest.
+
+        Returns
+        -------
+        dict of str to list of int
+            ``{ticker: [permaticker, ...]}``, sorted.
+
+        Examples
+        --------
+        Needs the Sharadar raw tier::
+
+            resolver.several_permatickers("/data/downloads/sharadar/actions/actions.parquet", ["DUP", "AAPL"])
+            # {'DUP': [501, 502]}
+        """
+        left = {str(t) for t in tickers if t is not None}
+        several: dict[str, list[int]] = {}
+        snapshot = snapshot_for(self.vendor_root, pull_time(Path(path)))
+        if snapshot is not None:
+            pairs = self._snapshot(snapshot)
+            known = left & set(pairs)
+            several.update({t: sorted(pairs[t]) for t in known if len(pairs[t]) > 1})
+            left -= known
+        current = self._current_pairs()
+        several.update({t: sorted(current[t]) for t in left if len(current.get(t, ())) > 1})
+        return dict(sorted(several.items()))
+
     def resolve(
         self, path: str | Path, tickers: Iterable[str], *, latest: dict[str, date] | None = None
     ) -> dict[str, int]:
