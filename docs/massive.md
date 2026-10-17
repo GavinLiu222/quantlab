@@ -62,6 +62,7 @@ Massive's REST endpoints are kept in the same raw tier, one directory per endpoi
 |---|---|---|---|---|
 | `splits` | `/stocks/v1/splits` | `execution_date` | 1978-01-01 | 7 days |
 | `dividends` | `/stocks/v1/dividends` | `ex_dividend_date` | 2000-01-01 | 7 days |
+| `news` | `/v2/reference/news` | `published_utc` (a timestamp) | 2016-06-01 | 1 day |
 
 These are the current `/stocks/v1` endpoints, not the deprecated `/v3/reference/splits` and `/v3/reference/dividends`.
 
@@ -103,7 +104,7 @@ A pull works like this:
     --endpoints dividends --end 2010-12-31
 ```
 
-A new endpoint is one more `RestEndpoint` in `ENDPOINTS`, with its name, URL and date field, its earliest day, its own fixed filters in `params`, and `key` and `tiebreak` when they are not `id` and `ticker`. A snapshot endpoint (`date_field=None`) is pulled whole on every run and keeps no watermark; with `once_a_day=True` it keeps one snapshot a day. Its pages wait in `massive/rest/<endpoint>/_pending/` until the last one is in, so an interrupted snapshot leaves nothing behind, and the next pull takes it again from the start. Two more kinds serve the reference tickers and the ticker events, below: `as_of_param` and `ids_from`.
+A new endpoint is one more `RestEndpoint` in `ENDPOINTS`, with its name, URL and date field, its earliest day, its own fixed filters in `params` (a `sort` there replaces the default one, as news' `sort=published_utc&order=asc`), and `key` and `tiebreak` when they are not `id` and `ticker`. With `timestamped=True` (news), the date field holds a timestamp, and `end=` is sent as `.lt` the day after `end`, so the whole of the last day is kept. A snapshot endpoint (`date_field=None`) is pulled whole on every run and keeps no watermark; with `once_a_day=True` it keeps one snapshot a day. Its pages wait in `massive/rest/<endpoint>/_pending/` until the last one is in, so an interrupted snapshot leaves nothing behind, and the next pull takes it again from the start. Two more kinds serve the reference tickers and the ticker events, below: `as_of_param` and `ids_from`.
 
 ### Raw-only tables
 
@@ -364,6 +365,36 @@ A cell without one is NaN. A security with several declared dividends pending sh
 The amounts are as declared on the day: `split_adjusted_cash_amount` and `historical_adjustment_factor` are never read, so a later event never rewrites the panel's history. Each record is placed through the Ticker map (above) on its own day: the ex-date for the cash, the execution date for the split, the first day shown for a declared dividend. Rows the map cannot place, and dividends not in USD or without an amount, are counted in `massive_dividends_1d.zarr.unplaced.json`. The columns are the universe's permatickers, by default SEP's domestic common stock (the universe fields work as for a Sharadar price panel); a record placed on another security (a fund) is dropped. The store is built through the last day SEP, both REST pulls and the Ticker map all reach, so `update()` appends a day once each holds it, and a store built day by day equals one built at once. A missing pull or an empty map is refused, naming the script to run.
 
 The shared store is `<data-dir>/market/massive/massive_dividends_1d/`, beside its `README.md` and `component.json`. `scripts/massive/dividends.py --download-dir ... --data-dir ...` writes the folder when it is missing (the config starting at the Ticker map's first day) and appends the new days; the daily data update runs it after the Ticker map ([data_update.md](data_update.md)).
+
+## News
+
+Every news article from 2016-06 is kept in the raw tier by the REST `news` pull (above), with all its fields as the vendor returned them: `id`, `title`, `description`, `keywords`, `tickers`, the per-ticker `insights` (`ticker`, `sentiment`, `sentiment_reasoning`), `published_utc`, `publisher`, `author` and the URLs. The text stays raw. `MassiveNewsDataset` (`quantlab.dataset.massive.news`) counts the articles in the panel `massive_news_1d`, on Sharadar's permaticker axis and SEP's trading calendar:
+
+```python
+from quantlab.dataset.config import MassiveNewsConfig
+from quantlab.dataset.massive.news import MassiveNewsDataset
+
+news = MassiveNewsDataset(MassiveNewsConfig(
+    zarr_file_path="/data/quantlab/market/massive/massive_news_1d/massive_news_1d.zarr",
+    raw_data_dir_path="/data/quantlab/downloads/sharadar",
+    massive_dir="/data/quantlab/downloads/massive",
+    ticker_map_path="/data/quantlab/market/massive/massive_ticker_map/massive_ticker_map",
+    start_date="2016-10-10",
+))
+news.update()
+panel = news.panel("2024-01-02", "2024-12-31")
+```
+
+| Variable | Value |
+|---|---|
+| `news_count` | articles naming the security that count on the day |
+| `news_positive` | of them, those whose `insights` sentiment for the security is `positive` |
+| `news_negative` | likewise `negative` |
+| `news_neutral` | likewise `neutral` |
+
+A cell without an article is 0. An article counts on the trading day of its `published_utc` in New York time when published before 16:00 there, and on the next trading day when published at 16:00 or later, or on a weekend or holiday, so news after the close never reaches the day's bar. The cut is 16:00 on every day, an early close included. An article's tickers are its `tickers` and those of its `insights`; each is placed through the Ticker map on the article's trading day, and the article counts once for each security placed (two tickers placed on one security count once). An article without an insight for a ticker counts in `news_count` only. A ticker the map cannot place is counted in `massive_news_1d.zarr.unplaced.json`; a ticker placed on a security outside the universe (a fund) is dropped. The store is built through the last day SEP, the news pull and the Ticker map all reach (every article counting on a trading day was published before that day ends in UTC, the pull watermark's day), so a store built day by day equals one built at once. A missing pull or an empty map is refused, naming the script to run.
+
+The first backfill (about ten years at 1,000 articles a page) is long; run `scripts/massive/rest_pull.py --endpoints news` by hand, in steps with `--end` if needed, before the daily update takes over: an interrupted pull resumes from its watermark. The shared store is `<data-dir>/market/massive/massive_news_1d/`, beside its `README.md` and `component.json`. `scripts/massive/news.py --download-dir ... --data-dir ...` writes the folder when it is missing (the config starting at the Ticker map's first day) and appends the new days; the daily data update runs it after the Ticker map ([data_update.md](data_update.md)). Each update reads every page of the news pull again.
 
 ## Reading Trade bars as securities
 

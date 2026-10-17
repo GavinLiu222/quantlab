@@ -1269,3 +1269,37 @@ class FrameDatasetConfig(BaseDatasetConfig):
     #: Path of a Zarr store holding the panel, read at construction; ``None`` for a
     #: panel handed over in memory.
     zarr_file_path: str | None = None
+
+
+@dataclass(kw_only=True, frozen=True)
+class MassiveNewsConfig(SharadarDatasetConfig):
+    """Config of the Massive news count and sentiment panel on the permaticker axis (#357).
+
+    Massive's news articles (the REST raw tier ``rest/news`` under
+    ``massive_dir``) are counted per security and trading day, each article
+    placed through the Ticker map at ``ticker_map_path``, on SEP's trading
+    calendar. ``raw_data_dir_path`` is Sharadar's raw tier: SEP's dates are
+    the calendar and SEP's TICKERS rows the universe, whose fields work as
+    for a price panel (the default is domestic common stock).
+
+    Examples
+    --------
+    >>> cfg = MassiveNewsConfig(
+    ...     zarr_file_path="/data/zarrs/massive_news_1d.zarr",
+    ...     raw_data_dir_path="/data/downloads/sharadar",
+    ...     massive_dir="/data/downloads/massive",
+    ...     ticker_map_path="/data/market/massive/massive_ticker_map/massive_ticker_map",
+    ... )
+    >>> cfg.vendor, cfg.table
+    ('massive', 'sep')
+    """
+
+    #: Massive's articles; the calendar and the universe are Sharadar's.
+    vendor: Vendor | None = "massive"
+    #: Always SEP: its TICKERS rows give the universe, its dates the calendar.
+    table: str = "sep"
+    #: Massive's raw tier (``<download-dir>/massive``), holding the REST pull
+    #: ``rest/news`` and the day aggregates.
+    massive_dir: str
+    #: The Ticker map's directory (``TickerMapConfig.path``).
+    ticker_map_path: str

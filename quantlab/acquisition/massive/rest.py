@@ -81,6 +81,10 @@ class RestEndpoint:
         next new session.
     id_field : str, default "composite_figi"
         The source records' field giving an ``ids_from`` endpoint's ids.
+    timestamped : bool, default False
+        ``date_field`` holds a timestamp, not a day (news' ``published_utc``):
+        a pull bounded by ``end`` asks for ``<date_field>.lt`` the day after
+        it, so the whole of ``end`` is kept.
 
     Examples
     --------
@@ -101,6 +105,7 @@ class RestEndpoint:
     as_of_param: str | None = None
     ids_from: str | None = None
     id_field: str = "composite_figi"
+    timestamped: bool = False
 
     def __post_init__(self) -> None:
         if self.ids_from is not None and "{id}" not in self.url:
@@ -136,6 +141,14 @@ ENDPOINTS: dict[str, RestEndpoint] = {
         # ex-date, so a pull past the watermark (always before today) reaches every new one.
         RestEndpoint(
             "dividends", f"{REST_HOST}/stocks/v1/dividends", "ex_dividend_date", date(2000, 1, 1), overlap_days=7
+        ),
+        # Every news article (#357) on its publication time, from 2016-06. The endpoint sorts
+        # with sort=<field> and order=asc (in params, which win over the default sort); a day
+        # is read again for articles indexed late.
+        RestEndpoint(
+            "news", f"{REST_HOST}/v2/reference/news", "published_utc", date(2016, 6, 1),
+            params={"sort": "published_utc", "order": "asc"}, limit=1000, overlap_days=1,
+            tiebreak=None, timestamped=True,
         ),
         # Raw-only tables (#360): filing text and second sources, on the filing date. Their
         # rows have no id of their own (a 13-F has one row per holding, a Form 4 one per

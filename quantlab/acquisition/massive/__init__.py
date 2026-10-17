@@ -10,7 +10,8 @@ so importing the client also registers the source.
 the credential variables, and the dataset classes that build Trade bars from
 the trade files (ADR 0030) and the Day aggregate store ``massive_day_bars_1d``
 from the day aggregates (#352), and the dividend panel ``massive_dividends_1d``
-from the REST dividends and splits (#351). The minute aggregates are raw only: they are
+from the REST dividends and splits (#351), and the news panel ``massive_news_1d`` from the
+REST news articles (#357). The minute aggregates are raw only: they are
 kept to check Trade bars against.
 
 Massive's raw tier is one vendor file per data type and trading day, pulled by
@@ -25,7 +26,7 @@ Examples
 >>> from quantlab.acquisition.base import DataSourceRegistry
 >>> source = DataSourceRegistry.get("massive")
 >>> [c.data_type for c in source.capabilities]
-['trades', 'minute_aggs', 'day_aggs', 'dividends']
+['trades', 'minute_aggs', 'day_aggs', 'dividends', 'news']
 >>> source.required_env
 ('MASSIVE_API_KEY', 'MASSIVE_S3_ACCESS_KEY_ID')
 """
@@ -33,6 +34,7 @@ Examples
 from quantlab.acquisition.base import Capability, SourceDescriptor, register_source
 from quantlab.dataset.massive.day_bars import MassiveDayBarDataset
 from quantlab.dataset.massive.dividends import MassiveDividendDataset
+from quantlab.dataset.massive.news import MassiveNewsDataset
 from quantlab.dataset.massive.trade_bars import MassiveTradeBarDataset
 
 #: The plan every data type needs; it serves a rolling ten-year window.
@@ -76,6 +78,12 @@ MASSIVE_SOURCE = register_source(
                 market="us_equity", frequency="1d", data_type="dividends",
                 dataset_cls=MassiveDividendDataset,
                 earliest_available="2000-08-01", entitlement=_ENTITLEMENT,
+            ),
+            # The REST news articles; the daily count and sentiment panel on the permaticker (#357).
+            Capability(
+                market="us_equity", frequency="1d", data_type="news",
+                dataset_cls=MassiveNewsDataset,
+                earliest_available="2016-06-22", entitlement=_ENTITLEMENT,
             ),
         ),
         # Literals, checked against the client's constants by a test. The S3
