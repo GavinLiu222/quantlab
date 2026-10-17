@@ -248,7 +248,7 @@ def test_the_registry_lists_fred_with_no_credential():
 
     assert source.required_env == ()
     assert is_configured(source) and credential_status(source) == {}
-    assert source.acquisition_cls is FredAcquisition
+    assert source.symbol_batch_cls is FredAcquisition
     assert source.capabilities[0].dataset_cls is FredRateDataset
     assert FredAcquisition.CREDENTIAL_ENV_VARS == ()
 
@@ -256,12 +256,12 @@ def test_the_registry_lists_fred_with_no_credential():
 def test_registry_run_and_convert_build_the_store(tmp_path, fred):
     import quantlab.acquisition.registry  # noqa: F401
     from quantlab.acquisition.base import DataSourceRegistry
-    from quantlab.acquisition.registry import convert, run
+    from quantlab.acquisition.registry import convert, download_symbols
     from quantlab.dataset.config import FredRateConfig
 
     fred()
     source = DataSourceRegistry.get("fred")
-    run(source, _acquisition(tmp_path).config)
+    download_symbols(source, _acquisition(tmp_path).config)
     convert(
         source,
         FredRateConfig(

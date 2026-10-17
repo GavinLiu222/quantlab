@@ -4,7 +4,7 @@ This example needs no API key, no WRDS account and no network. It shows:
 
 1. every registered data source, what it serves and whether its credentials
    are set in this environment (as booleans; no value is ever printed);
-2. a download driven through ``quantlab.acquisition.registry.run`` with a progress
+2. a download driven through ``quantlab.acquisition.registry.download_symbols`` with a progress
    callback, a resumed second run, and a run stopped with a ``CancelToken``.
    A real vendor needs credentials and network access, so the download uses
    a small stand-in acquisition class that invents prices locally and writes
@@ -30,13 +30,13 @@ from loguru import logger
 
 from quantlab.acquisition._support.inspector import SourceInspector
 from quantlab.acquisition.tiingo import TiingoAcquisition
-from quantlab.acquisition.base import Acquisition
+from quantlab.acquisition.base import SymbolBatchAcquisition
 from quantlab.utils.progress import CallbackProgressReporter, CancelToken
 from quantlab.acquisition.config import stock_acquisition_config
 from quantlab.config import set_data_root, stock_kline_config
 from quantlab.dataset.stock import StockDataset
 from quantlab.acquisition.base import Capability, DataSourceRegistry, SourceDescriptor
-from quantlab.acquisition.registry import convert, credential_status, run
+from quantlab.acquisition.registry import convert, credential_status, download_symbols
 
 # Keep the output readable: show only warnings from quantlab's logger, and
 # silence a Zarr notice about consolidated metadata that is not relevant here.
@@ -70,9 +70,9 @@ print("Tiingo serves tick data:", tiingo.supports("us_equity", "tick"))
 
 
 # ---------------------------------------------------------------------------
-# 2. A download through run(), using a local stand-in for a vendor.
+# 2. A download through download_symbols(), using a local stand-in for a vendor.
 # ---------------------------------------------------------------------------
-class SyntheticDailyBars(Acquisition):
+class SyntheticDailyBars(SymbolBatchAcquisition):
     """Stand-in for a vendor client: invents weekday prices, one page per batch.
 
     It reuses Tiingo's column layout, so the files it writes are exactly what
@@ -111,12 +111,12 @@ class SyntheticDailyBars(Acquisition):
         return pl.concat(frames), None
 
 
-# An unregistered descriptor pointing at the stand-in. run() only needs a
+# An unregistered descriptor pointing at the stand-in. download_symbols() only needs a
 # descriptor to find the acquisition class; it never looks the vendor up.
 demo_source = SourceDescriptor(
     vendor="tiingo",
     display_name="Synthetic daily bars",
-    acquisition_cls=SyntheticDailyBars,
+    symbol_batch_cls=SyntheticDailyBars,
     config_factory=stock_acquisition_config,
     capabilities=(Capability(market="us_equity", frequency="1d"),),
     required_env=(),
@@ -144,13 +144,13 @@ with tempfile.TemporaryDirectory() as tmp:
 
     section("First download")
     events = []
-    result = run(demo_source, acq_config, reporter=CallbackProgressReporter(events.append))
+    result = download_symbols(demo_source, acq_config, reporter=CallbackProgressReporter(events.append))
     for event in events:
         print(f"    event {event.kind:<16} {event.completed}/{event.total}")
     print("succeeded:", result.succeeded, "failures:", result.failures)
 
     section("Second run of the same config (resumes, fetches nothing)")
-    result = run(demo_source, acq_config)
+    result = download_symbols(demo_source, acq_config)
     print("coverage:", result.coverage)
 
     section("A run cancelled after its first batch")
@@ -167,7 +167,7 @@ with tempfile.TemporaryDirectory() as tmp:
         if event.kind == "batch_completed":
             token.cancel()
 
-    result = run(
+    result = download_symbols(
         demo_source,
         wider,
         reporter=CallbackProgressReporter(stop_after_first_batch),

@@ -17,7 +17,7 @@ copies each table whole through the shared WRDS session and writes one
 parquet file per table, plus a ``manifest.json`` that records the CRSP
 annual release (vintage) the tables came from.
 
-This is deliberately not an ``Acquisition``. That base class downloads a
+This is deliberately not a ``SymbolBatchAcquisition``. That base class downloads a
 time series per symbol, in batches and pages, and records progress so it
 can resume. These tables have no symbol axis and no date window; each one is
 either present or not. They are written to ``.../wrds_crsp/_reference``,

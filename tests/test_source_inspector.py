@@ -165,7 +165,7 @@ def test_the_stock_zarr_fixture_opens_and_carries_a_symbol_index(
 # 03.4-04 Task 1 -- the CoverageLedger extraction (D-09)
 #
 # `quantlab/acquisition/_support/coverage.py` is where coverage judgement now lives, and it is
-# a LEAF: `Acquisition` composes a ledger and delegates, while the inspector
+# a LEAF: `SymbolBatchAcquisition` composes a ledger and delegates, while the inspector
 # built in Task 2 composes one directly. These tests pin the two properties the
 # extraction ADDED (an explicit sidecar enumeration, and the shared
 # `_failures.json` / `_pages` names); the properties it PRESERVED are pinned by
@@ -180,7 +180,7 @@ def test_iter_watermark_symbols_skips_the_manifest_and_the_page_ledgers(
 ) -> None:
     """A blind `*.json` glob would report `_failures` as a symbol.
 
-    `Acquisition.stamp_watermarks` globs the same directory and gets away with
+    `SymbolBatchAcquisition.stamp_watermarks` globs the same directory and gets away with
     it because a manifest and a page ledger both read back with
     `last_date is None` and fall out of its loop. `iter_watermark_symbols` has
     no such filter -- "does this symbol have a watermark" is a question about
@@ -237,12 +237,12 @@ def test_the_failure_manifest_name_is_declared_once_and_bound_by_acquisition(
     IDENTITY of the string object is not asserted (CPython interns short
     literals, so two independent declarations of `"_failures.json"` would be
     `is`-identical and the assertion would be a tautology). What is asserted
-    instead is that `Acquisition`'s class attribute and the ledger's path agree
+    instead is that `SymbolBatchAcquisition`'s class attribute and the ledger's path agree
     AND that `base/acquisition.py` contains no second declaration of the
     literal -- which is the property that can actually rot.
 
     Reddened by: re-declaring `FAILURE_MANIFEST_NAME = "_failures.json"` on
-    `Acquisition`.
+    `SymbolBatchAcquisition`.
     """
     import inspect
     import re
@@ -250,7 +250,7 @@ def test_the_failure_manifest_name_is_declared_once_and_bound_by_acquisition(
     import quantlab.acquisition.base as acquisition_module
     from quantlab.acquisition._support.coverage import FAILURE_MANIFEST_NAME, CoverageLedger
 
-    assert acquisition_module.Acquisition.FAILURE_MANIFEST_NAME == (
+    assert acquisition_module.SymbolBatchAcquisition.FAILURE_MANIFEST_NAME == (
         FAILURE_MANIFEST_NAME
     )
 
@@ -272,7 +272,7 @@ def test_the_failure_manifest_name_is_declared_once_and_bound_by_acquisition(
 def test_every_moved_acquisition_member_is_a_single_delegating_call() -> None:
     """The delegation is structural, not a coincidence of today's bodies.
 
-    D-09 is only true while `Acquisition` has NO coverage body of its own. A
+    D-09 is only true while `SymbolBatchAcquisition` has NO coverage body of its own. A
     reintroduced local implementation would keep the ~40 existing call sites
     green -- they call the method, not the ledger -- so the shape of the body
     is what has to be pinned. Every moved member must be exactly one statement
@@ -304,7 +304,7 @@ def test_every_moved_acquisition_member_is_a_single_delegating_call() -> None:
     klass = next(
         node
         for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "Acquisition"
+        if isinstance(node, ast.ClassDef) and node.name == "SymbolBatchAcquisition"
     )
     functions = {
         node.name: node
@@ -313,7 +313,7 @@ def test_every_moved_acquisition_member_is_a_single_delegating_call() -> None:
     }
 
     missing = sorted(moved - set(functions))
-    assert not missing, f"moved members vanished from Acquisition: {missing}"
+    assert not missing, f"moved members vanished from SymbolBatchAcquisition: {missing}"
 
     for name in sorted(moved):
         body = [
@@ -353,7 +353,7 @@ def test_every_moved_acquisition_member_is_a_single_delegating_call() -> None:
 _INSPECTOR_RESOLVER_TOKEN = "INSPECTOR-FORBIDDEN-IMPORT-RESOLVED"
 
 #: Every module whose presence in the inspector's import graph would mean an
-#: `Acquisition` subclass -- and therefore a credential demand and a socket --
+#: `SymbolBatchAcquisition` subclass -- and therefore a credential demand and a socket --
 #: is reachable from the read surface. `quantlab.acquisition.registry` is in the
 #: set for a second reason: its own bottom imports pull BOTH vendor modules, so
 #: reaching it reaches them transitively.
@@ -483,7 +483,7 @@ def test_the_inspector_answers_without_credentials(
 
     Reddened by: importing any vendor class into `inspector.py` and
     constructing it, or by having the inspector reach coverage through an
-    `Acquisition`.
+    `SymbolBatchAcquisition`.
     """
     import os
 
@@ -566,7 +566,7 @@ def test_inspector_binds_no_client() -> None:
     registry reaches every client transitively.
 
     Reddened by: adding `from quantlab.acquisition.registry import ...` (or any
-    relative spelling of it) to either module, or binding an `Acquisition`
+    relative spelling of it) to either module, or binding a `SymbolBatchAcquisition`
     subclass into the inspector's namespace, or putting a single byte into any
     of the three package `__init__.py` files on the inspector's import path --
     the last of which is what the emptiness arm below exists for.
@@ -576,7 +576,7 @@ def test_inspector_binds_no_client() -> None:
 
     import quantlab.acquisition._support.inspector as inspector_module
     import quantlab.acquisition._support.coverage as coverage_module
-    from quantlab.acquisition.base import Acquisition
+    from quantlab.acquisition.base import SymbolBatchAcquisition
 
     for module in (inspector_module, coverage_module):
         resolved = _resolved_imports(
@@ -626,11 +626,11 @@ def test_inspector_binds_no_client() -> None:
     bound_clients = [
         name
         for name, value in vars(inspector_module).items()
-        if isinstance(value, type) and issubclass(value, Acquisition)
+        if isinstance(value, type) and issubclass(value, SymbolBatchAcquisition)
     ]
     assert not bound_clients, bound_clients
 
-    # And no name ending in `Acquisition` is bound at all -- a subclass that
+    # And no name ending in `SymbolBatchAcquisition` is bound at all -- a subclass that
     # had not yet been imported when this ran would slip past the issubclass
     # check above.
     acquisition_names = [
@@ -651,7 +651,7 @@ def test_coverage_is_the_same_code_as_the_real_run(
     dicts is the WEAKEST arm here and is asserted first only because it is the
     cheapest. What actually binds:
 
-    1. `Acquisition._partition_by_coverage` reaches
+    1. `SymbolBatchAcquisition._partition_by_coverage` reaches
        `CoverageLedger.partition_by_coverage` -- asserted on the FUNCTION
        OBJECT, so a re-inlined body fails even if it computes the same answer;
     2. monkeypatching that one function changes BOTH answers. A second
@@ -769,7 +769,7 @@ def test_tick_watermark_roots_agree_between_the_two_ledger_constructors(
     """Pitfall 8: quotes' watermarks must never answer a trades query.
 
     `CoverageLedger.for_config` resolves `data_type` from `config.kwargs`
-    directly, while the ledger `Acquisition` composes takes it from
+    directly, while the ledger `SymbolBatchAcquisition` composes takes it from
     `AlpacaAcquisition._data_type` -- an instance property that validates
     against `TICK_DATA_TYPES`. Two resolutions, so they are pinned to the same
     `watermark_root` here; the incident STATE.md records is a completed quotes

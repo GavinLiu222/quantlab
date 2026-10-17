@@ -2,7 +2,7 @@
 
 English | [简体中文](zh-CN/acquisition.md)
 
-Acquisition is the layer of quantlab that downloads raw vendor data into a local directory of parquet files. A vendor client only describes how to make one request; the base class `Acquisition` supplies batching, pagination, concurrency, per-symbol failure isolation, resumable progress, request-quota handling and credential scrubbing. The layer writes raw files only. Converting them into the `(timestamp, symbol)` xarray panel is done by the matching dataset class (see the [dataset](dataset.md) guide).
+Acquisition is the layer of quantlab that downloads raw vendor data into a local directory of files. This guide covers its symbol-batched family, the vendors queried one batch of symbols at a time over a date window (Tiingo, Alpaca, FRED and the retired WRDS downloads). Sharadar's whole tables and Massive's daily files and REST endpoints are pulled by their own clients and kept current through `quantlab.acquisition.registry.refresh_raw_tier` (see the [registry](registry.md), [Sharadar](sharadar.md) and [Massive](massive.md) guides). In the symbol-batched family a vendor client only describes how to make one request; the base class `SymbolBatchAcquisition` supplies batching, pagination, concurrency, per-symbol failure isolation, resumable progress, request-quota handling and credential scrubbing. The layer writes raw files only. Converting them into the `(timestamp, symbol)` xarray panel is done by the matching dataset class (see the [dataset](dataset.md) guide).
 
 ## Prerequisites
 
@@ -24,9 +24,9 @@ A vendor client is a subclass with three parts: `VENDOR` names the vendor, `RAW_
 >>> from datetime import date
 >>> from pathlib import Path
 >>> import polars as pl
->>> from quantlab.acquisition.base import Acquisition
+>>> from quantlab.acquisition.base import SymbolBatchAcquisition
 >>> from quantlab.acquisition.config import AcquisitionConfig
->>> class DemoAcquisition(Acquisition):
+>>> class DemoAcquisition(SymbolBatchAcquisition):
 ...     VENDOR = "tiingo"
 ...     RAW_COLUMNS = ("timestamp", "symbol", "vendor", "close")
 ...     def _fetch_page(self, symbols, start_date, end_date, page_token=None):
@@ -302,24 +302,25 @@ uv run python scripts/wrds/etf.py --etf spy,qqq --start 1999-01-01
 uv run python scripts/wrds/nbbo.py --permnos 14593,10107 --start 2024-01-02 --end 2024-01-31
 ```
 
-Tiingo, Alpaca and Binance have library interfaces only: their acquisition classes are driven
-through `quantlab.acquisition.registry.run` and `convert` as in this guide.
+Tiingo, Alpaca and Binance have library interfaces only and no caller in the project: their
+acquisition classes are driven through `quantlab.acquisition.registry.download_symbols` and
+`convert` as in this guide (see the status note in the [registry](registry.md) guide).
 
 The library's storage root is the environment variable `QUANTLAB_DATA_DIR`, else the repository's `data/` directory in a source checkout and `~/.quantlab/data` in an installed package. The scripts do not use it: they take `--download-dir` for the raw files and `--data-dir` for the data root the stores go under, both defaulting to the current directory. Each store sits in its own folder `<data-dir>/<category>/<group>/<stem>/<stem>.zarr` (WRDS bars under `market/wrds/`, membership panels under `universe/wrds/`) beside its sidecars and a short `README.md` the script writes when the folder has none.
 
 ### Download the risk-free rate (FRED)
 
-FRED's CSV endpoint needs no key, so `FredAcquisition` reads no credential. Each series id is one symbol of the download. `FredRateDataset` turns a rate series, quoted in annualized percent, into a panel with one symbol: `rate` as published and `risk_free = rate / 100 / days_per_year`, a decimal return per trading day with the default 252. A holiday has no observation and is NaN. A factor that needs the rate on every stock broadcasts it across symbols, and lags it one bar, because the rate of a day is published the next business day.
+FRED's CSV endpoint needs no key, so `FredAcquisition` reads no credential. Each series id is one symbol of the download. `FredRateDataset` turns a rate series, quoted in annualized percent, into a panel with one symbol: `rate` as published and `risk_free = rate / 100 / days_per_year`, a decimal return per trading day with the default 252. A holiday has no observation and is NaN. A factor that needs the rate on every stock broadcasts it across symbols, and lags it one bar, because the rate of a day is published the next business day. The session below downloads an explicit window with `download_symbols`; the daily update keeps the same raw tier current with `refresh_raw_tier(source, "downloads", series=["DTB3"], start="1954-01-04")`, which wraps `FredAcquisition`.
 
 ```python
 from quantlab.acquisition.base import DataSourceRegistry
 from quantlab.acquisition.config import AcquisitionConfig
-from quantlab.acquisition.registry import convert, run
+from quantlab.acquisition.registry import convert, download_symbols
 from quantlab.dataset.config import FredRateConfig
 from quantlab.dataset.fred import FredRateDataset
 
 source = DataSourceRegistry.get("fred")
-run(source, AcquisitionConfig(
+download_symbols(source, AcquisitionConfig(
     market="us_equity", frequency="1d", vendor="fred",
     raw_data_dir_path="downloads/fred", watermark_path="downloads/_watermarks/fred",
     symbols=("DTB3",), start_date="1954-01-04",
@@ -400,4 +401,4 @@ Raw tick data is written exactly as the vendor sent it, with no resampling and n
 
 ## See also
 
-The [pageledger](pageledger.md) guide for resuming inside a multi-page batch, the [registry](registry.md) guide for looking up a vendor and running it by name, the [universes](user-guide/universes.md) guide for the symbol roster, and the [dataset](dataset.md) guide for converting raw files to the xarray panel. The class docstrings of `quantlab.acquisition.base.Acquisition`, `quantlab.acquisition._support.coverage.CoverageLedger` and `quantlab.utils.progress` list every option.
+The [pageledger](pageledger.md) guide for resuming inside a multi-page batch, the [registry](registry.md) guide for looking up a vendor, downloading from it by name and keeping its raw tier current, the [universes](user-guide/universes.md) guide for the symbol roster, and the [dataset](dataset.md) guide for converting raw files to the xarray panel. The class docstrings of `quantlab.acquisition.base.SymbolBatchAcquisition`, `quantlab.acquisition._support.coverage.CoverageLedger` and `quantlab.utils.progress` list every option.

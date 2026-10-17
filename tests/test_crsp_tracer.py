@@ -3,7 +3,7 @@
 ONE path, end to end, entirely offline:
 
     FakeCrspSession (AAPL's real 2020-08 `crsp_a_stock.dsf_v2` rows)
-      -> registry.run(WRDS_SOURCE, cfg)        # the new crsp_daily capability
+      -> registry.download_symbols(WRDS_SOURCE, cfg)        # the new crsp_daily capability
       -> PERMNO-keyed raw shards under crsp_daily/month=2020-08/
       -> registry.convert(WRDS_SOURCE, CrspDatasetConfig, ...)
       -> a [timestamp, symbol] Zarr panel whose symbol axis is the int64

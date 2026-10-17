@@ -93,7 +93,7 @@ def test_tracer_one_wrds_symbol_day_lands_raw_and_resamples_to_a_zarr_panel(
     cfg = WrdsTaqNbboAcquisition.build_config(
         ("AAPL",), start_date="2024-01-24", end_date="2024-01-24"
     )
-    registry.run(WRDS_SOURCE, cfg)
+    registry.download_symbols(WRDS_SOURCE, cfg)
 
     # -- raw: every record of the day, one row each, in arrival order -------
     raw_root = Path(cfg.raw_data_dir_path)
@@ -217,7 +217,7 @@ def _acquire(tmp_path, rows: dict, *, symbols=("AAPL",)):
         start_date=days[0].isoformat(),
         end_date=days[-1].isoformat(),
     )
-    registry.run(WRDS_SOURCE, cfg)
+    registry.download_symbols(WRDS_SOURCE, cfg)
     return cfg
 
 

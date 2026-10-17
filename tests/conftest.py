@@ -127,7 +127,7 @@ FRED_HOST = "fred.stlouisfed.org"
 def _forbid_fred_network(monkeypatch):
     """No automated test may download from FRED.
 
-    `tests/test_acquisition_batching.py` walks every concrete `Acquisition`
+    `tests/test_acquisition_batching.py` walks every concrete `SymbolBatchAcquisition`
     subclass and calls `download()` on it, and FRED needs no key, so a
     forgotten fake would reach the network silently. `requests` is
     wrapped so a FRED URL raises `AssertionError`; every other call passes
@@ -189,7 +189,7 @@ def _forbid_wrds_network(monkeypatch, tmp_path):
     """D-28: no automated test may ever open a connection to WRDS.
 
     Every WRDS connection can push a Duo prompt to the developer's phone, and
-    `tests/test_acquisition_batching.py` walks EVERY concrete `Acquisition`
+    `tests/test_acquisition_batching.py` walks EVERY concrete `SymbolBatchAcquisition`
     subclass and calls `download()` on it -- so one forgotten fake would reach
     the real server from an ordinary `pytest` run. This tripwire makes that
     impossible rather than unlikely: `psycopg2.connect` AND the C-level
@@ -713,7 +713,7 @@ def mock_universe_fetchers(
         # characters with no delimiter is not a shape any real US ticker
         # has -- the longest delimiter-free symbol in the live 14,485-symbol
         # `us_all` roster is SEVEN (`ALLPDCL`, `ALLYPRA`) -- so
-        # `Acquisition._validate_symbols` refused it, and had always refused
+        # `SymbolBatchAcquisition._validate_symbols` refused it, and had always refused
         # it. A fixture symbol the production guard rejects is the same trap
         # 260906-eme documented for `ADDED1`/`TEMP1`/`GONE1`: it makes the
         # fixture unable to represent the pipeline it stands in for. Keep

@@ -1,7 +1,7 @@
 """Alpaca vendor round-trip against a mocked transport (03.2 SC-5, SC-2, D-12/D-15).
 
 `acquisition/alpaca.py:AlpacaAcquisition` is the second vendor behind the shared
-`Acquisition` base. Three things about it are easy to get wrong in ways nothing
+`SymbolBatchAcquisition` base. Three things about it are easy to get wrong in ways nothing
 else catches:
 
 - **429 is `rate_limited`, never `quota`.** Tiingo's 429 means the hourly
@@ -476,7 +476,7 @@ def test_an_absent_rate_limit_header_contributes_nothing_not_a_default():
     would send an operator hunting a ceiling that was never reported.
     """
     from quantlab.acquisition.alpaca import AlpacaAcquisition
-    from quantlab.acquisition.base import Acquisition
+    from quantlab.acquisition.base import SymbolBatchAcquisition
 
     partial = _http_error(429, reason="Too Many Requests")
     partial.response.headers["X-RateLimit-Limit"] = "200"
@@ -496,7 +496,7 @@ def test_an_absent_rate_limit_header_contributes_nothing_not_a_default():
         == {}
     )
     assert (
-        Acquisition._rate_limit_headers(
+        SymbolBatchAcquisition._rate_limit_headers(
             AlpacaAcquisition.__new__(AlpacaAcquisition), partial
         )
         == {}

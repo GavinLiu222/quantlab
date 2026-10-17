@@ -45,7 +45,7 @@ from loguru import logger
 from psycopg2 import sql
 
 from quantlab.acquisition.wrds import taq as _wrds
-from quantlab.acquisition.base import Acquisition
+from quantlab.acquisition.base import SymbolBatchAcquisition
 from quantlab.acquisition.config import AcquisitionConfig
 from quantlab.config import get_data_root
 from quantlab.utils.atomic import write_json_atomically
@@ -573,7 +573,7 @@ def year_pages(start, end) -> list[tuple[date, date]]:
     ]
 
 
-class WrdsCrspDailyAcquisition(Acquisition):
+class WrdsCrspDailyAcquisition(SymbolBatchAcquisition):
     """Download CRSP Stock v2 daily bars from ``crsp_a_stock.dsf_v2``.
 
     The symbols of this acquisition are PERMNOs written as digit strings,
@@ -581,7 +581,7 @@ class WrdsCrspDailyAcquisition(Acquisition):
     page is one calendar year for one batch of PERMNOs. ``_fetch_page`` reads
     the year named by the page token (the window's first year when there is
     no token) and returns the following year as the next token. The shared
-    ``Acquisition`` base class runs the batch loop, writes the parquet files
+    ``SymbolBatchAcquisition`` base class runs the batch loop, writes the parquet files
     (shards), records finished pages and resumes interrupted runs.
 
     The raw tier is written under ``.../wrds_crsp/wrds/crsp_daily/month=YYYY-MM/``, with

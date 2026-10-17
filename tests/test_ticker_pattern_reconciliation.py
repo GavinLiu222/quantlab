@@ -7,7 +7,7 @@ against each other:
 - 260906-eme decided that `us_all` deliberately RETAINS its 1,124 warrant /
   unit / right / when-issued lines -- a named, measured, carried-forward
   finding.
-- 03.2-03 decided that `Acquisition._validate_symbols` admits at most ONE
+- 03.2-03 decided that `SymbolBatchAcquisition._validate_symbols` admits at most ONE
   suffix segment, because a symbol becomes both a filesystem path segment and
   a comma-joined query value.
 
@@ -100,7 +100,7 @@ _UNSAFE = (
 
 
 def _acquisition(acquisition_config, **config_kwargs):
-    """A minimal CONCRETE `Acquisition` whose `_fetch_page` is never called.
+    """A minimal CONCRETE `SymbolBatchAcquisition` whose `_fetch_page` is never called.
 
     Same idiom as `tests/test_acquisition_batching.py:_acquisition`, and for
     the same reason: `_validate_symbols` belongs to the base class, so
@@ -108,9 +108,9 @@ def _acquisition(acquisition_config, **config_kwargs):
     the assertion. `_validate_symbols` reads only `self.class_name` and
     `self.config.raw_data_dir_path`, so nothing here touches the network.
     """
-    from quantlab.acquisition.base import Acquisition
+    from quantlab.acquisition.base import SymbolBatchAcquisition
 
-    class _Guard(Acquisition):
+    class _Guard(SymbolBatchAcquisition):
         VENDOR = "tiingo"
         RAW_COLUMNS = ("timestamp", "symbol", "vendor")
 

@@ -52,7 +52,7 @@ A session Massive has no file for yet comes back with `published` false and is s
 
 Concurrency is set on the client: one file is fetched at a time in `streams` byte ranges (default 16), while up to `files - 1` earlier ones are verified (`files` defaults to 4). Verifying decodes the whole gzip on one core and takes about twice as long as fetching: on the training server on 2026-10-09 a 2 GB trade file of 2025 fetched in 33 s at 16 streams and decoded in 81 s. Ranged reads from the server with the vendor reached directly: 1 stream 9 MB/s, 4 streams 35, 8 streams 54, 16 streams 40 to 61, 32 streams 72 MB/s.
 
-`download_days` starts a day only once its caller has moved past the day `files` before it, so however slow the conversion, the day being converted and at most `files - 1` after it are on disk. `registry.run()` refuses Massive, as it refuses Sharadar: the download is the conversion script's (below).
+`download_days` starts a day only once its caller has moved past the day `files` before it, so however slow the conversion, the day being converted and at most `files - 1` after it are on disk. `registry.download_symbols()` refuses Massive, as it refuses Sharadar, since neither is downloaded in symbol batches: the daily files are downloaded by the conversion script (below), and the REST endpoints are kept current by `registry.refresh_raw_tier()`.
 
 ## REST pulls
 

@@ -9,7 +9,7 @@ per date, with an empty value, or ``.`` in the older format, where FRED has
 no observation (a holiday); either becomes a null.
 
 ``FredAcquisition`` treats each series id as a *symbol* of the shared
-``Acquisition`` base, which gives the download its resumable per-series
+``SymbolBatchAcquisition`` base, which gives the download its resumable per-series
 watermark, its ``refresh()`` from that watermark and its daily raw tier
 (``month=YYYY-MM/`` shards with ``timestamp``, ``symbol``, ``vendor`` and
 ``value``). ``quantlab.dataset.fred.FredRateDataset`` converts a rate series
@@ -44,7 +44,7 @@ import polars as pl
 import requests
 
 from quantlab.acquisition.base import (
-    Acquisition,
+    SymbolBatchAcquisition,
     Capability,
     SourceDescriptor,
     register_source,
@@ -115,8 +115,8 @@ def parse_csv(text: str, series: str) -> pl.DataFrame:
     )
 
 
-class FredAcquisition(Acquisition):
-    """Download FRED series, one series id per symbol, through the shared ``Acquisition`` base.
+class FredAcquisition(SymbolBatchAcquisition):
+    """Download FRED series, one series id per symbol, as a ``SymbolBatchAcquisition``.
 
     The endpoint answers one series over the whole requested window, so a
     batch is one series and ``_fetch_page`` never returns a page token. A
@@ -293,7 +293,7 @@ FRED_SOURCE = register_source(
     SourceDescriptor(
         vendor="fred",
         display_name="FRED (St. Louis Fed economic data; key-free CSV)",
-        acquisition_cls=FredAcquisition,
+        symbol_batch_cls=FredAcquisition,
         config_factory=functools.partial(
             stock_acquisition_config, vendor="fred", subdir="macro"
         ),

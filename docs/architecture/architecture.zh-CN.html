@@ -141,7 +141,7 @@ ul,ol{ margin:4pt 0 8pt; padding-left:18pt; } li{ margin:2pt 0; }
 
 <table>
 <tr><th>阶段</th><th>根类（位于 &lt;层&gt;/base.py）</th><th>输入 → 输出</th></tr>
-<tr><td>数据获取</td><td><code>Acquisition</code></td><td>供应商 API → 原始 Parquet 文件</td></tr>
+<tr><td>数据获取</td><td><code>SymbolBatchAcquisition</code></td><td>供应商 API → 原始 Parquet 文件</td></tr>
 <tr><td>数据集</td><td><code>BaseDataset</code> / <code>MarketDataset</code></td><td>原始文件 → 价格面板（存成 Zarr）</td></tr>
 <tr><td>因子 / 标签</td><td><code>Factor</code> / <code>Forward</code></td><td>价格面板 → 因子面板</td></tr>
 <tr><td>收益模型</td><td><code>BaseModel</code></td><td>因子面板 + 标签面板 → 预测面板</td></tr>

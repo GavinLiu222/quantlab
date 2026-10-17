@@ -6,7 +6,7 @@ granularity:
 
 ``"symbol"``
     One sidecar per symbol (``<watermark_path>/<SYMBOL>.json``), written by
-    ``quantlab.acquisition.base.Acquisition`` and read by
+    ``quantlab.acquisition.base.SymbolBatchAcquisition`` and read by
     ``CoverageLedger``: ``last_date``, optionally ``start_date`` (the covered
     start) and ``no_data`` (the vendor returned nothing). Compact JSON, keys
     in that order.

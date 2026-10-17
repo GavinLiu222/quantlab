@@ -19,7 +19,7 @@ clients used to write each on their own (#361):
 Waiting is injected (``sleep``), so tests run without waiting. What a status
 *means* stays with each client: Sharadar retries exactly
 ``RETRY_STATUSES``; Massive retries every status but 401/403/404; the
-symbol-batched ``Acquisition`` family decides per vendor whether a 429 is a
+symbol-batched ``SymbolBatchAcquisition`` family decides per vendor whether a 429 is a
 rate limit to wait out or a quota that stops the run.
 
 Examples

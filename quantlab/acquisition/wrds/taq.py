@@ -48,7 +48,7 @@ import polars as pl
 import psycopg2
 from psycopg2 import sql
 
-from quantlab.acquisition.base import Acquisition
+from quantlab.acquisition.base import SymbolBatchAcquisition
 from quantlab.acquisition.config import AcquisitionConfig
 from quantlab.config import get_data_root
 
@@ -999,14 +999,14 @@ def trading_days_between(session, start: date, end: date) -> list[date]:
     return sorted(day for day in days if start <= day <= end)
 
 
-class WrdsTaqNbboAcquisition(Acquisition):
+class WrdsTaqNbboAcquisition(SymbolBatchAcquisition):
     """Download WRDS TAQ ``complete_nbbo`` day tables.
 
     The work is split into pages, and one page is one trading day's table
     for one batch of symbols. ``_fetch_page`` reads the day named by the page
     token (the window's first trading day when there is no token) and
     returns the next trading day's ISO date as the next token. The shared
-    ``Acquisition`` base class runs the batch loop, writes the parquet files
+    ``SymbolBatchAcquisition`` base class runs the batch loop, writes the parquet files
     (shards), records finished pages and resumes interrupted runs.
 
     The raw tier is written under ``.../wrds/nbbo/date=/symbol=/`` (the

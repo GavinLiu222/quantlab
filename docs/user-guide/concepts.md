@@ -23,7 +23,7 @@ vendor API --> acquisition --> raw tier --> dataset --> factors, labels --> mode
 
 | Stage | Input | Output | Base class |
 |-------|-------|--------|------------|
-| Acquisition | a vendor API and an `AcquisitionConfig` | raw parquet files on disk | `quantlab.acquisition.base.Acquisition` |
+| Acquisition | a vendor API (and, for a symbol-batched vendor, an `AcquisitionConfig`) | raw files on disk | `quantlab.acquisition.refresh.RawTierRefresh` (keep current), `quantlab.acquisition.base.SymbolBatchAcquisition` (symbol batches) |
 | Dataset | the raw files | a price panel in a Zarr store | `quantlab.dataset.base.BaseDataset` (read), `quantlab.dataset.raw.RawDataset` (build) |
 | Factor and label | a price panel | a factor panel | `quantlab.factor.base.Factor` |
 | Model | factor and label panels | a prediction panel | `quantlab.model.base.BaseModel` |
@@ -262,8 +262,9 @@ extension framework: the classes you subclass to write your own factor, label, m
 backtester. Each layer's `predefined/` package holds the implementations quantlab ships. To add
 a new model you subclass `quantlab.model.torch_model.TorchModel` or
 `quantlab.model.library_model.LibraryModel`; to add a KunQuant factor you subclass
-`quantlab.factor.kunquant.FactorKunQuant`; to add a data source you subclass
-`quantlab.acquisition.base.Acquisition` and register it. The
+`quantlab.factor.kunquant.FactorKunQuant`; to add a data source you register a
+`SourceDescriptor` with a raw-tier refresh, a
+`quantlab.acquisition.base.SymbolBatchAcquisition` subclass, or both. The
 [extending guide](../developer-guide/extending.md) walks through each case.
 
 ```text
@@ -285,7 +286,7 @@ quantlab/
                      RawMarketDataset, IndexConstituentDataset: the build path), config.py,
                      then one entry per dataset: stock.py, spot.py, constituent.py, crsp/, nbbo/
     config/          data-root resolution and config factories for the bundled datasets
-    acquisition/     base.py (Acquisition, source registration), config.py, registry.py,
+    acquisition/     base.py (SymbolBatchAcquisition, source registration), config.py, registry.py,
                      then one entry per vendor: tiingo.py, alpaca.py, wrds/
     analysis/        factor reports
     factor/          base.py (Factor), config.py, kunquant.py (FactorKunQuant),

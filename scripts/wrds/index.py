@@ -51,7 +51,7 @@ from datetime import date
 from pathlib import Path
 
 from quantlab.acquisition.base import DataSourceRegistry
-from quantlab.acquisition.registry import convert, run
+from quantlab.acquisition.registry import convert, download_symbols
 from quantlab.dataset.config import ConstituentDatasetConfig, CrspDatasetConfig
 from quantlab.dataset.constituent import (
     CompustatNasdaq100ConstituentDataset,
@@ -70,7 +70,7 @@ from quantlab.utils.cli import (
 
 SOURCE = DataSourceRegistry.get("wrds")
 CAPABILITY = ("us_equity", "1d", "crsp_daily")
-ACQ = SOURCE.acquisition_cls_for(*CAPABILITY)
+ACQ = SOURCE.symbol_batch_cls_for(*CAPABILITY)
 
 #: Folders under the data root: the WRDS market stores and its universe (membership) stores.
 MARKET_FOLDER = Path("market") / "wrds"
@@ -224,7 +224,7 @@ if __name__ == "__main__":
 
         # 5. Download.
         print(f"Acquiring from {SOURCE.display_name} (refresh={args.refresh})")
-        result = run(SOURCE, acq_config, refresh=args.refresh)
+        result = download_symbols(SOURCE, acq_config, refresh=args.refresh)
         print(f"{len(result.succeeded)} PERMNO(s) succeeded, {len(result.failures)} failed")
         print(f"Raw data written under: {acq_config.raw_data_dir_path}")
 

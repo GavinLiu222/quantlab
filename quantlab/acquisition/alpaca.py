@@ -2,7 +2,7 @@
 
 ``AlpacaAcquisition`` is the Alpaca-specific part of the acquisition layer.
 It builds one HTTP request per page against Alpaca's historical stock
-endpoints and hands each page to the shared ``Acquisition`` base class, which
+endpoints and hands each page to the shared ``SymbolBatchAcquisition`` base class, which
 handles pagination, resuming, concurrency, per-batch failures and writing the
 raw parquet files (*shards*). Besides daily and minute *bars* (open, high,
 low, close and volume per interval), Alpaca serves *tick* data: every
@@ -28,7 +28,7 @@ import requests
 
 from quantlab.acquisition._support.request_policy import require_env
 from quantlab.acquisition.base import Capability, SourceDescriptor, register_source
-from quantlab.acquisition.base import Acquisition
+from quantlab.acquisition.base import SymbolBatchAcquisition
 from quantlab.acquisition.config import AcquisitionConfig
 from quantlab.acquisition.config import stock_acquisition_config
 from quantlab.dataset.stock import StockDataset
@@ -169,8 +169,8 @@ class _AlpacaMarketDataClient:
         return response.json()
 
 
-class AlpacaAcquisition(Acquisition):
-    """Download Alpaca Market Data through the shared ``Acquisition`` base.
+class AlpacaAcquisition(SymbolBatchAcquisition):
+    """Download Alpaca Market Data through the shared ``SymbolBatchAcquisition`` base.
 
     Alpaca serves many symbols per request and splits large answers into
     pages, so ``_fetch_page`` sends one request and returns
@@ -482,7 +482,7 @@ class AlpacaAcquisition(Acquisition):
     #: What a credential value is replaced with in any captured message.
     REDACTION = "<APCA CREDENTIAL REDACTED>"
 
-    #: The two credentials ``Acquisition._scrub`` hides before a message
+    #: The two credentials ``SymbolBatchAcquisition._scrub`` hides before a message
     #: reaches a log line or the failure manifest. Built from the module-level
     #: constants, not from the client class that tests replace. Alpaca sends
     #: credentials in headers rather than in the URL, but a ``requests``
@@ -830,7 +830,7 @@ ALPACA_SOURCE = register_source(
     SourceDescriptor(
         vendor="alpaca",
         display_name="Alpaca Market Data",
-        acquisition_cls=AlpacaAcquisition,
+        symbol_batch_cls=AlpacaAcquisition,
         config_factory=functools.partial(stock_acquisition_config, vendor="alpaca"),
         # The two bar entries convert through ``StockDataset``, as Tiingo's
         # does. The tick entries have no ``dataset_cls``, so

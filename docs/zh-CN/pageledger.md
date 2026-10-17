@@ -4,7 +4,7 @@
 
 有些厂商会把一个多标的请求的结果拆成一串页，每页带一个不透明的 token 指向下一页。全市场下载会发出成千上万个这样的批次，每个批次可能长达几十页。`PageLedger` 是一个小 JSON 文件，每个批次一个，记录哪些页已经写入、下一个 token 是什么、每页的行写在哪些 parquet 文件里。崩溃之后，[acquisition](acquisition.md) 引擎读取账本，从批次中间接着抓，不会重复请求已完成的页，也不会把任何一行写两遍。
 
-账本由 `Acquisition` 基类使用，厂商客户端不需要直接调用它。
+账本由 `SymbolBatchAcquisition` 基类使用，厂商客户端不需要直接调用它。
 
 ## 基础
 
@@ -16,10 +16,10 @@
 >>> from datetime import date
 >>> from pathlib import Path
 >>> import polars as pl
->>> from quantlab.acquisition.base import Acquisition
+>>> from quantlab.acquisition.base import SymbolBatchAcquisition
 >>> from quantlab.acquisition.config import AcquisitionConfig
 >>> from quantlab.acquisition._support.page_ledger import PageLedger
->>> class PagedAcquisition(Acquisition):
+>>> class PagedAcquisition(SymbolBatchAcquisition):
 ...     VENDOR = "alpaca"
 ...     RAW_COLUMNS = ("timestamp", "symbol", "vendor", "close")
 ...     PAGE_SIZE = 4
@@ -238,4 +238,4 @@ ValueError: StuckAcquisition: the vendor returned the same page token it was giv
 
 ## 另请参阅
 
-[acquisition](acquisition.md) 指南介绍账本外层的下载循环。`quantlab.acquisition._support.page_ledger.PageLedger` 和 `quantlab.acquisition.base.Acquisition._fetch_batch` 的类文档字符串详细描述了每个方法和写入顺序。
+[acquisition](acquisition.md) 指南介绍账本外层的下载循环。`quantlab.acquisition._support.page_ledger.PageLedger` 和 `quantlab.acquisition.base.SymbolBatchAcquisition._fetch_batch` 的类文档字符串详细描述了每个方法和写入顺序。

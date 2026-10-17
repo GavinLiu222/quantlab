@@ -612,7 +612,7 @@ def _write_tick_shard(
     """One tick shard at `<data type>/date=/symbol=`, in that nesting order.
 
     `symbol` is carried by the path segment rather than duplicated into the
-    rows, exactly as `Acquisition._write_shard` writes it.
+    rows, exactly as `SymbolBatchAcquisition._write_shard` writes it.
     """
     part = root / data_type / f"date={session_date}" / f"symbol={symbol}"
     part.mkdir(parents=True, exist_ok=True)

@@ -98,7 +98,7 @@ def test_a_half_written_watermark_sidecar_reads_back_as_absent(
 ) -> None:
     """The blast-radius bound L-4 relies on, asserted BEFORE the change.
 
-    `Acquisition._read_sidecar` is the single tolerant read that both
+    `SymbolBatchAcquisition._read_sidecar` is the single tolerant read that both
     `_read_watermark` and `_read_coverage` share, so there is exactly one
     failure policy for a corrupt sidecar rather than two that could drift. Its
     policy is: absent or unparseable both mean `None`, i.e. "no watermark",

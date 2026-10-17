@@ -70,7 +70,7 @@ from pathlib import Path
 import polars as pl
 
 from quantlab.acquisition.base import DataSourceRegistry
-from quantlab.acquisition.registry import convert, run
+from quantlab.acquisition.registry import convert, download_symbols
 from quantlab.dataset.config import NbboBarsDatasetConfig, NbboDatasetConfig
 from quantlab.dataset.nbbo import NbboPanelDataset
 from quantlab.dataset.nbbo.bars import NbboBarsDataset
@@ -112,7 +112,7 @@ SOURCE = DataSourceRegistry.get("wrds")
 NBBO_CAPABILITY = ("us_equity", "tick", "nbbo")
 NBBO_BARS_CAPABILITY = ("us_equity", "1m", "nbbo_bars")
 CRSP_CAPABILITY = ("us_equity", "1d", "crsp_daily")
-ACQ = SOURCE.acquisition_cls_for(*NBBO_CAPABILITY)
+ACQ = SOURCE.symbol_batch_cls_for(*NBBO_CAPABILITY)
 
 #: ``--index`` name -> CRSP membership universe id.
 INDEXES: dict[str, str] = {
@@ -297,7 +297,7 @@ def _resolve_roster(
         schemas.extend((CrspQueries.COMPUSTAT_SCHEMA, CrspQueries.CCM_SCHEMA))
     CrspQueries.assert_entitled(session, schemas)
 
-    crsp_acq = SOURCE.acquisition_cls_for(*CRSP_CAPABILITY)
+    crsp_acq = SOURCE.symbol_batch_cls_for(*CRSP_CAPABILITY)
     reference_dir = crsp_acq.reference_dir_for(
         place_downloads(SOURCE.config_factory_for(*CRSP_CAPABILITY)(symbols=()), download_dir)
     )
@@ -401,7 +401,7 @@ if __name__ == "__main__":
             download_dir,
         )
         print(f"Acquiring from {SOURCE.display_name} (refresh={args.refresh})")
-        result = run(SOURCE, acq_config, refresh=args.refresh)
+        result = download_symbols(SOURCE, acq_config, refresh=args.refresh)
         print(f"{len(result.succeeded)} ticker(s) succeeded, {len(result.failures)} failed")
         print(f"Raw data written under: {acq_config.raw_data_dir_path}")
 

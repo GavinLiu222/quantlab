@@ -4,7 +4,7 @@ English | [简体中文](zh-CN/pageledger.md)
 
 Some vendors answer a request for many symbols as a chain of pages, each page carrying an opaque token that names the next one. A full-market download issues thousands of such batches, and each batch can span dozens of pages. `PageLedger` is a small JSON file, one per batch, that records which pages have been written, which token comes next, and which parquet files hold each page. After a crash the [acquisition](acquisition.md) engine reads the ledger and continues from the middle of the batch, without re-requesting finished pages and without writing any row twice.
 
-The ledger is used by the `Acquisition` base class; a vendor client does not call it directly.
+The ledger is used by the `SymbolBatchAcquisition` base class; a vendor client does not call it directly.
 
 ## The basics
 
@@ -16,10 +16,10 @@ A page is one response: some rows plus the token of the next page, or no token o
 >>> from datetime import date
 >>> from pathlib import Path
 >>> import polars as pl
->>> from quantlab.acquisition.base import Acquisition
+>>> from quantlab.acquisition.base import SymbolBatchAcquisition
 >>> from quantlab.acquisition.config import AcquisitionConfig
 >>> from quantlab.acquisition._support.page_ledger import PageLedger
->>> class PagedAcquisition(Acquisition):
+>>> class PagedAcquisition(SymbolBatchAcquisition):
 ...     VENDOR = "alpaca"
 ...     RAW_COLUMNS = ("timestamp", "symbol", "vendor", "close")
 ...     PAGE_SIZE = 4
@@ -238,4 +238,4 @@ Each page record also stores `last_symbol` and `last_timestamp`. They are meant 
 
 ## See also
 
-The [acquisition](acquisition.md) guide for the download loop around the ledger. The class docstrings of `quantlab.acquisition._support.page_ledger.PageLedger` and `quantlab.acquisition.base.Acquisition._fetch_batch` describe every method and the write order in detail.
+The [acquisition](acquisition.md) guide for the download loop around the ledger. The class docstrings of `quantlab.acquisition._support.page_ledger.PageLedger` and `quantlab.acquisition.base.SymbolBatchAcquisition._fetch_batch` describe every method and the write order in detail.

@@ -10,9 +10,10 @@ so an operator surface lists it: one ``Capability`` per table of the raw tier
 dataset class that converts each table that becomes a panel.
 
 Sharadar's raw tier is whole tables, pulled as bulk zips and trailing date
-windows by ``SharadarClient``, not the symbol-batched hive tree an
-``Acquisition`` writes. The descriptor therefore names no acquisition class
-and no config factory: ``registry.run()`` refuses it. Its raw-tier refresh is
+windows by ``SharadarClient``, not the symbol-batched hive tree a
+``SymbolBatchAcquisition`` writes. The descriptor therefore names no
+symbol-batch class and no config factory: ``registry.download_symbols()``
+refuses it. Its raw-tier refresh is
 ``quantlab.acquisition.sharadar.refresh.refresh_raw_tier`` (the daily table
 plan), which ``registry.refresh_raw_tier`` calls; the first download and the
 store builds are ``scripts/sharadar/download.py`` and
@@ -54,7 +55,7 @@ SHARADAR_SOURCE = register_source(
     SourceDescriptor(
         vendor="sharadar",
         display_name="Sharadar (US equities and funds, daily; direct API)",
-        acquisition_cls=None,
+        symbol_batch_cls=None,
         config_factory=None,
         capabilities=(
             Capability(

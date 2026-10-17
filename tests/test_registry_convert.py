@@ -175,9 +175,9 @@ def test_run_still_returns_an_acquisition_result_and_converts_nothing() -> None:
     """SC-2's surviving first half: conversion is a SEPARATE function.
 
     Pinned structurally rather than by running an acquisition (which would
-    need a credential): `run` and `convert` are two module-level functions
-    with two different return annotations, and `run` grew no conversion
-    keyword. A `mode=`/`to_zarr=` flag appearing on `run` is exactly the
+    need a credential): `download_symbols` and `convert` are two module-level functions
+    with two different return annotations, and `download_symbols` grew no conversion
+    keyword. A `mode=`/`to_zarr=` flag appearing on `download_symbols` is exactly the
     regression 03.4 D-14 forbids, and it would be invisible to every
     behavioural test in this file.
     """
@@ -186,11 +186,11 @@ def test_run_still_returns_an_acquisition_result_and_converts_nothing() -> None:
     from quantlab.acquisition import registry
     from quantlab.acquisition.base import AcquisitionResult
 
-    assert registry.run.__annotations__["return"] is AcquisitionResult
+    assert registry.download_symbols.__annotations__["return"] is AcquisitionResult
     assert registry.convert.__annotations__["return"] is ConversionResult
 
-    run_params = set(inspect.signature(registry.run).parameters)
-    assert not run_params & {"mode", "to_zarr", "convert", "granularity"}
+    download_params = set(inspect.signature(registry.download_symbols).parameters)
+    assert not download_params & {"mode", "to_zarr", "convert", "granularity"}
 
 
 # ---------------------------------------------------------------------------
@@ -349,7 +349,7 @@ def test_two_matching_targets_without_a_data_type_refuse_rather_than_guess(
         SourceDescriptor(
             vendor="twotarget",  # type: ignore[arg-type]
             display_name="Two Target Vendor",
-            acquisition_cls=tiingo_module.TiingoAcquisition,
+            symbol_batch_cls=tiingo_module.TiingoAcquisition,
             config_factory=lambda **kw: None,  # type: ignore[arg-type,return-value]
             capabilities=(
                 Capability(
@@ -675,7 +675,7 @@ def test_a_reporter_that_raises_on_every_event_cannot_end_the_conversion(
 ) -> None:
     """T-03.5-18: a UI bug must not cost a multi-hour conversion.
 
-    The same never-raises contract `Acquisition._emit` holds one layer up,
+    The same never-raises contract `SymbolBatchAcquisition._emit` holds one layer up,
     reintroduced here because the callback now runs inside a SECOND loop this
     repository owns. `calls` is asserted non-zero so the test cannot pass
     against an implementation that simply stopped emitting.

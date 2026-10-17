@@ -97,15 +97,15 @@ _MANY = tuple(f"SYM{i:04d}" for i in range(250))
 
 
 def _acquisition(acquisition_config, **config_kwargs):
-    """A minimal CONCRETE `Acquisition` whose `_fetch_page` is never called.
+    """A minimal CONCRETE `SymbolBatchAcquisition` whose `_fetch_page` is never called.
 
     Deliberately not `TiingoAcquisition` or `AlpacaAcquisition`: the batching
     rules under test belong to the base class, and instantiating a vendor here
     would let a vendor override silently satisfy the assertion.
     """
-    from quantlab.acquisition.base import Acquisition
+    from quantlab.acquisition.base import SymbolBatchAcquisition
 
-    class _Batching(Acquisition):
+    class _Batching(SymbolBatchAcquisition):
         VENDOR = "tiingo"
         RAW_COLUMNS = ("timestamp", "symbol", "vendor")
 
@@ -228,9 +228,9 @@ def test_refresh_batches_still_chunk_a_large_shared_watermark_group(
 #   input generator's check is an optimisation and this one is the guarantee.
 #   Move it three lines down, past a coverage read, and every test still
 #   passes while a quota-exhausted run keeps issuing vendor requests.
-# - no concrete `Acquisition` subclass may carry a not-implemented placeholder,
+# - no concrete `SymbolBatchAcquisition` subclass may carry a not-implemented placeholder,
 #   and every one must reach its vendor through the shared `_fetch_batch`
-#   (SC-1). Asserted by WALKING `Acquisition.__subclasses__()` rather than by
+#   (SC-1). Asserted by WALKING `SymbolBatchAcquisition.__subclasses__()` rather than by
 #   naming the vendors, so a third vendor added later is covered without
 #   editing this file.
 #
@@ -286,9 +286,9 @@ def test_the_abort_check_is_first_in_attempt_batch_abort_is_first():
     """
     import ast
 
-    from quantlab.acquisition.base import Acquisition
+    from quantlab.acquisition.base import SymbolBatchAcquisition
 
-    first = _first_executable_statement(Acquisition._attempt_batch)
+    first = _first_executable_statement(SymbolBatchAcquisition._attempt_batch)
 
     assert isinstance(first, ast.If), (
         f"the first statement of _attempt_batch must be the stop guard; got "
@@ -306,7 +306,7 @@ def test_the_abort_check_is_first_in_attempt_batch_abort_is_first():
     import textwrap
 
     stop_body = ast.parse(
-        textwrap.dedent(inspect.getsource(Acquisition._should_stop))
+        textwrap.dedent(inspect.getsource(SymbolBatchAcquisition._should_stop))
     ).body[0].body
     stop_code = [
         node
@@ -328,7 +328,7 @@ def test_the_abort_check_is_first_in_attempt_batch_abort_is_first():
 
 
 def _concrete_acquisition_subclasses():
-    """Every concrete `Acquisition` subclass defined in the SHIPPED tree.
+    """Every concrete `SymbolBatchAcquisition` subclass defined in the SHIPPED tree.
 
     Imports every top-level entry of the `acquisition` package first, so the
     walk does not depend on which vendor some earlier test happened to import
@@ -345,7 +345,7 @@ def _concrete_acquisition_subclasses():
     plus a private package it does NOT recurse into (`iter_modules`, not
     `walk_packages`).
     Discovery is unaffected: the vendors are still imported directly, and
-    `Acquisition.__subclasses__()` below is what actually finds the classes.
+    `SymbolBatchAcquisition.__subclasses__()` below is what actually finds the classes.
 
     Classes defined inside the test tree are excluded: a test double is not a
     vendor, and whether one exists at all depends on test ordering.
@@ -355,7 +355,7 @@ def _concrete_acquisition_subclasses():
     import sys
 
     import quantlab.acquisition as acquisition
-    from quantlab.acquisition.base import Acquisition
+    from quantlab.acquisition.base import SymbolBatchAcquisition
 
     for info in pkgutil.iter_modules(
         acquisition.__path__, acquisition.__name__ + "."
@@ -374,7 +374,7 @@ def _concrete_acquisition_subclasses():
                 found[subclass.__qualname__] = subclass
             walk(subclass)
 
-    walk(Acquisition)
+    walk(SymbolBatchAcquisition)
     return list(found.values())
 
 
@@ -419,7 +419,7 @@ def test_no_concrete_acquisition_subclass_carries_a_not_implemented_placeholder(
                     offenders.append(f"{cls.__qualname__}.{name}")
 
     assert not offenders, (
-        f"placeholder(s) found in the Acquisition hierarchy: {offenders}. "
+        f"placeholder(s) found in the SymbolBatchAcquisition hierarchy: {offenders}. "
         f"Every concrete subclass must reach its vendor through the shared "
         f"_fetch_batch/_fetch_page path (SC-1)."
     )
@@ -549,11 +549,11 @@ def test_refresh_actually_dispatches_the_watermark_grouped_batches(
     this covers whichever vendor is multi-symbol rather than the one that
     happens to be today.
     """
-    from quantlab.acquisition.base import Acquisition
+    from quantlab.acquisition.base import SymbolBatchAcquisition
 
     requests_made: list[tuple[tuple[str, ...], str]] = []
 
-    class _Recording(Acquisition):
+    class _Recording(SymbolBatchAcquisition):
         VENDOR = "alpaca"
         RAW_COLUMNS = ("timestamp", "symbol", "vendor")
         DEFAULT_BATCH_SIZE = 100

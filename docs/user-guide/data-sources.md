@@ -152,19 +152,23 @@ uv run python scripts/wrds/nbbo.py --permnos 14593,10107,83443 \
 The scripts are described in [WRDS: CRSP and TAQ](wrds.md); run any of them
 with `--help` for its complete flag list. Tiingo, Alpaca and Binance have
 library interfaces only: their acquisition and dataset classes are driven from
-Python through `quantlab.acquisition.registry.run` and `quantlab.acquisition.registry.convert`, as in
+Python through `quantlab.acquisition.registry.download_symbols` and `quantlab.acquisition.registry.convert`, as in
 the next section.
 
 ## Downloading from Python
 
-`quantlab.acquisition.registry.run(descriptor, config)` runs a download in the current
-process and returns an `AcquisitionResult`. The descriptor's `config_factory`
+`quantlab.acquisition.registry.download_symbols(descriptor, config)` downloads
+the config's symbols over its window from a symbol-batched vendor, in the current
+process, and returns an `AcquisitionResult`. Keeping a vendor's whole raw tier
+current from its watermarks (Sharadar, Massive, FRED) is
+`quantlab.acquisition.registry.refresh_raw_tier` instead, which the daily update
+calls (see the [registry](../registry.md) guide). The descriptor's `config_factory`
 builds an `AcquisitionConfig` with the standard paths for that vendor. This
 needs `TIINGO_API_KEY` and network access, so no output is shown:
 
 ```python
 from quantlab.acquisition.base import DataSourceRegistry
-from quantlab.acquisition.registry import run
+from quantlab.acquisition.registry import download_symbols
 
 source = DataSourceRegistry.get("tiingo")
 config = source.config_factory(
@@ -173,13 +177,13 @@ config = source.config_factory(
     end_date="2024-05-31",
     kwargs={"max_workers": 4},
 )
-result = run(source, config)
+result = download_symbols(source, config)
 print(result.succeeded, result.failures, result.coverage)
 ```
 
 `result.failures` maps each symbol that failed in this run to a message;
 `result.cancelled` and `result.quota_aborted` say whether the run stopped
-early. `run(..., refresh=True)` fetches each symbol forward from where it last
+early. `download_symbols(..., refresh=True)` fetches each symbol forward from where it last
 stopped instead of backfilling the whole window.
 
 Per-run tuning lives in `config.kwargs`, so a run is fully described by its
@@ -187,7 +191,7 @@ config: `batch_size` (symbols per request), `max_workers` (concurrent
 requests), `resume`, `progress`, the quota and rate-limit knobs below, and
 vendor options such as Alpaca's `data_type`, `feed`, `adjustment` and
 `page_limit`. Alpaca bars are requested unadjusted (`adjustment="raw"`) unless
-you say otherwise. See the docstrings of `quantlab.acquisition.base.Acquisition`
+you say otherwise. See the docstrings of `quantlab.acquisition.base.SymbolBatchAcquisition`
 and each vendor class for details.
 
 ### Progress events
@@ -201,7 +205,7 @@ collects the events of a three-symbol download:
 from quantlab.utils.progress import CallbackProgressReporter
 
 events = []
-result = run(source, config, reporter=CallbackProgressReporter(events.append))
+result = download_symbols(source, config, reporter=CallbackProgressReporter(events.append))
 for event in events:
     print(f"    event {event.kind:<16} {event.completed}/{event.total}")
 ```
@@ -237,7 +241,7 @@ def stop_after_first_batch(event):
     if event.kind == "batch_completed":
         token.cancel()
 
-result = run(source, wider_config,
+result = download_symbols(source, wider_config,
              reporter=CallbackProgressReporter(stop_after_first_batch),
              cancel=token)
 print("cancelled:", result.cancelled, "newly completed:", result.succeeded)
@@ -432,7 +436,7 @@ print(result.windows_written, result.windows_planned, result.rows_written)
 The conversion runs one time window at a time (`granularity`: `year` by
 default, down to `day` or `hour`) and records each finished window,
 so an interrupted or cancelled conversion resumes at the first unwritten
-window. It accepts `reporter=` and `cancel=` like `run()`. Nothing checks that a
+window. It accepts `reporter=` and `cancel=` like `download_symbols()`. Nothing checks that a
 window fits in memory, so choose a finer granularity for a large roster or for
 minute data.
 

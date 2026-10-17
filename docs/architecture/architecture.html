@@ -139,7 +139,7 @@ A research result depends on data, parameters and code together. Data is appende
 
 <table>
 <tr><th>Stage</th><th>Root class (in &lt;layer&gt;/base.py)</th><th>Input → output</th></tr>
-<tr><td>Acquisition</td><td><code>Acquisition</code></td><td>vendor API → raw Parquet files</td></tr>
+<tr><td>Acquisition</td><td><code>SymbolBatchAcquisition</code></td><td>vendor API → raw Parquet files</td></tr>
 <tr><td>Dataset</td><td><code>BaseDataset</code> / <code>MarketDataset</code></td><td>raw files → price panel (stored as Zarr)</td></tr>
 <tr><td>Factor / label</td><td><code>Factor</code> / <code>Forward</code></td><td>price panel → factor panel</td></tr>
 <tr><td>Return model</td><td><code>BaseModel</code></td><td>factor panel + label panel → prediction panel</td></tr>

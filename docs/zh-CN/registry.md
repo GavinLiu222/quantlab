@@ -2,20 +2,22 @@
 
 [English](../registry.md) | 简体中文
 
-注册表是 quantlab 能下载行情数据的所有来源的目录。每个数据源（Alpaca、FRED、Sharadar、Tiingo、WRDS）只描述一次：凭证放在哪些环境变量里，以及它提供哪些市场、频率和数据类型。`run()` 和 `convert()` 两个函数可以在 Python 里下载原始数据并转换成 Zarr，调用方不需要指名任何厂商类。`SourceInspector` 则不需要任何凭证，就能报告磁盘上已经有什么。
+注册表是 quantlab 能下载行情数据的所有来源的目录。每个数据源（Alpaca、FRED、Massive、Sharadar、Tiingo、WRDS）只描述一次：凭证放在哪些环境变量里，它提供哪些市场、频率和数据类型，以及它的原始层怎么下载。`refresh_raw_tier()` 从水位线起让一个厂商的原始层保持最新；`download_symbols()` 为按标的分批的厂商下载一份明确的名单和时间窗口；`convert()` 把原始层转换成 Zarr。三者都不需要调用方指名厂商类。`SourceInspector` 则不需要任何凭证，就能报告磁盘上已经有什么。
 
 ## 前置条件
 
-用 `uv sync --all-extras` 安装项目。查看目录和检查本地文件都不需要凭证。下载则要求调用 `run()` 的进程环境里设置了下表的变量。
+用 `uv sync --all-extras` 安装项目。查看目录和检查本地文件都不需要凭证。下载则要求调用 `refresh_raw_tier()` 或 `download_symbols()` 的进程环境里设置了下表的变量。
 
 | 厂商 | 环境变量 | 提供的数据 |
 |---|---|---|
-| `alpaca` | `APCA_API_KEY_ID`、`APCA_API_SECRET_KEY` | 美股 1d、1m 行情；tick 报价与成交 |
-| `fred` | 无 | 利率序列，例如 DTB3（3 个月期国库券利率，免 key 的 CSV 接口）；`FredRateDataset` 生成单 symbol 的 `rate` 与 `risk_free` 面板 |
-| `massive` | `MASSIVE_API_KEY`、`MASSIVE_S3_ACCESS_KEY_ID`（`MASSIVE_S3_SECRET_ACCESS_KEY` 可选） | 美股每一笔 SIP 成交，以及 Massive 自己的分钟、日 bar，按日放在 S3 文件里；`MassiveTradeBarDataset` 生成 Trade bar，`MassiveDayBarDataset` 生成日 bar 库，都在 Massive 代码轴上；`MassiveDividendDataset` 用 REST 的分红和拆股生成 permaticker 上的分红面板，`MassiveShortInterestDataset` 用 REST 的卖空余额生成卖空余额面板，`MassiveShortVolumeDataset` 用 REST 的卖空成交量生成卖空成交量面板，`MassiveNewsDataset` 用 REST 的新闻生成新闻条数和情绪面板，`MassiveDisclosureDataset` 用 REST 的 8-K 披露生成 8-K 披露类别面板，`MassiveIpoDataset` 用 REST 的 IPO 生成 IPO 面板；由 `MassiveClient` 下载，不走 `run()`（见 [Massive](../massive.md)） |
-| `sharadar` | `SHARADAR_API_KEY` | 美股股票（SEP）与基金（SFP）日线、SF1 基本面、DAILY 估值、8-K 事件、内部人交易、13F 持仓、ACTIONS、标普 500 成分、TICKERS、INDICATORS；由 `scripts/sharadar/download.py` 首次下载，不走 `run()`，由 `refresh_raw_tier()` 保持最新（见 [Sharadar](../sharadar.md)） |
-| `tiingo` | `TIINGO_API_KEY` | 美股日线 |
-| `wrds` | `WRDS_USERNAME`（密码放在 `~/.pgpass`） | TAQ NBBO 报价；CRSP 日线 |
+| `alpaca` | `APCA_API_KEY_ID`、`APCA_API_SECRET_KEY` | 美股 1d、1m 行情；tick 报价与成交；只有库接口（见下文“状态”） |
+| `fred` | 无 | 利率序列，例如 DTB3（3 个月期国库券利率，免 key 的 CSV 接口）；`FredRateDataset` 生成单 symbol 的 `rate` 与 `risk_free` 面板；由 `refresh_raw_tier()` 保持最新，它包装了 FRED 的按标的分批下载 |
+| `massive` | `MASSIVE_API_KEY`、`MASSIVE_S3_ACCESS_KEY_ID`（`MASSIVE_S3_SECRET_ACCESS_KEY` 可选） | 美股每一笔 SIP 成交，以及 Massive 自己的分钟、日 bar，按日放在 S3 文件里；`MassiveTradeBarDataset` 生成 Trade bar，`MassiveDayBarDataset` 生成日 bar 库，都在 Massive 代码轴上；`MassiveDividendDataset` 用 REST 的分红和拆股生成 permaticker 上的分红面板，`MassiveShortInterestDataset` 用 REST 的卖空余额生成卖空余额面板，`MassiveShortVolumeDataset` 用 REST 的卖空成交量生成卖空成交量面板，`MassiveNewsDataset` 用 REST 的新闻生成新闻条数和情绪面板，`MassiveDisclosureDataset` 用 REST 的 8-K 披露生成 8-K 披露类别面板，`MassiveIpoDataset` 用 REST 的 IPO 生成 IPO 面板；由 `MassiveClient` 下载，不走 `download_symbols()`；REST 端点由 `refresh_raw_tier()` 保持最新（见 [Massive](../massive.md)） |
+| `sharadar` | `SHARADAR_API_KEY` | 美股股票（SEP）与基金（SFP）日线、SF1 基本面、DAILY 估值、8-K 事件、内部人交易、13F 持仓、ACTIONS、标普 500 成分、TICKERS、INDICATORS；由 `scripts/sharadar/download.py` 首次下载，不走 `download_symbols()`，由 `refresh_raw_tier()` 保持最新（见 [Sharadar](../sharadar.md)） |
+| `tiingo` | `TIINGO_API_KEY` | 美股日线；只有库接口（见下文“状态”） |
+| `wrds` | `WRDS_USERNAME`（密码放在 `~/.pgpass`） | TAQ NBBO 报价；CRSP 日线；已停用，只由 `scripts/wrds/` 通过 `download_symbols()` 下载 |
+
+**Tiingo 和 Alpaca 的状态。** 两者都已注册、有测试、能转换，但项目里没有任何地方从它们下载：没有脚本、没有每日更新步骤，也没有示例调用它们的客户端（离线示例只复用 Tiingo 的原始层布局和它的转换器 `StockDataset`）。它们作为可用的库接口保留，不针对线上 API 维护；保留还是删除尚未决定。每日更新保持最新的是 Sharadar、Massive 和 FRED，WRDS 已停用。
 
 本文的交互示例省略了 quantlab 通过 `loguru` 写到 stderr 的日志行。
 
@@ -23,7 +25,7 @@
 
 ### 数据源与 capability
 
-`DataSourceRegistry.all()` 为每个厂商返回一个 `SourceDescriptor`（描述符），按厂商名排序。描述符包含显示名、环境变量名、默认的采集类，以及一组 `Capability`（能力）。一个 capability 就是该厂商提供的一种「市场、频率、数据类型」组合；厂商不区分数据类型时，data type 为 `None`。
+`DataSourceRegistry.all()` 为每个厂商返回一个 `SourceDescriptor`（描述符），按厂商名排序。描述符包含显示名、环境变量名、默认的按标的分批下载类（`symbol_batch_cls`，不按标的分批下载的厂商为 `None`）、原始层刷新函数（`raw_tier_refresh`，每日更新不负责的厂商为 `None`），以及一组 `Capability`（能力）。一个 capability 就是该厂商提供的一种「市场、频率、数据类型」组合；厂商不区分数据类型时，data type 为 `None`。
 
 ```python
 >>> from quantlab.acquisition.base import DataSourceRegistry
@@ -37,7 +39,7 @@ us_equity tick nbbo 2003-09-10
 us_equity 1d crsp_daily 1925-12-31
 ```
 
-一个 WRDS 账号提供两种产品，所以两行 capability 指向不同的采集类。`earliest_available` 只是参考信息，不会被检查。
+一个 WRDS 账号提供两种产品，所以两行 capability 指向不同的按标的分批下载类。`earliest_available` 只是参考信息，不会被检查。
 
 ### 凭证
 
@@ -57,7 +59,7 @@ False
 
 ### 查询谁能满足一个请求
 
-`supports()` 判断一个数据源是否提供某个 `(market, frequency, data_type)` 请求。`capabilities_for()` 返回匹配的行，`data_type=None` 表示匹配任意数据类型。`acquisition_cls_for()` 返回负责下载该请求的类。
+`supports()` 判断一个数据源是否提供某个 `(market, frequency, data_type)` 请求。`capabilities_for()` 返回匹配的行，`data_type=None` 表示匹配任意数据类型。`symbol_batch_cls_for()` 返回负责下载该请求的 `SymbolBatchAcquisition` 类，厂商没有这种类时返回 `None`。
 
 ```python
 >>> wrds.supports("us_equity", "tick", "nbbo")
@@ -67,27 +69,36 @@ False
 >>> alpaca = DataSourceRegistry.get("alpaca")
 >>> [c.data_type for c in alpaca.capabilities_for("us_equity", "tick")]
 ['quotes', 'trades']
->>> wrds.acquisition_cls_for("us_equity", "1d").__name__
+>>> wrds.symbol_batch_cls_for("us_equity", "1d").__name__
 'WrdsCrspDailyAcquisition'
->>> wrds.acquisition_cls_for("us_equity", "tick", "nbbo").__name__
+>>> wrds.symbol_batch_cls_for("us_equity", "tick", "nbbo").__name__
 'WrdsTaqNbboAcquisition'
 ```
 
-如果多个匹配行指向不同的类，`acquisition_cls_for()` 会抛出 `ValueError` 并要求传入 `data_type`，不会替调用方挑一个。
+如果多个匹配行指向不同的类，`symbol_batch_cls_for()` 会抛出 `ValueError` 并要求传入 `data_type`，不会替调用方挑一个。
+
+### 两种下载方式
+
+注册表按调用方知道什么，提供两种下载方式（ADR 0049）：
+
+- **让原始层保持最新。** `refresh_raw_tier(source, download_dir)` 把厂商原始层的每一部分从水位线拉到今天，调用方不给名单也不给时间窗口。这是保持原始层最新的唯一方式，也是每日更新调用的函数；见[让原始层保持最新](#让原始层保持最新)。
+- **下载一份名单的一个时间窗口。** `download_symbols(source, config)` 用厂商的 `SymbolBatchAcquisition` 下载 `AcquisitionConfig` 给出的标的和日期。只有按标的分批的厂商有这种类（Tiingo、Alpaca、FRED、WRDS）；Sharadar 和 Massive 会被拒绝，错误信息指向 `refresh_raw_tier()`。
+
+每日更新负责的按标的分批厂商（FRED）注册的刷新函数包装了它自己的 `SymbolBatchAcquisition`，所以两个函数不会争同一个调用方。
 
 ### 先下载，再转换
 
-`run(source, config)` 把一个时间窗口下载到原始层（parquet 分片，加上每个标的一个很小的 JSON 水位标记文件），并返回 `AcquisitionResult`。`convert(source, dataset_config)` 读取原始层并写出 Zarr 存储；它不需要凭证，也不联网。两个调用是刻意分开的。数据源的配置由它的 `config_factory` 生成：
+`download_symbols(source, config)` 把一个时间窗口下载到原始层（parquet 分片，加上每个标的一个很小的 JSON 水位标记文件），并返回 `AcquisitionResult`。`convert(source, dataset_config)` 读取原始层并写出 Zarr 存储；它不需要凭证，也不联网。两个调用是刻意分开的。数据源的配置由它的 `config_factory` 生成：
 
 ```python
 from quantlab.acquisition.base import DataSourceRegistry
-from quantlab.acquisition.registry import run, convert
+from quantlab.acquisition.registry import convert, download_symbols
 
 source = DataSourceRegistry.get("tiingo")            # 需要 TIINGO_API_KEY
 config = source.config_factory(
     symbols=("AAPL", "MSFT"), start_date="2024-01-02", end_date="2024-05-31"
 )
-result = run(source, config)                          # 原始 parquet 写入磁盘
+result = download_symbols(source, config)                          # 原始 parquet 写入磁盘
 result.failures                                       # 本次运行的 {标的: 原因}
 ```
 
@@ -95,7 +106,7 @@ result.failures                                       # 本次运行的 {标的:
 
 ### 进度与取消
 
-`run()` 和 `convert()` 都接受 `reporter` 和 `cancel` 参数。reporter 每一步收到一个 `ProgressEvent`；默认在 stderr 画一个 tqdm 进度条，`NullProgressReporter` 丢弃所有事件，`CallbackProgressReporter(fn)` 对每个事件调用 `fn(event)`。采集会发出 `coverage`、`run_started`、`batch_completed`、`quota_exhausted`、`cancelled` 和 `run_finished`；转换会发出 `conversion_started`、`window_written`、`window_skipped`、`cancelled` 和 `conversion_finished`。reporter 不能停止运行。停止要通过 `CancelToken`，循环在批次之间（下载）或窗口之间（转换）检查它。已经完成的批次保留在磁盘上，所以下一次调用从上次停下的地方继续。
+`download_symbols()` 和 `convert()` 都接受 `reporter` 和 `cancel` 参数。reporter 每一步收到一个 `ProgressEvent`；默认在 stderr 画一个 tqdm 进度条，`NullProgressReporter` 丢弃所有事件，`CallbackProgressReporter(fn)` 对每个事件调用 `fn(event)`。按标的分批的下载会发出 `coverage`、`run_started`、`batch_completed`、`quota_exhausted`、`cancelled` 和 `run_finished`；转换会发出 `conversion_started`、`window_written`、`window_skipped`、`cancelled` 和 `conversion_finished`。reporter 不能停止运行。停止要通过 `CancelToken`，循环在批次之间（下载）或窗口之间（转换）检查它。已经完成的批次保留在磁盘上，所以下一次调用从上次停下的地方继续。
 
 ## 常见任务
 
@@ -109,13 +120,13 @@ result.failures                                       # 本次运行的 {标的:
 >>> import tempfile
 >>> from pathlib import Path
 >>> from quantlab.acquisition.base import DataSourceRegistry
->>> from quantlab.acquisition.registry import run, convert
+>>> from quantlab.acquisition.registry import convert, download_symbols
 >>> import demo_source
 >>> root = Path(tempfile.mkdtemp())
 >>> acq_cfg, ds_cfg = demo_source.make_configs(root)
 >>> from quantlab.utils.progress import CallbackProgressReporter
 >>> events = []
->>> result = run(demo_source.DEMO, acq_cfg, reporter=CallbackProgressReporter(events.append))
+>>> result = download_symbols(demo_source.DEMO, acq_cfg, reporter=CallbackProgressReporter(events.append))
 >>> for e in events: print(e.kind, e.completed, e.total, e.symbols)
 coverage 3 3 ()
 run_started 0 3 ()
@@ -129,7 +140,7 @@ run_finished 3 3 ()
 
 ### 停止运行并续跑
 
-在回调里设置 `CancelToken`，运行会在下一个批次边界停下。结果里 `cancelled=True`，`succeeded` 只包含已完成的标的。用同一个配置再次调用 `run()`，这些标的会被跳过。
+在回调里设置 `CancelToken`，运行会在下一个批次边界停下。结果里 `cancelled=True`，`succeeded` 只包含已完成的标的。用同一个配置再次调用 `download_symbols()`，这些标的会被跳过。
 
 ```python
 >>> from quantlab.utils.progress import CancelToken
@@ -138,10 +149,10 @@ run_finished 3 3 ()
 ...     if event.kind == "batch_completed" and event.completed == 1:
 ...         token.cancel()
 >>> acq_cfg2, _ = demo_source.make_configs(root / "second")
->>> first = run(demo_source.DEMO, acq_cfg2, reporter=CallbackProgressReporter(stop_after_first), cancel=token)
+>>> first = download_symbols(demo_source.DEMO, acq_cfg2, reporter=CallbackProgressReporter(stop_after_first), cancel=token)
 >>> first.cancelled, first.succeeded
 (True, ('AAPL',))
->>> second = run(demo_source.DEMO, acq_cfg2)
+>>> second = download_symbols(demo_source.DEMO, acq_cfg2)
 >>> second.cancelled, second.succeeded
 (False, ('MSFT', 'NVDA'))
 ```
@@ -210,7 +221,7 @@ shape: (2, 3)
 >>> refresh_raw_tier(DataSourceRegistry.get("tiingo"), "downloads")
 Traceback (most recent call last):
 ...
-ValueError: Tiingo EOD registers no raw-tier refresh; download it with run().
+ValueError: Tiingo EOD registers no raw-tier refresh; download it with download_symbols().
 ```
 
 联网时，`refresh_raw_tier(DataSourceRegistry.get("fred"), "/data/quantlab/downloads", series=["DTB3"], start="1954-01-04")` 写入 `<download_dir>/fred`，水位线在 `<download_dir>/_watermarks/fred`。每日更新的 `refresh` 步骤就是这个调用（见[数据更新指南](../data_update.md)）。
@@ -223,9 +234,9 @@ ValueError: Tiingo EOD registers no raw-tier refresh; download it with run().
 >>> import dataclasses
 >>> class BrokenAcquisition(demo_source.DemoAcquisition):
 ...     RAW_COLUMNS = (*demo_source.DemoAcquisition.RAW_COLUMNS, "bid")
->>> broken = dataclasses.replace(demo_source.DEMO, acquisition_cls=BrokenAcquisition)
+>>> broken = dataclasses.replace(demo_source.DEMO, symbol_batch_cls=BrokenAcquisition)
 >>> bad_cfg, _ = demo_source.make_configs(root / "broken", symbols=("AAPL",))
->>> bad = run(broken, bad_cfg)
+>>> bad = download_symbols(broken, bad_cfg)
 >>> bad.succeeded, list(bad.failures)
 ((), ['AAPL'])
 >>> bad.failures["AAPL"].split(";")[0]
@@ -234,7 +245,7 @@ ValueError: Tiingo EOD registers no raw-tier refresh; download it with run().
 
 ## 扩展
 
-新增一个数据源，就是把一个 `SourceDescriptor` 交给 `register_source()`，写在它所描述的 `Acquisition` 子类旁边。子类需要一个 `VENDOR` 标记、一个 `RAW_COLUMNS` 元组和一个返回 `(DataFrame, 下一页令牌)` 的 `_fetch_page()` 方法；令牌为 `None` 表示最后一页。下面是上文用到的完整 `demo_source.py`。它为每个标的每天生成一根价格恒定的 bar，写出日线列，所以现有的 `StockDataset` 就能转换它。
+新增一个数据源，就是把一个 `SourceDescriptor` 交给 `register_source()`，写在厂商自己的模块里。每日更新负责的厂商给它一个 `raw_tier_refresh`：签名为 `(download_dir, *, end=None, **options)`、返回 `RawTierRefreshResult` 的函数（`quantlab.acquisition.refresh`）；原始层不按标的分批的厂商把 `symbol_batch_cls` 和 `config_factory` 留作 `None`。按标的分批的厂商在描述符旁边写一个 `SymbolBatchAcquisition` 子类。子类需要一个 `VENDOR` 标记、一个 `RAW_COLUMNS` 元组和一个返回 `(DataFrame, 下一页令牌)` 的 `_fetch_page()` 方法；令牌为 `None` 表示最后一页。下面是上文用到的完整 `demo_source.py`。它为每个标的每天生成一根价格恒定的 bar，写出日线列，所以现有的 `StockDataset` 就能转换它。
 
 ```python
 # demo_source.py
@@ -247,7 +258,7 @@ from pathlib import Path
 
 import polars as pl
 
-from quantlab.acquisition.base import Acquisition
+from quantlab.acquisition.base import SymbolBatchAcquisition
 from quantlab.acquisition.config import AcquisitionConfig
 from quantlab.dataset.config import DatasetConfig
 from quantlab.acquisition.config import stock_acquisition_config
@@ -258,7 +269,7 @@ PRICE_COLUMNS = ("open", "high", "low", "close", "adjOpen", "adjHigh", "adjLow",
 OTHER_COLUMNS = ("volume", "adjVolume", "divCash", "splitFactor")
 
 
-class DemoAcquisition(Acquisition):
+class DemoAcquisition(SymbolBatchAcquisition):
     """为每个标的、每个自然日生成一根价格恒定的日线。"""
 
     VENDOR = "demo"
@@ -286,7 +297,7 @@ DEMO = register_source(
     SourceDescriptor(
         vendor="demo",
         display_name="Demo Vendor",
-        acquisition_cls=DemoAcquisition,
+        symbol_batch_cls=DemoAcquisition,
         config_factory=functools.partial(stock_acquisition_config, vendor="demo"),
         capabilities=(
             Capability(market="us_equity", frequency="1d", dataset_cls=StockDataset),
@@ -314,7 +325,7 @@ def make_configs(root: Path, symbols=("AAPL", "MSFT", "NVDA")):
     return acquisition, dataset
 ```
 
-描述符为厂商提供的每种组合列一个 `Capability`。`dataset_cls` 指定转换原始层的 dataset 类；对于没有稠密面板形式的 capability 留成 `None`，`convert()` 会拒绝它。capability 还可以带自己的 `acquisition_cls` 和 `config_factory`，一个 WRDS 账号提供两种产品就是这样做到的。注册必须发生在有人查询注册表之前，所以仓库之外的数据源需要先 import。仓库之内的数据源，把它的模块加到 `quantlab/acquisition/registry.py` 底部的 import 行里。
+描述符为厂商提供的每种组合列一个 `Capability`。`dataset_cls` 指定转换原始层的 dataset 类；对于没有稠密面板形式的 capability 留成 `None`，`convert()` 会拒绝它。capability 还可以带自己的 `symbol_batch_cls` 和 `config_factory`，一个 WRDS 账号提供两种产品就是这样做到的。注册必须发生在有人查询注册表之前，所以仓库之外的数据源需要先 import。仓库之内的数据源，把它的模块加到 `quantlab/acquisition/registry.py` 底部的 import 行里。
 
 ```python
 >>> [d.vendor for d in DataSourceRegistry.all()]
@@ -326,16 +337,16 @@ True
 False
 ```
 
-`is_configured()` 报告缺少 `DEMO_API_KEY`，但上面的 `run()` 却成功了，因为 demo 类从不读这个变量。需要 key 的厂商类会在构造函数里读它，缺失时抛出异常。
+`is_configured()` 报告缺少 `DEMO_API_KEY`，但上面的 `download_symbols()` 却成功了，因为 demo 类从不读这个变量。需要 key 的厂商类会在构造函数里读它，缺失时抛出异常。
 
 ## 注意事项
 
-`run()` 会构造采集类，这是第一次需要凭证的地方。变量缺失时，在发出任何请求之前就抛出 `RuntimeError`：
+`download_symbols()` 会构造按标的分批下载类，这是第一次需要凭证的地方。变量缺失时，在发出任何请求之前就抛出 `RuntimeError`：
 
 ```python
 >>> tiingo = DataSourceRegistry.get("tiingo")
 >>> tiingo_cfg = tiingo.config_factory(symbols=("AAPL",), start_date="2024-01-02", end_date="2024-01-05")
->>> run(tiingo, tiingo_cfg)
+>>> download_symbols(tiingo, tiingo_cfg)
 Traceback (most recent call last):
   ...
 RuntimeError: TIINGO_API_KEY environment variable is not set. Export it before running acquisition (see Tiingo dashboard for your key).
@@ -368,4 +379,4 @@ ValueError: Alpaca Market Data: no raw-to-Zarr conversion exists for ('us_equity
 
 ## 另请参阅
 
-[acquisition](acquisition.md) 指南讲下载引擎、分批、续跑和失败清单。[WRDS TAQ](wrds_taq.md) 指南详述 `wrds` 数据源。另见 [pageledger](pageledger.md)（页级续跑）以及 [dataset](dataset.md) 和 [chunking](chunking.md)（`convert()` 写出什么）。模块文档字符串：`quantlab.acquisition.registry`、`quantlab.acquisition._support.inspector`、`quantlab.utils.progress`。
+[acquisition](acquisition.md) 指南讲按标的分批的下载引擎、分批、续跑和失败清单。[WRDS TAQ](wrds_taq.md) 指南详述 `wrds` 数据源。另见 [pageledger](pageledger.md)（页级续跑）以及 [dataset](dataset.md) 和 [chunking](chunking.md)（`convert()` 写出什么）。模块文档字符串：`quantlab.acquisition.registry`、`quantlab.acquisition._support.inspector`、`quantlab.utils.progress`。

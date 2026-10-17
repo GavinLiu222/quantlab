@@ -1545,7 +1545,7 @@ _MEASURED_COMMON = (
 #: (`us_all` 14,485 unique symbols, `nasdaq_all` 8,967): these are exactly and
 #: only what `enums.data.TRADEABLE_TICKER_PATTERN` rejects.
 #:
-#: Each is UNFETCHABLE -- `Acquisition._validate_symbols` refuses it before a
+#: Each is UNFETCHABLE -- `SymbolBatchAcquisition._validate_symbols` refuses it before a
 #: single request is issued -- so persisting it into the reference table
 #: guarantees a whole-roster pre-flight abort later. The drop's axis is
 #: WELL-FORMEDNESS, never security type: `nasdaq_all`'s frozen preferred
