@@ -279,7 +279,7 @@ def refresh_raw_tier(
         watermark_path=str(root / WATERMARK_DIR),
         symbols=tuple(series), start_date=start,
         end_date=end.isoformat() if end is not None else None,
-    )).download()
+    )).refresh()
     result = acquisition.last_result
     return RawTierRefreshResult("fred", tuple(
         RefreshedPart.failure(name, result.failures[name]) if name in result.failures

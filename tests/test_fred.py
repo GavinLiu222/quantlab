@@ -356,3 +356,19 @@ def test_an_empty_answer_is_no_rows():
 def test_no_test_can_reach_fred_through_a_session():
     with pytest.raises(AssertionError, match="fred.stlouisfed.org"):
         requests.Session().get("https://fred.stlouisfed.org/graph/fredgraph.csv")
+
+
+def test_a_second_raw_tier_refresh_asks_only_from_the_watermark_on(tmp_path, fred):
+    from datetime import date
+
+    # FRED publishes a day late, so the watermark never reaches the refresh's end.
+    fake = fred({d: v for d, v in SERIES.items() if d <= "2024-01-08"})
+    _refresh(tmp_path, series=["DTB3"], start="2024-01-02", end=date(2024, 1, 9))
+    fake.rows = dict(SERIES)
+    fake.calls.clear()
+
+    _refresh(tmp_path, series=["DTB3"], start="2024-01-02", end=date(2024, 1, 10))
+
+    (call,) = fake.calls
+    assert (call["cosd"], call["coed"]) == ("2024-01-08", "2024-01-10")
+    assert _rates(_panel(tmp_path))["2024-01-09"] == 5.21
