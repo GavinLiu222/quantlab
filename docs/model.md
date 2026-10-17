@@ -237,7 +237,7 @@ Every head derives from `BaseModel` through one of two variants. The variants di
 | `TorchModel` | torch, one cross-section of symbols per step | `.pth` | `window_bars`, `_init_model`, `_loss`; optional hooks with defaults (see Train a torch model) |
 | `LibraryModel` | numpy rows, the library's own early stopping | `.joblib` | `_init_model`, `_fit_model`, `_forward`; optional `_transform_feature`, `_transform_target`, `_loss` (see Extending) |
 
-Shipped heads: `XGBoostRegressor`, `XGBTDRegressor` and `RealMLPRegressor`, all `LibraryModel` heads, and the `TorchModel` heads `GATsRegressor` (`quantlab.model.predefined.gats`, Qlib's GATs on the cross-section) and `MASTERRegressor` (`quantlab.model.predefined.master`, the market-guided transformer MASTER). Every shipped model, the ensembles included, lives in `quantlab/model/predefined/`, and the classes a new head or ensemble subclasses live at the top of `quantlab/model/` (`torch_model.py`, `library_model.py`, `ensemble.py`). See the docstrings of `quantlab/model/base.py` and `quantlab/backtest/config.py` for the full config fields.
+Shipped heads: `XGBoostRegressor`, `XGBTDRegressor` and `RealMLPRegressor`, all `LibraryModel` heads, the `TorchModel` heads `GATsRegressor` (`quantlab.model.predefined.gats`, Qlib's GATs on the cross-section) and `MASTERRegressor` (`quantlab.model.predefined.master`, the market-guided transformer MASTER), and the other models of Qlib's Alpha158 benchmark (see Train Qlib's benchmark models). Every shipped model, the ensembles included, lives in `quantlab/model/predefined/`, and the classes a new head or ensemble subclasses live at the top of `quantlab/model/` (`torch_model.py`, `library_model.py`, `ensemble.py`). See the docstrings of `quantlab/model/base.py` and `quantlab/backtest/config.py` for the full config fields.
 
 ### Configuration and reserved hyperparameters
 
@@ -910,6 +910,55 @@ Known differences from the official implementation:
 - no `RobustZScoreNorm` is fitted on the training span: the default `_transform_feature` clips to ±3 and fills NaN with 0, where the official data forward- and back-fills gaps inside a window;
 - the output has one column per label instead of one;
 - when the threshold is never reached, training stops at `epochs` with the last weights; the official code has no weights to save in that case.
+
+### Train Qlib's benchmark models
+
+The models of Qlib's Alpha158 benchmark table (`examples/benchmarks/README.md` in `microsoft/qlib`) ship as heads, each with the hyperparameters of its `workflow_config_<model>_Alpha158.yaml` (or, where the config leaves one out, the model's own default) as its defaults. They need no setting of their own: give them factors, one label and dates as any head.
+
+| Head | Module | Qlib model | Variant |
+|---|---|---|---|
+| `LinearRegressor` | `linear` | `LinearModel` (OLS; ridge, lasso and nnls by `estimator`) | `LibraryModel` |
+| `LGBMRegressor` | `lgbm` | `LGBModel` | `LibraryModel` |
+| `CatBoostRegressor` | `catboost_model` | `CatBoostModel` | `LibraryModel` |
+| `DoubleEnsembleRegressor` | `double_ensemble` | `DEnsembleModel` (LightGBM sub-models) | `LibraryModel` |
+| `MLPRegressor` | `mlp` | `DNNModelPytorch` | `TorchModel` |
+| `LSTMRegressor`, `GRURegressor`, `ALSTMRegressor` | `rnn` | `LSTM`, `GRU`, `ALSTM` (`pytorch_*_ts.py`) | `TorchModel` |
+| `TCNRegressor` | `tcn` | `TCN` (`pytorch_tcn_ts.py`) | `TorchModel` |
+| `TransformerRegressor`, `LocalformerRegressor` | `transformer` | `TransformerModel`, `LocalformerModel` (`pytorch_*_ts.py`) | `TorchModel` |
+| `GATsRegressor` | `gats` | `GATs` (see Train GATs on the cross-section) | `TorchModel` |
+
+Every module is under `quantlab.model.predefined`. LightGBM and CatBoost come with the `gbdt` extra (`uv sync --extra gbdt`). `XGBoostRegressor` is not Qlib's `XGBModel`: it has its own objective and defaults. Qlib's TFT (TensorFlow 1) is not reproduced; nor are the models of its Alpha360 table built for a window of raw prices (ADARNN, ADD, IGMTF, KRNN, Sandwich, SFM, TCTS), HIST, which needs a stock-to-concept table, TabNet and TRA.
+
+All of them train, as in Qlib, on the label's `CSRankNorm` (`cs_rank_norm`), so they report every label `"standardized"`, and every head except `LinearRegressor` and `DoubleEnsembleRegressor` keeps the best validation round or epoch:
+
+- The library heads default `training_target` to `"cs_rank"`, and LightGBM and CatBoost `early_stopping` to True with a patience of 50 rounds; `DoubleEnsembleRegressor` trains each of its 3 sub-models for 28 rounds without early stopping, as Qlib's benchmark does. Every other key goes to the library over the head's `DEFAULTS`. `LinearRegressor` clips the features to ±3 and fills NaN with 0, as Qlib's `RobustZScoreNorm` and `Fillna` leave them, and solves its estimator from the Gram matrix, so millions of rows need no float64 copy. CatBoost runs on the GPU when it sees one, as in Qlib, and swaps the benchmark's Poisson bootstrap, which CatBoost accepts only on the GPU, for Bernoulli on the CPU.
+- The torch heads share Qlib's time-series regimen (`QlibSequenceHead` in `quantlab/model/predefined/_support/qlib.py`): Qlib's `(bar, symbol)` samples of the last `window_bars` bars (`SymbolSequenceDataset`), shuffled in batches of `batch_size` with the last incomplete training batch dropped, the MSE over the samples with a target, Adam with `weight_decay`, gradient values clipped at 3, and the epoch with the lowest validation loss kept, training stopping after `early_stop` epochs without a lower one. `MLPRegressor` trains the way `DNNModelPytorch` does: an epoch is `eval_steps` (20) batches of `batch_size` (8192) rows drawn with replacement, `ReduceLROnPlateau` halves the learning rate on the validation loss, and gradients are not clipped. Each network keeps Qlib's parameter names, so a Qlib state dict loads into a one-label net, and a test in the suite checks that each gives the same output as Qlib's for the same weights and input.
+
+Below, `alpha158` and `label` stand for a model's factors and label:
+
+```python
+from quantlab.model.config import ModelConfig
+from quantlab.model.predefined.lgbm import LGBMRegressor
+from quantlab.model.predefined.rnn import ALSTMRegressor
+
+common = dict(factor_data_strategy="read", label_data_strategy="read", train_start="2010-01-01",
+              train_end="2019-12-31", test_start="2020-01-01", test_end="2024-12-31")
+lightgbm = LGBMRegressor(ModelConfig(
+    factors=[alpha158], labels=[label], model_save_dir="checkpoints/lightgbm",
+    hyperparameters={"num_threads": 32}, **common,
+))
+alstm = ALSTMRegressor(ModelConfig(
+    factors=[alpha158], labels=[label], model_save_dir="checkpoints/alstm",
+    hyperparameters={"panel_device": "cuda", "panel_dtype": "float16"}, **common,
+))
+```
+
+Known differences from Qlib's implementations, beyond those of the heads above:
+
+- the features are the model's factors, not Qlib's Alpha158 columns (nor the 20 of them its LSTM, GRU, ALSTM and GATs benchmarks keep), and no `RobustZScoreNorm` is fitted on the training span: the torch heads' default `_transform_feature` clips to ±3 and fills NaN with 0, where Qlib forward- and back-fills gaps inside a window, and the tree heads keep NaN as missing;
+- a torch head's validation loss is averaged per bar, where Qlib averages it per batch, and the training set's loss is not evaluated again after each epoch;
+- DoubleEnsemble draws its permutations and features from a generator seeded with `random_seed`, not numpy's global one, and does not ask a sub-model without the permuted feature to predict again;
+- the torch networks return one column per label instead of one.
 
 ### Choose the training device
 

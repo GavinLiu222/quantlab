@@ -237,7 +237,7 @@ True
 | `TorchModel` | torch，每一步一个标的截面 | `.pth` | `window_bars`、`_init_model`、`_loss`；其余是带默认实现的可选钩子（见“训练 torch 模型”） |
 | `LibraryModel` | numpy 行，使用库自带的提前停止 | `.joblib` | `_init_model`、`_fit_model`、`_forward`；可选 `_transform_feature`、`_transform_target`、`_loss`（见“扩展”） |
 
-自带的模型头有 `XGBoostRegressor`、`XGBTDRegressor` 和 `RealMLPRegressor`，都是 `LibraryModel`；以及 `TorchModel` 模型头 `GATsRegressor`（`quantlab.model.predefined.gats`，截面上的 Qlib GATs）和 `MASTERRegressor`（`quantlab.model.predefined.master`，市场引导的 transformer MASTER）。所有自带模型（包括集成）都放在 `quantlab/model/predefined/`，新模型头或新集成要继承的类放在 `quantlab/model/` 顶层（`torch_model.py`、`library_model.py`、`ensemble.py`）。完整的配置字段见 `quantlab/model/base.py` 和 `quantlab/backtest/config.py` 的 docstring。
+自带的模型头有 `XGBoostRegressor`、`XGBTDRegressor` 和 `RealMLPRegressor`，都是 `LibraryModel`；`TorchModel` 模型头 `GATsRegressor`（`quantlab.model.predefined.gats`，截面上的 Qlib GATs）和 `MASTERRegressor`（`quantlab.model.predefined.master`，市场引导的 transformer MASTER），以及 Qlib Alpha158 基准里的其他模型（见“训练 Qlib 的基准模型”）。所有自带模型（包括集成）都放在 `quantlab/model/predefined/`，新模型头或新集成要继承的类放在 `quantlab/model/` 顶层（`torch_model.py`、`library_model.py`、`ensemble.py`）。完整的配置字段见 `quantlab/model/base.py` 和 `quantlab/backtest/config.py` 的 docstring。
 
 ### 配置与保留超参数
 
@@ -910,6 +910,55 @@ MASTER 与官方代码一样按训练损失停止：第一个训练损失不超�
 - 不在训练区间上拟合 `RobustZScoreNorm`：默认的 `_transform_feature` 截断到 ±3 并把 NaN 填成 0，而官方数据对窗口内的缺口先前向填充、再后向填充；
 - 输出每个标签一列，而不是只有一列；
 - 始终达不到阈值时，训练在 `epochs` 处停止并保留最后的权重；官方代码在这种情况下没有可保存的权重。
+
+### 训练 Qlib 的基准模型
+
+Qlib Alpha158 基准表（`microsoft/qlib` 的 `examples/benchmarks/README.md`）里的模型都有对应的模型头，默认超参数取各自 `workflow_config_<model>_Alpha158.yaml` 的值（配置没写的取模型自己的默认值）。它们不需要专门的设置，和其他模型头一样给出因子、一个标签和日期即可。
+
+| 模型头 | 模块 | Qlib 模型 | 变体 |
+|---|---|---|---|
+| `LinearRegressor` | `linear` | `LinearModel`（OLS；`estimator` 可选 ridge、lasso、nnls） | `LibraryModel` |
+| `LGBMRegressor` | `lgbm` | `LGBModel` | `LibraryModel` |
+| `CatBoostRegressor` | `catboost_model` | `CatBoostModel` | `LibraryModel` |
+| `DoubleEnsembleRegressor` | `double_ensemble` | `DEnsembleModel`（LightGBM 子模型） | `LibraryModel` |
+| `MLPRegressor` | `mlp` | `DNNModelPytorch` | `TorchModel` |
+| `LSTMRegressor`、`GRURegressor`、`ALSTMRegressor` | `rnn` | `LSTM`、`GRU`、`ALSTM`（`pytorch_*_ts.py`） | `TorchModel` |
+| `TCNRegressor` | `tcn` | `TCN`（`pytorch_tcn_ts.py`） | `TorchModel` |
+| `TransformerRegressor`、`LocalformerRegressor` | `transformer` | `TransformerModel`、`LocalformerModel`（`pytorch_*_ts.py`） | `TorchModel` |
+| `GATsRegressor` | `gats` | `GATs`（见“在截面上训练 GATs”） | `TorchModel` |
+
+模块都在 `quantlab.model.predefined` 下。LightGBM 和 CatBoost 在 `gbdt` extra 里（`uv sync --extra gbdt`）。`XGBoostRegressor` 不是 Qlib 的 `XGBModel`：它有自己的目标函数和默认值。没有复现的有：Qlib 的 TFT（TensorFlow 1）；Alpha360 表里为原始价格窗口设计的模型（ADARNN、ADD、IGMTF、KRNN、Sandwich、SFM、TCTS）；需要股票-概念表的 HIST；TabNet 和 TRA。
+
+和 Qlib 一样，它们都用标签的 `CSRankNorm`（`cs_rank_norm`）训练，所以每个标签都报告 `"standardized"`；除 `LinearRegressor` 和 `DoubleEnsembleRegressor` 外，都保留验证集上最好的轮次或 epoch：
+
+- 库模型头的 `training_target` 默认是 `"cs_rank"`，LightGBM 和 CatBoost 的 `early_stopping` 默认开启，耐心 50 轮；`DoubleEnsembleRegressor` 和 Qlib 基准一样，3 个子模型各训练 28 轮、不提前停止。其余键在模型头的 `DEFAULTS` 之上传给库。`LinearRegressor` 把特征截断到 ±3、NaN 填 0（Qlib 的 `RobustZScoreNorm` 和 `Fillna` 处理后的样子），并用 Gram 矩阵求解，几百万行也不需要 float64 副本。CatBoost 和 Qlib 一样，有 GPU 时在 GPU 上训练；基准用的 Poisson bootstrap 只能在 GPU 上用，在 CPU 上换成 Bernoulli。
+- torch 模型头共用 Qlib 的时序训练方式（`quantlab/model/predefined/_support/qlib.py` 的 `QlibSequenceHead`）：Qlib 的 `(bar, symbol)` 样本，即最近 `window_bars` 个 bar（`SymbolSequenceDataset`），打乱后按 `batch_size` 分批，训练时丢掉最后不满的一批；损失是有目标样本上的 MSE；优化器是带 `weight_decay` 的 Adam，梯度值截断到 3；保留验证损失最低的 epoch，连续 `early_stop` 个 epoch 没有更低就停止。`MLPRegressor` 按 `DNNModelPytorch` 的方式训练：一个 epoch 是 `eval_steps`（20）批、每批有放回地抽 `batch_size`（8192）行，`ReduceLROnPlateau` 按验证损失把学习率减半，不截断梯度。每个网络都沿用 Qlib 的参数名，Qlib 的 state dict 能载入单标签网络；测试套件中有测试检查每个网络在相同权重和输入下与 Qlib 的输出一致。
+
+下面的 `alpha158` 和 `label` 代表模型的因子和标签：
+
+```python
+from quantlab.model.config import ModelConfig
+from quantlab.model.predefined.lgbm import LGBMRegressor
+from quantlab.model.predefined.rnn import ALSTMRegressor
+
+common = dict(factor_data_strategy="read", label_data_strategy="read", train_start="2010-01-01",
+              train_end="2019-12-31", test_start="2020-01-01", test_end="2024-12-31")
+lightgbm = LGBMRegressor(ModelConfig(
+    factors=[alpha158], labels=[label], model_save_dir="checkpoints/lightgbm",
+    hyperparameters={"num_threads": 32}, **common,
+))
+alstm = ALSTMRegressor(ModelConfig(
+    factors=[alpha158], labels=[label], model_save_dir="checkpoints/alstm",
+    hyperparameters={"panel_device": "cuda", "panel_dtype": "float16"}, **common,
+))
+```
+
+除上面各模型头已说明的之外，与 Qlib 实现的已知差异：
+
+- 特征是模型自己的因子，不是 Qlib 的 Alpha158 列（也不是其 LSTM、GRU、ALSTM、GATs 基准保留的 20 列），也不在训练区间上拟合 `RobustZScoreNorm`：torch 模型头默认的 `_transform_feature` 截断到 ±3、NaN 填 0，而 Qlib 在窗口内前向、后向填充缺口；树模型头把 NaN 当作缺失值；
+- torch 模型头的验证损失按 bar 平均，Qlib 按批平均；每个 epoch 之后也不再重新评估训练集的损失；
+- DoubleEnsemble 的置换和特征抽样用 `random_seed` 播种的生成器，不用 numpy 的全局随机数；不含被置换特征的子模型不再重新预测；
+- torch 网络每个标签输出一列，而不是只有一列。
 
 ### 选择训练设备
 
