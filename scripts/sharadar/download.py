@@ -23,8 +23,9 @@ folder has none; a panel store's folder also gets a ``component.json``). The pri
   USD, PE, PB, PS, EV/EBIT, EV/EBITDA);
 - ``sharadar_events_1d.zarr``, one boolean per 8-K event code, set on the
   filing date;
-- ``sharadar_insiders_1d.zarr``, insiders' net open-market shares and USD
-  bought, on the filing date;
+- ``sharadar_insiders_1d.zarr``, insiders' net shares and USD per
+  transaction code (open-market totals beside them), derivative units and
+  the number of insiders buying and selling, on the filing date;
 - ``sharadar_holdings_1d.zarr``, 13F holders and shares held (from SF3A),
   each quarter shown from quarter end + 45 days;
 - ``sharadar_industry_1d.zarr``, each security's point-in-time Fama-French
@@ -118,7 +119,7 @@ STORE_DESCRIPTIONS = {
     "sharadar_sf1_art": "Point-in-time Sharadar SF1 fundamentals, as reported, trailing twelve months (ART), on SEP's trading days.",
     "sharadar_daily_1d": "Sharadar DAILY valuations (market cap and EV in USD, PE, PB, PS, EV/EBIT, EV/EBITDA).",
     "sharadar_events_1d": "Sharadar EVENTS: one boolean per 8-K event code, set on the filing date.",
-    "sharadar_insiders_1d": "Sharadar SF2 insiders' net open-market shares and USD bought, on the filing date.",
+    "sharadar_insiders_1d": "Sharadar SF2 insiders' net shares and USD per transaction code, derivative units and buyer and seller counts, on the filing date.",
     "sharadar_holdings_1d": "Sharadar SF3A 13F holders and shares held, each quarter shown from quarter end + 45 days.",
     "sharadar_industry_1d": "Each security's point-in-time Fama-French 48 industry, from its Sharadar SIC history.",
     "sharadar_sf1_fiscal_years": "EPS and sales per share of each company's latest five fiscal years (Sharadar SF1 ARY), point in time.",

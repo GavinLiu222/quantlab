@@ -317,6 +317,35 @@ class MassiveTradeBarsDatasetConfig(DatasetConfig):
 
 
 @dataclass(kw_only=True, frozen=True)
+class MassiveDayBarsDatasetConfig(DatasetConfig):
+    """Config of the Day aggregate panel built from Massive's ``day_aggs`` files (#352, ADR 0031).
+
+    The panel's ``symbol`` axis is the Massive ticker, exactly as the files
+    spell it; every ticker of every file is kept. The inherited ``symbols``
+    field is refused by the dataset. ``end_date=None`` takes every day of
+    the raw tier, so the daily update extends the store from the same
+    config.
+
+    Examples
+    --------
+    >>> cfg = MassiveDayBarsDatasetConfig(
+    ...     zarr_file_path="/data/zarrs/massive_day_bars_1d.zarr",
+    ...     raw_data_dir_path="/data/downloads/massive",
+    ...     start_date="2016-10-10",
+    ... )
+    >>> cfg.frequency, cfg.vendor
+    ('1d', 'massive')
+    """
+
+    #: Always US equity for this vendor.
+    market: Market = "us_equity"
+    #: One bar per trading day.
+    frequency: Frequency = "1d"
+    #: Always Massive for this dataset.
+    vendor: Vendor | None = "massive"
+
+
+@dataclass(kw_only=True, frozen=True)
 class TickerMapConfig(FrozenConfig):
     """Config of the Ticker map: each day's Massive ticker to its permaticker (ADR 0031).
 

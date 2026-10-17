@@ -14,6 +14,17 @@ directory of the download root::
 and beside them each data type's watermark (the day a run over several days
 is complete through) and the trade-condition table, one snapshot per
 download run.
+
+REST pulls (``MassiveClient.pull``) keep each page as the vendor returned
+it, one JSON-lines file per page, under ``rest/<endpoint>/<YYYY>/`` (the
+pull's year), named by the pull's UTC stamp and the page's number, with the
+endpoint's watermark beside them::
+
+    <download-dir>/massive/rest/splits/2026/20261016T120000000000_000001.jsonl
+    <download-dir>/massive/rest/splits/_watermark.json
+
+A row may be in several files (a page re-read past the watermark);
+``read_rest_records`` keeps each record's newest copy.
 The client (``quantlab.acquisition.massive.client``) writes this tree, and
 ``quantlab.dataset.massive.trade_bars`` reads it; both take every path from
 here.
@@ -68,6 +79,12 @@ CONDITIONS_PREFIX = "conditions_"
 
 #: The pull stamp's format, as in the Sharadar raw tier.
 _STAMP_FORMAT = "%Y%m%dT%H%M%S%f"
+
+#: The directory of the REST endpoints, one directory per endpoint under it.
+REST_DIR = "rest"
+
+#: Suffix of one REST page file.
+REST_PAGE_SUFFIX = ".jsonl"
 
 #: The columns of a trade file, in the vendor's order, read with these
 #: types. ``size`` is a float: recent years carry fractional shares.
@@ -329,3 +346,139 @@ def _read_csv(path: str | Path, schema: dict[str, pl.DataType], columns: tuple[s
             f"refusing to read it by position."
         )
     return pl.read_csv(path, schema=schema, columns=list(columns))
+
+
+def rest_dir(vendor_root: str | Path, endpoint: str) -> Path:
+    """Return the directory of one REST endpoint's pages and watermark.
+
+    Examples
+    --------
+    >>> rest_dir("/d/massive", "splits")
+    PosixPath('/d/massive/rest/splits')
+    """
+    if not endpoint or "/" in endpoint or endpoint.startswith((".", "_")):
+        raise ValueError(f"Massive REST endpoint name {endpoint!r} must be a plain directory name.")
+    return Path(vendor_root) / REST_DIR / endpoint
+
+
+def rest_page_file(vendor_root: str | Path, endpoint: str, pulled_at: datetime, page: int) -> Path:
+    """Return the path of page ``page`` (from 1) of the pull started at ``pulled_at`` (UTC).
+
+    Examples
+    --------
+    >>> rest_page_file("/d/massive", "splits", datetime(2026, 10, 16, 12, tzinfo=UTC), 3).name
+    '20261016T120000000000_000003.jsonl'
+    """
+    stamp = pulled_at.astimezone(UTC)
+    name = f"{stamp.strftime(_STAMP_FORMAT)}_{page:06d}{REST_PAGE_SUFFIX}"
+    return rest_dir(vendor_root, endpoint) / f"{stamp:%Y}" / name
+
+
+def write_rest_page(path: str | Path, records: list[dict]) -> None:
+    """Write one page's records, one JSON object per line, atomically.
+
+    Examples
+    --------
+    Writes one line per record::
+
+        write_rest_page(rest_page_file(root, "splits", pulled_at, 1), page["results"])
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    partial = path.with_name(path.name + ".part")
+    with partial.open("w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    partial.replace(path)
+
+
+def rest_page_files(vendor_root: str | Path, endpoint: str) -> list[Path]:
+    """Return every page file of one REST endpoint, oldest pull first, pages in order.
+
+    Examples
+    --------
+    Needs a raw tier on disk::
+
+        rest_page_files("/data/quantlab/downloads/massive", "dividends")
+    """
+    root = rest_dir(vendor_root, endpoint)
+    if not root.exists():
+        return []
+    return sorted(root.glob(f"*/*{REST_PAGE_SUFFIX}"), key=lambda path: path.name)
+
+
+def read_rest_records(vendor_root: str | Path, endpoint: str, key: str = "id") -> list[dict]:
+    """Return one REST endpoint's records, each record's newest copy once.
+
+    Pages are read oldest pull first, so a record re-read by a later pull
+    (a row past the watermark, a vendor revision) replaces the earlier copy.
+    Records keep the vendor's field names and values verbatim.
+
+    Parameters
+    ----------
+    vendor_root : str or Path
+        ``<download-dir>/massive``.
+    endpoint : str
+        The endpoint's name (``quantlab.acquisition.massive.rest.ENDPOINTS``).
+    key : str, default "id"
+        The field identifying a record.
+
+    Raises
+    ------
+    ValueError
+        If a record lacks ``key``.
+
+    Examples
+    --------
+    Needs a raw tier on disk::
+
+        splits = read_rest_records("/data/quantlab/downloads/massive", "splits")
+        splits[0]["execution_date"], splits[0]["split_from"], splits[0]["split_to"]
+    """
+    records: dict[object, dict] = {}
+    for path in rest_page_files(vendor_root, endpoint):
+        with path.open(encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                record = json.loads(line)
+                if key not in record:
+                    raise ValueError(f"A Massive {endpoint} record in {str(path)!r} has no {key!r}: {record}")
+                records.pop(record[key], None)
+                records[record[key]] = record
+    return list(records.values())
+
+
+def read_rest_watermark(vendor_root: str | Path, endpoint: str) -> date | None:
+    """Return the day a REST endpoint's rows are pulled through, or ``None``.
+
+    Every row whose date field is on or before the watermark was pulled; a
+    later pull asks only for rows after it (less the endpoint's overlap).
+
+    Examples
+    --------
+    >>> write_rest_watermark(root, "splits", "execution_date", date(2024, 3, 14))
+    >>> read_rest_watermark(root, "splits")
+    datetime.date(2024, 3, 14)
+    """
+    path = rest_dir(vendor_root, endpoint) / WATERMARK_FILE
+    if not path.exists():
+        return None
+    return date.fromisoformat(json.loads(path.read_text(encoding="utf-8"))["through"])
+
+
+def write_rest_watermark(vendor_root: str | Path, endpoint: str, field: str, through: date) -> None:
+    """Record that a REST endpoint's rows are pulled through ``through`` on ``field``.
+
+    Examples
+    --------
+    Writes ``/data/quantlab/downloads/massive/rest/splits/_watermark.json``::
+
+        write_rest_watermark("/data/quantlab/downloads/massive", "splits", "execution_date", date(2024, 3, 14))
+    """
+    write_json_atomically(
+        rest_dir(vendor_root, endpoint) / WATERMARK_FILE,
+        {"endpoint": endpoint, "field": field, "through": through.isoformat()},
+        indent=2,
+        sort_keys=True,
+    )

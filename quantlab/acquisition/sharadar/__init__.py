@@ -96,7 +96,7 @@ SHARADAR_SOURCE = register_source(
                 earliest_available="1993-11-08",
                 entitlement=_ENTITLEMENT,
             ),
-            # Insiders' net open-market buying, on the filing date.
+            # Insiders' net shares and value per transaction code, on the filing date.
             Capability(
                 market="us_equity",
                 frequency="1d",

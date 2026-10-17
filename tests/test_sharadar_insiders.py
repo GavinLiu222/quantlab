@@ -200,3 +200,109 @@ def test_an_update_appends_new_filings_and_keeps_stored_days(tmp_path, today):
     assert after["symbol"].values.tolist() == [101, 202]
     assert after.sel(timestamp=slice(None, "2024-01-08"), symbol=[101]).identical(before)
     assert _series(after, "net_shares", 202) == {"2024-01-10": -30.0}
+
+
+# -- every transaction code (#348) ----------------------------------------------
+
+
+def test_each_transaction_code_nets_its_own_shares_and_value_on_its_filing_day(tmp_path, today):
+    sf2 = [
+        sf2_row("AAA", "2024-01-03", "P", 300, 10.0),  # SYNTHETIC
+        sf2_row("AAA", "2024-01-03", "S", -100, 12.0, ownername="ROE RICHARD"),  # SYNTHETIC
+        sf2_row("AAA", "2024-01-03", "A", 500, None),  # SYNTHETIC: a grant, no price
+        sf2_row("AAA", "2024-01-04", "M", 200, 5.0),  # SYNTHETIC: an option exercise
+        sf2_row("AAA", "2024-01-04", "F", -40, 10.0),  # SYNTHETIC: tax withholding
+        sf2_row("AAA", "2024-01-05", "G", -25, None),  # SYNTHETIC: a gift
+        sf2_row("AAA", "2024-01-05", "D", -10, 8.0),  # SYNTHETIC: disposed to the issuer
+        sf2_row("AAA", "2024-01-05", "J", 3, 4.0),  # SYNTHETIC: another code
+        sf2_row("AAA", "2024-01-05", "C", -2, 4.0),  # SYNTHETIC: another code
+    ]
+    panel = _panel(tmp_path, _bulk(_vendor(sf2), tmp_path / "dl"))
+
+    assert _series(panel, "net_shares_P") == {"2024-01-03": 300.0}
+    assert _series(panel, "net_value_P") == {"2024-01-03": 3000.0}
+    assert _series(panel, "net_shares_S") == {"2024-01-03": -100.0}
+    assert _series(panel, "net_value_S") == {"2024-01-03": -1200.0}
+    assert _series(panel, "net_shares_A") == {"2024-01-03": 500.0}
+    assert _series(panel, "net_value_A") == {}
+    assert _series(panel, "net_shares_M") == {"2024-01-04": 200.0}
+    assert _series(panel, "net_value_M") == {"2024-01-04": 1000.0}
+    assert _series(panel, "net_shares_F") == {"2024-01-04": -40.0}
+    assert _series(panel, "net_value_F") == {"2024-01-04": -400.0}
+    assert _series(panel, "net_shares_G") == {"2024-01-05": -25.0}
+    assert _series(panel, "net_shares_D") == {"2024-01-05": -10.0}
+    assert _series(panel, "net_value_D") == {"2024-01-05": -80.0}
+    assert _series(panel, "net_shares_other") == {"2024-01-05": 1.0}
+    assert _series(panel, "net_value_other") == {"2024-01-05": 4.0}
+    # The open-market totals keep their meaning.
+    assert _series(panel, "net_shares") == {"2024-01-03": 200.0}
+    assert _series(panel, "net_value") == {"2024-01-03": 1800.0}
+    assert panel["net_value_M"].attrs["unit"] == "USD"
+    assert panel["net_shares_other"].attrs["unit"] == "shares"
+
+
+def test_a_holding_row_changes_nothing_and_derivative_rows_reach_only_the_derivative_total(
+    tmp_path, today
+):
+    sf2 = [
+        # A Form 3 holding line, with no transaction.
+        sf2_row("AAA", "2024-01-03", None, 0, None, formtype="3", securityadcode="N"),  # SYNTHETIC
+        # An option exercise: the option disposed of, the stock acquired.
+        sf2_row("AAA", "2024-01-04", "M", -200, None, securityadcode="DD",
+                securitytitle="Stock Option"),  # SYNTHETIC
+        sf2_row("AAA", "2024-01-04", "M", 200, 5.0),  # SYNTHETIC
+        sf2_row("AAA", "2024-01-05", "A", 1000, None, securityadcode="DA",
+                securitytitle="Stock Option"),  # SYNTHETIC: an option grant
+        sf2_row("AAA", "2024-01-05", "S", -10, 3.0, securityadcode="DD"),  # SYNTHETIC
+    ]
+    panel = _panel(tmp_path, _bulk(_vendor(sf2), tmp_path / "dl"))
+
+    assert _series(panel, "net_shares_derivative") == {"2024-01-04": -200.0, "2024-01-05": 990.0}
+    assert _series(panel, "net_shares_M") == {"2024-01-04": 200.0}
+    for variable in panel.data_vars:
+        if variable not in ("net_shares_derivative", "net_shares_M", "net_value_M"):
+            assert _series(panel, variable) == {}, variable
+
+
+def test_insiders_buying_and_selling_count_distinct_owners_of_a_filing_day(tmp_path, today):
+    sf2 = [
+        sf2_row("AAA", "2024-01-03", "P", 100, 10.0, ownername="DOE JANE"),  # SYNTHETIC
+        sf2_row("AAA", "2024-01-03", "P", 50, 10.5, ownername="DOE JANE", rownum=2),  # SYNTHETIC
+        sf2_row("AAA", "2024-01-03", "P", 10, 10.0, ownername="ROE RICHARD"),  # SYNTHETIC
+        sf2_row("AAA", "2024-01-03", "A", 10, None, ownername="POE EDGAR"),  # SYNTHETIC: a grant
+        sf2_row("AAA", "2024-01-04", "S", -10, 10.0, ownername="ROE RICHARD"),  # SYNTHETIC
+        # A derivative sale is not an insider selling the stock.
+        sf2_row("AAA", "2024-01-04", "S", -10, 3.0, securityadcode="DD",
+                ownername="POE EDGAR"),  # SYNTHETIC
+    ]
+    panel = _panel(tmp_path, _bulk(_vendor(sf2), tmp_path / "dl"))
+
+    assert _series(panel, "insiders_buying") == {"2024-01-03": 2.0}
+    assert _series(panel, "insiders_selling") == {"2024-01-04": 1.0}
+
+
+def test_a_day_at_a_time_equals_a_whole_build(tmp_path, today):
+    sf2 = [
+        sf2_row("AAA", "2024-01-03", "P", 100, 10.0),  # SYNTHETIC
+        sf2_row("AAA", "2024-01-04", "M", 200, 5.0),  # SYNTHETIC
+        sf2_row("AAA", "2024-01-04", "M", -200, None, securityadcode="DD"),  # SYNTHETIC
+        sf2_row("BBB", "2024-01-09", "S", -30, 10.0),  # SYNTHETIC
+        sf2_row("BBB", "2024-01-11", "F", -5, 10.0),  # SYNTHETIC
+    ]
+    vendor = _vendor(sf2, days=DAYS, tickers=("AAA", "BBB"))
+    columns, sep = vendor.tables["stocks"]
+    vendor.tables["stocks"] = (columns, [r for r in sep if r["date"] <= DAYS[2]])
+    today(DAYS[2])
+    root = _bulk(vendor, tmp_path / "dl")
+    _dataset(tmp_path / "daily", root).update()
+    for last in DAYS[3:]:
+        vendor.tables["stocks"] = (columns, [r for r in sep if r["date"] <= last])
+        today(last)
+        client = _client(vendor)
+        client.window_table("sep", tmp_path / "dl")
+        client.window_table("sf2", tmp_path / "dl")
+        _dataset(tmp_path / "daily", root).update()
+    daily = _dataset(tmp_path / "daily", root).panel("2024-01-01", "2024-12-31").load()
+
+    whole = _panel(tmp_path / "whole", root)
+    assert daily.identical(whole)

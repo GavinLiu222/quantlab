@@ -246,7 +246,7 @@ On the 2026-10-02 pull, EVENTS has 2.5 million filings. A store from 2015 holds 
 
 ## Insider transactions (SF2)
 
-SF2 holds one row per security line of an insider's Form 3, 4 or 5. Its `date` is the SEC filing date, the day the trade became public; `transactiondate` is earlier, two days at the median. `SharadarInsidersDataset` counts only open-market trades in the stock itself: transaction code `P` (purchase) or `S` (sale) on a non-derivative line (`securityadcode` `NA` or `ND`). Grants, option exercises, tax withholding, gifts and derivative lines are compensation or bookkeeping, not a decision to buy or sell, and are left out.
+SF2 holds one row per security line of an insider's Form 3, 4 or 5. Its `date` is the SEC filing date, the day the trade became public; `transactiondate` is earlier, two days at the median. A line is a non-derivative transaction (`securityadcode` `NA` acquired or `ND` disposed), a derivative one (`DA`, `DD`), or a holding with no transaction (no `transactioncode`; about 3.4 million of the 11.57 million rows), which `SharadarInsidersDataset` never counts. Open-market trades in the stock (`P`, `S`) have their own totals; grants, option exercises, tax withholding, gifts and the rest are netted per transaction code beside them.
 
 ```python
 from quantlab.dataset.config import SharadarInsidersConfig
@@ -260,9 +260,19 @@ SharadarInsidersDataset(config).update()
 panel = SharadarInsidersDataset(config).panel("2024-01-02", "2024-12-31")
 ```
 
-- **Variables.** `net_shares` is shares bought minus shares sold, and `net_value` is USD bought minus USD sold. Both are summed per security over the filings that become available on a day, and are 0 on a day without a trade. A trade lands on the first SEP trading day on or after its filing date, never on its transaction date.
+- **Variables.** Every variable is summed (or counted) per security over the filings that become available on a day, and is 0 on a day without a transaction. A transaction lands on the first SEP trading day on or after its filing date, never on its transaction date.
+
+  | Variable | Unit | Lines | Meaning |
+  |---|---|---|---|
+  | `net_shares`, `net_value` | shares, USD | non-derivative `P`, `S` | open-market bought minus sold |
+  | `net_shares_<code>`, `net_value_<code>` | shares, USD | non-derivative, one code | acquired minus disposed, for `P` (purchase), `S` (sale), `A` (grant or award), `M` (exercise or conversion of a derivative), `F` (exercise price or tax paid in stock), `G` (gift), `D` (disposed to the issuer) |
+  | `net_shares_other`, `net_value_other` | shares, USD | non-derivative, every other code | acquired minus disposed |
+  | `net_shares_derivative` | shares | derivative, every code | units acquired minus disposed |
+  | `insiders_buying`, `insiders_selling` | insiders | non-derivative `P`, `S` | distinct owners (`ownername`) buying, selling |
+
+  `P` and `S` count by their own sign, as in `net_shares`; every other code counts positive when acquired (`NA`) and negative when disposed (`ND`). A line without a price (a grant, a gift) adds its shares and nothing to the value. `net_shares` and `net_value` are unchanged from before the per-code variables were added.
 - **Units.** INDICATORS calls `transactionvalue` USD millions, but on the 2026-10-02 pull it equals shares times price at the median, so it is USD. It is unsigned; a sale counts negative.
-- **Amendments.** A trade is counted on the first filing that shows it. An amendment (4/A) repeats the trades of the filing it restates, and a later line that repeats one exactly (same insider, transaction date, code, shares and price) is not counted again. When the amendment arrives, the vendor relabels the original `RESTATED - 4`. The label is ignored, because a live update saw the original as a plain `4` on its filing date: a live store and a rebuilt one give the same panel. An amendment that changes a trade's shares or price is counted again on its own date. On the 2026-10-02 pull, about 21,000 of the 2.5 million open-market lines do that.
+- **Amendments.** A trade is counted on the first filing that shows it. An amendment (4/A) repeats the trades of the filing it restates, and a later line that repeats one exactly (same insider, transaction date, code, shares and price, on the same side of the derivative split) is not counted again. When the amendment arrives, the vendor relabels the original `RESTATED - 4`. The label is ignored, because a live update saw the original as a plain `4` on its filing date: a live store and a rebuilt one give the same panel. An amendment that changes a trade's shares or price is counted again on its own date. On the 2026-10-02 pull, about 21,000 of the 2.5 million open-market lines do that.
 - **Axis and updates.** TICKERS has SF2 rows, and every SF2 ticker maps through them. SF2 has no `lastupdated`, so `update.py` re-pulls it as a trailing date window.
 
 Known limit: a filer's typo stays in the data. One 2024 filing gives $65,122 per share for a penny stock, so it adds $21.9 billion of buying; `net_shares` is not affected. Normalise `net_value` (for example by market cap) and winsorise it before using it as a factor.
@@ -283,7 +293,7 @@ SharadarHoldingsDataset(config).update()
 panel = SharadarHoldingsDataset(config).panel("2024-01-02", "2024-12-31")
 ```
 
-- **Variables.** `holders` is the number of institutions holding the common stock, `shares_held` is their shares (`shrunits` is in thousands), and `quarter_end` is the quarter shown.
+- **Variables.** `holders` is the number of institutions holding the common stock, `shares_held` is their shares (`shrunits` is in thousands), `value_held` is the value of those shares in USD as the filers report it at the quarter end (`shrvalue` is in USD millions), and `quarter_end` is the quarter shown. `value_held` shows over the same days as `shares_held`. SF3A's other security types (calls, puts, warrants, debt, preferred, funds), `totalvalue` and `percentoftotal` are not in the panel.
 - **Placement.** SF3 has no filing date, and a quarter's rows fill in as filings arrive. On 2026-10-05, AAPL's newest quarter has 29 holders against 6,153 for the quarter before. A quarter is therefore shown from the first SEP trading day on or after quarter end + 45 days, until the next quarter's day, so a partial quarter is never shown. Quarters due before SEP's first trading day are all available on it, and the latest of them is shown. A security with no row in the shown quarter shows NaN, not an older quarter's count. AAPL moves from 6,131 to 6,136 holders on 2026-05-15 and to 6,153 holders (9.68 billion shares) on 2026-08-14.
 - **Axis.** TICKERS lists SF3's tickers only under the price tables (its `SF3B` rows are investors), so SF3A's tickers are mapped through SEP's rows. A ticker SEP does not list, such as a fund or a CUSIP with no Sharadar prices, is left out and counted in the log. On the 2026-10-05 pull that is 330,000 of 674,000 rows, and a 2024 trading day shows about 5,800 securities.
 - **Updates.** `update.py` pulls SF3A whole every run and appends the new trading days. A rebuilt store shows each quarter as the vendor holds it now, including filings made after the 45 days; an updated store shows it as it stood on the update. SF3 and SF3B feed no store, so only `download.py` pulls them.
