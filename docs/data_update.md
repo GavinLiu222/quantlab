@@ -54,8 +54,9 @@ no price copy cut to the roster: SEP is brought up by the raw stage and the memb
 common-stock membership (`universe/sharadar/sharadar_common_stock_membership`, every security of SEP from
 its first to its last priced bar, `CommonStockConstituentDataset`, see the
 [constituent guide](constituent.md)), allowed to fail. The raw stage also runs
-`scripts/massive/rest_pull.py`, which brings Massive's REST endpoints (splits and dividends) up
-in the raw tier from each endpoint's watermark (see "REST pulls" in the [Massive guide](massive.md));
+`scripts/massive/rest_pull.py`, which brings Massive's REST endpoints (splits, dividends and
+the raw-only tables: filing text, Form 3/4, 13-F, reference tickers, ticker events, and a daily
+Float snapshot) up in the raw tier from each endpoint's watermark (see "REST pulls" in the [Massive guide](massive.md));
 it writes raw files only (`writes: []`) and is allowed to fail. WRDS data is not in the
 daily update; run `scripts/wrds/*.py` when the vendor publishes.
 
@@ -68,9 +69,12 @@ Massive's intraday trades up (see the [Massive guide](massive.md)):
 aggregates to Massive's own daily bars `market/massive/massive_day_bars_1d`, then
 `scripts/massive/ticker_map.py` appends those days'
 rows to the Ticker map `market/massive/massive_ticker_map`, up to the last bar of Sharadar's SEP
-store, which the raw stage has brought up, and `scripts/massive/dividends.py` appends the days
-SEP, the REST pull and the map all reach to the dividend panel `market/massive/massive_dividends_1d`
-(Massive's dividends and splits placed on permatickers through the map). All four are `run` steps with `allow_failure: true`; the
+store, which the raw stage has brought up; two `update` steps then map the new days onto
+permatickers, `market/massive/massive_permaticker_bars_1m` (the Trade bars) and
+`market/massive/massive_permaticker_day_bars_1d` (the day aggregates), and
+`scripts/massive/dividends.py` appends the days SEP, the REST pull and the map all reach to the
+dividend panel `market/massive/massive_dividends_1d` (Massive's dividends and splits placed on
+permatickers through the map). The four scripts are `run` steps with `allow_failure: true`; the
 conversion and the map do at most five days each (`--max-days 5`; a store far behind is caught up by a
 run of its own), the day bars and the dividend panel every new day on disk, and none of the stores is
 in `ready`: Massive publishes a day's files at about 00:30 ET the next day, and a late file

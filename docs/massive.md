@@ -103,7 +103,56 @@ A pull works like this:
     --endpoints dividends --end 2010-12-31
 ```
 
-A new endpoint is one more `RestEndpoint` in `ENDPOINTS`, with its name, URL and date field, its earliest day, its own fixed filters in `params`, and `key` and `tiebreak` when they are not `id` and `ticker`. A snapshot endpoint (`date_field=None`) is pulled whole on every run and keeps no watermark.
+A new endpoint is one more `RestEndpoint` in `ENDPOINTS`, with its name, URL and date field, its earliest day, its own fixed filters in `params`, and `key` and `tiebreak` when they are not `id` and `ticker`. A snapshot endpoint (`date_field=None`) is pulled whole on every run and keeps no watermark; with `once_a_day=True` it keeps one snapshot a day. Its pages wait in `massive/rest/<endpoint>/_pending/` until the last one is in, so an interrupted snapshot leaves nothing behind, and the next pull takes it again from the start. Two more kinds serve the reference tickers and the ticker events, below: `as_of_param` and `ids_from`.
+
+### Raw-only tables
+
+These tables are kept in the raw tier only, with no panel: filing text and the second sources of Sharadar's SF2 and SF3 (spec #345, Vendor table). Each is pulled by `scripts/massive/rest_pull.py` with the others, so the daily update keeps them current.
+
+| Endpoint | URL | Kind | Layout | Read with | Coverage asked |
+|---|---|---|---|---|---|
+| `10k_sections` | `/stocks/filings/10-K/vX/sections` | `filing_date`, 100 rows a page | pages | `read_rest_records(root, "10k_sections", key=None)` | from 1993-01-01 |
+| `8k_text` | `/stocks/filings/8-K/vX/text` | `filing_date`, 100 rows a page | pages | `read_rest_records(root, "8k_text", key=None)` | from 1993-01-01 (the vendor's starts in 1999-11) |
+| `risk_factors` | `/stocks/filings/vX/risk-factors` | `filing_date`, 50,000 rows a page | pages | `read_rest_records(root, "risk_factors", key=None)` | from 1993-01-01 (the vendor's starts in 2015-01) |
+| `form_3` | `/stocks/filings/vX/form-3` | `filing_date`, 10,000 rows a page | pages | `read_rest_records(root, "form_3", key=None)` | from 1993-01-01 |
+| `form_4` | `/stocks/filings/vX/form-4` | `filing_date`, 10,000 rows a page | pages | `read_rest_records(root, "form_4", key=None)` | from 1993-01-01 (the vendor's starts in 2003-09) |
+| `13f` | `/stocks/filings/vX/13-F` | `filing_date`, 1,000 rows a page | pages | `read_rest_records(root, "13f", key=None)` | from 1993-01-01 |
+| `float` | `/stocks/vX/float` | snapshot, once a day | one snapshot a day | `rest_snapshots`, `read_rest_snapshot` | from the first pull on |
+| `tickers` | `/v3/reference/tickers` | as of each XNYS session (`date=`), `market=stocks` | one directory a session | `rest_as_of_days`, `read_rest_as_of` | from 2016-10-10 |
+| `ticker_events` | `/vX/reference/tickers/{id}/events` | one composite FIGI a call (`ids_from="tickers"`) | pages | `read_rest_records(root, "ticker_events", key="composite_figi")` | every FIGI of `tickers` |
+
+`root` is `<download-dir>/massive`; the readers are in `quantlab.dataset.massive.raw`.
+
+- **Filings.** Six date-ranged endpoints on `filing_date`, sorted on it alone (the only sort column the docs name), with a 7-day overlap for filings the vendor adds late. Their rows have no id: a 13-F has one row per holding and a Form 4 one per line, all under one `accession_number`. So `key=None` names a record by all its fields, and a row re-read in the overlap is kept once.
+- **Float.** The table holds only each ticker's latest free float (`effective_date`, `free_float`, `free_float_percent`, `ticker`). So the whole table is kept once a day, and the history builds up from the first pull. The watermark is the New York day of the newest snapshot, and a second pull that day asks for nothing. A snapshot is named by its pull's UTC stamp and is never overwritten:
+
+  ```text
+  massive/rest/float/2026/20261016T120000000000_000001.jsonl
+  massive/rest/float/_watermark.json
+  ```
+
+  ```python
+  from quantlab.dataset.massive.raw import read_rest_snapshot, rest_snapshots
+
+  root = "/data/quantlab/downloads/massive"
+  history = {stamp: read_rest_snapshot(root, "float", stamp) for stamp in rest_snapshots(root, "float")}
+  ```
+
+- **Reference tickers.** The table of stock tickers listed as of each session, pulled whole with `date=<session>` (the endpoint's default `active=true`: the tickers trading that day), 1,000 rows a page, sorted by ticker. Each session goes in its own directory, which appears only once the session is whole. The watermark moves to each session as it is kept, so an interrupted backfill resumes at the session it stopped on. The vendor's history goes back to 2003-09-10. The pull starts at 2016-10-10, the first day of the Day aggregates and of the Ticker map, at about 11,000 rows (12 pages) a session:
+
+  ```text
+  massive/rest/tickers/2016/2016-10-10/20261016T120000000000_000001.jsonl
+  massive/rest/tickers/_watermark.json
+  ```
+
+- **Ticker events.** A composite FIGI's ticker changes, one FIGI a call. A pull reads the reference tickers' sessions after its watermark. It asks for every FIGI with no record kept yet, and for every FIGI whose ticker changed from one session to the next. Each record is the vendor's `results` object (`composite_figi`, `name`, `events` with `date`, `type` and `ticker_change.ticker`), 1,000 a page file. The watermark moves to the last session read once every FIGI has been asked for, so an interrupted pull asks the next time for the FIGIs it did not reach. A FIGI Massive does not know (404) is counted in the log and asked for again with the next new session. Pull the reference tickers first; `ENDPOINTS` lists them in that order.
+
+The first pull of these tables is a long backfill: the reference tickers ask for about 30,000 pages from 2016-10-10, and the 100-row filing text endpoints ask for one page per 100 filings. Run it once by hand, in steps with `--end` if you like, before the daily update takes over:
+
+```bash
+.venv/bin/python scripts/massive/rest_pull.py --download-dir /data/quantlab/downloads \
+    --endpoints tickers,ticker_events --end 2020-12-31
+```
 
 ## The conversion script
 
@@ -350,6 +399,32 @@ daily = mapped.resample("1d").panel("2020-03-02", "2020-03-06")
 mapped = load_component("/data/quantlab/market/massive/massive_permaticker_bars_1m")   # the shared one
 ```
 
-The store is the view's cache, so it is only as current as the map it was mapped with. The sidecar `<store>.permaticker_map.json` holds a digest of each stored day's mapped `(ticker, permaticker)` rows and the map's rules version. `update(end=None, workers=1)` first maps again every stored day whose rows changed (a rebuilt map: new rules or a Sharadar restatement) and writes it over its own bars; then it maps the session days that both the Trade bar store and the map hold after the store's last, up to `end`, and appends them `BATCH_DAYS` (2) at a time. With `workers` above 1, that many processes map batches ahead of the writes. The sidecar is written after every write, so an interrupted update resumes where it stopped. A permaticker met for the first time is appended at the end of the symbol axis without rewriting what is stored ([ADR 0032](adr/0032-a-stores-symbol-axis-grows-at-its-end.md)) and reads as a column without a trade (NaN prices, zero volumes) before, as the view gives it. `panel` refuses a range holding a day whose map rows no longer match the sidecar (`ValueError: MappedTradeBarDataset: the Ticker map changed on 1 stored day(s) since they were mapped, ...; run update() to map them again.`), so a read never returns bars mapped by a map that has since changed. A store without its sidecar is refused by `update`.
+The store is the view's cache, so it is only as current as the map it was mapped with. The sidecar `<store>.permaticker_map.json` holds a digest of each stored day's mapped `(ticker, permaticker)` rows, the map's rules version and, per day, the number of stored tickers the map could not place that day (`unplaced()` returns `{day: count}`, days with none left out): their bars are in no column, never guessed onto a security. `update(end=None, workers=1)` first maps again every stored day whose rows changed (a rebuilt map: new rules or a Sharadar restatement) and writes it over its own bars; then it maps the session days that both the Trade bar store and the map hold after the store's last, up to `end`, and appends them `BATCH_DAYS` (2) at a time. With `workers` above 1, that many processes map batches ahead of the writes. The sidecar is written after every write, so an interrupted update resumes where it stopped. A permaticker met for the first time is appended at the end of the symbol axis without rewriting what is stored ([ADR 0032](adr/0032-a-stores-symbol-axis-grows-at-its-end.md)) and reads as a column without a trade (NaN prices, zero volumes) before, as the view gives it. `panel` refuses a range holding a day whose map rows no longer match the sidecar (`ValueError: MappedTradeBarDataset: the Ticker map changed on 1 stored day(s) since they were mapped, ...; run update() to map them again.`), so a read never returns bars mapped by a map that has since changed. A store without its sidecar is refused by `update`.
 
 The shared store is `<data-dir>/market/massive/massive_permaticker_bars_1m/`, beside its `README.md` and `component.json`. `scripts/massive/permaticker_bars.py --data-dir ... --workers N` writes the folder when it is missing and builds or catches up the store; the daily data update brings it up to date after the Ticker map (an `update` step, [data_update.md](data_update.md)).
+
+## Day aggregates on permatickers
+
+The view and the mapped store above are not specific to the Trade bars: `PermatickerDataset` maps any store on the Massive ticker axis through the Ticker map, and `MappedPermatickerDataset` keeps a view's panel in a store, with the sidecar, the refusal of a changed map and the remapping by `update` described above. `PermatickerDayBarDataset` is the view of the Day aggregate store, and `MappedDayBarDataset` keeps it as `massive_permaticker_day_bars_1d` (#353):
+
+```python
+from quantlab.core.store_folder import load_component
+from quantlab.dataset.config import MappedDayBarsConfig
+from quantlab.dataset.massive.mapped_bars import MappedDayBarDataset
+from quantlab.dataset.massive.permaticker_bars import PermatickerDayBarDataset
+
+view = PermatickerDayBarDataset(days, ticker_map)   # the MassiveDayBarDataset above
+mapped = MappedDayBarDataset(MappedDayBarsConfig(
+    source=view,
+    zarr_file_path="/data/quantlab/market/massive/massive_permaticker_day_bars_1d/massive_permaticker_day_bars_1d.zarr",
+))
+mapped.update()                                     # build, or append the new days
+panel = mapped.panel("2024-11-26", "2024-11-29")    # symbol: int64 permatickers
+mapped.unplaced()                                   # {day: tickers the map could not place}
+
+mapped = load_component("/data/quantlab/market/massive/massive_permaticker_day_bars_1d")   # the shared one
+```
+
+The variables are the Day aggregates' (`open`, `high`, `low`, `close`, `volume`, `n_trades`), raw: not adjusted for splits or dividends. One bar per trading day labelled with its date, as SEP's bars. The mapping rules are the view's: a security that changed ticker is one column, a reused ticker goes each day to the permaticker that held it that day, two tickers of one permaticker keep the busier, and a permaticker without a ticker on a day reads as a column without a bar (NaN prices, zero `volume` and `n_trades`). A ticker the map cannot place on a day is counted in the sidecar, not guessed. `update(end=None)` appends `BATCH_DAYS` (250) days per write. A store built a day at a time equals one built at once.
+
+The shared store is `<data-dir>/market/massive/massive_permaticker_day_bars_1d/`, beside its `README.md` and `component.json`. `scripts/massive/permaticker_day_bars.py --data-dir ...` writes the folder when it is missing (the view over the `massive_day_bars_1d` and `massive_ticker_map` folders) and builds or catches up the store, printing the unplaced ticker-days; the daily data update brings it up to date after the Ticker map (an `update` step, [data_update.md](data_update.md)). SEP stays the daily price of research, backtests and trading.

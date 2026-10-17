@@ -1,43 +1,49 @@
-"""Trade bars read on the permaticker axis, through the Ticker map (ADR 0031).
+"""Datasets on the Massive ticker axis read on the permaticker axis, through the Ticker map (ADR 0031).
 
-The Trade bar store's symbol axis is the Massive ticker, which names a
-column, not a security. ``PermatickerTradeBarDataset`` is the one way to read
-it as securities: for each session day it maps the store's ticker columns
-to permatickers through that day's rows of the Ticker map
-(``quantlab.dataset.massive.ticker_map``), and returns a dense
-``(timestamp, symbol)`` panel on the permaticker axis:
+The Trade bar store's and the Day aggregate store's symbol axis is the
+Massive ticker, which names a column, not a security. ``PermatickerDataset``
+is the one way to read such a store as securities: for each session day it
+maps the store's ticker columns to permatickers through that day's rows of
+the Ticker map (``quantlab.dataset.massive.ticker_map``), and returns a
+dense ``(timestamp, symbol)`` panel on the permaticker axis:
 
 - a ticker the map leaves unmapped that day is dropped;
 - two tickers mapped to one permaticker on one day keep the one with more
   volume that day (ties: the first ticker in text order);
 - a security that changed ticker is one column across the change;
-- a permaticker without a ticker on a day reads as a Trade bar column
-  without a trade: NaN prices, zero volumes and ``n_trades``.
+- a permaticker without a ticker on a day reads as a column of the store
+  without a bar: NaN prices, zero volumes and counts.
 
-The view is a drop-in ``MarketDataset``: ``panel``, ``resample`` (the
-mapped one-minute bars are aggregated as the Trade bars are, per session),
-the calendar and the KunQuant export are the Trade bar dataset's, and the
-tradable and delisting bars ``MarketDataset``'s rules over its own panel. Only the ticker columns the map names are read from the store.
-A read records the store (through the Trade bar dataset) and the map's rows
-in an open ``DataRecorder``. The view has no store of its own and no build
-path: its input is the Trade bar dataset (``inputs()``), and the Trade bar
+Two views share the mapping, one per store on the Massive ticker:
+``PermatickerTradeBarDataset`` over the one-minute Trade bars
+(``MassiveTradeBarDataset``) and ``PermatickerDayBarDataset`` over Massive's
+Day aggregates (``MassiveDayBarDataset``, #353). A view is a drop-in
+``MarketDataset``: ``panel``, ``resample`` (the mapped bars are aggregated as
+the store's are, per session), the calendar and the KunQuant export are the
+store's dataset's, and the tradable and delisting bars ``MarketDataset``'s
+rules over its own panel. Only the ticker columns the map names are read
+from the store. A read records the store (through the store's dataset) and
+the map's rows in an open ``DataRecorder``. A view has no store of its own
+and no build path: its input is the store's dataset (``inputs()``), and the
 store and the Ticker map are updated by their own steps.
 
 Examples
 --------
-With ``trade_bars`` the one-minute Trade bar dataset and ``ticker_map`` the
-Ticker map::
+With ``trade_bars`` the one-minute Trade bar dataset, ``day_bars`` the Day
+aggregate dataset and ``ticker_map`` the Ticker map::
 
     bars = PermatickerTradeBarDataset(trade_bars, ticker_map)
     panel = bars.panel("2020-03-02", "2020-03-03")      # permatickers
     hourly = bars.resample("1h").panel("2020-03-02", "2020-03-03")
+    daily = PermatickerDayBarDataset(day_bars, ticker_map).panel("2020-03-02", "2020-03-06")
 """
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Sequence
-from datetime import timedelta
-from typing import Self
+from datetime import date, timedelta
+from typing import ClassVar, Self
 
 import numpy as np
 import pandas as pd
@@ -45,80 +51,79 @@ import polars as pl
 import xarray as xr
 from loguru import logger
 
-from quantlab.dataset.base import MarketDataset
-from quantlab.dataset.config import PermatickerTradeBarsConfig
-from quantlab.dataset.massive.ticker_map import RULES_VERSION, TickerMap
-from quantlab.dataset.massive.trade_bars import TRADE_BAR_RESAMPLE_HOW, MassiveTradeBarDataset, no_trade_fills
-from quantlab.runs.record import record_read
 from quantlab.backend.resample import resample_on_read
+from quantlab.dataset.base import MarketDataset
+from quantlab.dataset.config import PermatickerDayBarsConfig, PermatickerTradeBarsConfig
+from quantlab.dataset.massive.day_bars import DAY_BAR_RESAMPLE_HOW, MassiveDayBarDataset
+from quantlab.dataset.massive.ticker_map import RULES_VERSION, TickerMap
+from quantlab.dataset.massive.trade_bars import TRADE_BAR_RESAMPLE_HOW, MassiveTradeBarDataset
+from quantlab.runs.record import record_read
 from quantlab.utils.date_range import check_range
 from quantlab.utils.symbol_axis import sort_symbol_axis
 
+__all__ = ["PermatickerDataset", "PermatickerDayBarDataset", "PermatickerTradeBarDataset"]
 
-class PermatickerTradeBarDataset(MarketDataset):
-    """Trade bars on the permaticker axis; see the module docstring.
+
+class PermatickerDataset(MarketDataset):
+    """A store on the Massive ticker axis read on the permaticker axis; see the module docstring.
+
+    A subclass names the config field holding the store's dataset
+    (``SOURCE_FIELD``), the class it must be (``SOURCE_CLS``) and how the
+    store tells its last day (``stored_through``).
 
     Parameters
     ----------
-    config : PermatickerTradeBarsConfig or MassiveTradeBarDataset
-        The config, or the Trade bar dataset with ``ticker_map`` beside it.
+    config : FrozenConfig or MarketDataset
+        The config, or the store's dataset with ``ticker_map`` beside it.
     ticker_map : TickerMap, optional
-        The Ticker map, when ``config`` is the Trade bar dataset.
+        The Ticker map, when ``config`` is the store's dataset.
 
     Raises
     ------
     ValueError
-        If the config's ``trade_bars`` is not a ``MassiveTradeBarDataset`` of
-        the store's own bars, or its ``ticker_map`` not a ``TickerMap``.
+        If the config's store dataset is not a ``SOURCE_CLS`` reading the
+        store's own bars, or its ``ticker_map`` not a ``TickerMap``.
 
     Examples
     --------
     >>> bars = PermatickerTradeBarDataset(trade_bars, ticker_map)
-    >>> bars.panel("2024-11-27", "2024-11-30")["symbol"].values.tolist()
-    [101, 202, 303, 404, 505]
+    >>> bars.ticker_bars is trade_bars
+    True
     """
 
-    # Narrower type annotation for readers and type checkers only.
-    config: PermatickerTradeBarsConfig
+    #: The config field holding the dataset on the Massive ticker axis.
+    SOURCE_FIELD: ClassVar[str]
+    #: The class that dataset must be.
+    SOURCE_CLS: ClassVar[type]
 
-    #: The config class used to rebuild this dataset from a saved config.
-    config_cls = PermatickerTradeBarsConfig
-
-    #: ``resample(freq)`` aggregates each variable as the Trade bars do.
-    DEFAULT_RESAMPLE_HOW = TRADE_BAR_RESAMPLE_HOW
-
-    def __init__(
-        self,
-        config: PermatickerTradeBarsConfig | MassiveTradeBarDataset,
-        ticker_map: TickerMap | None = None,
-    ):
+    def __init__(self, config, ticker_map: TickerMap | None = None):
         """Initialize the view; see the class docstring for parameters."""
-        if not isinstance(config, PermatickerTradeBarsConfig):
-            config = PermatickerTradeBarsConfig(trade_bars=config, ticker_map=ticker_map)
+        if not isinstance(config, self.config_cls):
+            config = self.config_cls(**{self.SOURCE_FIELD: config, "ticker_map": ticker_map})
         elif ticker_map is not None:
             raise ValueError(f"{type(self).__name__}: give the Ticker map in the config, not beside it.")
         super().__init__(config)
 
     @property
-    def trade_bars(self) -> MassiveTradeBarDataset:
-        """The Trade bar dataset on the Massive ticker axis.
+    def ticker_bars(self) -> MarketDataset:
+        """The dataset on the Massive ticker axis the view maps.
 
         Examples
         --------
-        >>> PermatickerTradeBarDataset(trade_bars, ticker_map).trade_bars is trade_bars
+        >>> PermatickerDayBarDataset(day_bars, ticker_map).ticker_bars is day_bars
         True
         """
-        return self.config.trade_bars
+        return getattr(self.config, self.SOURCE_FIELD)
 
-    def inputs(self) -> tuple[MassiveTradeBarDataset]:
-        """Return the Trade bar dataset, the one dataset ``panel`` reads (the Ticker map is not a dataset).
+    def inputs(self) -> tuple[MarketDataset]:
+        """Return the store's dataset, the one dataset ``panel`` reads (the Ticker map is not a dataset).
 
         Examples
         --------
         >>> PermatickerTradeBarDataset(trade_bars, ticker_map).inputs() == (trade_bars,)
         True
         """
-        return (self.trade_bars,)
+        return (self.ticker_bars,)
 
     @property
     def ticker_map(self) -> TickerMap:
@@ -131,26 +136,45 @@ class PermatickerTradeBarDataset(MarketDataset):
         """
         return self.config.ticker_map
 
-    def _normalize_config(self, config: PermatickerTradeBarsConfig) -> PermatickerTradeBarsConfig:
+    def stored_through(self) -> date | None:
+        """Return the last day the store on the Massive ticker holds, ``None`` without one.
+
+        Examples
+        --------
+        >>> PermatickerDayBarDataset(day_bars, ticker_map).stored_through()
+        datetime.date(2024, 11, 29)
+        """
+        raise NotImplementedError
+
+    def no_bar_fills(self) -> dict[str, float]:
+        """Return the values of a column without a bar: zero volumes and counts; prices stay NaN.
+
+        Examples
+        --------
+        >>> PermatickerDayBarDataset(day_bars, ticker_map).no_bar_fills()
+        {'volume': 0.0, 'n_trades': 0.0}
+        """
+        return self.ticker_bars._widen_fill_values()
+
+    def _normalize_config(self, config):
         """Return ``config`` with ``name`` set, refusing inputs of other kinds."""
-        if not isinstance(config.trade_bars, MassiveTradeBarDataset):
+        source = getattr(config, self.SOURCE_FIELD)
+        if not isinstance(source, self.SOURCE_CLS):
             raise ValueError(
-                f"{self.class_name}: trade_bars must be a MassiveTradeBarDataset, got "
-                f"{type(config.trade_bars).__name__}."
+                f"{self.class_name}: {self.SOURCE_FIELD} must be a {self.SOURCE_CLS.__name__}, got "
+                f"{type(source).__name__}."
             )
-        if config.trade_bars.config.resample_freq is not None:
+        if source.config.resample_freq is not None:
             raise ValueError(
-                f"{self.class_name}: trade_bars must read the store's own bars; resample this view "
+                f"{self.class_name}: {self.SOURCE_FIELD} must read the store's own bars; resample this view "
                 f"instead, so tickers are mapped before bars of different days are combined."
             )
         if not isinstance(config.ticker_map, TickerMap):
             raise ValueError(
                 f"{self.class_name}: ticker_map must be a TickerMap, got {type(config.ticker_map).__name__}."
             )
-        return PermatickerTradeBarsConfig(
-            trade_bars=config.trade_bars,
-            ticker_map=config.ticker_map,
-            resample_freq=config.resample_freq,
+        return dataclasses.replace(
+            config,
             resample_how=None if config.resample_how is None else dict(config.resample_how),
             name=self.import_path,
         )
@@ -165,7 +189,7 @@ class PermatickerTradeBarDataset(MarketDataset):
         rows = self.ticker_map.read(
             (first - timedelta(days=1)).date(), (last + timedelta(days=1)).date()
         ).filter(pl.col("permaticker").is_not_null())
-        stored = self.trade_bars.stored_symbols()
+        stored = self.ticker_bars.stored_symbols()
         return rows.filter(pl.col("ticker").is_in(stored))
 
     def stored_symbols(self) -> list:
@@ -177,8 +201,33 @@ class PermatickerTradeBarDataset(MarketDataset):
         [101, 202, 303, 404, 505]
         """
         rows = self.ticker_map.read().filter(pl.col("permaticker").is_not_null())
-        rows = rows.filter(pl.col("ticker").is_in(self.trade_bars.stored_symbols()))
+        rows = rows.filter(pl.col("ticker").is_in(self.ticker_bars.stored_symbols()))
         return sort_symbol_axis(rows["permaticker"].unique().to_list())
+
+    def unplaced(self, start, end) -> dict[date, int]:
+        """Return ``{day: count}`` of the stored tickers the map cannot place, per mapped day.
+
+        A ticker is counted on a day when the map has a row for it (it had
+        a bar in Massive's day aggregates) and no permaticker; its bars are
+        in no column of the view that day. Days without such a ticker are
+        left out.
+
+        Parameters
+        ----------
+        start, end : str, datetime.date or pd.Timestamp
+            The days to count, both inclusive.
+
+        Examples
+        --------
+        >>> bars.unplaced("2024-11-27", "2024-11-29")   # ZZZ, a test symbol
+        {datetime.date(2024, 11, 27): 1, datetime.date(2024, 11, 29): 1}
+        """
+        rows = self.ticker_map.read(start, end)
+        rows = rows.filter(
+            pl.col("permaticker").is_null() & pl.col("ticker").is_in(self.ticker_bars.stored_symbols())
+        )
+        counts = rows.group_by("date").len().sort("date")
+        return {day: int(n) for day, n in counts.iter_rows()}
 
     def _mapped_panel(self, start, end, symbols, variables) -> xr.Dataset:
         """Return the store's bars of ``start``..``end`` on permatickers, at the store's own bars."""
@@ -187,7 +236,7 @@ class PermatickerTradeBarDataset(MarketDataset):
         if symbols is not None:
             rows = rows.filter(pl.col("permaticker").is_in([int(s) for s in symbols]))
         tickers = sort_symbol_axis(rows["ticker"].unique().to_list())
-        bars = self.trade_bars.panel(start, end, symbols=tickers, variables=variables)
+        bars = self.ticker_bars.panel(start, end, symbols=tickers, variables=variables)
         self._record_map(rows, start, end)
         volumes = self._day_volumes(rows)
 
@@ -196,9 +245,9 @@ class PermatickerTradeBarDataset(MarketDataset):
             if symbols is not None
             else sort_symbol_axis(rows["permaticker"].unique().to_list())
         )
-        fills = no_trade_fills()
+        fills = self.no_bar_fills()
         timestamps = bars["timestamp"].values
-        days = pd.DatetimeIndex(self.trade_bars.resample_labels(timestamps, "1d")).date if timestamps.size else []
+        days = pd.DatetimeIndex(self.ticker_bars.resample_labels(timestamps, "1d")).date if timestamps.size else []
         by_day = {day: frame for (day,), frame in rows.partition_by("date", as_dict=True).items()}
         pieces = []
         missing = []
@@ -241,10 +290,10 @@ class PermatickerTradeBarDataset(MarketDataset):
             return {}
         tickers = sort_symbol_axis(clashes["ticker"].explode().unique().to_list())
         days = sorted(clashes["date"].unique().to_list())
-        bars = self.trade_bars.panel(
+        bars = self.ticker_bars.panel(
             days[0], days[-1] + timedelta(days=1), symbols=tickers, variables=["volume"]
         )
-        session = pd.DatetimeIndex(self.trade_bars.resample_labels(bars["timestamp"].values, "1d")).date
+        session = pd.DatetimeIndex(self.ticker_bars.resample_labels(bars["timestamp"].values, "1d")).date
         frame = bars["volume"].to_pandas().groupby(session).sum()
         return {day: {ticker: float(volume) for ticker, volume in row.items()} for day, row in frame.iterrows()}
 
@@ -292,7 +341,7 @@ class PermatickerTradeBarDataset(MarketDataset):
         symbols: Sequence | None = None,
         variables: Sequence[str] | None = None,
     ) -> xr.Dataset:
-        """Return the Trade bars from ``start`` to ``end`` on the permaticker axis.
+        """Return the store's bars from ``start`` to ``end`` on the permaticker axis.
 
         Parameters
         ----------
@@ -333,11 +382,11 @@ class PermatickerTradeBarDataset(MarketDataset):
         freq : str
             A ``ResampleFrequency`` token, coarser than the store's bars.
         how : dict[str, str], optional
-            ``{variable: method}``; ``None`` uses the Trade bars' defaults.
+            ``{variable: method}``; ``None`` uses the store's defaults.
 
         Returns
         -------
-        PermatickerTradeBarDataset
+        PermatickerDataset
             A new view.
 
         Examples
@@ -345,43 +394,140 @@ class PermatickerTradeBarDataset(MarketDataset):
         >>> bars.resample("1h").panel("2024-11-27", "2024-11-30").sizes["timestamp"]
         11
         """
-        return type(self)(
-            PermatickerTradeBarsConfig(
-                trade_bars=self.trade_bars, ticker_map=self.ticker_map, resample_freq=freq, resample_how=how
-            )
-        )
+        return type(self)(dataclasses.replace(self.config, resample_freq=freq, resample_how=how))
 
-    # -- the Trade bar dataset's market rules ---------------------------------
+    # -- the store dataset's market rules ---------------------------------------
 
     def _calendar(self) -> pd.DatetimeIndex:
-        """Return the Trade bar dataset's calendar, on this view's resampled bars when resampled."""
-        calendar = self.trade_bars._calendar()
+        """Return the store dataset's calendar, on this view's resampled bars when resampled."""
+        calendar = self.ticker_bars._calendar()
         if self.config.resample_freq is None:
             return calendar
         return pd.DatetimeIndex(np.unique(self.resample_labels(calendar.values, self.config.resample_freq)))
 
     def resample_labels(self, timestamps: np.ndarray, freq: str) -> np.ndarray:
-        """Return the bars the Trade bar dataset cuts ``timestamps`` into."""
-        return self.trade_bars.resample_labels(timestamps, freq)
+        """Return the bars the store's dataset cuts ``timestamps`` into."""
+        return self.ticker_bars.resample_labels(timestamps, freq)
 
     def _to_kunquant(self, data: xr.Dataset, data_columns: tuple[str, ...]) -> tuple[dict, np.ndarray, np.ndarray]:
-        """Export the columns as the Trade bar dataset does."""
-        return self.trade_bars._to_kunquant(data, data_columns)
+        """Export the columns as the store's dataset does."""
+        return self.ticker_bars._to_kunquant(data, data_columns)
 
     def copy(self) -> Self:
-        """Return a view over a copy of the Trade bar dataset and the same map's config.
+        """Return a view over a copy of the store's dataset and the same map's config.
 
         Examples
         --------
         >>> other = bars.copy()
-        >>> other == bars, other.trade_bars is bars.trade_bars
+        >>> other == bars, other.ticker_bars is bars.ticker_bars
         (True, False)
         """
         return type(self)(
-            PermatickerTradeBarsConfig(
-                trade_bars=self.trade_bars.copy(),
+            dataclasses.replace(
+                self.config,
+                **{self.SOURCE_FIELD: self.ticker_bars.copy()},
                 ticker_map=TickerMap(self.ticker_map.config),
-                resample_freq=self.config.resample_freq,
-                resample_how=self.config.resample_how,
             )
         )
+
+
+class PermatickerTradeBarDataset(PermatickerDataset):
+    """The one-minute Trade bars on the permaticker axis; see the module docstring.
+
+    Parameters
+    ----------
+    config : PermatickerTradeBarsConfig or MassiveTradeBarDataset
+        The config, or the Trade bar dataset with ``ticker_map`` beside it.
+    ticker_map : TickerMap, optional
+        The Ticker map, when ``config`` is the Trade bar dataset.
+
+    Examples
+    --------
+    >>> bars = PermatickerTradeBarDataset(trade_bars, ticker_map)
+    >>> bars.panel("2024-11-27", "2024-11-30")["symbol"].values.tolist()
+    [101, 202, 303, 404, 505]
+    """
+
+    # Narrower type annotation for readers and type checkers only.
+    config: PermatickerTradeBarsConfig
+
+    #: The config class used to rebuild this dataset from a saved config.
+    config_cls = PermatickerTradeBarsConfig
+
+    #: ``resample(freq)`` aggregates each variable as the Trade bars do.
+    DEFAULT_RESAMPLE_HOW = TRADE_BAR_RESAMPLE_HOW
+
+    SOURCE_FIELD = "trade_bars"
+    SOURCE_CLS = MassiveTradeBarDataset
+
+    @property
+    def trade_bars(self) -> MassiveTradeBarDataset:
+        """The Trade bar dataset on the Massive ticker axis.
+
+        Examples
+        --------
+        >>> PermatickerTradeBarDataset(trade_bars, ticker_map).trade_bars is trade_bars
+        True
+        """
+        return self.config.trade_bars
+
+    def stored_through(self) -> date | None:
+        """Return the last day the Trade bar store has converted, ``None`` without one.
+
+        Examples
+        --------
+        >>> PermatickerTradeBarDataset(trade_bars, ticker_map).stored_through()
+        datetime.date(2024, 11, 29)
+        """
+        return self.trade_bars.converted_through()
+
+
+class PermatickerDayBarDataset(PermatickerDataset):
+    """Massive's Day aggregates on the permaticker axis (#353); see the module docstring.
+
+    Parameters
+    ----------
+    config : PermatickerDayBarsConfig or MassiveDayBarDataset
+        The config, or the Day aggregate dataset with ``ticker_map`` beside it.
+    ticker_map : TickerMap, optional
+        The Ticker map, when ``config`` is the Day aggregate dataset.
+
+    Examples
+    --------
+    >>> bars = PermatickerDayBarDataset(day_bars, ticker_map)
+    >>> bars.panel("2024-11-27", "2024-11-30")["close"].sel(symbol=202).values.tolist()   # OLD, then NEW
+    [20.0, 21.0]
+    """
+
+    # Narrower type annotation for readers and type checkers only.
+    config: PermatickerDayBarsConfig
+
+    #: The config class used to rebuild this dataset from a saved config.
+    config_cls = PermatickerDayBarsConfig
+
+    #: ``resample(freq)`` aggregates each variable as the Day aggregates do.
+    DEFAULT_RESAMPLE_HOW = DAY_BAR_RESAMPLE_HOW
+
+    SOURCE_FIELD = "day_bars"
+    SOURCE_CLS = MassiveDayBarDataset
+
+    @property
+    def day_bars(self) -> MassiveDayBarDataset:
+        """The Day aggregate dataset on the Massive ticker axis.
+
+        Examples
+        --------
+        >>> PermatickerDayBarDataset(day_bars, ticker_map).day_bars is day_bars
+        True
+        """
+        return self.config.day_bars
+
+    def stored_through(self) -> date | None:
+        """Return the last day the Day aggregate store holds, ``None`` without one.
+
+        Examples
+        --------
+        >>> PermatickerDayBarDataset(day_bars, ticker_map).stored_through()
+        datetime.date(2024, 11, 29)
+        """
+        return self.day_bars.stored_through()
