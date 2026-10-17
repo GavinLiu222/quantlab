@@ -71,13 +71,19 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
-from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
+from urllib.parse import quote
 
 import exchange_calendars as xcals
 import requests
 from joblib import Parallel, delayed
 from loguru import logger
 
+from quantlab.acquisition._support.request_policy import (
+    REFUSAL_STATUSES,
+    RequestPolicy,
+    TransientError,
+    require_env,
+)
 from quantlab.acquisition.massive.rest import ENDPOINTS, RestEndpoint
 from quantlab.acquisition.massive.raw_tier import (
     write_day_file_watermark,
@@ -146,8 +152,12 @@ class MassiveNotPublishedError(LookupError):
     """Massive has no file for that day: not a trading day, or not published yet."""
 
 
-class MassiveTransportError(ConnectionError):
-    """The connection failed or broke, Massive throttled, or a downloaded file failed its checks; retried."""
+class MassiveTransportError(TransientError):
+    """The connection failed or broke, Massive throttled, or a downloaded file failed its checks; retried.
+
+    A ``TransientError`` (a ``ConnectionError``) of the request policy
+    (``quantlab.acquisition._support.request_policy``).
+    """
 
 
 class _Aborted(Exception):
@@ -190,16 +200,19 @@ class MassiveCredentials:
         MassiveCredentialError: MASSIVE_S3_ACCESS_KEY_ID not set; ...
         """
         environ = os.environ if environ is None else environ
-        missing = [name for name in (API_KEY_ENV, S3_ACCESS_KEY_ENV) if not environ.get(name)]
-        if missing:
-            raise MassiveCredentialError(
-                f"{' and '.join(missing)} not set; set them in the environment (the S3 secret "
-                f"{S3_SECRET_ENV} defaults to {API_KEY_ENV}). Nothing was downloaded."
-            )
+        api_key, access_key_id = require_env(
+            (API_KEY_ENV, S3_ACCESS_KEY_ENV),
+            hint=(
+                f"set them in the environment (the S3 secret {S3_SECRET_ENV} defaults to "
+                f"{API_KEY_ENV}). Nothing was downloaded."
+            ),
+            error=MassiveCredentialError,
+            environ=environ,
+        )
         return cls(
-            api_key=environ[API_KEY_ENV],
-            s3_access_key_id=environ[S3_ACCESS_KEY_ENV],
-            s3_secret_access_key=environ.get(S3_SECRET_ENV) or environ[API_KEY_ENV],
+            api_key=api_key,
+            s3_access_key_id=access_key_id,
+            s3_secret_access_key=environ.get(S3_SECRET_ENV) or api_key,
         )
 
 
@@ -552,18 +565,25 @@ class MassiveClient:
         self.backoff = backoff
         self.sleep = sleep
 
+    @property
+    def _policy(self) -> RequestPolicy:
+        """The request policy: retries, back-off, and the credentials scrubbed and kept out of URLs."""
+        return RequestPolicy(
+            {
+                API_KEY_ENV: self.credentials.api_key,
+                S3_ACCESS_KEY_ENV: self.credentials.s3_access_key_id,
+                S3_SECRET_ENV: self.credentials.s3_secret_access_key,
+            },
+            retries=self.retries,
+            backoff=self.backoff,
+            sleep=self.sleep,
+        )
+
     def _retrying(self, what: str, attempt: Callable[[], object]):
         """Run ``attempt``, retrying a ``MassiveTransportError`` after a doubling back-off."""
-        wait = self.backoff
-        for tries in range(self.retries + 1):
-            try:
-                return attempt()
-            except MassiveTransportError as error:
-                if tries == self.retries:
-                    raise
-                logger.warning(f"Massive: {what} failed ({error}); retrying in {wait:g}s.")
-                self.sleep(wait)
-                wait *= 2
+        return self._policy.call(
+            attempt, lambda tries, wait, error: f"Massive: {what} failed ({error}); retrying in {wait:g}s."
+        )
 
     def download_day(self, data_type: str, day: date, download_root: str | Path) -> Path:
         """Make one data type's file for one trading day present and verified in the raw tier.
@@ -741,8 +761,8 @@ class MassiveClient:
         target.parent.mkdir(parents=True, exist_ok=True)
         partial = target.with_name(target.name + ".part")
         started = time.monotonic()
+        policy = self._policy
         try:
-            wait_seconds = self.backoff
             for tries in range(self.retries + 1):
                 with fetching:
                     self._fetch_parts(key, partial, expected, abort)
@@ -752,9 +772,7 @@ class MassiveClient:
                 except MassiveTransportError as error:
                     if tries == self.retries:
                         raise
-                    logger.warning(f"Massive: {error}; downloading it again in {wait_seconds:g}s.")
-                    self.sleep(wait_seconds)
-                    wait_seconds *= 2
+                    policy.back_off(tries, lambda wait, error=error: f"Massive: {error}; downloading it again in {wait:g}s.")
             os.replace(partial, target)
         except BaseException:
             partial.unlink(missing_ok=True)
@@ -795,9 +813,9 @@ class MassiveClient:
         again at once for the rest; one that delivers nothing is retried
         after a doubling back-off, ``retries`` times.
         """
+        policy = self._policy
         position = first
         attempt = 0
-        wait_seconds = self.backoff
         with partial.open("r+b") as handle:
             while position < stop:
                 if aborted():
@@ -820,21 +838,25 @@ class MassiveClient:
                         )
                 except MassiveTransportError as error:
                     if position > before:
-                        logger.warning(f"Massive: {error}; resuming at byte {position} of {first}-{stop - 1}.")
-                        attempt, wait_seconds = 0, self.backoff
+                        logger.warning(
+                            policy.scrub(f"Massive: {error}; resuming at byte {position} of {first}-{stop - 1}.")
+                        )
+                        attempt = 0
                         continue
                     if attempt == self.retries or aborted():
                         raise
+                    policy.back_off(
+                        attempt,
+                        lambda wait, error=error: f"Massive: {error}; retrying bytes {position}-{stop - 1} in {wait:g}s.",
+                    )
                     attempt += 1
-                    logger.warning(f"Massive: {error}; retrying bytes {position}-{stop - 1} in {wait_seconds:g}s.")
-                    self.sleep(wait_seconds)
-                    wait_seconds *= 2
 
     def _get_json(self, url: str, params: Mapping[str, str], *, missing_ok: bool = False) -> dict | None:
         """GET ``url`` with the key in a header; retry throttling, 5xx and transport errors.
 
         With ``missing_ok`` a 404 returns ``None`` instead of raising.
         """
+        policy = self._policy
         headers = {"Authorization": f"Bearer {self.credentials.api_key}"}
         # Never the query: a next_url carries a cursor, and logs print this.
         where = url.split("?")[0]
@@ -843,21 +865,21 @@ class MassiveClient:
             response = self.http_get(url, params=params, headers=headers)
             if missing_ok and response.status == 404:
                 return None
-            if response.status == 401:
-                raise MassiveEntitlementError(
-                    f"Massive refused the API key on {where} ({response.status}: "
-                    f"{_vendor_error(response.body)})."
+            if response.status in REFUSAL_STATUSES:
+                raise policy.refusal(
+                    response.status,
+                    vendor="Massive",
+                    where=where,
+                    detail=_vendor_error(response.body),
+                    credential=API_KEY_ENV,
+                    error=MassiveEntitlementError,
                 )
-            if response.status == 403:
-                raise MassiveEntitlementError(
-                    f"Massive refused {where} (403): the plan is not entitled to this endpoint "
-                    f"({_vendor_error(response.body)})."
-                )
+            # Every other failure is retried, a 4xx too: Massive's own words go in the message.
             if response.status == 429 or response.status >= 500:
                 raise MassiveTransportError(f"HTTP {response.status} on {where}")
             if response.status != 200:
                 raise MassiveTransportError(
-                    f"HTTP {response.status} on {where}: {_vendor_error(response.body)}"
+                    policy.scrub(f"HTTP {response.status} on {where}: {_vendor_error(response.body)}")
                 )
             return json.loads(response.body)
 
@@ -975,7 +997,7 @@ class MassiveClient:
                     if not holds(watermark, through):  # a REST watermark never moves back
                         write_rest_watermark(vendor_root, endpoint.name, field, through)
                         watermark = through
-            url, params = (_without_key(following) if following else None), {}
+            url, params = (self._policy.keyless(following) if following else None), {}
         logger.info(f"Massive: {endpoint.name}: {rows:,} row(s) in {pages} page(s); watermark {watermark}.")
         return RestPull(endpoint.name, pages, rows, watermark, tuple(files))
 
@@ -1112,7 +1134,7 @@ class MassiveClient:
             page = self._get_json(url, params)
             yield page.get("results") or []
             following = page.get("next_url")
-            url, params = (_without_key(following) if following else None), {}
+            url, params = (self._policy.keyless(following) if following else None), {}
 
     def condition_table(self, download_root: str | Path) -> Path:
         """Pull the stock condition table over REST and store it as a snapshot.
@@ -1148,7 +1170,8 @@ class MassiveClient:
         while url:
             page = self._get_json(url, params)
             records.extend(page.get("results", []))
-            url, params = page.get("next_url"), {}
+            following = page.get("next_url")
+            url, params = (self._policy.keyless(following) if following else None), {}
         path = conditions_file(Path(download_root) / VENDOR_DIR, pulled_at)
         path.parent.mkdir(parents=True, exist_ok=True)
         write_json_atomically(path, records)
@@ -1187,13 +1210,6 @@ def _day_of(record: Mapping[str, object], field: str, endpoint: str) -> date:
     if not value:
         raise ValueError(f"A Massive {endpoint} record has no {field!r}; cannot move its watermark: {record}")
     return date.fromisoformat(str(value)[:10])
-
-
-def _without_key(url: str) -> str:
-    """Return ``url`` without an ``apiKey`` query parameter: the key travels in a header only."""
-    parts = urlsplit(url)
-    query = [(name, value) for name, value in parse_qsl(parts.query, keep_blank_values=True) if name != "apiKey"]
-    return urlunsplit(parts._replace(query=urlencode(query)))
 
 
 def _vendor_error(body: bytes) -> str:

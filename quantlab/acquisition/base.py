@@ -49,6 +49,7 @@ from quantlab.acquisition._support.coverage import (
 )
 from quantlab.acquisition._support.coverage import CoverageLedger
 from quantlab.acquisition._support.page_ledger import PageLedger
+from quantlab.acquisition._support.request_policy import scrub
 from quantlab.dataset.base import MarketDataset
 from quantlab.utils.progress import (
     QUOTA_EXHAUSTED_DESCRIPTION,
@@ -733,11 +734,11 @@ class Acquisition(ABC):
             ``message`` with every credential value replaced by
             ``REDACTION``.
         """
-        for name in self.CREDENTIAL_ENV_VARS:
-            value = os.environ.get(name)
-            if value:
-                message = message.replace(value, self.REDACTION)
-        return message
+        return scrub(
+            message,
+            {name: os.environ.get(name) for name in self.CREDENTIAL_ENV_VARS},
+            self.REDACTION,
+        )
 
     # -- error classification: the part each vendor customises -------------
 

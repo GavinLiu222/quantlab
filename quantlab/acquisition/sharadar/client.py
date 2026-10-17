@@ -61,6 +61,14 @@ import requests
 from joblib import Parallel, delayed
 from loguru import logger
 
+from quantlab.acquisition._support.request_policy import (
+    REFUSAL_STATUSES,
+    RETRY_STATUSES,
+    RequestPolicy,
+    TransientError,
+    require_env,
+    retry_after,
+)
 from quantlab.acquisition.sharadar.raw_tier import (
     fold_tickers_history,
     prune_tickers_snapshots,
@@ -98,11 +106,13 @@ class SharadarHttpError(RuntimeError):
     """Sharadar answered with an error status, or kept failing past the retries."""
 
 
-class SharadarTransportError(ConnectionError):
+class SharadarTransportError(TransientError):
     """The connection failed to open, or broke while a body was read.
 
     The transport raises it, so the client retries a network failure
-    without knowing the HTTP library underneath.
+    without knowing the HTTP library underneath. A ``TransientError`` (a
+    ``ConnectionError``), retried by the request policy
+    (``quantlab.acquisition._support.request_policy``).
     """
 
 
@@ -209,7 +219,7 @@ class SharadarClient:
     """
 
     #: Statuses that are retried after a back-off.
-    RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+    RETRY_STATUSES = RETRY_STATUSES
 
     def __init__(
         self,
@@ -277,11 +287,7 @@ class SharadarClient:
             SharadarClient().bulk_table("sep", "/data/quantlab/downloads", years="5")
         """
         spec = table(code)
-        key = os.environ.get(API_KEY_ENV)
-        if not key:
-            raise SharadarEntitlementError(
-                f"cannot pull Sharadar table {code!r}: {API_KEY_ENV} is not set."
-            )
+        key = _api_key(code)
         pulled_at = datetime.now(UTC)
         response = self._get(
             spec,
@@ -387,11 +393,7 @@ class SharadarClient:
         spec = table(code)
         if "date" not in spec.schema:
             raise ValueError(f"Sharadar table {code!r} has no date column to window.")
-        key = os.environ.get(API_KEY_ENV)
-        if not key:
-            raise SharadarEntitlementError(
-                f"cannot pull Sharadar table {code!r}: {API_KEY_ENV} is not set."
-            )
+        key = _api_key(code)
         vendor_root = Path(download_dir) / VENDOR_DIR
         end = date.fromisoformat(str(through)) if through is not None else vendor_today()
         start = self._window_start(vendor_root, code, end, trading_days)
@@ -472,11 +474,7 @@ class SharadarClient:
                 f"Sharadar table {code!r} is not refreshed by lastupdated; "
                 f"use window_table or bulk_table."
             )
-        key = os.environ.get(API_KEY_ENV)
-        if not key:
-            raise SharadarEntitlementError(
-                f"cannot pull Sharadar table {code!r}: {API_KEY_ENV} is not set."
-            )
+        key = _api_key(code)
         vendor_root = Path(download_dir) / VENDOR_DIR
         if since is None:
             since = read_watermark(vendor_root, code)
@@ -688,6 +686,16 @@ class SharadarClient:
                 written,
             )
 
+    @property
+    def _policy(self) -> RequestPolicy:
+        """The request policy: retries, back-off, and the key scrubbed from every message."""
+        return RequestPolicy(
+            {API_KEY_ENV: os.environ.get(API_KEY_ENV, "")},
+            retries=self._max_retries,
+            backoff=self._backoff_seconds,
+            sleep=self._sleep,
+        )
+
     def _get(
         self,
         spec: SharadarTable,
@@ -711,51 +719,60 @@ class SharadarClient:
             On another 4xx, or a retried status or connection failure past
             ``max_retries``.
         """
-        for attempt in range(self._max_retries + 1):
-            try:
-                response = self._transport(url, params=params, headers=headers)
-            except SharadarTransportError as exc:
-                failure = str(exc)
-                if attempt < self._max_retries:
-                    self._back_off(spec, attempt, failure)
-                continue
-            if response.status in (401, 403) and keyed:
-                raise SharadarEntitlementError(
-                    f"Sharadar refused table {spec.code!r} (API name "
-                    f"{spec.api_name!r}) with HTTP {response.status}: "
-                    f"{_text(response)!r}. Check that {API_KEY_ENV} is a paid "
-                    f"sharadar.com key whose plan covers this table."
-                )
-            if response.status not in self.RETRY_STATUSES:
-                if response.status >= 400:
-                    raise SharadarHttpError(
-                        f"Sharadar table {spec.code!r}: HTTP {response.status}: "
-                        f"{_text(response)!r}"
-                    )
-                return response
-            response.close()
-            failure = f"HTTP {response.status}"
-            if attempt < self._max_retries:
-                self._back_off(spec, attempt, failure, _retry_after(response))
-        raise SharadarHttpError(
-            f"Sharadar table {spec.code!r}: still {failure} after "
-            f"{self._max_retries} retries."
-        )
+        policy = self._policy
 
-    def _back_off(
-        self, spec: SharadarTable, attempt: int, failure: str, wait: float | None = None
-    ) -> None:
+        def attempt() -> Response:
+            response = self._transport(url, params=params, headers=headers)
+            if keyed and response.status in REFUSAL_STATUSES:
+                raise policy.refusal(
+                    response.status,
+                    vendor="Sharadar",
+                    where=f"table {spec.code!r} (API name {spec.api_name!r})",
+                    detail=repr(_text(response)),
+                    credential=f"{API_KEY_ENV} (a paid sharadar.com key)",
+                    error=SharadarEntitlementError,
+                )
+            if response.status in self.RETRY_STATUSES:
+                response.close()
+                raise SharadarTransportError(
+                    f"HTTP {response.status}", retry_after=retry_after(response.headers)
+                )
+            if response.status >= 400:
+                raise SharadarHttpError(
+                    policy.scrub(
+                        f"Sharadar table {spec.code!r}: HTTP {response.status}: {_text(response)!r}"
+                    )
+                )
+            return response
+
+        try:
+            return policy.call(
+                attempt,
+                lambda tries, wait, error: (
+                    f"Sharadar table {spec.code!r}: {error}; retry "
+                    f"{tries + 1}/{self._max_retries} in {wait:.1f}s"
+                ),
+            )
+        except TransientError as error:
+            raise SharadarHttpError(
+                policy.scrub(
+                    f"Sharadar table {spec.code!r}: still {error} after "
+                    f"{self._max_retries} retries."
+                )
+            ) from error
+
+    def _back_off(self, spec: SharadarTable, attempt: int, failure: str) -> None:
         """Log a retryable failure and sleep before retry ``attempt + 1``.
 
-        ``wait`` is the server's ``Retry-After``; without it the wait is
-        ``backoff_seconds`` doubled on each attempt.
+        The wait is ``backoff_seconds`` doubled on each attempt.
         """
-        wait = wait or self._backoff_seconds * 2**attempt
-        logger.warning(
-            f"Sharadar table {spec.code!r}: {failure}; retry "
-            f"{attempt + 1}/{self._max_retries} in {wait:.1f}s"
+        self._policy.back_off(
+            attempt,
+            lambda wait: (
+                f"Sharadar table {spec.code!r}: {failure}; retry "
+                f"{attempt + 1}/{self._max_retries} in {wait:.1f}s"
+            ),
         )
-        self._sleep(wait)
 
     @staticmethod
     def _extract_csv(spec: SharadarTable, archive: Path, scratch: Path) -> Path:
@@ -775,6 +792,15 @@ class SharadarClient:
         return target
 
 
+def _api_key(code: str) -> str:
+    """Return the API key from the environment, or raise naming the variable and the table."""
+    return require_env(
+        [API_KEY_ENV],
+        hint=f"cannot pull Sharadar table {code!r}; set it in the environment.",
+        error=SharadarEntitlementError,
+    )[0]
+
+
 class _BrokenBody(SharadarTransportError):
     """A response body that broke or ended short, after ``written`` bytes were kept."""
 
@@ -788,15 +814,6 @@ def _range_total(response: Response) -> int | None:
     value = response.headers.get("Content-Range", "")
     _, _, total = value.rpartition("/")
     return int(total) if total.isdigit() else None
-
-
-def _retry_after(response: Response) -> float | None:
-    """Return the ``Retry-After`` seconds of a response, or ``None``."""
-    value = response.headers.get("Retry-After")
-    try:
-        return float(value) if value is not None else None
-    except ValueError:
-        return None
 
 
 def _text(response: Response, limit: int | None = 300) -> str:
