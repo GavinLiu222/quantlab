@@ -1,4 +1,4 @@
-"""Literature-backed fundamental, institutional and insider factors in one KunQuant graph.
+"""Twenty-three literature-backed fundamental, institutional and insider factors in one KunQuant graph.
 
 Every output is a characteristic from the accounting, 13F or Form 4 data
 rather than from prices alone, signed so that a higher value predicts a
@@ -25,6 +25,11 @@ output                      formula                                         refe
 ``insider_npr``             ``(P + S) / (P - S)``, shares, 126 bars         Lakonishok and Lee (2001)
 ``insider_net_buy``         ``sum net_value / marketcap``, 252 bars         Seyhun (1986)
 ``insider_breadth``         ``sum(buyers - sellers)``, 126 bars             Lakonishok and Lee (2001)
+``operating_profitability`` ``(revenue - cor - sgna - intexp) / equityavg``  Fama and French (2015)
+``investment_to_assets``    ``-(dPPE + dinventory) / assetsavg``, a year    Lyandres et al. (2008)
+``insider_purchase``        ``sum net_value_P / marketcap``, 252 bars       Jeng et al. (2003)
+``insider_buyers``          ``sum buyers``, 126 bars                        Jeng et al. (2003)
+``holders_growth``          ``log(holders / holders a year ago)``           Chen, Hong and Stein (2002)
 ==========================  ==============================================  ==========================
 
 ``ROA`` is ``netinc / assetsavg``; ``dE`` is the change of a quarter's value
@@ -58,7 +63,8 @@ Titman (2006); Chan, Lakonishok and Sougiannis (2001); Balakrishnan,
 Bartov and Faurel (2010); Piotroski (2000); Foster, Olsen and Shevlin
 (1984); Jegadeesh and Livnat (2006); Chen, Hong and Stein (2002); Gompers
 and Metrick (2001); Sias, Starks and Titman (2006); Lakonishok and Lee
-(2001); Seyhun (1986).
+(2001); Seyhun (1986); Fama and French (2015); Lyandres, Sun and Zhang
+(2008); Jeng, Metrick and Zeckhauser (2003).
 """
 
 from __future__ import annotations
@@ -82,7 +88,8 @@ REPORT_KEY = "reportperiod"
 #: SF3A items, lagged by ``quarter_end``.
 QUARTER_KEY = "quarter_end"
 HOLDINGS_COLUMNS = ("holders", "value_held")
-INSIDER_COLUMNS = ("net_shares_P", "net_shares_S", "net_value", "insiders_buying", "insiders_selling")
+INSIDER_COLUMNS = ("net_shares_P", "net_shares_S", "net_value", "net_value_P", "insiders_buying",
+                   "insiders_selling")
 #: Derived input: DAILY's market cap on the 13F quarter's end.
 QUARTER_END_CAP = "marketcap__quarter_end"
 
@@ -107,6 +114,11 @@ OUTPUT_COLUMNS: dict[str, tuple[str, ...]] = {
     "insider_npr": ("net_shares_P", "net_shares_S", "adjClose"),
     "insider_net_buy": ("net_value", "marketcap", "adjClose"),
     "insider_breadth": ("insiders_buying", "insiders_selling", "adjClose"),
+    "operating_profitability": ("revenue", "cor", "sgna", "intexp", "equityavg"),
+    "investment_to_assets": ("ppnenet", "inventory", "assetsavg"),
+    "insider_purchase": ("net_value_P", "marketcap", "adjClose"),
+    "insider_buyers": ("insiders_buying", "adjClose"),
+    "holders_growth": ("holders",),
 }
 
 _F_SCORE_LAGGED = ("netinc", "assetsavg", "debtnc", "currentratio", "grossmargin", "assetturnover")
@@ -193,6 +205,11 @@ class FundamentalAlphaParameters:
             need("revenue", *sue)
         if "breadth_change" in outputs:
             need("holders", 1)
+        if "holders_growth" in outputs:
+            need("holders", 4)
+        if "investment_to_assets" in outputs:
+            for column in ("ppnenet", "inventory", "assetsavg"):
+                need(column, 4)
         if "io_change" in outputs:
             need("value_held", 1)
             need(QUARTER_END_CAP, 1)
@@ -212,7 +229,7 @@ class FundamentalAlphaParameters:
         lagged = self.lags(outputs)
         if any(c not in HOLDINGS_COLUMNS and c != QUARTER_END_CAP for c in lagged):
             columns.append(REPORT_KEY)
-        if {"institutional_ownership", "io_change", "breadth_change"} & set(outputs):
+        if {"institutional_ownership", "io_change", "breadth_change", "holders_growth"} & set(outputs):
             columns.append(QUARTER_KEY)
         return tuple(columns)
 
@@ -311,7 +328,7 @@ def _flag(condition: OpBase) -> OpBase:
 
 
 class FundamentalAlpha(FactorKunQuant):
-    """Compute the eighteen fundamental, 13F and insider characteristics in KunQuant.
+    """Compute the twenty-three fundamental, 13F and insider characteristics in KunQuant.
 
     Only the selected ``factor_names`` are built, and ``data_columns`` must
     name exactly ``FundamentalAlphaParameters.required_panel_columns`` of
@@ -483,6 +500,19 @@ class FundamentalAlpha(FactorKunQuant):
             if "insider_breadth" in wanted:
                 outputs["insider_breadth"] = WindowedSum(
                     x("insiders_buying") - x("insiders_selling"), params.insider_window)
+            if "operating_profitability" in wanted:
+                outputs["operating_profitability"] = positive_ratio(
+                    x("revenue") - x("cor") - x("sgna") - x("intexp"), x("equityavg"))
+            if "investment_to_assets" in wanted:
+                change = (x("ppnenet") - x("ppnenet__q4")) + (x("inventory") - x("inventory__q4"))
+                outputs["investment_to_assets"] = 0.0 - positive_ratio(change, x("assetsavg__q4"))
+            if "insider_purchase" in wanted:
+                outputs["insider_purchase"] = positive_ratio(
+                    WindowedSum(x("net_value_P"), params.insider_value_window), x("marketcap"))
+            if "insider_buyers" in wanted:
+                outputs["insider_buyers"] = WindowedSum(x("insiders_buying"), params.insider_window)
+            if "holders_growth" in wanted:
+                outputs["holders_growth"] = Log(positive_ratio(x("holders"), x("holders__q4")))
             for name in wanted:
                 Output(Rank(outputs[name]) if params.ranked else outputs[name], name)
         return Function(builder.ops, name="fundamental_alpha")
@@ -496,7 +526,7 @@ class FundamentalAlpha(FactorKunQuant):
         ``marketcap__quarter_end`` is DAILY's market cap on the last bar on or
         before each cell's 13F ``quarter_end``. The insider flows are 0
         where NaN on a bar with a price, NaN without a price and before the
-        first bar on which any symbol has a non-zero flow.
+        first bar on which any symbol has a non-zero flow of any of them.
         """
         params = self._parameters()
         outputs = self.get_factor_names()
@@ -521,12 +551,15 @@ class FundamentalAlpha(FactorKunQuant):
             columns = np.broadcast_to(np.arange(quarter_end.shape[1]), quarter_end.shape)
             cap[ok] = arrays["marketcap"][index[ok], columns[ok]]
             arrays[QUARTER_END_CAP] = cap
-        for column in INSIDER_COLUMNS:
-            if column in arrays:
-                flow = arrays[column]
-                started = np.flatnonzero(np.nansum(np.abs(flow), axis=1) > 0)
-                first = started[0] if len(started) else flow.shape[0]
-                filled = np.where(np.isfinite(arrays["adjClose"]), np.nan_to_num(flow, nan=0.0), np.nan)
+        flows = [column for column in INSIDER_COLUMNS if column in arrays]
+        if flows:
+            # One start for every flow: the first bar on which any symbol has any of them.
+            active = np.any([np.nansum(np.abs(arrays[column]), axis=1) > 0 for column in flows], axis=0)
+            started = np.flatnonzero(active)
+            first = started[0] if len(started) else len(timestamps)
+            priced = np.isfinite(arrays["adjClose"])
+            for column in flows:
+                filled = np.where(priced, np.nan_to_num(arrays[column], nan=0.0), np.nan)
                 filled[:first] = np.nan
                 arrays[column] = np.ascontiguousarray(filled)
         lags = params.lags(outputs)

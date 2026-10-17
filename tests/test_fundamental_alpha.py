@@ -26,7 +26,7 @@ DAYS = pd.bdate_range("2020-01-01", periods=910)
 START, END = DAYS[0].strftime("%Y-%m-%d"), DAYS[-1].strftime("%Y-%m-%d")
 SYMBOLS = [str(s) for s in range(12)]
 ITEMS = ("netinc", "ncfo", "assetsavg", "equityavg", "ebit", "fcf", "ncfdiv", "ncfcommon", "revenue", "rnd",
-         "debtnc", "currentratio", "grossmargin", "assetturnover")
+         "debtnc", "currentratio", "grossmargin", "assetturnover", "cor", "sgna", "intexp", "ppnenet", "inventory")
 PERIOD_ENDS = pd.Timestamp("2019-09-30") + pd.to_timedelta(91 * np.arange(15), unit="D")
 SKIPPED = (4, 6)  # symbol 4 never files the report of period 6
 
@@ -85,9 +85,10 @@ def _panel():
     data["net_shares_P"] = np.where(trades & (rng.random(shape) < 0.4), rng.uniform(1e3, 1e5, shape), 0.0)
     data["net_shares_S"] = np.where(trades, -rng.uniform(1e3, 1e5, shape), 0.0)
     data["net_value"] = (data["net_shares_P"] + data["net_shares_S"]) * data["adjClose"]
+    data["net_value_P"] = data["net_shares_P"] * data["adjClose"]
     data["insiders_buying"] = (data["net_shares_P"] > 0).astype(float)
     data["insiders_selling"] = (data["net_shares_S"] < 0).astype(float)
-    for name in ("net_shares_P", "net_shares_S", "net_value", "insiders_buying", "insiders_selling"):
+    for name in ("net_shares_P", "net_shares_S", "net_value", "net_value_P", "insiders_buying", "insiders_selling"):
         data[name][:30] = 0.0
         data[name][::17, 3] = np.nan  # a symbol SF2 does not list on some days
     data["adjClose"][600:, 7] = np.nan  # delisted: no insider flow, not a zero one
@@ -163,10 +164,16 @@ def _reference(panel, truth) -> dict[str, np.ndarray]:
         ownership = np.where(has, truth["value"][np.maximum(q_shown, 0), cols], np.nan)
         ownership_before = np.where(has_before, truth["value"][np.maximum(q_shown - 1, 0), cols], np.nan)
         holders_before = np.where(has_before, truth["holders"][np.maximum(q_shown - 1, 0), cols], np.nan)
+        holders_year = np.where(q_shown >= 4, truth["holders"][np.maximum(q_shown - 4, 0), cols], np.nan)
+        invest = (v["ppnenet"] - _lagged(truth, "ppnenet", 4)) + (v["inventory"] - _lagged(truth, "inventory", 4))
+
+        flows = ("net_shares_P", "net_shares_S", "net_value", "net_value_P", "insiders_buying", "insiders_selling")
+        first = int(np.argmax(np.any([np.nansum(np.abs(v[n]), axis=1) > 0 for n in flows], axis=0)))
+        assert first >= 30
 
         def flow(name):
             x = np.where(np.isfinite(v["adjClose"]), np.nan_to_num(v[name], nan=0.0), np.nan)
-            x[:30] = np.nan  # no flow before the first trade of any symbol
+            x[:first] = np.nan  # no flow before the first trade of any symbol
             return pd.DataFrame(x)
 
         bought, sold = flow("net_shares_P").rolling(126).sum(), flow("net_shares_S").rolling(126).sum()
@@ -189,6 +196,11 @@ def _reference(panel, truth) -> dict[str, np.ndarray]:
             "insider_npr": pos((bought + sold).values, (bought - sold).values),
             "insider_net_buy": pos(flow("net_value").rolling(252).sum().values, v["marketcap"]),
             "insider_breadth": (flow("insiders_buying") - flow("insiders_selling")).rolling(126).sum().values,
+            "operating_profitability": pos(v["revenue"] - v["cor"] - v["sgna"] - v["intexp"], v["equityavg"]),
+            "investment_to_assets": -pos(invest, _lagged(truth, "assetsavg", 4)),
+            "insider_purchase": pos(flow("net_value_P").rolling(252).sum().values, v["marketcap"]),
+            "insider_buyers": flow("insiders_buying").rolling(126).sum().values,
+            "holders_growth": np.log(pos(v["holders"], holders_year)),
         }
 
 
