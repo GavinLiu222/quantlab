@@ -68,12 +68,16 @@ massive = ["boto3>=1.43.110", "botocore>=1.43.110"]
 optimize = ["cvxpy>=1.9.3", "mosek>=11.2.6"]
 # quantlab.model.predefined.realmlp and xgb_td
 tabkit = ["pytabkit>=1.7.3"]
+# quantlab.model.predefined.lgbm, double_ensemble and catboost_model
+gbdt = ["catboost>=1.2.8", "lightgbm>=4.6.0"]
 # quantlab.tracking.wandb
 wandb = ["wandb>=0.29.0"]
 all = [
     "boto3>=1.43.110",
     "botocore>=1.43.110",
+    "catboost>=1.2.8",
     "cvxpy>=1.9.3",
+    "lightgbm>=4.6.0",
     "mlflow-skinny>=3.0",
     "mosek>=11.2.6",
     "protobuf>=7",
