@@ -16,10 +16,11 @@ and no config factory: ``registry.run()`` refuses it, and the download and the
 daily update are ``scripts/sharadar/download.py`` and
 ``scripts/sharadar/update.py``. ``registry.convert()`` builds the SEP and SFP
 stores, the SF1 fundamentals stores, and the DAILY, EVENTS, insider (SF2),
-13F ownership (SF3A) and corporate-actions (ACTIONS) stores; the S&P 500 membership panel (a
-constituent dataset), the industry panel (built from TICKERS and ACTIONS
-together, not from one table) and the fiscal-year history panel (SF1's ARY
-rows, which the fundamentals stores refuse) are built by the scripts.
+13F ownership (SF3A) and corporate-actions (ACTIONS) stores; the S&P 500
+membership panel (a constituent dataset), the industry panel and the listing
+panel (the latter registered under TICKERS, both built from TICKERS and
+ACTIONS together) and the fiscal-year history panel (SF1's ARY rows, which
+the fundamentals stores refuse) are built by the scripts.
 
 Examples
 --------
@@ -39,6 +40,7 @@ from quantlab.dataset.sharadar.events import SharadarEventsDataset
 from quantlab.dataset.sharadar.fundamentals import SharadarFundamentalsDataset
 from quantlab.dataset.sharadar.holdings import SharadarHoldingsDataset
 from quantlab.dataset.sharadar.insiders import SharadarInsidersDataset
+from quantlab.dataset.sharadar.listing import SharadarListingDataset
 from quantlab.dataset.sharadar.stock import SharadarStockDataset
 
 #: The plan every table needs: the Bundle covers all of them.
@@ -140,9 +142,11 @@ SHARADAR_SOURCE = register_source(
                 earliest_available="1957-03-04",
                 entitlement=_ENTITLEMENT,
             ),
-            # Reference tables, kept as parquet sidecars.
+            # Reference tables, kept as parquet sidecars; TICKERS' SIC code and
+            # exchange, walked back through ACTIONS, are the listing panel.
             Capability(
                 market="us_equity", frequency="1d", data_type="tickers",
+                dataset_cls=SharadarListingDataset,
                 entitlement=_ENTITLEMENT,
             ),
             Capability(

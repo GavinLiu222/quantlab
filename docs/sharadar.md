@@ -381,6 +381,37 @@ panel["firm"].sel(symbol=119496).values[0]  # GOOG -> 195146.0, GOOGL
 - **Variable.** `firm` holds the permaticker as a float. It is NaN on a day where no SF1 security with the CIK is priced or where two or more are, and outside the security's own first and last price dates. Each day is decided from the issuers priced on it, so the panel holds no look-ahead.
 - **Updates.** `update.py` pulls TICKERS whole and appends the new trading days.
 
+## Listing (SIC and exchange)
+
+TICKERS gives each security's current SIC code and exchange. ACTIONS records their changes as pairs of rows on one date: `sicchangefrom`/`sicchangeto` with the code in `value`, and `exchangefrom`/`exchangeto` with the exchange name in `contraname`. `SharadarListingDataset` walks both histories back from the current value and stores `sharadar_listing_1d`. The SIC history comes from `quantlab.dataset.sharadar.history.sic_history`, which the industry panel also reads, so the two panels never disagree about a security's SIC on a day.
+
+```python
+from quantlab.dataset.config import SharadarListingConfig
+from quantlab.dataset.sharadar.listing import SharadarListingDataset
+
+config = SharadarListingConfig(
+    zarr_file_path="/data/quantlab/market/sharadar/sharadar_listing_1d/sharadar_listing_1d.zarr",
+    raw_data_dir_path="/data/quantlab/downloads/sharadar",
+)
+SharadarListingDataset(config).update()
+panel = SharadarListingDataset(config).panel("2024-01-02", "2024-12-31")
+panel["exchange"].attrs["names"]["2"]  # 'NASDAQ'
+```
+
+| Variable | Value | `names` attribute |
+|---|---|---|
+| `sic_code` | the SIC code | none |
+| `sic_sector` | the SIC division of the code, 1..11; NaN for a code in no division's range | Sharadar's `sicsector` spelling of each division |
+| `sic_industry` | the SIC code again (Sharadar's `sicindustry` has one title per code) | each code's TICKERS title; a past code that no row carries any more has no title |
+| `fama_industry` | the Fama-French 48 industry of the code, 1..48, before any merge | French's short names |
+| `exchange` | a fixed code per exchange name (`quantlab.dataset.sharadar.listing.EXCHANGES`) | each code's vendor name |
+
+- **Point in time.** A change shows from its action date, or from the next trading day when that date is not one. The walk back works as for the industry panel. Two changes of one kind for one security on one date are refused, and so is an exchange name that `EXCHANGES` does not list, so a new venue is never silently dropped.
+- **Coverage.** Values are shown from a security's TICKERS `firstpricedate` to its `lastpricedate`, on SEP's trading days, for the default universe (domestic common stock). They are NaN outside those dates or where the value is unknown.
+- **Left out.** TICKERS attributes that have no history in ACTIONS are not in the panel: `sector`, `industry`, `category`, `location`, `currency`, `scalemarketcap`, `scalerevenue` and `famaindustry`. Each would carry today's value back over the whole history. `fama_industry` is the code French's ranges give the SIC, not Sharadar's `famaindustry` label.
+- **Measured.** On the 2026-10-16 raw tier, a build from 2000-01-03 takes 17 s and holds 6,737 days by 15,758 securities. Exchange changes fall on 2,363 security-days. `fama_industry`, merged with `DEFAULT_INDUSTRY_MERGE`, equals the shared `sharadar_industry_1d` store on all 106 million common cells.
+- **Updates.** `update.py` pulls TICKERS and ACTIONS whole and appends the new trading days. When the store does not exist yet, it builds it from SEP's first stored day and writes its `README.md` and `component.json`.
+
 ## Tickers and companies
 
 The panel's `symbol` axis is the permaticker. Every conversion of a `SharadarStockDataset`, an update included, also writes `<store>.sharadar_tickers.json` beside the store, naming each of the store's permatickers from the raw tier: the current ticker and company from its TICKERS rows of the store's table, and each earlier ticker and company from ACTIONS' `tickerchangefrom` rows (on the row's `date`, `contraticker`/`contraname` became `ticker`). `ticker_lookup()` returns a `SharadarTickerLookup` over it, so a backtest shows the ticker and company in use on each day in its Holdings tab and its settlement and rejected-order records:
@@ -411,7 +442,7 @@ uv run python scripts/sharadar/download.py --download-dir /data/quantlab/downloa
 uv run python scripts/sharadar/update.py --download-dir /data/quantlab/downloads --data-dir /data/quantlab
 ```
 
-`download.py` pulls `tickers`, `indicators`, `sep`, `sfp`, `actions`, `sp500`, `sf1`, `daily`, `events`, `sf2`, `sf3`, `sf3a` and `sf3b` (never METRICS) and builds `sharadar_sep_1d.zarr`, `sharadar_sfp_1d.zarr`, `sharadar_sp500_1d.zarr` (the `roster_universe="sp500"` store: every permaticker ever a member, with all its bars), `sharadar_spy_1d.zarr` (SPY alone, `SPY_PERMATICKER`), `sharadar_sp500_membership.zarr`, and the fundamentals stores `sharadar_sf1_arq.zarr` and `sharadar_sf1_art.zarr`, and the valuation store `sharadar_daily_1d.zarr`, and the filing and ownership stores `sharadar_events_1d.zarr`, `sharadar_insiders_1d.zarr` and `sharadar_holdings_1d.zarr`, the corporate-actions store `sharadar_actions_1d.zarr`, the industry store `sharadar_industry_1d.zarr`, the fiscal-year history store `sharadar_sf1_fiscal_years.zarr` and the share-class store `sharadar_share_class_1d.zarr`, all with `update()`, so each keeps the chunk ledger the daily update reads. Each store sits in its own folder beside its sidecars and a short `README.md` (written when the folder has none): `<data-dir>/market/sharadar/<stem>/<stem>.zarr`, and the membership at `<data-dir>/universe/sharadar/sharadar_sp500_membership/sharadar_sp500_membership.zarr`; `--start` narrows the stores, `--years` picks the history tier. Each panel store's folder also gets a `component.json`. `update.py` extends each store from the first day it holds and prints where vendor corrections were reported; a panel store not built yet (one added after `download.py` ran) is built whole from the raw tier, with its `README.md` and `component.json`. Sharadar is registered as a source (`DataSourceRegistry.get("sharadar")`, one capability per table), but its raw tier is whole tables rather than a symbol-batched download, so `registry.run()` refuses it and points here; `registry.convert()` builds every store except the membership, industry, fiscal-year and share-class panels.
+`download.py` pulls `tickers`, `indicators`, `sep`, `sfp`, `actions`, `sp500`, `sf1`, `daily`, `events`, `sf2`, `sf3`, `sf3a` and `sf3b` (never METRICS) and builds `sharadar_sep_1d.zarr`, `sharadar_sfp_1d.zarr`, `sharadar_sp500_1d.zarr` (the `roster_universe="sp500"` store: every permaticker ever a member, with all its bars), `sharadar_spy_1d.zarr` (SPY alone, `SPY_PERMATICKER`), `sharadar_sp500_membership.zarr`, and the fundamentals stores `sharadar_sf1_arq.zarr` and `sharadar_sf1_art.zarr`, and the valuation store `sharadar_daily_1d.zarr`, and the filing and ownership stores `sharadar_events_1d.zarr`, `sharadar_insiders_1d.zarr` and `sharadar_holdings_1d.zarr`, the corporate-actions store `sharadar_actions_1d.zarr`, the industry store `sharadar_industry_1d.zarr`, the fiscal-year history store `sharadar_sf1_fiscal_years.zarr`, the share-class store `sharadar_share_class_1d.zarr` and the listing store `sharadar_listing_1d.zarr`, all with `update()`, so each keeps the chunk ledger the daily update reads. Each store sits in its own folder beside its sidecars and a short `README.md` (written when the folder has none): `<data-dir>/market/sharadar/<stem>/<stem>.zarr`, and the membership at `<data-dir>/universe/sharadar/sharadar_sp500_membership/sharadar_sp500_membership.zarr`; `--start` narrows the stores, `--years` picks the history tier. Each panel store's folder also gets a `component.json`. `update.py` extends each store from the first day it holds and prints where vendor corrections were reported; a panel store not built yet (one added after `download.py` ran) is built from the SEP store's first day, with its `README.md` and `component.json`. Sharadar is registered as a source (`DataSourceRegistry.get("sharadar")`, one capability per table), but its raw tier is whole tables rather than a symbol-batched download, so `registry.run()` refuses it and points here; `registry.convert()` builds every store except the membership, industry, fiscal-year, share-class and listing panels.
 
 ## Daily update
 

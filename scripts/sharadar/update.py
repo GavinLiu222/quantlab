@@ -24,8 +24,8 @@ Run every morning after ``download.py`` has built the stores. One run:
    ``sharadar_sf1_art.zarr``, ``sharadar_daily_1d.zarr``,
    ``sharadar_events_1d.zarr``, ``sharadar_insiders_1d.zarr``,
    ``sharadar_holdings_1d.zarr``, ``sharadar_actions_1d.zarr``,
-   ``sharadar_industry_1d.zarr``,
-   ``sharadar_sf1_fiscal_years.zarr`` and ``sharadar_share_class_1d.zarr``),
+   ``sharadar_industry_1d.zarr``, ``sharadar_sf1_fiscal_years.zarr``,
+   ``sharadar_share_class_1d.zarr`` and ``sharadar_listing_1d.zarr``),
    each from the
    first day it already holds: new bars are appended and earlier rows are
    never rewritten. A vendor correction to a stored date of a price store is
@@ -35,9 +35,10 @@ Run every morning after ``download.py`` has built the stores. One run:
    store's ticker sidecar), so a ticker change between pulls never stops the
    update; a row still unmapped is left out and listed in
    ``<store>.unmapped.json``. A panel store (events, insiders, holdings,
-   actions, industry, fiscal years, share class) not built yet is built
-   whole from the raw tier, beside a ``README.md`` and a ``component.json``,
-   so a panel added after ``download.py`` ran needs no other step.
+   actions, industry, fiscal years, share class, listing) not built yet is
+   built from the SEP store's first day, beside a ``README.md`` and a
+   ``component.json``, so a panel added after ``download.py`` ran needs no
+   other step.
 
 SF3 (every 13F holding, 400 MB) and SF3B (holdings by investor) feed no
 store and are not refreshed here; ``download.py`` pulls them whole.
@@ -86,6 +87,7 @@ from quantlab.acquisition.sharadar.client import (
     SharadarEntitlementError,
     SharadarHttpError,
 )
+from quantlab.core.store_folder import README_FILE, save_component
 from quantlab.dataset.config import (
     SPY_PERMATICKER,
     ConstituentDatasetConfig,
@@ -98,9 +100,9 @@ from quantlab.dataset.config import (
     SharadarHoldingsConfig,
     SharadarIndustryConfig,
     SharadarInsidersConfig,
+    SharadarListingConfig,
     SharadarShareClassConfig,
 )
-from quantlab.core.store_folder import save_component
 from quantlab.dataset.sharadar.actions import SharadarActionsDataset
 from quantlab.dataset.sharadar.daily import SharadarDailyDataset
 from quantlab.dataset.sharadar.events import SharadarEventsDataset
@@ -108,6 +110,7 @@ from quantlab.dataset.sharadar.fiscal_years import SharadarFiscalYearsDataset
 from quantlab.dataset.sharadar.holdings import SharadarHoldingsDataset
 from quantlab.dataset.sharadar.industry import SharadarIndustryDataset
 from quantlab.dataset.sharadar.insiders import SharadarInsidersDataset
+from quantlab.dataset.sharadar.listing import SharadarListingDataset
 from quantlab.dataset.sharadar.share_class import SharadarShareClassDataset
 from quantlab.dataset.sharadar.fundamentals import SharadarFundamentalsDataset
 from quantlab.dataset.sharadar.membership import SharadarSP500ConstituentDataset
@@ -155,7 +158,7 @@ MEMBERSHIP_STORE = "sharadar_sp500_membership"
 FUNDAMENTALS_STORES = {"sharadar_sf1_arq": "ARQ", "sharadar_sf1_art": "ART"}
 #: The DAILY valuation store.
 DAILY_STORE = "sharadar_daily_1d"
-#: The stores of the filing, ownership, industry, fiscal-year and share-class panels, with their config and dataset classes.
+#: The stores of the filing, ownership, industry, fiscal-year, share-class and listing panels, with their config and dataset classes.
 PANEL_STORES = {
     "sharadar_events_1d": (SharadarEventsConfig, SharadarEventsDataset),
     "sharadar_insiders_1d": (SharadarInsidersConfig, SharadarInsidersDataset),
@@ -164,6 +167,7 @@ PANEL_STORES = {
     "sharadar_industry_1d": (SharadarIndustryConfig, SharadarIndustryDataset),
     "sharadar_sf1_fiscal_years": (SharadarFiscalYearsConfig, SharadarFiscalYearsDataset),
     "sharadar_share_class_1d": (SharadarShareClassConfig, SharadarShareClassDataset),
+    "sharadar_listing_1d": (SharadarListingConfig, SharadarListingDataset),
 }
 
 
@@ -176,6 +180,26 @@ def _store_start(path: Path) -> str:
 #: Messages of ``update()`` refusing a store whose stored symbols left the
 #: raw tier's symbol axis.
 _DROPPED_SYMBOL_REFUSALS = ("refusing to resume", "absent from the pinned whole-range axis")
+
+
+def _build_panel_store(
+    path: Path, config_cls, dataset_cls, vendor_root: Path, start: str, failures: list
+) -> None:
+    """Build a panel store not built yet from ``start`` (SEP's first day), with its README.md and component.json."""
+    try:
+        dataset = dataset_cls(config_cls(
+            zarr_file_path=str(path), raw_data_dir_path=str(vendor_root), start_date=start,
+        )).update()
+        print_conversion_result(dataset.last_chunk_result)
+        readme = path.parent / README_FILE
+        save_component(dataset, path.parent, readme=None if readme.exists() else (
+            f"# {path.stem}\n\n{dataset_cls.__doc__.strip().splitlines()[0]}\n\n"
+            f"Built by `scripts/sharadar/update.py` from {start}; it appends the new bars every morning.\n"
+        ))
+        print(f"{path.name}: built from {start}")
+    except Exception:  # noqa: BLE001 - one store's failure must not stop the others
+        failures.append(path.name)
+        print(f"{path.name}: build failed:\n{traceback.format_exc()}")
 
 
 def _update_store(path: Path, make, rebuild_except: set[str] | None, failures: list) -> None:
@@ -220,23 +244,6 @@ def _update_store(path: Path, make, rebuild_except: set[str] | None, failures: l
     except Exception:  # noqa: BLE001
         failures.append(path.name)
         print(f"{path.name}: rebuild failed:\n{traceback.format_exc()}")
-
-
-def _build_store(path: Path, config_cls, dataset_cls, vendor_root: Path, failures: list) -> None:
-    """Build a panel store not built yet from the whole raw tier, with its README.md and component.json."""
-    try:
-        config = config_cls(zarr_file_path=str(path), raw_data_dir_path=str(vendor_root))
-        print(f"{path.name}: not built yet; building it from the raw tier")
-        print_conversion_result(dataset_cls(config).update().last_chunk_result)
-        summary = (dataset_cls.__doc__ or "").strip().splitlines()[0]
-        readme = None if (path.parent / "README.md").exists() else (
-            f"# {path.stem}\n\n{summary}\n\nBuilt and appended every morning by "
-            f"`scripts/sharadar/update.py` (`{dataset_cls.__module__}.{dataset_cls.__name__}`).\n"
-        )
-        save_component(dataset_cls(config), path.parent, readme=readme)
-    except Exception:  # noqa: BLE001 - one store's failure must not stop the others
-        failures.append(path.name)
-        print(f"{path.name}: build failed:\n{traceback.format_exc()}")
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -380,7 +387,10 @@ if __name__ == "__main__":
     )
     for store, (config_cls, dataset_cls) in PANEL_STORES.items():
         if not store_path(market_dir, store).exists():
-            _build_store(store_path(market_dir, store), config_cls, dataset_cls, vendor_root, failures)
+            _build_panel_store(
+                store_path(market_dir, store), config_cls, dataset_cls, vendor_root,
+                _store_start(store_path(market_dir, "sharadar_sep_1d")), failures,
+            )
             continue
         _update_store(
             store_path(market_dir, store),
