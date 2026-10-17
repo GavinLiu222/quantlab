@@ -944,7 +944,10 @@ class MassiveClient:
             bounds = {f"{field}.gte": start.isoformat()}
             if end is not None:
                 cap = min(cap, end)
-                bounds[f"{field}.lte"] = end.isoformat()
+                if endpoint.timestamped:
+                    bounds[f"{field}.lt"] = (end + timedelta(days=1)).isoformat()
+                else:
+                    bounds[f"{field}.lte"] = end.isoformat()
             params = {**bounds, **params, **endpoint.sort_params}
             logger.info(f"Massive: pulling {endpoint.name} from {field} {start} (watermark {watermark}).")
 

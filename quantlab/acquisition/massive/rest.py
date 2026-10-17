@@ -83,8 +83,12 @@ class RestEndpoint:
         The source records' field giving an ``ids_from`` endpoint's ids.
     order_param : bool, default False
         Give the order in its own ``order`` parameter (``sort=<date
-        field>&order=asc``), as the ``/vX/reference`` IPOs take it, instead
+        field>&order=asc``), as the ``/vX/reference`` IPOs and the news take it, instead
         of ``sort=<date field>.asc,<tiebreak>.asc``.
+    timestamped : bool, default False
+        ``date_field`` holds a timestamp, not a day (news' ``published_utc``):
+        a pull bounded by ``end`` asks for ``<date_field>.lt`` the day after
+        it, so the whole of ``end`` is kept.
 
     Examples
     --------
@@ -106,6 +110,7 @@ class RestEndpoint:
     ids_from: str | None = None
     id_field: str = "composite_figi"
     order_param: bool = False
+    timestamped: bool = False
 
     def __post_init__(self) -> None:
         if self.ids_from is not None and "{id}" not in self.url:
@@ -158,6 +163,13 @@ ENDPOINTS: dict[str, RestEndpoint] = {
         # ex-date, so a pull past the watermark (always before today) reaches every new one.
         RestEndpoint(
             "dividends", f"{REST_HOST}/stocks/v1/dividends", "ex_dividend_date", date(2000, 1, 1), overlap_days=7
+        ),
+        # Every news article (#357) on its publication time, from 2016-06. The endpoint sorts
+        # with sort=<field> and order=asc (order_param); a day is read again for articles
+        # indexed late.
+        RestEndpoint(
+            "news", f"{REST_HOST}/v2/reference/news", "published_utc", date(2016, 6, 1),
+            limit=1000, overlap_days=1, tiebreak=None, order_param=True, timestamped=True,
         ),
         # FINRA short interest per settlement date, twice a month from 2017-12 (#355). A
         # release is published about 8 trading days after its settlement date, when the

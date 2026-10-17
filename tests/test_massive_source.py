@@ -29,14 +29,14 @@ def test_the_registry_lists_massive_and_its_data_types():
 
     source = _source()
     assert [c.data_type for c in source.capabilities] == ["trades", "minute_aggs", "day_aggs", "dividends",
-                                                             "short_interest", "short_volume", "disclosures",
+                                                             "news", "short_interest", "short_volume", "disclosures",
                                                              "ipos"]
     # The flat files, then the REST endpoints a panel is built from.
-    assert set(DATA_TYPES) | {"dividends", "short_interest", "short_volume", "disclosures", "ipos"} == {
-        c.data_type for c in source.capabilities}
+    rest = {"dividends", "news", "short_interest", "short_volume", "disclosures", "ipos"}
+    assert set(DATA_TYPES) | rest == {c.data_type for c in source.capabilities}
     assert {(c.data_type, c.frequency) for c in source.capabilities} == {
-        ("trades", "tick"), ("minute_aggs", "1m"), ("day_aggs", "1d"), ("dividends", "1d"), ("short_interest", "1d"),
-        ("short_volume", "1d"), ("disclosures", "1d"), ("ipos", "1d"),
+        ("trades", "tick"), ("minute_aggs", "1m"), ("day_aggs", "1d"), ("dividends", "1d"), ("news", "1d"),
+        ("short_interest", "1d"), ("short_volume", "1d"), ("disclosures", "1d"), ("ipos", "1d"),
     }
     assert {c.market for c in source.capabilities} == {"us_equity"}
 
@@ -46,15 +46,16 @@ def test_the_trades_and_the_day_aggregates_convert_through_the_registry():
     from quantlab.dataset.massive.disclosures import MassiveDisclosureDataset
     from quantlab.dataset.massive.dividends import MassiveDividendDataset
     from quantlab.dataset.massive.ipos import MassiveIpoDataset
+    from quantlab.dataset.massive.news import MassiveNewsDataset
     from quantlab.dataset.massive.short_interest import MassiveShortInterestDataset
     from quantlab.dataset.massive.short_volume import MassiveShortVolumeDataset
     from quantlab.dataset.massive.trade_bars import MassiveTradeBarDataset
 
     by_type = {c.data_type: c.dataset_cls for c in _source().capabilities}
     assert by_type == {"trades": MassiveTradeBarDataset, "minute_aggs": None, "day_aggs": MassiveDayBarDataset,
-                       "dividends": MassiveDividendDataset, "short_interest": MassiveShortInterestDataset,
-                       "short_volume": MassiveShortVolumeDataset, "disclosures": MassiveDisclosureDataset,
-                       "ipos": MassiveIpoDataset}
+                       "dividends": MassiveDividendDataset, "news": MassiveNewsDataset,
+                       "short_interest": MassiveShortInterestDataset, "short_volume": MassiveShortVolumeDataset,
+                       "disclosures": MassiveDisclosureDataset, "ipos": MassiveIpoDataset}
 
 
 def test_the_credentials_are_the_clients_own_variables():
