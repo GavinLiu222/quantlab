@@ -26,6 +26,7 @@ results are read through `TrainedRun`.
 """
 
 import json
+from contextlib import contextmanager
 from pathlib import Path
 
 import joblib
@@ -365,6 +366,40 @@ def test_hyperparameters_pass_through(tmp_path, tracker):
     }
     assert "num_boost_round" not in model._params
     assert model.config.hyperparameters == hyper
+
+
+def test_dmatrix_builds_and_predictions_run_inside_openmp_threads_of_nthread(tmp_path, monkeypatch):
+    """Every DMatrix of a fit and of a prediction is built inside
+    `openmp_threads(nthread)`, so torch's one-thread OpenMP setting cannot
+    pin it (see tests/test_openmp_threads.py)."""
+    import quantlab.model.predefined.xgb as xgb_head
+
+    events: list = []
+
+    @contextmanager
+    def recording(requested):
+        events.append(("enter", requested))
+        yield
+        events.append(("exit", requested))
+
+    class RecordingDMatrix(xgb.DMatrix):
+        def __init__(self, *args, **kwargs):
+            events.append(("dmatrix", None))
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(xgb_head, "openmp_threads", recording)
+    monkeypatch.setattr(xgb_head.xgb, "DMatrix", RecordingDMatrix)
+    factors, labels = _panels(seed=17)
+    model = _train(tmp_path, factors, labels, hyperparameters={"num_boost_round": 3, "nthread": 3})
+    model.predict(_test_arrays(model)[0])
+
+    assert ("enter", 3) in events
+    assert {requested for kind, requested in events if kind == "enter"} == {3}
+    depth = 0
+    for kind, _ in events:
+        depth += {"enter": 1, "exit": -1}.get(kind, 0)
+        assert kind != "dmatrix" or depth == 1
+    assert depth == 0
 
 
 def test_default_params(tmp_path, tracker):

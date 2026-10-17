@@ -29,6 +29,7 @@ except ImportError as exc:
 from quantlab.model.library_model import Rows
 from quantlab.model.predefined._support.devices import resolve_device, xgboost_default_device
 from quantlab.model.predefined._support.tabkit import TabkitRegressor, active_callbacks
+from quantlab.model.predefined._support.threads import openmp_threads
 from quantlab.model.predefined.xgb import (
     _TrackingEvalCallback,
     boosters_on_cpu,
@@ -205,7 +206,8 @@ class XGBTDRegressor(TabkitRegressor):
 
         Label ``i`` is fitted on column ``i`` of the training target. Without
         validation rows each estimator is pinned to predict with all of its
-        rounds.
+        rounds. Each fit runs on ``n_threads`` OpenMP threads
+        (``openmp_threads``).
         """
         self._warn_without_validation(val_rows)
         names = list(self.get_label_names())
@@ -215,7 +217,7 @@ class XGBTDRegressor(TabkitRegressor):
             with active_callbacks(
                 xgb_callbacks=self._round_callbacks(suffix),
                 xgb_params={"device": self._params["device"]},
-            ):
+            ), openmp_threads(self._params.get("n_threads")):
                 if val_rows is None:
                     estimator.fit(train_rows.x, train_rows.y[:, i])
                     self._pin_all_rounds(estimator)
@@ -335,9 +337,14 @@ class XGBTDRegressor(TabkitRegressor):
         return out
 
     def _forward(self, x: np.ndarray) -> np.ndarray:
-        """Predict ``[n, L]`` from imputed ``[n, F]`` rows, one estimator per label."""
-        columns = [
-            np.asarray(estimator.predict(x), dtype=np.float32).reshape(-1)
-            for estimator in self.model
-        ]
+        """Predict ``[n, L]`` from imputed ``[n, F]`` rows, one estimator per label.
+
+        Runs on ``n_threads`` OpenMP threads (``openmp_threads``; every
+        available CPU after a load).
+        """
+        with openmp_threads((self._params or {}).get("n_threads")):
+            columns = [
+                np.asarray(estimator.predict(x), dtype=np.float32).reshape(-1)
+                for estimator in self.model
+            ]
         return np.stack(columns, axis=-1)

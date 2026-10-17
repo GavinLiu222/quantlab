@@ -29,6 +29,7 @@ from quantlab.model.predefined._support.devices import (
     resolve_device,
     xgboost_default_device,
 )
+from quantlab.model.predefined._support.threads import openmp_threads
 
 #: scikit-learn style aliases mapped to the native ``xgb.train`` parameter
 #: names. Aliases are rewritten on the user's dict before it is merged with
@@ -671,56 +672,60 @@ class XGBoostRegressor(LibraryModel):
 
         NaN features are xgboost's missing values. With early stopping, the
         best iteration and its score are written to the run summary,
-        followed by the feature importance.
+        followed by the feature importance. The DMatrix build and training
+        run on ``nthread`` OpenMP threads (``openmp_threads``).
         """
         params = dict(self._params)
         if self._uses_ccc_objective and "base_score" not in params:
             params["base_score"] = float(np.mean(train_rows.y, dtype=np.float64))
             self._run.summarize({"base_score": params["base_score"]})
-        dtrain = xgb.DMatrix(train_rows.x, label=train_rows.y)
-        # The validation set is evaluated every round for early stopping; the
-        # training set only feeds the per-round training curve, so it is
-        # left out when the training segment is not scored.
-        evals = [(dtrain, "train")] if "train" in self.config.metric_splits else []
+        # torch may have left the OpenMP runtime xgboost shares at one thread
+        # (see ``openmp_threads``); the DMatrix build and CPU work need ``nthread``.
+        with openmp_threads(params.get("nthread")):
+            dtrain = xgb.DMatrix(train_rows.x, label=train_rows.y)
+            # The validation set is evaluated every round for early stopping; the
+            # training set only feeds the per-round training curve, so it is
+            # left out when the training segment is not scored.
+            evals = [(dtrain, "train")] if "train" in self.config.metric_splits else []
 
-        dval = None
-        if val_rows is not None:
-            dval = xgb.DMatrix(val_rows.x, label=val_rows.y)
-            evals.append((dval, "val"))
+            dval = None
+            if val_rows is not None:
+                dval = xgb.DMatrix(val_rows.x, label=val_rows.y)
+                evals.append((dval, "val"))
 
-        # The logging callback must precede EarlyStopping: xgboost short-
-        # circuits its callback list, so a callback placed after EarlyStopping
-        # misses the round that triggered the stop.
-        callbacks: list[xgb.callback.TrainingCallback] = [
-            _TrackingEvalCallback(self._run)
-        ]
-        use_early_stopping = self.early_stopping and dval is not None
-        if use_early_stopping:
-            callbacks.append(
-                xgb.callback.EarlyStopping(
-                    rounds=self.early_stopping_patience,
-                    data_name="val",
-                    metric_name=self.EARLY_STOPPING_METRIC,
-                    save_best=True,
+            # The logging callback must precede EarlyStopping: xgboost short-
+            # circuits its callback list, so a callback placed after EarlyStopping
+            # misses the round that triggered the stop.
+            callbacks: list[xgb.callback.TrainingCallback] = [
+                _TrackingEvalCallback(self._run)
+            ]
+            use_early_stopping = self.early_stopping and dval is not None
+            if use_early_stopping:
+                callbacks.append(
+                    xgb.callback.EarlyStopping(
+                        rounds=self.early_stopping_patience,
+                        data_name="val",
+                        metric_name=self.EARLY_STOPPING_METRIC,
+                        save_best=True,
+                    )
                 )
-            )
-        elif self.early_stopping:
-            logger.warning(
-                f"{self.class_name}: early_stopping=True but there is no usable "
-                f"validation segment; early stopping skipped, training all "
-                f"{self._num_boost_round} rounds."
-            )
+            elif self.early_stopping:
+                logger.warning(
+                    f"{self.class_name}: early_stopping=True but there is no usable "
+                    f"validation segment; early stopping skipped, training all "
+                    f"{self._num_boost_round} rounds."
+                )
 
-        self.model = xgb.train(
-            params,
-            dtrain,
-            num_boost_round=self._num_boost_round,
-            evals=evals,
-            obj=ccc_objective if self._uses_ccc_objective else None,
-            custom_metric=ccc_loss_metric,
-            callbacks=callbacks,
-            verbose_eval=False,
-        )
+            self.model = xgb.train(
+                params,
+                dtrain,
+                num_boost_round=self._num_boost_round,
+                evals=evals,
+                obj=ccc_objective if self._uses_ccc_objective else None,
+                custom_metric=ccc_loss_metric,
+                callbacks=callbacks,
+                verbose_eval=False,
+            )
 
         if use_early_stopping:
             self._run.summarize(
@@ -791,8 +796,14 @@ class XGBoostRegressor(LibraryModel):
         ``inplace_predict``, which skips building a ``DMatrix``, is tried
         first. Boosters that do not support it
         (``gblinear``) fall back to ``predict`` on a ``DMatrix``. NaN is
-        treated as missing on both paths.
+        treated as missing on both paths. Both run on ``nthread`` OpenMP
+        threads (``openmp_threads``; every available CPU after a load).
         """
+        with openmp_threads((self._params or {}).get("nthread")):
+            return self._predict_rows(x)
+
+    def _predict_rows(self, x: np.ndarray) -> np.ndarray:
+        """``_forward`` without the OpenMP thread setting."""
         if self._device not in (None, "cpu"):
             # ``_forward_rows`` never passes an empty batch.
             rows = self._predict_batch_rows(*x.shape)
