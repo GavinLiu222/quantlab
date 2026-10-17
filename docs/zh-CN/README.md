@@ -24,7 +24,7 @@
 | 指南 | 内容 |
 |------|------|
 | [采集引擎](acquisition.md) | 一次下载如何运行：分批、失败隔离、增量刷新、原始文件布局和体量护栏 |
-| [数据源登记表](registry.md) | 数据源目录、`run()` 与 `convert()` 入口、进度事件和只读检视器 |
+| [数据源登记表](registry.md) | 数据源目录、`download_symbols()`、`refresh_raw_tier()` 与 `convert()` 入口、进度事件和只读检视器 |
 | [断点续传](pageledger.md) | 多页下载中断后如何接着运行 |
 | [WRDS CRSP 日频股票](wrds_crsp.md) | 按 PERMNO 组织的研究级美股日频数据、总收益复权和退市收益 |
 | [WRDS TAQ 报价](wrds_taq.md) | 最优买卖报价（NBBO）及其重采样为 bar |
@@ -65,7 +65,7 @@ quantlab/       各层按一条链单向依赖（ADR 0022）：每层的根类�
   universe.py   时点股票池
   dataset/      数据集根类与配置；具体数据集：现货 K 线、美股、CRSP、NBBO、指数成分，以及多数据集合并视图
   config/       数据根目录与配置工厂
-  acquisition/  采集根类、数据源登记与 run()/convert() 入口（registry.py）；Tiingo、Alpaca、WRDS 下载器
+  acquisition/  采集根类、数据源登记与 download_symbols()/refresh_raw_tier()/convert() 入口（registry.py）；Tiingo、Alpaca、WRDS 下载器
   analysis/     因子分析报告
   factor/       因子根类与配置、因子框架（KunQuant、Polars 两种后端）、KunQuant 自定义算子；predefined/ 下是自带因子：Alpha101、Alpha158、动量等
   label/        标签配置与标签框架（Forward）；predefined/ 下是自带的未来收益与波动率标签

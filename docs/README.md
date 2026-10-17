@@ -87,7 +87,7 @@ working on.
 |------|----------------|
 | [Frame API](api.md) | `quantlab.api`: factors, forward returns, factor reports and backtests from your own DataFrames |
 | [Acquisition](acquisition.md) | How a download runs: batches, failure isolation, incremental refresh and the raw file layout |
-| [Data source registry](registry.md) | The catalogue of sources, `run()` and `convert()`, progress events and the read-only inspector |
+| [Data source registry](registry.md) | The catalogue of sources, `download_symbols()`, `refresh_raw_tier()` and `convert()`, progress events and the read-only inspector |
 | [Resumable downloads](pageledger.md) | How a multi-page download resumes after an interruption |
 | [WRDS CRSP daily stocks](wrds_crsp.md) | US daily data by PERMNO, total-return adjustment and delisting returns |
 | [WRDS TAQ quotes](wrds_taq.md) | National best bid and offer quotes and their resampling to bars |
