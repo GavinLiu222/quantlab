@@ -601,6 +601,42 @@ class MassiveClient:
         """
         return self._download(data_type, day, download_root, threading.Lock(), threading.Event())[0]
 
+    def published_size(self, data_type: str, day: date) -> int:
+        """Return the size of one data type's file for one trading day, downloading nothing.
+
+        One HEAD request, not retried: a caller probing which days the plan
+        serves (the oldest day of its rolling window) tells the answers apart
+        by the exception.
+
+        Parameters
+        ----------
+        data_type : str
+            ``"trades"``, ``"minute_aggs"`` or ``"day_aggs"``.
+        day : date
+            The trading day.
+
+        Returns
+        -------
+        int
+            The file's size in bytes.
+
+        Raises
+        ------
+        MassiveNotPublishedError
+            If Massive has no file for the day.
+        MassiveEntitlementError
+            If Massive refused the credentials or the day (outside the plan's window).
+        MassiveTransportError
+            If the request failed.
+
+        Examples
+        --------
+        Needs the credentials and the network::
+
+            client.published_size("trades", date(2016, 11, 25))  # 217911421
+        """
+        return self.store.size(s3_key(data_type, day))
+
     def download_days(
         self, data_type: str, start: date, end: date, download_root: str | Path
     ) -> Iterator[DayDownload]:

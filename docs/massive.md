@@ -101,7 +101,7 @@ A pull works like this:
 - HTTP 429 and 5xx, and a broken connection, are retried after the client's back-off (`backoff`, doubled each time, `retries` times), and then raise `MassiveTransportError`. HTTP 401 raises `MassiveEntitlementError` saying the key was refused. HTTP 403 raises `MassiveEntitlementError` naming the endpoint the plan is not entitled to. Either way, the pages and the watermark written before stay.
 - The API key goes in an `Authorization: Bearer` header only. It is never in a URL, a query, a log line (which prints the URL without its query) or a raw file.
 
-`scripts/massive/rest_pull.py` pulls every endpoint, or those of `--endpoints`. It tries each one even when another fails, and exits 1 if any failed. The daily update runs it in its raw stage, allowed to fail (see the [data update guide](data_update.md)):
+Massive's raw-tier refresh, `quantlab.acquisition.massive.refresh.refresh_raw_tier`, pulls every endpoint, or those of `endpoints=`. It tries each one even when another fails, and lists the failed ones in its result's `failed`. It is registered on the source, so `quantlab.acquisition.registry.refresh_raw_tier(DataSourceRegistry.get("massive"), download_dir)` calls it, and the daily update does so in its raw stage, allowed to fail (`refresh: {vendor: massive}`, see the [data update guide](data_update.md)). The daily trade and aggregate files are not part of it: they are downloaded beside their conversion (`convert.py --download`, below), which converts each day while the next downloads. `scripts/massive/rest_pull.py` runs the refresh by hand and exits 1 if any endpoint failed:
 
 ```bash
 .venv/bin/python scripts/massive/rest_pull.py --download-dir /data/quantlab/downloads

@@ -13,7 +13,9 @@ no observation (a holiday); either becomes a null.
 watermark, its ``refresh()`` from that watermark and its daily raw tier
 (``month=YYYY-MM/`` shards with ``timestamp``, ``symbol``, ``vendor`` and
 ``value``). ``quantlab.dataset.fred.FredRateDataset`` converts a rate series
-into a panel. ``FRED_SOURCE`` at the bottom registers the vendor.
+into a panel. ``refresh_raw_tier`` keeps series current under a download root
+(the daily update's raw-tier refresh), and ``FRED_SOURCE`` at the bottom
+registers the vendor with it.
 
 Examples
 --------
@@ -34,6 +36,9 @@ from __future__ import annotations
 
 import functools
 import io
+from collections.abc import Sequence
+from datetime import date
+from pathlib import Path
 
 import polars as pl
 import requests
@@ -44,7 +49,8 @@ from quantlab.acquisition.base import (
     SourceDescriptor,
     register_source,
 )
-from quantlab.acquisition.config import stock_acquisition_config
+from quantlab.acquisition.config import AcquisitionConfig, stock_acquisition_config
+from quantlab.acquisition.refresh import RawTierRefreshResult, RefreshedPart
 from quantlab.dataset.fred import FredRateDataset
 
 #: The CSV endpoint; it takes ``id``, ``cosd`` and ``coed`` and no key.
@@ -225,6 +231,63 @@ class FredAcquisition(Acquisition):
         }
 
 
+#: Where the raw tier and the watermarks go under the download root.
+RAW_DIR = "fred"
+WATERMARK_DIR = Path("_watermarks") / "fred"
+
+
+def refresh_raw_tier(
+    download_dir: str | Path,
+    *,
+    series: Sequence[str],
+    start: str,
+    end: date | None = None,
+) -> RawTierRefreshResult:
+    """Download FRED ``series`` into ``<download_dir>/fred``, each from its watermark.
+
+    A first refresh downloads each series from ``start``; a later one only
+    what is past its watermark (``<download_dir>/_watermarks/fred``). The FRED
+    stores read the raw tier from ``<download_dir>/fred``. Registered on
+    ``FRED_SOURCE``.
+
+    Parameters
+    ----------
+    download_dir : str or Path
+        The download root.
+    series : sequence of str
+        The series ids, such as ``["DTB3"]``.
+    start : str
+        The first observation day a first download asks for, YYYY-MM-DD.
+    end : date or None, default None
+        The last observation day; today when omitted.
+
+    Returns
+    -------
+    RawTierRefreshResult
+        One part per series, a failed one with FRED's error.
+
+    Examples
+    --------
+    Needs the network (no key)::
+
+        refresh_raw_tier("/data/quantlab/downloads", series=["DTB3"], start="1954-01-04")
+    """
+    root = Path(download_dir)
+    acquisition = FredAcquisition(AcquisitionConfig(
+        market="us_equity", frequency="1d", vendor="fred",
+        raw_data_dir_path=str(root / RAW_DIR),
+        watermark_path=str(root / WATERMARK_DIR),
+        symbols=tuple(series), start_date=start,
+        end_date=end.isoformat() if end is not None else None,
+    )).download()
+    result = acquisition.last_result
+    return RawTierRefreshResult("fred", tuple(
+        RefreshedPart(name, "", error=result.failures[name]) if name in result.failures
+        else RefreshedPart(name, "downloaded")
+        for name in result.requested
+    ))
+
+
 #: The registered descriptor for FRED.
 FRED_SOURCE = register_source(
     SourceDescriptor(
@@ -244,5 +307,6 @@ FRED_SOURCE = register_source(
             ),
         ),
         required_env=(),
+        raw_tier_refresh=refresh_raw_tier,
     )
 )

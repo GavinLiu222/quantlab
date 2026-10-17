@@ -13,7 +13,7 @@
 | `alpaca` | `APCA_API_KEY_ID`、`APCA_API_SECRET_KEY` | 美股 1d、1m 行情；tick 报价与成交 |
 | `fred` | 无 | 利率序列，例如 DTB3（3 个月期国库券利率，免 key 的 CSV 接口）；`FredRateDataset` 生成单 symbol 的 `rate` 与 `risk_free` 面板 |
 | `massive` | `MASSIVE_API_KEY`、`MASSIVE_S3_ACCESS_KEY_ID`（`MASSIVE_S3_SECRET_ACCESS_KEY` 可选） | 美股每一笔 SIP 成交，以及 Massive 自己的分钟、日 bar，按日放在 S3 文件里；`MassiveTradeBarDataset` 生成 Trade bar，`MassiveDayBarDataset` 生成日 bar 库，都在 Massive 代码轴上；`MassiveDividendDataset` 用 REST 的分红和拆股生成 permaticker 上的分红面板，`MassiveShortInterestDataset` 用 REST 的卖空余额生成卖空余额面板，`MassiveShortVolumeDataset` 用 REST 的卖空成交量生成卖空成交量面板，`MassiveNewsDataset` 用 REST 的新闻生成新闻条数和情绪面板，`MassiveDisclosureDataset` 用 REST 的 8-K 披露生成 8-K 披露类别面板，`MassiveIpoDataset` 用 REST 的 IPO 生成 IPO 面板；由 `MassiveClient` 下载，不走 `run()`（见 [Massive](../massive.md)） |
-| `sharadar` | `SHARADAR_API_KEY` | 美股股票（SEP）与基金（SFP）日线、SF1 基本面、DAILY 估值、8-K 事件、内部人交易、13F 持仓、ACTIONS、标普 500 成分、TICKERS、INDICATORS；由 `scripts/sharadar/` 下载，不走 `run()`（见 [Sharadar](../sharadar.md)） |
+| `sharadar` | `SHARADAR_API_KEY` | 美股股票（SEP）与基金（SFP）日线、SF1 基本面、DAILY 估值、8-K 事件、内部人交易、13F 持仓、ACTIONS、标普 500 成分、TICKERS、INDICATORS；由 `scripts/sharadar/download.py` 首次下载，不走 `run()`，由 `refresh_raw_tier()` 保持最新（见 [Sharadar](../sharadar.md)） |
 | `tiingo` | `TIINGO_API_KEY` | 美股日线 |
 | `wrds` | `WRDS_USERNAME`（密码放在 `~/.pgpass`） | TAQ NBBO 报价；CRSP 日线 |
 
@@ -200,6 +200,20 @@ shape: (2, 3)
 ```
 
 `granularity` 设定窗口大小（默认 `"year"`），`on_new_listing` 决定如何处理不在存储标的轴上的新标的。两者详见 chunking 指南。
+
+### 让原始层保持最新
+
+每日更新负责保持最新的厂商，会在描述符上注册一个原始层刷新函数（`raw_tier_refresh`，即 `quantlab.acquisition.refresh.RawTierRefresh`）。`refresh_raw_tier(descriptor, download_dir, end=None, **options)` 调用它。原始层的每一部分都从自己的水位线拉到 `end`：Sharadar 的一张表、Massive 的一个 REST 端点、FRED 的一条序列。函数返回 `RawTierRefreshResult`，每部分一个 `RefreshedPart`，`failed` 列出没刷新成功的部分。选项由各厂商自定：Sharadar 用 `trading_days`，Massive 用 `endpoints`，FRED 用 `series` 和 `start`。Tiingo、Alpaca 和 WRDS 没有注册刷新函数，`refresh_raw_tier` 会拒绝它们。
+
+```python
+>>> from quantlab.acquisition.registry import refresh_raw_tier
+>>> refresh_raw_tier(DataSourceRegistry.get("tiingo"), "downloads")
+Traceback (most recent call last):
+...
+ValueError: Tiingo EOD registers no raw-tier refresh; download it with run().
+```
+
+联网时，`refresh_raw_tier(DataSourceRegistry.get("fred"), "/data/quantlab/downloads", series=["DTB3"], start="1954-01-04")` 写入 `<download_dir>/fred`，水位线在 `<download_dir>/_watermarks/fred`。每日更新的 `refresh` 步骤就是这个调用（见[数据更新指南](../data_update.md)）。
 
 ### 查明一个标的为什么失败
 
