@@ -169,5 +169,12 @@ ENDPOINTS: dict[str, RestEndpoint] = {
             "ticker_events", f"{REST_HOST}/vX/reference/tickers/{{id}}/events", None, limit=1000,
             key="composite_figi", ids_from="tickers",
         ),
+        # Daily short volume per ticker (FINRA's files, totals and per venue), from 2024-02-06
+        # (#356). A record has no id (one per ticker and day), so it is identified by all its
+        # fields and the short volume panel keeps the newest copy of each (ticker, date).
+        RestEndpoint(
+            "short_volume", f"{REST_HOST}/stocks/v1/short-volume", "date", date(2024, 2, 6),
+            limit=50000, overlap_days=7, key=None,
+        ),
     )
 }
