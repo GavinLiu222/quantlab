@@ -77,9 +77,10 @@ dividend panel `market/massive/massive_dividends_1d` (Massive's dividends and sp
 permatickers through the map), `scripts/massive/short_interest.py` does the same for the short
 interest panel `market/massive/massive_short_interest_1d` (a release shown from settlement + 8 trading
 days), `scripts/massive/short_volume.py` appends the same days to the short volume panel
-`market/massive/massive_short_volume_1d`, and `scripts/massive/disclosures.py` does the same for the 8-K
+`market/massive/massive_short_volume_1d`, `scripts/massive/disclosures.py` does the same for the 8-K
 disclosure panel `market/massive/massive_disclosures_1d` (one flag per primary category of Massive's
-disclosure taxonomy). The scripts are `run` steps with `allow_failure: true`; the
+disclosure taxonomy), and `scripts/massive/ipos.py` for the IPO panel `market/massive/massive_ipos_1d`
+(listed IPOs on their listing day). The scripts are `run` steps with `allow_failure: true`; the
 conversion and the map do at most five days each (`--max-days 5`; a store far behind is caught up by a
 run of its own), the day bars and the REST panels every new day on disk, and none of the stores is
 in `ready`: Massive publishes a day's files at about 00:30 ET the next day, and a late file
