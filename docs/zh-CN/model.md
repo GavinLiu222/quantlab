@@ -1185,7 +1185,7 @@ ValueError: XGBoostRegressor: train_cv: train_periods=4 needs at least 5 trainin
 
 在 macOS 上，`xgboost` 的 wheel 链接的是 Homebrew 的 OpenMP 运行时，而 `torch` 自带另一份。同一个进程里同时使用两者可能崩溃或卡死。在第一次导入其中任何一个库之前设置 `OMP_NUM_THREADS=1` 可以避免，代价是树模型和 torch 代码变成单线程。Linux 不受影响。
 
-在 Linux 上，xgboost 和 torch 共用同一个 OpenMP 运行时。torch 在 `MKL_NUM_THREADS=1`（且未设 `OMP_NUM_THREADS`）下启动时会把它设成一个线程，xgboost 的 `nthread` 无法再调高。因此 `XGBoostRegressor` 和 `XGBTDRegressor` 在每次训练和预测时设置 OpenMP 线程数：取 `nthread`（`XGBTDRegressor` 是 `n_threads`），未设时取进程可用的全部 CPU，且不超过环境变量 `OMP_NUM_THREADS`（`quantlab/model/predefined/_support/threads.py`）。在训练服务器上实测：2,000,000 x 360 的 `DMatrix` 在 `nthread=64` 下，运行时为一个线程时用 13.5 秒，设置后用 4.3 秒。
+在 Linux 上不要设置 `MKL_NUM_THREADS=1`：torch 会因此把它和 xgboost 共用的 OpenMP 运行时设成一个线程，xgboost 的 `nthread` 无法再调高（训练服务器上 2,000,000 x 360 的 `DMatrix` 从 4.4 秒变成 13.5 秒）。
 
 ## 另请参阅
 

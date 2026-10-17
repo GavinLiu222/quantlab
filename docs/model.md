@@ -1185,7 +1185,7 @@ Progress goes to stderr through `loguru` and `tqdm`. `logger.remove()` silences 
 
 On macOS the `xgboost` wheel links Homebrew's OpenMP runtime while `torch` bundles its own. A process that uses both can crash or hang. Setting `OMP_NUM_THREADS=1` before the first import of either library avoids this, at the cost of single-threaded tree and torch code. Linux is not affected.
 
-On Linux, xgboost shares torch's OpenMP runtime, and torch started with `MKL_NUM_THREADS=1` (and `OMP_NUM_THREADS` unset) leaves it at one thread, which xgboost's `nthread` cannot raise. `XGBoostRegressor` and `XGBTDRegressor` therefore set the OpenMP thread count around every fit and prediction: `nthread` (`n_threads` for `XGBTDRegressor`), every CPU the process may run on when unset, never more than an `OMP_NUM_THREADS` in the environment (`quantlab/model/predefined/_support/threads.py`). Measured on the training server: a 2,000,000 x 360 `DMatrix` at `nthread=64` took 13.5 s with the runtime at one thread and 4.3 s with it set.
+On Linux, do not set `MKL_NUM_THREADS=1`: torch then sets the OpenMP runtime it shares with xgboost to one thread, and xgboost's `nthread` cannot raise it (a 2,000,000 x 360 `DMatrix` took 13.5 s instead of 4.4 s on the training server).
 
 ## See also
 

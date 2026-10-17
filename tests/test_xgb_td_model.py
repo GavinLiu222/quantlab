@@ -30,7 +30,6 @@ results are read through `TrainedRun`.
 """
 
 import json
-from contextlib import contextmanager
 from pathlib import Path
 
 import joblib
@@ -308,29 +307,6 @@ def test_hyperparameters_pass_through_and_the_config_dict_is_not_mutated(tmp_pat
     assert fitted["n_threads"] == 1
     assert json.dumps(hyper, sort_keys=True) == before
     assert model.config.hyperparameters is hyper
-
-
-def test_fits_and_predictions_run_inside_openmp_threads_of_n_threads(tmp_path, monkeypatch):
-    """Each estimator's fit and prediction runs inside
-    `openmp_threads(n_threads)` (see tests/test_openmp_threads.py)."""
-    import quantlab.model.predefined.xgb_td as xgb_td_head
-
-    requested: list = []
-
-    @contextmanager
-    def recording(n):
-        requested.append(n)
-        yield
-
-    monkeypatch.setattr(xgb_td_head, "openmp_threads", recording)
-    factors, labels = _panels(seed=17)
-    model = _train(tmp_path, factors, labels, hyperparameters={**FAST, "n_threads": 2})
-    fits = len(requested)
-    model.predict(_test_arrays(model)[0])
-
-    assert fits >= 1
-    assert len(requested) > fits
-    assert set(requested) == {2}
 
 
 def test_default_params_pin_val_fraction_to_zero(tmp_path):
