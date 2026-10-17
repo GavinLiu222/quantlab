@@ -62,6 +62,9 @@ Massive's REST endpoints are kept in the same raw tier, one directory per endpoi
 |---|---|---|---|---|
 | `splits` | `/stocks/v1/splits` | `execution_date` | 1978-01-01 | 7 days |
 | `dividends` | `/stocks/v1/dividends` | `ex_dividend_date` | 2000-01-01 | 7 days |
+| `ipos` | `/vX/reference/ipos` | `listing_date` | 2008-12-01 | 7 days |
+
+The IPO endpoint takes its order as `sort=listing_date&order=asc` (`RestEndpoint.order_param`), not as `sort=<field>.asc`. Its records have no id, so a record is identified by all its fields (`key=None`); every status is kept, withdrawn and pending IPOs too, and an IPO without a listing date is not returned by a pull on the listing date.
 
 These are the current `/stocks/v1` endpoints, not the deprecated `/v3/reference/splits` and `/v3/reference/dividends`.
 
@@ -364,6 +367,37 @@ A cell without one is NaN. A security with several declared dividends pending sh
 The amounts are as declared on the day: `split_adjusted_cash_amount` and `historical_adjustment_factor` are never read, so a later event never rewrites the panel's history. Each record is placed through the Ticker map (above) on its own day: the ex-date for the cash, the execution date for the split, the first day shown for a declared dividend. Rows the map cannot place, and dividends not in USD or without an amount, are counted in `massive_dividends_1d.zarr.unplaced.json`. The columns are the universe's permatickers, by default SEP's domestic common stock (the universe fields work as for a Sharadar price panel); a record placed on another security (a fund) is dropped. The store is built through the last day SEP, both REST pulls and the Ticker map all reach, so `update()` appends a day once each holds it, and a store built day by day equals one built at once. A missing pull or an empty map is refused, naming the script to run.
 
 The shared store is `<data-dir>/market/massive/massive_dividends_1d/`, beside its `README.md` and `component.json`. `scripts/massive/dividends.py --download-dir ... --data-dir ...` writes the folder when it is missing (the config starting at the Ticker map's first day) and appends the new days; the daily data update runs it after the Ticker map ([data_update.md](data_update.md)).
+
+## IPOs
+
+`MassiveIpoDataset` (`quantlab.dataset.massive.ipos`) builds the IPO panel `massive_ipos_1d` from the REST `ipos` pull, on Sharadar's permaticker axis and SEP's trading calendar:
+
+```python
+from quantlab.dataset.config import MassiveIposConfig
+from quantlab.dataset.massive.ipos import MassiveIpoDataset
+
+ipos = MassiveIpoDataset(MassiveIposConfig(
+    zarr_file_path="/data/quantlab/market/massive/massive_ipos_1d/massive_ipos_1d.zarr",
+    raw_data_dir_path="/data/quantlab/downloads/sharadar",
+    massive_dir="/data/quantlab/downloads/massive",
+    ticker_map_path="/data/quantlab/market/massive/massive_ticker_map/massive_ticker_map",
+    start_date="2016-10-10",
+))
+ipos.update()
+panel = ipos.panel("2024-01-02", "2024-12-31")
+```
+
+| Variable | Value | Placement |
+|---|---|---|
+| `ipo_offer_price` | `final_issue_price`, the final offer price per share (USD) | the `listing_date` |
+| `ipo_offer_size` | `total_offer_size`, the total amount raised (USD) | the `listing_date` |
+| `ipo_days_announced` | trading days from the `announced_date` to the listing, 0 on the same day | the `listing_date` |
+
+A cell without one is NaN. Only an IPO that listed is shown: `ipo_status` `new`, `history` or `direct_listing_process`, with a `listing_date`. Pending, rumoured, postponed and withdrawn IPOs stay in the raw tier and are not counted as left out. The vendor revises a record as the IPO goes from pending to listed, so each IPO (a ticker and its announcement date) is read from its newest copy: the latest `last_updated`, then the latest pull. An announcement date that is not a session counts from the next one, and the days are counted on the NYSE calendar. A listing date that is not a trading day rolls onto the next one, and an IPO listed before the store's first day is not shown.
+
+Each IPO is placed through the Ticker map (above) on its listing day; one the map cannot place, and one not in USD, is counted in `massive_ipos_1d.zarr.unplaced.json`. The columns are the universe's permatickers, by default SEP's domestic common stock. The store is built through the last day SEP, the REST pull and the Ticker map all reach, so a store built day by day equals one built at once; a missing pull or an empty map is refused, naming the script to run.
+
+The shared store is `<data-dir>/market/massive/massive_ipos_1d/`, beside its `README.md` and `component.json`. `scripts/massive/ipos.py --download-dir ... --data-dir ...` writes the folder when it is missing and appends the new days; the daily data update runs it after the Ticker map.
 
 ## Reading Trade bars as securities
 

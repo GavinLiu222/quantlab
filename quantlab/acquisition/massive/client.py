@@ -945,7 +945,7 @@ class MassiveClient:
             if end is not None:
                 cap = min(cap, end)
                 bounds[f"{field}.lte"] = end.isoformat()
-            params = {**bounds, **params, "sort": endpoint.sort}
+            params = {**bounds, **params, **endpoint.sort_params}
             logger.info(f"Massive: pulling {endpoint.name} from {field} {start} (watermark {watermark}).")
 
         url: str | None = endpoint.url

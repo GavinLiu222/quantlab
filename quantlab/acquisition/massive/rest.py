@@ -81,6 +81,10 @@ class RestEndpoint:
         next new session.
     id_field : str, default "composite_figi"
         The source records' field giving an ``ids_from`` endpoint's ids.
+    order_param : bool, default False
+        Give the order in its own ``order`` parameter (``sort=<date
+        field>&order=asc``), as the ``/vX/reference`` IPOs take it, instead
+        of ``sort=<date field>.asc,<tiebreak>.asc``.
 
     Examples
     --------
@@ -101,6 +105,7 @@ class RestEndpoint:
     as_of_param: str | None = None
     ids_from: str | None = None
     id_field: str = "composite_figi"
+    order_param: bool = False
 
     def __post_init__(self) -> None:
         if self.ids_from is not None and "{id}" not in self.url:
@@ -120,7 +125,24 @@ class RestEndpoint:
         """
         if self.date_field is None:
             return None
+        if self.order_param:
+            return self.date_field
         return ",".join(f"{column}.asc" for column in (self.date_field, self.tiebreak) if column)
+
+    @property
+    def sort_params(self) -> dict[str, str]:
+        """The query parameters ordering a date-ranged pull: ``sort``, and ``order`` with ``order_param``.
+
+        Examples
+        --------
+        >>> ENDPOINTS["splits"].sort_params
+        {'sort': 'execution_date.asc,ticker.asc'}
+        >>> ENDPOINTS["ipos"].sort_params
+        {'sort': 'listing_date', 'order': 'asc'}
+        """
+        if self.date_field is None:
+            return {}
+        return {"sort": self.sort, "order": "asc"} if self.order_param else {"sort": self.sort}
 
 
 #: Every endpoint the raw tier keeps, by name.
@@ -165,6 +187,14 @@ ENDPOINTS: dict[str, RestEndpoint] = {
         ),
         # Each composite FIGI's ticker changes (experimental vX endpoint, one FIGI a call),
         # asked for every FIGI of the reference tickers once and again when its ticker changes.
+        # IPOs on their listing date, from 2008-12 (#359). Every status is kept raw
+        # (withdrawn, pending); the IPO panel reads the listed ones. The records have no
+        # id and a revision (pending -> new -> history) changes their fields, so a record
+        # is identified by all of them and the panel keeps each IPO's newest copy.
+        RestEndpoint(
+            "ipos", f"{REST_HOST}/vX/reference/ipos", "listing_date", date(2008, 12, 1),
+            limit=1000, overlap_days=7, key=None, tiebreak=None, order_param=True,
+        ),
         RestEndpoint(
             "ticker_events", f"{REST_HOST}/vX/reference/tickers/{{id}}/events", None, limit=1000,
             key="composite_figi", ids_from="tickers",
