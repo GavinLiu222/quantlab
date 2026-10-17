@@ -315,6 +315,9 @@ TABLES: dict[str, SharadarTable] = {
                 "contraticker": pl.String,
                 "contraname": pl.String,
             },
+            categories=_DOMESTIC_COMMON,
+            # TICKERS has no ACTIONS rows; ACTIONS is keyed by SEP's tickers.
+            tickers_code="sep",
         ),
         SharadarTable(
             code="tickers",
