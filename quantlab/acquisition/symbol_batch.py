@@ -14,9 +14,12 @@ A subclass declares ``VENDOR`` and ``RAW_COLUMNS`` and implements
 base class supplies everything around that request: splitting the symbol list
 into batches, following pagination, fetching batches concurrently on worker
 threads, isolating a failure to the batch that caused it, stopping the whole
-run when the vendor's request quota runs out, honouring a caller's cancel
-request, reporting progress, and removing credentials from every captured
-error message. ``BatchOutcome`` summarises one batch and ``AcquisitionResult``
+run when the vendor's request quota runs out, retrying a request the server
+asked to repeat, honouring a caller's cancel request, reporting progress, and
+removing credentials from every captured error message. The retry and the
+scrubbing are the shared ``RequestPolicy``
+(``quantlab.acquisition._support.request_policy``), so this family waits as
+the Sharadar and Massive clients do. ``BatchOutcome`` summarises one batch and ``AcquisitionResult``
 one whole download.
 
 A few terms recur throughout the module. A *shard* is one parquet file
@@ -46,6 +49,7 @@ from pathlib import Path
 from typing import Iterator, Self, Sequence
 
 import polars as pl
+import requests
 from joblib import Parallel, delayed
 from loguru import logger
 
@@ -53,7 +57,12 @@ from quantlab.acquisition.config import AcquisitionConfig
 from quantlab.acquisition._support.coverage import FAILURE_MANIFEST_NAME as _FAILURE_MANIFEST_NAME
 from quantlab.acquisition._support.coverage import CoverageLedger, SymbolCoverage
 from quantlab.acquisition._support.page_ledger import PageLedger
-from quantlab.acquisition._support.request_policy import scrub
+from quantlab.acquisition._support.request_policy import (
+    RETRY_STATUSES,
+    RequestPolicy,
+    TransientError,
+    retry_after,
+)
 from quantlab.utils.progress import (
     QUOTA_EXHAUSTED_DESCRIPTION,
     CancelToken,
@@ -199,7 +208,7 @@ class SymbolBatchAcquisition(ABC):
     Per-run tuning parameters are read from ``config.kwargs``: ``batch_size``,
     ``max_workers``, ``resume``, ``progress``, ``wait_for_quota``,
     ``quota_wait_seconds``, ``quota_max_waits``, ``legacy_watermarks``,
-    ``rate_limit_backoff_seconds`` and ``rate_limit_max_retries``.
+    ``request_retries`` and ``retry_backoff_seconds``.
 
     Parameters
     ----------
@@ -427,11 +436,8 @@ class SymbolBatchAcquisition(ABC):
     #: credentials, name the same file.
     FAILURE_MANIFEST_NAME = _FAILURE_MANIFEST_NAME
 
-    #: What a credential value is replaced with in any captured message.
-    #: Subclasses may override it with vendor-specific wording.
-    REDACTION = "<CREDENTIAL REDACTED>"
-
-    #: The environment variables whose values ``_scrub`` hides. A subclass
+    #: The environment variables whose values the request policy hides
+    #: (each becomes ``<NAME REDACTED>``). A subclass
     #: fills this from module-level constants, not from its HTTP client
     #: class, so a test double that replaces the client cannot turn the
     #: redaction off. An empty tuple means the vendor uses no credentials.
@@ -456,24 +462,24 @@ class SymbolBatchAcquisition(ABC):
     #: retrying forever against a locked-out account is worse than stopping.
     DEFAULT_QUOTA_MAX_WAITS = 3
 
-    #: HTTP statuses this vendor treats as a short-lived rate limit: the
-    #: worker waits and retries the same batch without stopping the run.
-    #: Empty by default, because the same code can mean opposite things for
-    #: two vendors (a per-minute limit that clears in seconds, or an hourly
-    #: quota where the right response is to stop the run).
-    RATE_LIMIT_STATUS_CODES: frozenset[int] = frozenset()
+    #: HTTP statuses that mean "try this request again later": the worker
+    #: waits and repeats the request without stopping the run. The request
+    #: policy's ``RETRY_STATUSES`` (429 and the 5xx a server sends while it
+    #: recovers). A vendor whose 429 means a used-up quota, where the right
+    #: response is to stop the run, says so in ``_classify_error`` before
+    #: deferring to the base (Tiingo).
+    RETRY_STATUS_CODES: frozenset[int] = RETRY_STATUSES
 
-    #: How long, in seconds, a rate-limited batch waits before retrying. A
-    #: practical value for a per-minute limit, not a documented vendor fact;
-    #: reset times are never read from headers. Overridable per run via
-    #: ``config.kwargs["rate_limit_backoff_seconds"]``.
-    DEFAULT_RATE_LIMIT_BACKOFF_SECONDS = 5.0
+    #: Seconds before the first retry of a request; doubled on each later
+    #: one, unless the server sent ``Retry-After``. Overridable per run via
+    #: ``config.kwargs["retry_backoff_seconds"]``.
+    DEFAULT_RETRY_BACKOFF_SECONDS = 2.0
 
-    #: How many consecutive waits one batch gets before it counts as
-    #: ``failed`` and goes to the manifest for the next run to retry. At the
-    #: default wait this is about 30 seconds. Overridable via
-    #: ``config.kwargs["rate_limit_max_retries"]``.
-    DEFAULT_RATE_LIMIT_MAX_RETRIES = 6
+    #: Retries of one request before its batch counts as ``failed`` and goes
+    #: to the manifest for the next run to retry. At the default back-off
+    #: the waits are 2, 4, 8, 16 and 32 seconds, about a minute in all.
+    #: Overridable via ``config.kwargs["request_retries"]``.
+    DEFAULT_REQUEST_RETRIES = 5
 
     def _knob(self, name: str, default=None):
         """Read a per-run tuning parameter from ``config.kwargs``.
@@ -490,7 +496,7 @@ class SymbolBatchAcquisition(ABC):
         """
         return (self.config.kwargs or {}).get(name, default)
 
-    # -- global stop, sleeping and credential scrubbing ----------------------
+    # -- global stop, sleeping and the request policy ------------------------
 
     @property
     def _abort(self) -> threading.Event:
@@ -513,6 +519,39 @@ class SymbolBatchAcquisition(ABC):
     def _sleep(self, seconds: float) -> None:
         """Sleep for ``seconds``; tests replace this to count waits instead."""
         time.sleep(seconds)
+
+    @property
+    def _policy(self) -> RequestPolicy:
+        """Return the request policy: how a request is retried and a message scrubbed.
+
+        Built on each use, so it reads the credentials in
+        ``CREDENTIAL_ENV_VARS`` and the ``request_retries`` and
+        ``retry_backoff_seconds`` knobs as they are now, and waits through
+        ``_sleep``. ``self._policy.scrub(message)`` replaces every credential
+        value in ``message`` with ``<NAME REDACTED>``: a vendor's HTTP error
+        text often repeats the full request URL, and some vendors put the
+        token in the query string, so every captured message passes through
+        it before it is logged or written, which makes the failure manifest
+        safe to paste into an issue. The only per-vendor input is
+        ``CREDENTIAL_ENV_VARS``, so a new vendor gets this without writing
+        any code.
+
+        Examples
+        --------
+        ::
+
+            acq._policy.scrub(f"GET /x?token={key}")
+            # 'GET /x?token=<TIINGO_API_KEY REDACTED>'
+        """
+        return RequestPolicy(
+            {name: os.environ.get(name) or "" for name in self.CREDENTIAL_ENV_VARS},
+            retries=int(self._knob("request_retries", self.DEFAULT_REQUEST_RETRIES)),
+            backoff=float(
+                self._knob("retry_backoff_seconds", self.DEFAULT_RETRY_BACKOFF_SECONDS)
+            ),
+            sleep=self._sleep,
+            vendor=self.VENDOR,
+        )
 
     def _is_cancelled(self) -> bool:
         """Return whether the caller's cancel token has been set.
@@ -578,7 +617,7 @@ class SymbolBatchAcquisition(ABC):
             self._active_reporter.emit(event)
         except Exception as exc:  # noqa: BLE001 -- isolation is the point
             logger.warning(
-                self._scrub(
+                self._policy.scrub(
                     f"Progress reporter {type(self._active_reporter).__name__} "
                     f"raised on a {event.kind!r} event and was ignored; the "
                     f"run is unaffected. {type(exc).__name__}: {exc}"
@@ -595,7 +634,7 @@ class SymbolBatchAcquisition(ABC):
             self._active_reporter.close()
         except Exception as exc:  # noqa: BLE001 -- isolation is the point
             logger.warning(
-                self._scrub(
+                self._policy.scrub(
                     f"Progress reporter close() raised and was ignored. "
                     f"{type(exc).__name__}: {exc}"
                 )
@@ -625,33 +664,6 @@ class SymbolBatchAcquisition(ABC):
             return
         with lock:
             self._no_data_marks = getattr(self, "_no_data_marks", 0) + count
-
-    def _scrub(self, message: str) -> str:
-        """Replace every declared credential value in ``message``.
-
-        A vendor's HTTP error text often repeats the full request URL, and
-        some vendors put the API token in the query string. So every captured
-        message passes through here before it is logged or written, which
-        makes the failure manifest safe to paste into an issue. The only
-        per-vendor input is ``CREDENTIAL_ENV_VARS``, so a new vendor gets this
-        protection without writing any code.
-
-        Parameters
-        ----------
-        message : str
-            The text to clean.
-
-        Returns
-        -------
-        str
-            ``message`` with every credential value replaced by
-            ``REDACTION``.
-        """
-        return scrub(
-            message,
-            {name: os.environ.get(name) for name in self.CREDENTIAL_ENV_VARS},
-            self.REDACTION,
-        )
 
     # -- error classification: the part each vendor customises -------------
 
@@ -691,27 +703,43 @@ class SymbolBatchAcquisition(ABC):
         The base returns ``{}``, which is correct for a vendor that sends no
         such headers. A missing header adds no entry rather than a default,
         so a reader can tell "the vendor said nothing" from "the vendor said
-        zero". The result is only logged; the wait time stays a configured
-        constant.
+        zero". The result is only logged, with a request's first retry; the
+        wait is the server's ``Retry-After`` (``_retry_after``) or the
+        policy's back-off.
         """
         return {}
 
+    def _retry_after(self, exc: BaseException) -> float | None:
+        """Return the seconds the server asked to wait before a retry, or None.
+
+        A ``TransientError`` carries its own ``retry_after``; otherwise the
+        ``Retry-After`` header of the response reachable from ``exc`` is read.
+        ``None`` means the policy's doubling back-off applies.
+        """
+        if isinstance(exc, TransientError) and exc.retry_after:
+            return exc.retry_after
+        response = self._vendor_response(exc)
+        return retry_after(getattr(response, "headers", None) or {})
+
     def _classify_error(self, exc: BaseException) -> str:
-        """Classify a vendor error as ``"failed"``, ``"quota"`` or ``"rate_limited"``.
+        """Classify a vendor error as ``"failed"``, ``"quota"`` or ``"transient"``.
 
         ``"failed"`` is a problem with one batch: the batch goes to the
         failure manifest, gets no watermark and is retried next run, while
         every other batch continues. ``"quota"`` is a run-wide condition that
         is slow to clear: it stops the whole run and stays out of the
         manifest, because blaming one symbol for it would be wrong.
-        ``"rate_limited"`` is short-lived: the worker waits and retries the
-        same batch.
+        ``"transient"`` is short-lived: the worker waits and repeats the
+        request, by the request policy, before counting the batch failed.
 
-        The base class is cautious and treats every error as ``"failed"``
-        unless its status is in ``RATE_LIMIT_STATUS_CODES``. Treating a
-        per-batch error as run-wide would stop a full-market run over one bad
-        ticker, and two vendors can use the same status code for opposite
-        things, so vendors override this method rather than the loop.
+        The base class returns ``"transient"`` for a status in
+        ``RETRY_STATUS_CODES`` (a 429 or a 5xx) and for a dropped or timed-out
+        connection (``ConnectionError``, ``requests.ConnectionError``,
+        ``requests.Timeout``), and ``"failed"`` for everything else; it never
+        returns ``"quota"``. Treating a per-batch error as run-wide would stop
+        a full-market run over one bad ticker, and two vendors can use the
+        same status code for opposite things (Tiingo's 429 is a used-up
+        hourly quota), so vendors override this method rather than the loop.
 
         Parameters
         ----------
@@ -721,10 +749,14 @@ class SymbolBatchAcquisition(ABC):
         Returns
         -------
         str
-            One of ``"failed"``, ``"quota"`` or ``"rate_limited"``.
+            One of ``"failed"``, ``"quota"`` or ``"transient"``.
         """
-        if self._status_of(exc) in self.RATE_LIMIT_STATUS_CODES:
-            return "rate_limited"
+        if self._status_of(exc) in self.RETRY_STATUS_CODES:
+            return "transient"
+        if isinstance(
+            exc, (ConnectionError, requests.ConnectionError, requests.Timeout)
+        ):
+            return "transient"
         return "failed"
 
     # -- symbol validation --------------------------------------------------
@@ -1061,9 +1093,11 @@ class SymbolBatchAcquisition(ABC):
         Each page's shard is written before the ledger records the page. A
         crash between the two costs one re-fetch that overwrites the same
         file, never a duplicated row or a lost page; the reverse order could
-        record pages whose data is not on disk. An exception from
-        ``_fetch_page`` propagates, but every page completed before it is
-        already recorded, so the next run resumes instead of restarting.
+        record pages whose data is not on disk. Each page is requested through
+        ``_request_page``, which repeats a request that failed transiently; an
+        exception it gives up on propagates, but every page completed before
+        it is already recorded, so the next run resumes instead of
+        restarting.
 
         Parameters
         ----------
@@ -1114,7 +1148,7 @@ class SymbolBatchAcquisition(ABC):
 
         page_index, page_token = ledger.resume_point()
         while True:
-            frame, next_token = self._fetch_page(
+            frame, next_token = self._request_page(
                 symbols, start_date, end_date, page_token
             )
             shards = self._write_shard(frame, batch_key, page_index)
@@ -1162,6 +1196,69 @@ class SymbolBatchAcquisition(ABC):
 
             page_index += 1
             page_token = next_token
+
+    def _request_page(
+        self,
+        symbols: list[str],
+        start_date: str,
+        end_date: str,
+        page_token: str | None,
+    ) -> tuple[pl.DataFrame, str | None]:
+        """Call ``_fetch_page``, repeating it while it fails transiently.
+
+        An error ``_classify_error`` calls ``"transient"`` is retried by the
+        request policy (``_policy``): after the server's ``Retry-After`` when
+        it sent one (``_retry_after``), otherwise after a back-off that
+        doubles from ``retry_backoff_seconds``, up to ``request_retries``
+        times. Only this worker waits; the other batches carry on, and the
+        pages before this one are not fetched again. The first retry's
+        warning names the vendor's rate-limit headers
+        (``_rate_limit_headers``). A run that is stopping (quota or cancel)
+        retries no more. Any other error, and the last transient one, is
+        raised for ``_attempt_batch`` to classify.
+
+        Parameters
+        ----------
+        symbols : list[str]
+            The batch.
+        start_date, end_date : str
+            The window, both inclusive.
+        page_token : str or None
+            The page to request.
+
+        Returns
+        -------
+        tuple[polars.DataFrame, str or None]
+            What ``_fetch_page`` returned.
+        """
+        policy = self._policy
+        for tries in range(policy.retries + 1):
+            try:
+                return self._fetch_page(symbols, start_date, end_date, page_token)
+            except Exception as exc:  # noqa: BLE001 -- classified, then raised
+                if (
+                    tries == policy.retries
+                    or self._should_stop()
+                    or self._classify_error(exc) != "transient"
+                ):
+                    raise
+
+                def announce(wait: float, exc=exc, tries=tries) -> str:
+                    message = (
+                        f"{self.class_name}: {type(exc).__name__}: {exc} on a "
+                        f"batch of {len(symbols)} symbol(s); retry "
+                        f"{tries + 1}/{policy.retries} in {wait:g}s in this "
+                        f"worker only."
+                    )
+                    if tries == 0:
+                        headers = self._rate_limit_headers(exc)
+                        message += (
+                            f" Vendor rate-limit headers: {headers or 'none sent'}."
+                        )
+                    return message
+
+                policy.back_off(tries, announce, self._retry_after(exc))
+        raise AssertionError("unreachable")  # pragma: no cover
 
     # -- entry points -------------------------------------------------------
 
@@ -1682,8 +1779,10 @@ class SymbolBatchAcquisition(ABC):
         ``"quota"``, and ``None`` otherwise.
 
         The method never raises, because an exception here would stop every
-        other batch. A rate-limited batch waits in this worker and retries up
-        to ``rate_limit_max_retries`` times before becoming ``"failed"``.
+        other batch. A request that fails transiently (a 429, a 5xx, a dropped
+        connection) is repeated by ``_request_page`` up to
+        ``request_retries`` times before the batch becomes ``"failed"``; one
+        whose retries a stopping run cut short is ``"skipped"``.
 
         Parameters
         ----------
@@ -1722,52 +1821,23 @@ class SymbolBatchAcquisition(ABC):
                 default=self.config.start_date,
             )
 
-        backoff = float(
-            self._knob(
-                "rate_limit_backoff_seconds",
-                self.DEFAULT_RATE_LIMIT_BACKOFF_SECONDS,
+        try:
+            outcome = self._fetch_batch(
+                symbols, start_date=start_date, end_date=self.config.end_date
             )
-        )
-        max_retries = int(
-            self._knob(
-                "rate_limit_max_retries", self.DEFAULT_RATE_LIMIT_MAX_RETRIES
-            )
-        )
-
-        retries = 0
-        while True:
-            try:
-                outcome = self._fetch_batch(
-                    symbols, start_date=start_date, end_date=self.config.end_date
-                )
-            except Exception as exc:  # noqa: BLE001 -- isolation is the point
-                message = self._scrub(f"{type(exc).__name__}: {exc}")
-                verdict = self._classify_error(exc)
-                if verdict == "quota":
-                    self._abort.set()
-                    return symbols, "quota", message
-                if verdict == "rate_limited" and retries < max_retries:
-                    # Short-lived, so only this worker waits; the other
-                    # batches carry on.
-                    if retries == 0:
-                        # Logged on the first wait only, to keep the log quiet.
-                        # The headers let an operator confirm the limit is
-                        # really per-minute.
-                        headers = self._rate_limit_headers(exc)
-                        logger.info(
-                            f"Rate limited on a batch of {len(symbols)} "
-                            f"symbol(s); backing off {backoff:.0f}s in this "
-                            f"worker only (up to {max_retries} times). Vendor "
-                            f"rate-limit headers: "
-                            f"{headers or 'none sent'}."
-                        )
-                    retries += 1
-                    self._sleep(backoff)
-                    continue
-                # Out of retries: record it as failed so the next run retries
-                # it, instead of this run never finishing.
-                return symbols, "failed", message
-            break
+        except Exception as exc:  # noqa: BLE001 -- isolation is the point
+            message = self._policy.scrub(f"{type(exc).__name__}: {exc}")
+            verdict = self._classify_error(exc)
+            if verdict == "quota":
+                self._abort.set()
+                return symbols, "quota", message
+            if verdict == "transient" and self._should_stop():
+                # The run stopped while this request waited to be retried:
+                # not this batch's failure, and its landed pages resume.
+                return symbols, "skipped", None
+            # A permanent error, or a transient one out of retries: recorded
+            # as failed so the next run retries it.
+            return symbols, "failed", message
 
         # "Queried, no data" is decided once per batch, never per page: page 0
         # may hold a single symbol. Only a complete batch, outside a quota

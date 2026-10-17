@@ -819,6 +819,8 @@ def test_result_and_manifest_agree(
                 "wait_for_quota": True,
                 "quota_wait_seconds": 0,
                 "quota_max_waits": 2,
+                # The 500 fails pass 1 at once instead of being retried.
+                "request_retries": 0,
             },
         )
     )
@@ -1151,7 +1153,7 @@ def test_a_disjoint_rerun_does_not_inherit_earlier_failures(
 def test_result_is_scrubbed(
     monkeypatch, mock_tiingo_client, acquisition_config
 ) -> None:
-    """RESEARCH Pitfall 10: `_scrub` is the choke point that made the failure
+    """RESEARCH Pitfall 10: `_policy.scrub` is the choke point that made the failure
     manifest safe to paste into an issue, and the result object and the
     progress events are NEW egress paths for vendor exception text.
 
@@ -1220,14 +1222,14 @@ def test_result_is_scrubbed(
         )
 
     assert all(
-        TiingoAcquisition.REDACTION in message
+        "<TIINGO_API_KEY REDACTED>" in message
         for message in result.failures.values()
     ), (
         f"the message must be REDACTED, not dropped -- otherwise this test "
         f"passes for an implementation that tells the operator nothing: "
         f"{result.failures}"
     )
-    assert TiingoAcquisition.REDACTION in manifest_text
+    assert "<TIINGO_API_KEY REDACTED>" in manifest_text
 
 
 def test_logging_is_unchanged(

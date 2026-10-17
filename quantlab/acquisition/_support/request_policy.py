@@ -22,8 +22,11 @@ and Massive REST clients send through the one GET of
 both honour ``Retry-After``. What a status *means* stays with each client:
 Sharadar retries exactly ``RETRY_STATUSES``; Massive retries every status but
 401/403 (and a 404 to an id it pulls, which means no record); the
-symbol-batched ``SymbolBatchAcquisition`` family decides per vendor whether a 429 is a
-rate limit to wait out or a quota that stops the run.
+symbol-batched ``SymbolBatchAcquisition`` family (Tiingo, Alpaca, FRED)
+retries ``RETRY_STATUSES`` and dropped connections through
+``RequestPolicy.back_off`` one page at a time, its own loop so a run that is
+stopping retries no more, while each vendor decides whether a 429 is a rate
+limit to wait out or a quota that stops the run (Tiingo's is a quota).
 
 Examples
 --------

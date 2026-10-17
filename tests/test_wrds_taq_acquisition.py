@@ -112,9 +112,9 @@ def test_credential_planted_username_is_absent_from_config_and_scrubbed(
     monkeypatch.setenv("WRDS_USERNAME", planted)
     acq = WrdsTaqNbboAcquisition(acquisition_config(vendor="wrds"))
     assert planted not in str(acq.config.to_dict())
-    scrubbed = acq._scrub(f"FATAL: password authentication failed for {planted}")
+    scrubbed = acq._policy.scrub(f"FATAL: password authentication failed for {planted}")
     assert planted not in scrubbed
-    assert acq.REDACTION in scrubbed
+    assert "<WRDS_USERNAME REDACTED>" in scrubbed
 
 
 def test_pgpass_valid_entry_connects_once_with_pinned_parameters(

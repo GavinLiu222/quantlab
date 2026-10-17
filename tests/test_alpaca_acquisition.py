@@ -4,7 +4,7 @@
 `SymbolBatchAcquisition` base. Three things about it are easy to get wrong in ways nothing
 else catches:
 
-- **429 is `rate_limited`, never `quota`.** Tiingo's 429 means the hourly
+- **429 is `transient`, never `quota`.** Tiingo's 429 means the hourly
   allocation is spent and the whole run must abort (260906-26o D-05); Alpaca's
   429 means "slow down" and must back off and retry. Classifying Alpaca's 429
   as `quota` would abort a healthy 15k-symbol run on its first burst; the
@@ -304,7 +304,7 @@ def test_tracer_no_credential_reaches_the_config_or_a_scrubbed_message(
 
     `AcquisitionConfig.to_dict()` returns `asdict(self)` and lands in persisted
     configs and model-checkpoint metadata, so a credential on that surface is a
-    credential committed to disk. And `_scrub` is the single choke point every
+    credential committed to disk. And `_policy.scrub` is the single choke point every
     captured vendor message passes through before it reaches a log line or the
     failure manifest.
     """
@@ -321,10 +321,11 @@ def test_tracer_no_credential_reaches_the_config_or_a_scrubbed_message(
     assert secret not in serialized
 
     message = f"boom while calling with {key} and {secret}"
-    scrubbed = acq._scrub(message)
+    scrubbed = acq._policy.scrub(message)
     assert key not in scrubbed
     assert secret not in scrubbed
-    assert AlpacaAcquisition.REDACTION in scrubbed
+    assert "<APCA_API_KEY_ID REDACTED>" in scrubbed
+    assert "<APCA_API_SECRET_KEY REDACTED>" in scrubbed
 
 
 def test_tracer_field_map_covers_the_whole_vendor_bar_and_maps_nothing_twice():
@@ -361,7 +362,7 @@ def test_tracer_field_map_covers_the_whole_vendor_bar_and_maps_nothing_twice():
 # - reading Alpaca's 429 as `quota` aborts every Alpaca run within seconds of
 #   starting, while logging a message about an allocation ceiling for a vendor
 #   that publishes no allocation concept at all (RESEARCH Pitfall 1, T-03.2-16);
-# - reading Tiingo's 429 as `rate_limited` grinds through ~10,000 fast-failing
+# - reading Tiingo's 429 as `transient` grinds through ~10,000 fast-failing
 #   requests, which is the observed 2026-09-06 incident.
 #
 # Both directions are asserted below, per vendor, so neither can regress into
@@ -425,7 +426,7 @@ def test_the_rate_limit_headers_are_read_and_logged_on_the_first_backoff(
     docstring asserted -- in the corporate-actions section -- that it carries
     "no unreachable branch and no unused constant". More practically, a 429
     with no diagnostic at all is what makes
-    `DEFAULT_RATE_LIMIT_BACKOFF_SECONDS` unverifiable in the field:
+    `DEFAULT_RETRY_BACKOFF_SECONDS` unverifiable in the field:
     `X-RateLimit-Reset` is the only thing that tells an operator whether the
     ceiling they hit is per-minute.
 
@@ -452,7 +453,7 @@ def test_the_rate_limit_headers_are_read_and_logged_on_the_first_backoff(
             symbols=("AAPL",),
             frequency="1d",
             subdir="ratelimit_headers",
-            kwargs={"rate_limit_backoff_seconds": 0, "progress": False},
+            kwargs={"retry_backoff_seconds": 0, "progress": False},
         )
         acq = _recording_alpaca(cfg)
         acq.download()
@@ -503,7 +504,7 @@ def test_an_absent_rate_limit_header_contributes_nothing_not_a_default():
     )
 
 
-def test_an_alpaca_429_classifies_rate_limited_and_never_trips_the_global_abort(
+def test_an_alpaca_429_classifies_transient_and_never_trips_the_global_abort(
     mock_alpaca_client, acquisition_config
 ):
     """T-03.2-16, the phase's single most expensive misclassification.
@@ -520,7 +521,7 @@ def test_an_alpaca_429_classifies_rate_limited_and_never_trips_the_global_abort(
     acq = AlpacaAcquisition(cfg)
 
     assert acq._classify_error(_http_error(429, reason="Too Many Requests")) == (
-        "rate_limited"
+        "transient"
     )
     # Classification alone must not touch shared state.
     assert not acq._abort.is_set()
@@ -528,13 +529,13 @@ def test_an_alpaca_429_classifies_rate_limited_and_never_trips_the_global_abort(
     # And the vendor has NO quota concept at all -- there is nothing on this
     # class that could ever classify a status as global.
     assert not hasattr(AlpacaAcquisition, "QUOTA_STATUS_CODES")
-    assert AlpacaAcquisition.RATE_LIMIT_STATUS_CODES == frozenset({429})
+    assert 429 in AlpacaAcquisition.RETRY_STATUS_CODES
 
 
 def test_a_rate_limited_alpaca_batch_backs_off_retries_and_stays_out_of_the_manifest(
     mock_alpaca_client, acquisition_config
 ):
-    """The whole `rate_limited` outcome, end to end.
+    """The whole `transient` outcome, end to end.
 
     A 429 on the first request must: sleep through the substituted seam, retry
     the SAME batch, succeed, leave the global abort unset, write the watermark,
@@ -573,14 +574,14 @@ def test_the_rate_limit_backoff_is_bounded_and_degrades_to_failed(
     """T-03.2-17. An unbounded retry loop against a rate limit is a worse
     version of the problem the backoff exists to solve.
 
-    After `rate_limit_max_retries` consecutive 429s the batch must degrade to
+    After `request_retries` consecutive 429s the batch must degrade to
     `failed`, land in the manifest and get no watermark -- so the next run
     retries it rather than the current run spinning forever.
     """
     cfg = acquisition_config(
         vendor="alpaca",
         symbols=("AAPL",),
-        kwargs={"rate_limit_backoff_seconds": 0.01, "rate_limit_max_retries": 2},
+        kwargs={"retry_backoff_seconds": 0.01, "request_retries": 2},
     )
 
     # Never clears.
@@ -590,8 +591,8 @@ def test_the_rate_limit_backoff_is_bounded_and_degrades_to_failed(
     acq = _recording_alpaca(cfg)
     acq.download()
 
-    assert acq.sleeps == [0.01, 0.01], (
-        f"exactly rate_limit_max_retries backoffs, then give up; got "
+    assert acq.sleeps == [0.01, 0.02], (
+        f"exactly request_retries doubling backoffs, then give up; got "
         f"{acq.sleeps}"
     )
     assert not acq._abort.is_set()
@@ -603,12 +604,13 @@ def test_the_rate_limit_backoff_is_bounded_and_degrades_to_failed(
     assert not (Path(cfg.watermark_path) / "bars" / "AAPL.json").exists()
 
 
-def test_an_alpaca_500_classifies_failed_and_isolates_to_its_batch(
+def test_an_alpaca_404_classifies_failed_and_isolates_to_its_batch(
     mock_alpaca_client, acquisition_config
 ):
     """The conservative default. Anything that is not a known transient is
     per-unit: it fails ONE batch, lands in the manifest and is retried next
-    run, while every other batch completes.
+    run, while every other batch completes. A 5xx is a known transient,
+    retried by the request policy.
     """
     from quantlab.acquisition.alpaca import AlpacaAcquisition
 
@@ -624,7 +626,8 @@ def test_an_alpaca_500_classifies_failed_and_isolates_to_its_batch(
     )
     acq = AlpacaAcquisition(cfg)
 
-    assert acq._classify_error(_http_error(500, reason="Server Error")) == "failed"
+    assert acq._classify_error(_http_error(500, reason="Server Error")) == "transient"
+    assert acq._classify_error(_http_error(404, reason="Not Found")) == "failed"
 
     # An exception carrying no reachable status is also `failed`, never a
     # crash: a classifier that raised would tear down the whole fan-out.
@@ -632,7 +635,7 @@ def test_an_alpaca_500_classifies_failed_and_isolates_to_its_batch(
     assert acq._status_of(RuntimeError("no status anywhere")) is None
 
     # Batch 0 (AAPL) fails, batch 1 (MSFT) completes.
-    mock_alpaca_client.raise_on = {0: _http_error(500, reason="Server Error")}
+    mock_alpaca_client.raise_on = {0: _http_error(404, reason="Not Found")}
     acq.download()
 
     manifest = json.loads(

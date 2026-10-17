@@ -361,9 +361,12 @@ instead, set `kwargs["wait_for_quota"] = True`: the run then sleeps
 times (default 3).
 
 Alpaca answers 429 when a per-minute ceiling is hit, which clears in seconds.
-The batch that hit it waits `rate_limit_backoff_seconds` (default 5) and
-retries, up to `rate_limit_max_retries` times (default 6), before it is
-recorded as failed for the next run. The free plan allows about 200 historical
+The request that hit it is repeated as every vendor client repeats one: after
+the server's `Retry-After` when it sends one, otherwise after a wait that
+doubles from `retry_backoff_seconds` (default 2), up to `request_retries`
+times (default 5, so 2, 4, 8, 16 and 32 seconds), before its batch is
+recorded as failed for the next run. A 5xx or a dropped connection is
+repeated the same way at Tiingo, Alpaca and FRED. The free plan allows about 200 historical
 requests per minute and the paid plan about 10,000; at 200 per minute a
 market-wide daily backfill takes about 8 minutes but a market-wide minute-bar
 backfill takes about 50 hours.

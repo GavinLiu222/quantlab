@@ -213,10 +213,12 @@ For a real vendor, a few more steps apply:
   missing. List the variable names in `CREDENTIAL_ENV_VARS`, so the base class
   redacts them from every logged or persisted message, and repeat them in the
   descriptor's `required_env`.
-- Override `_classify_error` so that an exhausted quota is reported as
-  `"quota"` (the run stops dispatching) and a per-minute rate limit as
-  `"rate_limited"` (the worker backs off), rather than letting every symbol
-  fail one by one. `quantlab/acquisition/tiingo.py` and
+- Override `_classify_error` when the base class's reading is wrong for
+  the vendor: it calls a 429, a 5xx or a dropped connection `"transient"`
+  (the worker waits by the shared request policy and repeats the request)
+  and everything else `"failed"`. A vendor whose 429 means an exhausted
+  quota reports it as `"quota"` (the run stops dispatching) before
+  deferring to the base, rather than letting every symbol fail one by one. `quantlab/acquisition/tiingo.py` and
   `quantlab/acquisition/alpaca.py` are the two reference implementations.
 - Declare `RAW_SCHEMA` with explicit dtypes if the vendor's responses can
   infer different column types for different symbols, and return an empty

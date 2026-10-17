@@ -30,17 +30,19 @@ PUBLISHED = {d: v for d, v in SERIES.items() if v is not None}
 class FakeFred:
     """Answers ``fredgraph.csv`` from ``rows``; ``missing`` is how a gap is written."""
 
-    def __init__(self, rows: dict, missing: str = "", status: int = 200):
+    def __init__(self, rows: dict, missing: str = "", status: int | list[int] = 200):
         self.rows = dict(rows)
         self.missing = missing
-        self.status = status
+        # One status for every call, or one per call, the last repeating.
+        self.statuses = list(status) if isinstance(status, list) else [status]
         self.calls: list[dict] = []
 
     def __call__(self, url: str, params: dict):
         self.calls.append({"url": url, **params})
         response = requests.Response()
-        response.status_code = self.status
-        if self.status != 200:
+        status = self.statuses[min(len(self.calls), len(self.statuses)) - 1]
+        response.status_code = status
+        if status != 200:
             response._content = b"<html>error</html>"
             return response
         lines = [f"observation_date,{params['id']}"]
@@ -65,7 +67,15 @@ def _acquisition(tmp_path, start="2024-01-02", end="2024-01-09"):
     from quantlab.acquisition.config import AcquisitionConfig
     from quantlab.acquisition.fred import FredAcquisition
 
-    return FredAcquisition(
+    class _Recording(FredAcquisition):
+        """Records the retry waits instead of sleeping."""
+
+        sleeps: list[float]
+
+        def _sleep(self, seconds: float) -> None:
+            self.__dict__.setdefault("sleeps", []).append(seconds)
+
+    return _Recording(
         AcquisitionConfig(
             market="us_equity",
             frequency="1d",
@@ -148,19 +158,38 @@ def test_a_date_without_a_value_is_no_bar_not_an_error(tmp_path, fred, missing):
     assert not np.isnan(panel["rate"].values).any()
 
 
-def test_a_server_error_fails_the_series_and_leaves_no_watermark(tmp_path, fred):
-    fred(status=500)
+def test_a_server_error_that_persists_fails_the_series_and_leaves_no_watermark(
+    tmp_path, fred
+):
+    fake = fred(status=500)
 
     acquisition = _acquisition(tmp_path).download()
 
     assert list(acquisition.last_result.failures) == ["DTB3"]
     assert acquisition._coverage.read_watermark("DTB3") is None
+    # The first request and the policy's five retries, waiting 2 s doubling.
+    assert len(fake.calls) == 6
+    assert acquisition.sleeps == [2.0, 4.0, 8.0, 16.0, 32.0]
+
+
+def test_a_503_is_retried_and_the_series_still_lands(tmp_path, fred):
+    fake = fred(status=[503, 200])
+
+    acquisition = _acquisition(tmp_path).download()
+
+    assert acquisition.last_result.succeeded == ("DTB3",)
+    assert len(fake.calls) == 2
+    assert acquisition.sleeps == [2.0]
+    assert _rates(_panel(tmp_path)) == pytest.approx(PUBLISHED)
 
 
 def test_a_rate_limit_is_waited_out(tmp_path, fred):
-    from quantlab.acquisition.fred import FredAcquisition
+    fake = fred(status=[429, 200])
 
-    assert 429 in FredAcquisition.RATE_LIMIT_STATUS_CODES
+    acquisition = _acquisition(tmp_path).download()
+
+    assert acquisition.last_result.succeeded == ("DTB3",)
+    assert len(fake.calls) == 2
 
 
 # -- dataset -----------------------------------------------------------------------
@@ -304,14 +333,22 @@ def test_the_raw_tier_refresh_downloads_each_series_under_the_download_root(tmp_
     assert _rates(_panel(tmp_path)) == pytest.approx(PUBLISHED)
 
 
-def test_a_series_the_refresh_could_not_fetch_is_listed_as_failed(tmp_path, fred):
+def test_a_series_the_refresh_could_not_fetch_is_listed_as_failed(
+    tmp_path, fred, monkeypatch
+):
     from datetime import date
 
+    waits: list[float] = []
+    monkeypatch.setattr(
+        "quantlab.acquisition.fred.FredAcquisition._sleep",
+        lambda self, seconds: waits.append(seconds),
+    )
     fred(status=500)
 
     result = _refresh(tmp_path, series=["DTB3"], start="2024-01-02", end=date(2024, 1, 9))
 
     assert result.failed == ("DTB3",)
+    assert waits == [2.0, 4.0, 8.0, 16.0, 32.0]
 
 
 def test_no_test_can_reach_fred_through_the_real_transport():

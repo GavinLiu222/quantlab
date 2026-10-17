@@ -644,7 +644,6 @@ class WrdsCrspDailyAcquisition(SymbolBatchAcquisition):
     DEFAULT_VERIFY_PAGE_COUNTS = True
 
     CREDENTIAL_ENV_VARS = (_wrds.USERNAME_ENV,)
-    REDACTION = "<WRDS CREDENTIAL REDACTED>"
 
     #: The raw tier lives under ``downloads/us_equity/1d/{DEFAULT_SUBDIR}/wrds``.
     DEFAULT_SUBDIR = "wrds_crsp"

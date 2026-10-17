@@ -416,7 +416,7 @@ def test_no_credential_appears_on_any_quota_path(
     mock_tiingo_client, tmp_path, capsys
 ):
     """This repo has already leaked one real Tiingo key. Every new path that
-    captures or logs vendor text goes through `_scrub()`.
+    captures or logs vendor text goes through `_policy.scrub()`.
     """
     from quantlab.acquisition.tiingo import TiingoAcquisition
 
@@ -493,7 +493,7 @@ def test_a_tiingo_429_classifies_quota_through_the_seam(
     assert acq._classify_error(error) == "quota"
     # Never the Alpaca reading. Backing off inside the worker instead of
     # stopping the world is what burned ~10,000 fast-failing requests.
-    assert acq._classify_error(error) != "rate_limited"
+    assert acq._classify_error(error) != "transient"
 
 
 def test_a_tiingo_429_still_aborts_globally_and_stays_out_of_the_manifest(
@@ -540,17 +540,25 @@ def test_a_tiingo_403_classifies_failed_not_quota(mock_tiingo_client, tmp_path):
     assert acq._classify_error(restricted) == "failed"
 
 
-def test_tiingo_declares_no_rate_limit_status_set(mock_tiingo_client, tmp_path):
+def test_tiingo_checks_its_quota_before_the_base_retry(mock_tiingo_client, tmp_path):
     """The negative half of the asymmetry, asserted explicitly.
 
-    Tiingo has no per-minute ceiling this project models, so it declares no
-    `RATE_LIMIT_STATUS_CODES`. Adding 429 to one would silently downgrade the
-    global abort to a worker-local backoff -- the exact 2026-09-06 incident.
+    The base class retries a 429 (`RETRY_STATUS_CODES`); Tiingo has no
+    per-minute ceiling this project models, so its quota check runs first and
+    a 429 with an empty body is still `quota`. Deferring to the base first
+    would silently downgrade the global abort to a worker-local backoff --
+    the exact 2026-09-06 incident. A 5xx is still retried.
     """
     from quantlab.acquisition.tiingo import TiingoAcquisition
 
-    assert TiingoAcquisition.RATE_LIMIT_STATUS_CODES == frozenset(), (
-        "Tiingo must classify 429 as `quota`, never as `rate_limited`"
+    acq = TiingoAcquisition(_make_config(tmp_path))
+
+    assert 429 in TiingoAcquisition.RETRY_STATUS_CODES
+    assert acq._classify_error(_rest_client_error(429, "", "Too Many Requests")) == (
+        "quota"
+    ), "Tiingo must classify 429 as `quota`, never as `transient`"
+    assert acq._classify_error(_rest_client_error(503, "", "Unavailable")) == (
+        "transient"
     )
 
 

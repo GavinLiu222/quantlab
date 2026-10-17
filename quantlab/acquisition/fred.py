@@ -120,8 +120,10 @@ class FredAcquisition(SymbolBatchAcquisition):
 
     The endpoint answers one series over the whole requested window, so a
     batch is one series and ``_fetch_page`` never returns a page token. A
-    429 is FRED asking to slow down and is waited out; any other error
-    fails that series alone. No credential exists to read or scrub.
+    429, a 5xx or a dropped connection is retried by the base class's
+    request policy (the server's ``Retry-After``, or a back-off doubling
+    from 2 s, five times); any other error fails that series alone. No
+    credential exists to read or scrub.
 
     A series' watermark is its last date with a value, not the requested
     end: FRED publishes a day's rate the next business day, so a download
@@ -148,9 +150,6 @@ class FredAcquisition(SymbolBatchAcquisition):
 
     #: Shard columns: the base's three, then the published value.
     RAW_COLUMNS = ("timestamp", "symbol", "vendor", "value")
-
-    #: FRED's "too many requests"; any other status fails the series.
-    RATE_LIMIT_STATUS_CODES = frozenset({429})
 
     def __init__(self, config):
         """Initialize the acquisition; see the class docstring for parameters."""

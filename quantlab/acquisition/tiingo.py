@@ -102,13 +102,11 @@ class TiingoAcquisition(SymbolBatchAcquisition):
 
     VENDOR = "tiingo"
 
-    #: The one credential ``SymbolBatchAcquisition._scrub`` hides before a message
-    #: reaches a log line or the failure manifest. Taken from the
-    #: module-level constant, not from the client class tests replace.
+    #: The one credential the request policy hides (as
+    #: ``<TIINGO_API_KEY REDACTED>``) before a message reaches a log line or
+    #: the failure manifest. Taken from the module-level constant, not from
+    #: the client class tests replace.
     CREDENTIAL_ENV_VARS = (KEY_ENV,)
-
-    #: What the API key is replaced with in any captured message.
-    REDACTION = "<TIINGO_API_KEY REDACTED>"
 
     #: HTTP statuses that mean the account's quota is used up, which affects
     #: the whole run. Only 429: Tiingo also returns 403 for a single ticker
@@ -164,19 +162,23 @@ class TiingoAcquisition(SymbolBatchAcquisition):
         self._client = TiingoClient({"session": True, "api_key": key})
 
     def _classify_error(self, exc: BaseException) -> str:
-        """Return ``"quota"`` for a used-up quota and ``"failed"`` otherwise.
+        """Return ``"quota"`` for a used-up quota, else the base class's verdict.
 
-        This vendor declares no ``RATE_LIMIT_STATUS_CODES``, so
-        ``"rate_limited"`` is never returned. Waiting and retrying inside
+        The quota check comes first, so a 429 stops the run instead of being
+        retried as the base class retries it: waiting and retrying inside
         each worker against an hourly quota would send thousands of requests
-        that fail immediately before anything noticed.
+        that fail immediately before anything noticed. A 5xx or a dropped
+        connection is ``"transient"`` and retried by the request policy;
+        anything else, a 403 for one ticker included, is ``"failed"``.
 
         Parameters
         ----------
         exc : BaseException
             The exception raised by the failed request.
         """
-        return "quota" if self._is_quota_error(exc) else "failed"
+        if self._is_quota_error(exc):
+            return "quota"
+        return super()._classify_error(exc)
 
     def _is_quota_error(self, exc: BaseException) -> bool:
         """Return whether ``exc`` means the account's request quota is used up.
@@ -203,7 +205,7 @@ class TiingoAcquisition(SymbolBatchAcquisition):
                 body = response.text or ""
             except Exception:  # noqa: BLE001 -- a decode failure is not a quota signal
                 body = ""
-        haystack = self._scrub(f"{body}\n{exc}").lower()
+        haystack = self._policy.scrub(f"{body}\n{exc}").lower()
         return self.QUOTA_MESSAGE_TOKEN in haystack
 
     def _fetch_one(

@@ -479,28 +479,23 @@ class AlpacaAcquisition(SymbolBatchAcquisition):
     #: Copy of the module-level constant; see its comment.
     ASOF_NO_MAPPING = ASOF_NO_MAPPING
 
-    #: What a credential value is replaced with in any captured message.
-    REDACTION = "<APCA CREDENTIAL REDACTED>"
-
-    #: The two credentials ``SymbolBatchAcquisition._scrub`` hides before a message
-    #: reaches a log line or the failure manifest. Built from the module-level
-    #: constants, not from the client class that tests replace. Alpaca sends
-    #: credentials in headers rather than in the URL, but a ``requests``
-    #: exception can still expose ``exc.request.headers``.
+    #: The two credentials the request policy hides (as ``<NAME REDACTED>``)
+    #: before a message reaches a log line or the failure manifest. Built from
+    #: the module-level constants, not from the client class that tests
+    #: replace. Alpaca sends credentials in headers rather than in the URL,
+    #: but a ``requests`` exception can still expose ``exc.request.headers``.
     CREDENTIAL_ENV_VARS = (KEY_ENV, SECRET_ENV)
 
-    #: HTTP statuses that mean "slow down", not "quota used up".
-    #:
-    #: Alpaca's 429 is a per-minute limit (200 requests per minute on the free
-    #: plan) that a normal full-market run hits often and that clears within
-    #: a minute, so the worker waits and retries. Alpaca has no hourly or
-    #: daily quota, so this class declares no ``QUOTA_STATUS_CODES``: treating
-    #: this 429 as run-wide would stop every run within seconds.
-    RATE_LIMIT_STATUS_CODES = frozenset({429})
+    # Alpaca's 429 is a per-minute limit (200 requests per minute on the
+    # free plan) that a normal full-market run hits often and that clears
+    # within a minute, so the base class's classification applies: the
+    # worker waits (the server's Retry-After, or the policy's doubling
+    # back-off) and retries. Alpaca has no hourly or daily quota, so this
+    # class declares no ``QUOTA_STATUS_CODES``: treating this 429 as run-wide
+    # would stop every run within seconds.
 
     #: Headers Alpaca may send with a 429, read for logging only. A missing
-    #: header is recorded as missing, never as a default, and the wait time
-    #: stays a configured constant.
+    #: header is recorded as missing, never as a default.
     RATE_LIMIT_HEADERS = (
         "X-RateLimit-Limit",
         "X-RateLimit-Remaining",
@@ -644,10 +639,10 @@ class AlpacaAcquisition(SymbolBatchAcquisition):
     def _rate_limit_headers(self, exc: BaseException) -> dict[str, str]:
         """Return whichever ``X-RateLimit-*`` headers the vendor sent, or ``{}``.
 
-        The base class calls this on a rate-limited batch's first wait and
-        logs the result. A missing header adds no entry, so "the vendor said
-        nothing" stays distinct from "the vendor said zero". The result is
-        only logged; the wait time is a configured constant.
+        The base class calls this on a request's first retry and logs the
+        result. A missing header adds no entry, so "the vendor said nothing"
+        stays distinct from "the vendor said zero". The result is only
+        logged.
 
         Parameters
         ----------
@@ -661,22 +656,6 @@ class AlpacaAcquisition(SymbolBatchAcquisition):
             for name in self.RATE_LIMIT_HEADERS
             if name in headers
         }
-
-    def _classify_error(self, exc: BaseException) -> str:
-        """Return ``"rate_limited"`` for a 429 and ``"failed"`` for anything else.
-
-        Alpaca has no run-wide quota, so this never returns ``"quota"``.
-        ``TiingoAcquisition`` treats the same status the opposite way; see
-        ``RATE_LIMIT_STATUS_CODES``.
-
-        Parameters
-        ----------
-        exc : BaseException
-            The exception raised by the failed request.
-        """
-        if self._status_of(exc) in self.RATE_LIMIT_STATUS_CODES:
-            return "rate_limited"
-        return "failed"
 
     def _fetch_page(
         self,

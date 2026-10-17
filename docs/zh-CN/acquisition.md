@@ -343,17 +343,16 @@ timestamp
 
 支持分页的厂商把下一页的 token 作为第二个返回值，引擎会在下一次调用时通过 `page_token` 交还给它。引擎写出每一页，把它记入分页账本，token 为 `None` 时停止；见 [pageledger](pageledger.md) 指南。
 
-错误分类由 `_classify_error(exc)` 完成，返回 `"failed"`（这个批次失败，下次运行重试）、`"quota"`（停止整个运行，见上文）或 `"rate_limited"`（退避后重试同一批次）。基类只有在 HTTP 状态码列在 `RATE_LIMIT_STATUS_CODES` 中时才返回 `"rate_limited"`，该集合默认为空；退避时间由 `rate_limit_backoff_seconds`（5）和 `rate_limit_max_retries`（6）控制。同一个状态码在不同厂商可能含义不同：Tiingo 把 429 视为小时配额用尽（`"quota"`），Alpaca 则视为每分钟上限（`"rate_limited"`）。
+错误分类由 `_classify_error(exc)` 完成，返回 `"failed"`（这个批次失败，下次运行重试）、`"quota"`（停止整个运行，见上文）或 `"transient"`（等待后重发这个请求）。基类对 `RETRY_STATUS_CODES` 中的状态码（429、500、502、503、504）以及连接断开或超时返回 `"transient"`，其余一律返回 `"failed"`。暂时性失败的请求由共用的请求策略重发，与 Sharadar 和 Massive 客户端相同：服务器给了 `Retry-After` 就按它等待，否则从 `retry_backoff_seconds`（2）开始逐次加倍，最多重试 `request_retries`（5）次，即 2、4、8、16、32 秒。只重发失败的那一页，也只有这个 worker 等待。同一个状态码在不同厂商可能含义不同：Tiingo 把 429 视为小时配额用尽（`"quota"`，先于基类的规则判断），Alpaca 和 FRED 则视为会解除的上限（`"transient"`）。
 
-凭证只需声明，不需要自己处理。厂商在 `__init__` 中读取环境变量，只把取值保存在内存中的客户端上，并把变量名列在 `CREDENTIAL_ENV_VARS` 里。每条被捕获的消息在写入日志或 `_failures.json` 之前都会经过 `_scrub`，其中每个凭证取值都会被替换为 `REDACTION`。
+凭证只需声明，不需要自己处理。厂商在 `__init__` 中读取环境变量，只把取值保存在内存中的客户端上，并把变量名列在 `CREDENTIAL_ENV_VARS` 里。每条被捕获的消息在写入日志或 `_failures.json` 之前都会经过请求策略的 `scrub`（`self._policy.scrub`），其中每个凭证取值都会被替换为 `<NAME REDACTED>`。
 
-所有厂商客户端共用一个请求策略 `quantlab.acquisition._support.request_policy`：`require_env` 读取凭证，在发出任何请求之前就失败并列出每个未设置的变量（`TIINGO_API_KEY not set; ...`）；`_scrub` 调用的就是其中的 `scrub`；Sharadar 和 Massive 的 REST 客户端通过 `RequestPolicy.call` 重试 `TransientError`（连接断开、429 或 5xx），服务器给了 `Retry-After` 就按它等待，否则按逐次加倍的退避等待；401 或 403 变成各自的权限错误并写明端点（`RequestPolicy.refusal`）；厂商返回的 URL 会去掉 `apiKey` 以及任何携带密钥的参数（`RequestPolicy.keyless`）；记录或抛出的每条消息都会抹去密钥。哪些状态码重试仍由各客户端决定，这个基类按批次的 `rate_limited` 等待也保持不变。两个 REST 客户端还共用一个 HTTP GET，即 `quantlab.acquisition._support.http`：`http_get` 把响应体以流的方式放进 `HttpResponse`（状态码、响应头、分块的响应体），连接建立失败或中途断开时抛出客户端自己的 `TransientError` 子类（`SharadarTransportError`、`MassiveTransportError`）；各客户端在自己的默认 transport 里绑定超时和是否跟随重定向（`sharadar.client.default_transport`、`massive.client.rest_transport`），测试替换的就是这一个可调用对象。
+所有厂商客户端共用一个请求策略 `quantlab.acquisition._support.request_policy`：`require_env` 读取凭证，在发出任何请求之前就失败并列出每个未设置的变量（`TIINGO_API_KEY not set; ...`）；引擎用的就是其中的 `RequestPolicy.scrub`；引擎的 `_request_page` 以及 Sharadar 和 Massive 的 REST 客户端都通过 `RequestPolicy` 重试连接断开、429 或 5xx（这里用 `back_off`，那边用 `call`），服务器给了 `Retry-After` 就按它等待，否则按逐次加倍的退避等待；401 或 403 变成各自的权限错误并写明端点（`RequestPolicy.refusal`）；厂商返回的 URL 会去掉 `apiKey` 以及任何携带密钥的参数（`RequestPolicy.keyless`）；记录或抛出的每条消息都会抹去密钥。哪些状态码重试仍由各客户端决定，这里是 `_classify_error`。两个 REST 客户端还共用一个 HTTP GET，即 `quantlab.acquisition._support.http`：`http_get` 把响应体以流的方式放进 `HttpResponse`（状态码、响应头、分块的响应体），连接建立失败或中途断开时抛出客户端自己的 `TransientError` 子类（`SharadarTransportError`、`MassiveTransportError`）；各客户端在自己的默认 transport 里绑定超时和是否跟随重定向（`sharadar.client.default_transport`、`massive.client.rest_transport`），测试替换的就是这一个可调用对象。
 
 ```python
 >>> import os
 >>> class KeyedAcquisition(DemoAcquisition):
 ...     CREDENTIAL_ENV_VARS = ("DEMO_API_KEY",)
-...     REDACTION = "<DEMO_API_KEY REDACTED>"
 ...     def _fetch_page(self, symbols, *args, **kwargs):
 ...         raise RuntimeError(f"401 for https://api.example.com/{symbols[0]}?token={os.environ['DEMO_API_KEY']}")
 >>> os.environ["DEMO_API_KEY"] = "s3cret-value-123"

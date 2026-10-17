@@ -296,6 +296,8 @@ def _fred_with_dgs10_failing(tmp_path, monkeypatch):
         return serving(url, params)
 
     monkeypatch.setattr("quantlab.acquisition.fred._http_get", dgs10_failing)
+    # The 500 is retried by the request policy; the waits are not slept.
+    monkeypatch.setattr("quantlab.acquisition.fred.FredAcquisition._sleep", lambda self, seconds: None)
     result = _refresh("fred", tmp_path, series=["DTB3", "DGS10", "DFF"], start="2024-01-02",
                       end=date(2024, 1, 9))
     return result, "DGS10"

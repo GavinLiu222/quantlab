@@ -1074,7 +1074,6 @@ class WrdsTaqNbboAcquisition(SymbolBatchAcquisition):
     DEFAULT_VERIFY_PAGE_COUNTS = True
 
     CREDENTIAL_ENV_VARS = (USERNAME_ENV,)
-    REDACTION = "<WRDS CREDENTIAL REDACTED>"
 
     SCHEMA_PATTERN = "taqm_{year}"
     TABLE_PATTERN = "complete_nbbo_{ymd}"
