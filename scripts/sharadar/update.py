@@ -53,8 +53,10 @@ store and are not refreshed here; ``download.py`` pulls them whole.
 An interrupted run resumes from each table's watermark and each store's last
 bar; running it twice in a day appends nothing the second time.
 
-A store that fails does not stop the others: its error is logged and printed, the run
-goes on with the next store and exits 1 at the end. A store refusing because
+A table that fails does not stop the others, nor the store update: it is printed as
+failed, keeps its watermark and the run exits 1 at the end. A store that fails does not
+stop the others: its error is logged and printed, the run goes on with the next store
+and exits 1 at the end. A store refusing because
 a symbol it holds is no longer on the raw tier's symbol axis (a security's
 raw rows now map to another permaticker; ``update()`` refuses rather than
 choose between losing history and stopping) is rebuilt from the raw tier
@@ -175,6 +177,7 @@ if __name__ == "__main__":
     if missing := missing_stores(data_dir):
         parser.exit(1, f"no store {[str(p) for p in missing]}; run download.py first.\n")
 
+    not_pulled: tuple[str, ...] = ()
     if not args.no_pull:
         try:
             pulled = refresh_raw_tier(
@@ -184,11 +187,13 @@ if __name__ == "__main__":
             parser.exit(1, f"{exc}\n")
         for part in pulled.parts:
             print(part.line)
+        not_pulled = pulled.failed
 
     outcome = update_stores(
         download_dir, data_dir, rebuild_dropped=args.rebuild_dropped, keep_dropped=args.keep_dropped
     )
     for line in outcome.lines():
         print(line)
-    if outcome.failed:
-        parser.exit(1, f"{len(outcome.failed)} store(s) not updated: {list(outcome.failed)}\n")
+    if outcome.failed or not_pulled:
+        parser.exit(1, f"{len(not_pulled)} table(s) not pulled: {list(not_pulled)}; "
+                       f"{len(outcome.failed)} store(s) not updated: {list(outcome.failed)}\n")

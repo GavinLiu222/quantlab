@@ -106,6 +106,15 @@ class SharadarHttpError(RuntimeError):
     """Sharadar answered with an error status, or kept failing past the retries."""
 
 
+class SharadarResponseError(ValueError):
+    """Sharadar answered with a file the client cannot read: a CSV not the table's schema, a zip without one CSV.
+
+    A ``ValueError``, but the vendor's: the raw-tier refresh records the table
+    as failed, where a plain ``ValueError`` (a bug of ours, a table never
+    pulled in bulk) is raised.
+    """
+
+
 class SharadarTransportError(TransientError):
     """The connection failed to open, or broke while a body was read.
 
@@ -277,8 +286,9 @@ class SharadarClient:
             If the key is missing or refused for this table.
         SharadarHttpError
             On any other error status, or a rate limit past the retries.
-        ValueError
-            If the CSV header is not the table's schema.
+        SharadarResponseError
+            If the zip holds other than one CSV, or its header is not the
+            table's schema (a ``ValueError``).
 
         Examples
         --------
@@ -381,6 +391,8 @@ class SharadarClient:
             If the table has no ``date`` column, or no raw pull yet.
         SharadarEntitlementError, SharadarHttpError
             As for ``bulk_table``.
+        SharadarResponseError
+            If a page's header is not the table's schema.
 
         Examples
         --------
@@ -459,6 +471,8 @@ class SharadarClient:
         ValueError
             If the table has no ``lastupdated`` column or primary key, has no
             watermark and no ``since`` is given, or one ticker fills a page.
+        SharadarResponseError
+            If a page's header is not the table's schema.
         SharadarEntitlementError, SharadarHttpError
             As for ``bulk_table``.
 
@@ -780,7 +794,7 @@ class SharadarClient:
         with zipfile.ZipFile(archive) as bundle:
             members = [name for name in bundle.namelist() if name.endswith(".csv")]
             if len(members) != 1:
-                raise ValueError(
+                raise SharadarResponseError(
                     f"Sharadar table {spec.code!r}: the bulk zip holds "
                     f"{len(members)} CSV files ({members}), expected one."
                 )
@@ -832,7 +846,7 @@ def _text(response: Response, limit: int | None = 300) -> str:
 def _check_header(spec: SharadarTable, header: list[str]) -> None:
     """Raise if a CSV header is not the table's schema, verbatim."""
     if tuple(header) != tuple(spec.schema):
-        raise ValueError(
+        raise SharadarResponseError(
             f"Sharadar table {spec.code!r}: the CSV columns {header} are "
             f"not the declared schema {list(spec.schema)}. Sharadar changed "
             f"the table; update quantlab.dataset.sharadar.tables."

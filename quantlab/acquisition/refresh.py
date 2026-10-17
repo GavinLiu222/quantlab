@@ -11,7 +11,24 @@ the registry, so a caller names a vendor, never a client.
 The function is a ``RawTierRefresh``: a protocol rather than a root class,
 because the three vendors share no implementation (whole tables, REST pages,
 symbol batches) and each refresh is a plain function over its own client
-(ADR 0017). What every refresh shares is the call and the result.
+(ADR 0017). What every refresh shares is the call, the result and how it
+fails.
+
+The failure rule is the same for every vendor. A part that fails (a table, an
+endpoint, a series) is recorded as ``RefreshedPart.failure(name, error)`` and
+the other parts still run. "Fails" means the vendor or the transport failed
+it: the vendor's own error types (a refusal of the key for that part, an HTTP
+error status, a ``TransientError`` of
+``quantlab.acquisition._support.request_policy`` past its retries, a
+``requests`` exception, a vendor file the client cannot read), each vendor
+naming the types it takes for one (``TABLE_FAILURES`` in
+``quantlab.acquisition.sharadar.refresh``, ``ENDPOINT_FAILURES`` in
+``quantlab.acquisition.massive.refresh``; FRED's symbol-batched download keeps
+a series' failure itself). Any other error, a bare ``ValueError``,
+``TypeError`` or ``KeyError`` of our own code, is raised: it is a bug, not a
+part the vendor failed. Only an error that stops the whole refresh before any
+part can run raises by design: a missing credential, checked before the first
+request.
 
 Examples
 --------
@@ -171,8 +188,16 @@ class RawTierRefresh(Protocol):
     Returns
     -------
     RawTierRefreshResult
-        Every part tried. A part that failed is listed with its error; an
-        error that stops the whole refresh (a missing credential) raises.
+        Every part tried. A part the vendor or the transport failed is
+        listed with its error and the other parts still run (see the module
+        docstring for which errors count).
+
+    Raises
+    ------
+    Exception
+        The vendor's credential error, before any part is asked for, when
+        a credential is missing; any error that is not the vendor failing a
+        part (a bug of ours), from the part it happened on.
 
     Examples
     --------

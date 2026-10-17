@@ -15,6 +15,12 @@ Each table is pulled the way its updates arrive:
   query after 15 seconds, and after a mass re-stamp of ``lastupdated`` the bulk
   zip is the cheaper copy of the changed rows.
 
+A table Sharadar fails (one of ``TABLE_FAILURES``: a refusal, an error
+status or a connection failure past the retries, a file not the table's
+schema) is recorded as failed (``RefreshedPart.failure``) and the tables after
+it are still pulled; any other error, a bug of ours or a table never pulled in
+bulk, is raised. A missing key raises before any table is asked for.
+
 SF3 and SF3B feed no store and are not refreshed; ``bulk_table`` pulls them.
 ``refresh_raw_tier`` is registered on ``SHARADAR_SOURCE``; the stores are
 brought up to date afterwards by ``quantlab.dataset.sharadar.stores``.
@@ -37,8 +43,16 @@ from pathlib import Path
 
 from loguru import logger
 
+from quantlab.acquisition._support.request_policy import require_env
 from quantlab.acquisition.refresh import RawTierRefreshResult, RefreshedPart
-from quantlab.acquisition.sharadar.client import SharadarClient, SharadarHttpError
+from quantlab.acquisition.sharadar.client import (
+    API_KEY_ENV,
+    SharadarClient,
+    SharadarEntitlementError,
+    SharadarHttpError,
+    SharadarResponseError,
+    SharadarTransportError,
+)
 
 #: Pulled whole every run: reference and membership tables are small.
 WHOLE_TABLES = ("tickers", "indicators", "sp500", "sf3a", "actions")
@@ -46,6 +60,8 @@ WHOLE_TABLES = ("tickers", "indicators", "sp500", "sf3a", "actions")
 WINDOW_TABLES = ("sep", "sfp", "events", "sf2")
 #: Pulled as the rows changed since the watermark (``lastupdated``).
 UPDATED_TABLES = ("sf1", "daily")
+#: The errors that mean Sharadar failed one table; the others are still pulled.
+TABLE_FAILURES = (SharadarEntitlementError, SharadarHttpError, SharadarTransportError, SharadarResponseError)
 
 
 def refresh_raw_tier(
@@ -58,9 +74,10 @@ def refresh_raw_tier(
     """Pull the table plan into the raw tier under ``<download_dir>/sharadar/``.
 
     The tables are pulled in the order ``WHOLE_TABLES``, ``WINDOW_TABLES``,
-    ``UPDATED_TABLES``. A failure stops the refresh at that table (the
-    tables after it keep their watermarks), except a failed updated pull,
-    which is retried as a bulk pull.
+    ``UPDATED_TABLES``. A table that fails with one of ``TABLE_FAILURES`` is
+    listed as failed and keeps its watermark, and the tables after it are
+    still pulled; a failed updated pull (``SharadarHttpError``) is first
+    retried as a bulk pull.
 
     Parameters
     ----------
@@ -78,17 +95,14 @@ def refresh_raw_tier(
     Returns
     -------
     RawTierRefreshResult
-        One part per table; its summary is the raw file written.
+        One part per table: the raw file written, or why it failed.
 
     Raises
     ------
     SharadarEntitlementError
-        If the key is missing or refused.
-    SharadarHttpError
-        If a whole or window pull failed, or the bulk fallback of an updated
-        pull.
+        If ``SHARADAR_API_KEY`` is unset; nothing is requested.
     ValueError
-        If a table has no bulk pull yet, or the vendor's CSV is not its schema.
+        If a table has no bulk pull yet; the tables before it are pulled.
 
     Examples
     --------
@@ -96,18 +110,29 @@ def refresh_raw_tier(
 
         refresh_raw_tier("/data/quantlab/downloads", trading_days=10).failed  # ()
     """
+    require_env(
+        [API_KEY_ENV],
+        hint="cannot refresh the Sharadar raw tier; set it in the environment. Nothing was requested.",
+        error=SharadarEntitlementError,
+    )
     client = client if client is not None else SharadarClient()
-    parts = []
-    for code in WHOLE_TABLES:
-        parts.append(RefreshedPart(code, str(client.bulk_table(code, download_dir))))
-    for code in WINDOW_TABLES:
-        path = client.window_table(code, download_dir, through=end, trading_days=trading_days)
-        parts.append(RefreshedPart(code, str(path)))
-    for code in UPDATED_TABLES:
+
+    def pull(code: str) -> RefreshedPart:
         try:
-            parts.append(RefreshedPart(code, str(client.updated_table(code, download_dir))))
-        except SharadarHttpError as exc:
-            logger.warning(f"Sharadar {code}: updated pull failed ({exc}); pulling it in bulk instead")
-            path = client.bulk_table(code, download_dir)
-            parts.append(RefreshedPart(code, f"updated pull failed ({exc}); pulled in bulk: {path}"))
-    return RawTierRefreshResult("sharadar", tuple(parts))
+            if code in WHOLE_TABLES:
+                return RefreshedPart(code, str(client.bulk_table(code, download_dir)))
+            if code in WINDOW_TABLES:
+                path = client.window_table(code, download_dir, through=end, trading_days=trading_days)
+                return RefreshedPart(code, str(path))
+            try:
+                return RefreshedPart(code, str(client.updated_table(code, download_dir)))
+            except SharadarHttpError as exc:
+                logger.warning(f"Sharadar {code}: updated pull failed ({exc}); pulling it in bulk instead")
+                path = client.bulk_table(code, download_dir)
+                return RefreshedPart(code, f"updated pull failed ({exc}); pulled in bulk: {path}")
+        except TABLE_FAILURES as exc:
+            logger.warning(f"Sharadar {code}: not refreshed ({exc}); pulling the other tables")
+            return RefreshedPart.failure(code, str(exc))
+
+    parts = tuple(pull(code) for code in (*WHOLE_TABLES, *WINDOW_TABLES, *UPDATED_TABLES))
+    return RawTierRefreshResult("sharadar", parts)

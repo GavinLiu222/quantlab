@@ -160,6 +160,14 @@ class MassiveTransportError(TransientError):
     """
 
 
+class MassiveResponseError(ValueError):
+    """Massive answered 200 with a page the client cannot read: not JSON, or a record missing a field it needs.
+
+    A ``ValueError``, but the vendor's: the refresh records the endpoint as
+    failed, where a plain ``ValueError`` (a bug of ours) is raised.
+    """
+
+
 class _Aborted(Exception):
     """Another range of the same file failed; this one stops."""
 
@@ -913,7 +921,10 @@ class MassiveClient:
                 raise MassiveTransportError(
                     policy.scrub(f"HTTP {response.status} on {where}: {_vendor_error(response.body)}")
                 )
-            return json.loads(response.body)
+            try:
+                return json.loads(response.body)
+            except ValueError as error:
+                raise MassiveResponseError(f"{where} answered 200 with a body that is not JSON: {error}") from error
 
         return self._retrying(f"GET {where}", attempt)
 
@@ -968,6 +979,9 @@ class MassiveClient:
         MassiveTransportError
             If a page kept failing after ``retries`` back-offs; likewise, so
             the next pull resumes from the watermark.
+        MassiveResponseError
+            If a page is not JSON, or a record lacks the field the watermark
+            or the id it was asked by needs; likewise.
 
         Examples
         --------
@@ -1147,7 +1161,7 @@ class MassiveClient:
                 continue
             record = page.get("results")
             if not isinstance(record, dict) or record.get(endpoint.key) != ident:
-                raise ValueError(f"Massive {endpoint.name} for {ident!r} returned no record keyed by "
+                raise MassiveResponseError(f"Massive {endpoint.name} for {ident!r} returned no record keyed by "
                                  f"{endpoint.key!r}: {record}")
             batch.append(record)
             rows += 1
@@ -1240,7 +1254,9 @@ def _day_of(record: Mapping[str, object], field: str, endpoint: str) -> date:
     """Return the day of a record's date field (a date, or an ISO timestamp's date)."""
     value = record.get(field)
     if not value:
-        raise ValueError(f"A Massive {endpoint} record has no {field!r}; cannot move its watermark: {record}")
+        raise MassiveResponseError(
+            f"A Massive {endpoint} record has no {field!r}; cannot move its watermark: {record}"
+        )
     return date.fromisoformat(str(value)[:10])
 
 

@@ -125,8 +125,29 @@ def test_the_sharadar_refresh_refuses_without_the_key(tmp_path, monkeypatch):
     from quantlab.acquisition.sharadar.client import SharadarEntitlementError
 
     monkeypatch.delenv("SHARADAR_API_KEY", raising=False)
+    vendor = _sharadar_vendor([])
     with pytest.raises(SharadarEntitlementError):
-        _refresh("sharadar", tmp_path, client=_sharadar_client(_sharadar_vendor([])))
+        _refresh("sharadar", tmp_path, client=_sharadar_client(vendor))
+    assert vendor.calls == []  # before any table
+
+
+def test_a_sharadar_table_whose_csv_is_not_its_schema_fails_that_table(tmp_path, sharadar_key):
+    vendor = _sharadar_vendor(["2024-01-02"])
+    _bulk_everything(vendor, tmp_path)
+    columns, rows = vendor.tables["sp500"]
+    vendor.tables["sp500"] = ((*columns, "renamed"), rows)  # SYNTHETIC: Sharadar changed the table
+
+    result = _refresh("sharadar", tmp_path, end=date(2024, 1, 2), client=_sharadar_client(vendor))
+
+    assert result.failed == ("sp500",)
+    assert "not the declared schema" in result.parts[2].error
+    assert len(result.parts) == 11
+
+
+def test_a_sharadar_table_with_no_bulk_pull_is_not_taken_for_a_failed_table(tmp_path, sharadar_key):
+    vendor = _sharadar_vendor(["2024-01-02"])
+    with pytest.raises(ValueError, match="pull it in bulk first"):
+        _refresh("sharadar", tmp_path, end=date(2024, 1, 2), client=_sharadar_client(vendor))
 
 
 # -- Massive REST --------------------------------------------------------------------
@@ -177,6 +198,120 @@ def test_the_massive_refresh_refuses_an_unknown_endpoint_before_any_request(tmp_
         _refresh("massive", tmp_path, endpoints=("splits", "nonsense"),
                  client=_massive_client(lambda *a, **k: calls.append(a)))
     assert calls == []
+
+
+def test_a_programming_error_in_the_massive_refresh_is_not_taken_for_a_failed_endpoint(tmp_path):
+    class Broken:
+        """A client whose pull fails with our own error, not the vendor's."""
+
+        def pull(self, name, download_dir, *, end=None, today=None):
+            raise ValueError("a bug in our code (SYNTHETIC)")
+
+    with pytest.raises(ValueError, match="a bug in our code"):
+        _refresh("massive", tmp_path, endpoints=("splits", "dividends"), client=Broken())
+
+
+def test_a_massive_page_the_client_cannot_read_fails_that_endpoint(tmp_path, massive_env):
+    from quantlab.acquisition.massive.client import HttpResponse
+
+    def splits_without_their_date(url, *, params, headers):
+        if url.startswith("https://api.massive.com/stocks/v1/splits"):
+            # A page with more to follow whose last row has no execution_date.
+            body = {"status": "OK", "results": [{"id": "S1", "ticker": "AAA"}],  # SYNTHETIC
+                    "next_url": "https://api.massive.com/stocks/v1/splits?cursor=x"}
+            return HttpResponse(200, json.dumps(body).encode())
+        return HttpResponse(200, json.dumps({"status": "OK", "results": []}).encode())
+
+    result = _refresh("massive", tmp_path, endpoints=("splits", "dividends"),
+                      client=_massive_client(splits_without_their_date), today=date(2024, 3, 15))
+
+    assert result.failed == ("splits",)
+    assert "execution_date" in result.parts[0].error
+    assert result.parts[1].ok
+
+
+def test_the_massive_refresh_refuses_without_the_credentials_before_any_endpoint(tmp_path, monkeypatch):
+    from quantlab.acquisition.massive.client import MassiveCredentialError
+
+    for name in ("MASSIVE_API_KEY", "MASSIVE_S3_ACCESS_KEY_ID", "MASSIVE_S3_SECRET_ACCESS_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    with pytest.raises(MassiveCredentialError):
+        _refresh("massive", tmp_path, endpoints=("splits",))
+    assert not (tmp_path / "massive").exists()
+
+
+# -- one failure contract for every vendor -------------------------------------------
+
+
+def _sharadar_with_events_failing(tmp_path, monkeypatch):
+    """Sharadar with every table bulk-pulled, then the events window answering HTTP 404."""
+    from quantlab.acquisition.sharadar.client import Response
+
+    monkeypatch.setenv("SHARADAR_API_KEY", "synthetic-key")  # SYNTHETIC
+    vendor = _sharadar_vendor(["2024-01-02"])
+    _bulk_everything(vendor, tmp_path)
+
+    def events_failing(url, *, params, headers):
+        if url.endswith("/events") and "from" in params:
+            return Response(status=404, headers={}, body=iter([b"not found (SYNTHETIC)"]))
+        return vendor(url, params=params, headers=headers)
+
+    result = _refresh("sharadar", tmp_path, end=date(2024, 1, 2), client=_sharadar_client(events_failing))
+    return result, "events"
+
+
+def _massive_with_dividends_failing(tmp_path, monkeypatch):
+    """Massive with the dividends endpoint answering HTTP 500 past every retry."""
+    from quantlab.acquisition.massive.client import HttpResponse
+
+    monkeypatch.setenv("MASSIVE_API_KEY", MASSIVE_KEY)
+    monkeypatch.setenv("MASSIVE_S3_ACCESS_KEY_ID", "synthetic-access-id")  # SYNTHETIC
+
+    def dividends_failing(url, *, params, headers):
+        if url.startswith("https://api.massive.com/stocks/v1/dividends"):
+            return HttpResponse(500, b"internal error (SYNTHETIC)")
+        if url.startswith("https://api.massive.com/stocks/v1/splits"):
+            return _splits_only(url, params=params, headers=headers)
+        return HttpResponse(200, json.dumps({"status": "OK", "results": []}).encode())
+
+    result = _refresh("massive", tmp_path, endpoints=("splits", "dividends", "ipos"),
+                      client=_massive_client(dividends_failing), today=date(2024, 3, 15))
+    return result, "dividends"
+
+
+def _fred_with_dgs10_failing(tmp_path, monkeypatch):
+    """FRED serving DTB3 and DFF but answering HTTP 500 for DGS10."""
+    import requests
+
+    from tests.test_fred import SERIES, FakeFred
+
+    serving = FakeFred(SERIES)
+
+    def dgs10_failing(url, params):
+        if params["id"] == "DGS10":
+            response = requests.Response()
+            response.status_code = 500
+            response._content = b"<html>error (SYNTHETIC)</html>"
+            return response
+        return serving(url, params)
+
+    monkeypatch.setattr("quantlab.acquisition.fred._http_get", dgs10_failing)
+    result = _refresh("fred", tmp_path, series=["DTB3", "DGS10", "DFF"], start="2024-01-02",
+                      end=date(2024, 1, 9))
+    return result, "DGS10"
+
+
+@pytest.mark.parametrize("failing", [
+    _sharadar_with_events_failing, _massive_with_dividends_failing, _fred_with_dgs10_failing,
+], ids=["sharadar", "massive", "fred"])
+def test_a_part_the_vendor_failed_is_listed_and_the_other_parts_still_run(tmp_path, monkeypatch, failing):
+    result, failed = failing(tmp_path, monkeypatch)
+
+    assert result.failed == (failed,)
+    others = [part for part in result.parts if part.name != failed]
+    assert len(others) >= 2 and all(part.ok for part in others)
+    # The failed part is not the last tried: the parts after it ran too.
+    assert result.parts[-1].name != failed
 
 
 # -- the daily update's refresh step -------------------------------------------------

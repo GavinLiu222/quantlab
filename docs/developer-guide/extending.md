@@ -67,7 +67,10 @@ depends on the vendor's API, and the descriptor says it in two fields
   returning a `RawTierRefreshResult` (`quantlab.acquisition.refresh`) that
   brings every part of the raw tier from its watermark up to `end`. A vendor
   the daily update keeps current registers one, and
-  `registry.refresh_raw_tier` calls it. Sharadar
+  `registry.refresh_raw_tier` calls it. It records a part the vendor fails
+  (the vendor's own error types only, never a bare `ValueError`) as
+  `RefreshedPart.failure` and runs the others, and raises a missing
+  credential before the first part (the `RawTierRefresh` docstring). Sharadar
   (`quantlab/acquisition/sharadar/refresh.py`), Massive
   (`quantlab/acquisition/massive/refresh.py`) and FRED
   (`quantlab/acquisition/fred.py`) are the references.

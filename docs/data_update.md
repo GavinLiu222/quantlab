@@ -19,7 +19,7 @@ root `--data-dir`. Each step is one action on one store folder (paths relative t
 
 | action | what it does |
 |--------|--------------|
-| `refresh` | keeps a vendor's raw tier current from its watermarks: `{vendor: ..., <options>}` calls `quantlab.acquisition.registry.refresh_raw_tier` with the vendor's options (Sharadar: `trading_days`; Massive: `endpoints`, `end`; FRED: `series`, `start`); raw files only; it raises when a part (a table, an endpoint, a series) failed, and its result names every part |
+| `refresh` | keeps a vendor's raw tier current from its watermarks: `{vendor: ..., <options>}` calls `quantlab.acquisition.registry.refresh_raw_tier` with the vendor's options (Sharadar: `trading_days`; Massive: `endpoints`, `end`; FRED: `series`, `start`); raw files only; a part (a table, an endpoint, a series) the vendor failed is recorded and the other parts still run, a missing credential raises before any part; the step raises when a part failed, and its result names every part |
 | `sharadar_stores` | brings every Sharadar store up from the raw tier in the update's own process (`quantlab.dataset.sharadar.stores.update_stores`): `{rebuild_dropped: ..., keep_dropped: [...]}`; it raises when a store failed, after trying every store, and its result counts the stores updated, built and rebuilt |
 | `benchmarks` | `scripts/sharadar/price_return_benchmark.py --refresh` for the listed tickers (`market/benchmarks/`) |
 | `update` | rebuilds the dataset of a store folder from its `component.json` and calls `update()` |
@@ -66,8 +66,8 @@ daily update; run `scripts/wrds/*.py` when the vendor publishes.
 
 Two failures are handled differently from when the raw stage pulled and updated Sharadar in one
 `scripts/sharadar/update.py` step and FRED in one download-and-update step. A failed Sharadar pull (one table the vendor refused or timed out) no longer stops the store
-update: the `refresh` step is recorded as failed and the `sharadar_stores` step still brings every store up to
-what the raw tier holds; whether the day is ready is decided by the `ready` stores. A FRED series that could
+update, nor the tables after it: the refresh still pulls the other tables, the `refresh` step is recorded as
+failed and the `sharadar_stores` step still brings every store up to what the raw tier holds; whether the day is ready is decided by the `ready` stores. A FRED series that could
 not be downloaded is now a failed step (the `refresh` step raises naming the series, and the step is
 allowed to fail), where it was only logged; the `update` of its store still runs on what is on disk.
 

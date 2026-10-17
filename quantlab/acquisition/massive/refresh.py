@@ -5,7 +5,12 @@ Each endpoint (``quantlab.acquisition.massive.rest.ENDPOINTS``) is pulled by
 vendor returned them under ``<download-dir>/massive/rest/<endpoint>/``, the
 watermark moved after every page. A first refresh backfills the whole history,
 a later one asks only for what is new, and an interrupted one resumes where it
-stopped. Every endpoint is tried even when one fails.
+stopped. Every endpoint is tried even when one fails: an endpoint Massive
+refuses (``MassiveEntitlementError``), whose pages kept failing past the
+retries (``MassiveTransportError``) or came back unreadable
+(``MassiveResponseError``) is recorded as failed (``RefreshedPart.failure``);
+any other error, a bug of ours among them, is raised. A missing credential
+raises before any endpoint is asked for.
 
 The daily trade, minute and day aggregate files are not refreshed here: their
 download runs beside the Trade bar conversion (``scripts/massive/convert.py
@@ -34,8 +39,12 @@ from pathlib import Path
 from quantlab.acquisition.massive.client import (
     MassiveClient,
     MassiveEntitlementError,
+    MassiveResponseError,
     MassiveTransportError,
 )
+
+#: The errors that mean Massive failed one endpoint; the others still run.
+ENDPOINT_FAILURES = (MassiveEntitlementError, MassiveTransportError, MassiveResponseError)
 from quantlab.acquisition.massive.rest import ENDPOINTS
 from quantlab.acquisition.refresh import RawTierRefreshResult, RefreshedPart
 
@@ -70,15 +79,19 @@ def refresh_raw_tier(
     -------
     RawTierRefreshResult
         One part per endpoint: the rows and pages pulled and the watermark
-        after, or why it failed (a refusal, a transport error past the
-        retries, a page the client cannot read).
+        after, or why it failed (one of ``ENDPOINT_FAILURES``: a refusal, a
+        transport error past the retries, a page the client cannot read).
 
     Raises
     ------
     ValueError
         If an endpoint is not in ``ENDPOINTS``; nothing is requested.
     MassiveCredentialError
-        If ``client`` is omitted and a credential variable is unset.
+        If ``client`` is omitted and a credential variable is unset; nothing
+        is requested.
+    Exception
+        Any error not in ``ENDPOINT_FAILURES`` (a bug of ours), from the
+        endpoint it happened on; the endpoints before it are pulled.
 
     Examples
     --------
@@ -95,7 +108,7 @@ def refresh_raw_tier(
         started = time.monotonic()
         try:
             done = client.pull(name, download_dir, end=end, today=today)
-        except (MassiveEntitlementError, MassiveTransportError, ValueError) as error:
+        except ENDPOINT_FAILURES as error:
             parts.append(RefreshedPart.failure(name, str(error)))
             continue
         parts.append(RefreshedPart(
