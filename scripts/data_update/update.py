@@ -15,8 +15,6 @@ holding ``<stem>.zarr``, its README.md and a ``component.json``: the component's
   ``keep_dropped`` passed on); it raises when a store failed;
 - ``benchmarks``: ``scripts/sharadar/price_return_benchmark.py --refresh``;
 - ``update``: ``update()`` the dataset of a store folder;
-- ``mirror``: append a source dataset's new bars to a store copying its variables
-  (``quantlab.backtest.live.mirror_new_bars``);
 - ``extend``: extend to t every store the component declares it owns, written by date
   range (``Component.store_uses``: a factor's store, which only its owner may extend, or
   a factor risk model's regression and estimate stores, in that order);
@@ -77,7 +75,6 @@ from loguru import logger
 
 from quantlab.acquisition.base import DataSourceRegistry
 from quantlab.acquisition.registry import refresh_raw_tier
-from quantlab.backtest.live import mirror_new_bars
 from quantlab.core.store_uses import OWNS, StoreUse, walk_store_uses
 from quantlab.core.store_folder import COMPONENT_FILE, load_component
 from quantlab.dataset.base import BaseDataset
@@ -89,9 +86,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 NEW_YORK = ZoneInfo("America/New_York")
 STATUS_FILE = "update_status.json"
 #: The actions a step may name; each is a method of ``Update``.
-ACTIONS = ("refresh", "sharadar_stores", "benchmarks", "update", "mirror", "extend", "run")
+ACTIONS = ("refresh", "sharadar_stores", "benchmarks", "update", "extend", "run")
 #: The actions whose step writes the folder named by its ``store``.
-STORE_ACTIONS = ("update", "extend", "mirror")
+STORE_ACTIONS = ("update", "extend")
 #: The exit status of each final state.
 EXIT_CODES = {"done": 0, "failed": 1, "no_new_bar": 3}
 
@@ -267,13 +264,6 @@ class Update:
         summary = getattr(dataset, "update_summary", None)
         return f"{result}; {summary()}" if callable(summary) else result
 
-    def mirror(self, store: str, source: str) -> str:
-        """Append the source dataset's new bars to ``store``."""
-        if self.dry_run:
-            return "would mirror"
-        return mirror_new_bars(load_component(self.folder(source)), store_path(self.folder(store)),
-                               self.t.date().isoformat())
-
     def extend(self, store: str) -> str:
         """Extend every store a component writes by date range (a factor's, a risk model's two) to t."""
         if self.dry_run:
@@ -368,8 +358,6 @@ class Update:
             problems += [f"{where}: {problem}" for problem in extend_problems(item)]
         if action == "update" and not isinstance(item, BaseDataset):
             problems.append(f"{where}: {action} takes a dataset")
-        if action == "mirror" and not isinstance(item, BaseDataset):
-            problems.append(f"{where}: the mirror source must be a dataset")
         own = store_path(folder).absolute()
         return problems, {p for p in stores_read(item) | {own} if p != own}
 
@@ -388,7 +376,7 @@ class Update:
                     continue
                 problems += self.check_options(where, action, kwargs)
                 reads: set[Path] = set()
-                keys = {"update": ("store",), "extend": ("store",), "mirror": ("source",)}
+                keys = {"update": ("store",), "extend": ("store",)}
                 for key in keys.get(action, ()):
                     if key not in kwargs:
                         problems.append(f"{where}: no {key}")
@@ -396,8 +384,6 @@ class Update:
                     found, read = self.check_component(where, action, key, kwargs[key])
                     problems += found
                     reads |= read
-                if action == "mirror" and "source" in kwargs:
-                    reads.add(store_path(self.folder(kwargs["source"])).absolute())
                 if action == "run":
                     if not (REPO_ROOT / kwargs["script"]).is_file():
                         problems.append(f"{where}: no script {kwargs['script']}")

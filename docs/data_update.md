@@ -23,15 +23,14 @@ root `--data-dir`. Each step is one action on one store folder (paths relative t
 | `sharadar_stores` | brings every Sharadar store up from the raw tier in the update's own process (`quantlab.dataset.sharadar.stores.update_stores`): `{rebuild_dropped: ..., keep_dropped: [...]}`; it raises when a store failed, after trying every store, and its result counts the stores updated, built and rebuilt |
 | `benchmarks` | `scripts/sharadar/price_return_benchmark.py --refresh` for the listed tickers (`market/benchmarks/`) |
 | `update` | rebuilds the dataset of a store folder from its `component.json` and calls `update()` |
-| `mirror` | appends a source dataset's new bars to a store that copies its variables (`quantlab.backtest.live.mirror_new_bars`) |
 | `extend` | rebuilds the folder's component from its `component.json` and extends every store it declares it owns, written by date range, to t (`Component.store_uses()`, the `owns` uses: a factor's store, or a factor risk model's regression and estimate stores, in that order); the step's result names each store, `extended to <t>` or `current` |
 | `run` | runs any script under the repository: `{script: ..., args: [...], writes: [...], reads: [...]}`; `{data_dir}` and `{download_dir}` in `args` are filled in (other braces are kept) |
 
 Any other action is an error, in a run and in `--check`. A `benchmarks`, `sharadar_stores` or `run` step
 lists in `writes` the store folders, or folder prefixes ending in `/`, it writes (the shipped file:
 `market/sharadar/` and `universe/sharadar/` for `sharadar_stores`, which writes those two when it lists none,
-`market/benchmarks/` for `benchmarks`); `refresh` writes raw files only and takes no `writes`; `update`, `extend`
-and `mirror` write their `store`. A `run` step may list in `reads` the folders or prefixes it reads; the others'
+`market/benchmarks/` for `benchmarks`); `refresh` writes raw files only and takes no `writes`; `update` and
+`extend` write their `store`. A `run` step may list in `reads` the folders or prefixes it reads; the others'
 reads come from their components. `--check` refuses a step whose options its action does not take (for `refresh`,
 a vendor that is not registered or registers no raw-tier refresh, or an option its refresh does not take, such as
 `writes` or a missing FRED `start`), and orders every step's reads against the later steps' writes.
@@ -116,8 +115,8 @@ QUANTLAB_DATA_DIR=/data/quantlab taskset -c 64-114 .venv/bin/python scripts/data
 stages, without the retry and without writing the status file. `--check` downloads and computes
 nothing: it rebuilds every step's component, checks that `update` names a dataset, that `extend`
 names a component declaring ranged stores it owns (a factor owning its store, a factor risk model), and that no step reads a store a later
-step writes, that the first stage writes the `calendar` store and every `ready` store, and that a
-`mirror` source is a dataset, then prints each problem and exits 1 if there is any. Run it after
+step writes, and that the first stage writes the `calendar` store and every `ready` store, then prints
+each problem and exits 1 if there is any. Run it after
 editing the file.
 
 ## Store configs
