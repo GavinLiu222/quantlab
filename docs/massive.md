@@ -62,6 +62,7 @@ Massive's REST endpoints are kept in the same raw tier, one directory per endpoi
 |---|---|---|---|---|
 | `splits` | `/stocks/v1/splits` | `execution_date` | 1978-01-01 | 7 days |
 | `dividends` | `/stocks/v1/dividends` | `ex_dividend_date` | 2000-01-01 | 7 days |
+| `short_volume` | `/stocks/v1/short-volume` | `date` | 2024-02-06 | 7 days |
 | `news` | `/v2/reference/news` | `published_utc` (a timestamp) | 2016-06-01 | 1 day |
 
 These are the current `/stocks/v1` endpoints, not the deprecated `/v3/reference/splits` and `/v3/reference/dividends`.
@@ -426,6 +427,36 @@ panel = news.panel("2024-01-02", "2024-12-31")
 A cell without an article is 0. An article counts on the trading day of its `published_utc` in New York time when published before 16:00 there, and on the next trading day when published at 16:00 or later, or on a weekend or holiday, so news after the close never reaches the day's bar. The cut is 16:00 on every day, an early close included. An article's tickers are its `tickers` and those of its `insights`; each is placed through the Ticker map on the article's trading day, and the article counts once for each security placed (two tickers placed on one security count once). An article without an insight for a ticker counts in `news_count` only. A ticker the map cannot place is counted in `massive_news_1d.zarr.unplaced.json`; a ticker placed on a security outside the universe (a fund) is dropped. The store is built through the last day SEP, the news pull and the Ticker map all reach (every article counting on a trading day was published before that day ends in UTC, the pull watermark's day), so a store built day by day equals one built at once. A missing pull or an empty map is refused, naming the script to run.
 
 The first backfill (about ten years at 1,000 articles a page) is long; run `scripts/massive/rest_pull.py --endpoints news` by hand, in steps with `--end` if needed, before the daily update takes over: an interrupted pull resumes from its watermark. The shared store is `<data-dir>/market/massive/massive_news_1d/`, beside its `README.md` and `component.json`. `scripts/massive/news.py --download-dir ... --data-dir ...` writes the folder when it is missing (the config starting at the Ticker map's first day) and appends the new days; the daily data update runs it after the dividend panel ([data_update.md](data_update.md)). Each update reads every page of the news pull again.
+
+## Short volume
+
+`MassiveShortVolumeDataset` (`quantlab.dataset.massive.short_volume`) builds the short volume panel `massive_short_volume_1d` from the REST `short_volume` pull (FINRA's daily short sale volume, from 2024-02-06), on Sharadar's permaticker axis and SEP's trading calendar:
+
+```python
+from quantlab.dataset.config import MassiveShortVolumeConfig
+from quantlab.dataset.massive.short_volume import MassiveShortVolumeDataset
+
+short = MassiveShortVolumeDataset(MassiveShortVolumeConfig(
+    zarr_file_path="/data/quantlab/market/massive/massive_short_volume_1d/massive_short_volume_1d.zarr",
+    raw_data_dir_path="/data/quantlab/downloads/sharadar",
+    massive_dir="/data/quantlab/downloads/massive",
+    ticker_map_path="/data/quantlab/market/massive/massive_ticker_map/massive_ticker_map",
+    start_date="2024-02-06",
+))
+short.update()
+panel = short.panel("2024-03-01", "2024-03-29")
+```
+
+| Variable | Value (the vendor's field) | Placement |
+|---|---|---|
+| `short_volume` | shares sold short across all venues (`short_volume`) | the record's `date` |
+| `short_total_volume` | total volume reported across all venues (`total_volume`) | the same day |
+| `short_exempt_volume` | short volume exempt from Regulation SHO (`exempt_volume`) | the same day |
+| `short_volume_ratio` | percent of the total volume sold short, `100 * short_volume / short_total_volume` (`short_volume_ratio`) | the same day |
+
+A cell without a record is NaN. The totals only reach the panel; the per-venue columns (ADF, Nasdaq Carteret, Nasdaq Chicago, NYSE) stay in the raw tier. The records have no id, so the pull keeps them by their whole content and the panel keeps the newest copy of each ticker and day: a revision the 7-day overlap re-reads replaces the earlier copy. The store only appends days, so a revision of a day it already holds reaches it on a rebuild. Each record is placed through the Ticker map (above) on its own day; when two tickers place on one permaticker that day, their volumes are summed and the ratio is recomputed from the sums. Rows the map cannot place are counted in `massive_short_volume_1d.zarr.unplaced.json`. The columns are the universe's permatickers, by default SEP's domestic common stock. The store is built through the last day SEP, the REST pull and the Ticker map all reach, so a store built day by day equals one built at once; a missing pull or an empty map is refused, naming the script to run.
+
+The shared store is `<data-dir>/market/massive/massive_short_volume_1d/`, beside its `README.md` and `component.json`. `scripts/massive/short_volume.py --download-dir ... --data-dir ...` writes the folder when it is missing (the config starting at the later of the Ticker map's first day and 2024-02-06) and appends the new days; the daily data update runs it after the Ticker map ([data_update.md](data_update.md)), so the history grows by a day a day.
 
 ## Reading Trade bars as securities
 
