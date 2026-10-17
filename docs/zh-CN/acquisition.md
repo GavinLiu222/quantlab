@@ -2,7 +2,7 @@
 
 [English](../acquisition.md) | 简体中文
 
-Acquisition 是 quantlab 中把厂商原始数据下载到本地 parquet 文件目录的一层。厂商客户端只需要描述“如何发一次请求”；基类 `Acquisition` 负责分批、分页、并发、按标的隔离失败、可续跑的进度记录、请求配额处理和凭证脱敏。这一层只写原始文件，把它们转换成 `(timestamp, symbol)` 结构的 xarray 面板由对应的 dataset 类完成（见 [dataset](dataset.md) 指南）。
+Acquisition 是 quantlab 中把厂商原始数据下载到本地文件目录的一层。本指南讲它的按标的分批家族，即按日期窗口、一次一批标的地查询的厂商（Tiingo、Alpaca、FRED 和已停用的 WRDS 下载）。Sharadar 的整表和 Massive 的每日文件与 REST 端点由各自的客户端拉取，并通过 `quantlab.acquisition.registry.refresh_raw_tier` 保持最新（见 [registry](registry.md)、[Sharadar](../sharadar.md) 和 [Massive](../massive.md) 指南）。在按标的分批家族里，厂商客户端只需要描述“如何发一次请求”；基类 `SymbolBatchAcquisition` 负责分批、分页、并发、按标的隔离失败、可续跑的进度记录、请求配额处理和凭证脱敏。这一层只写原始文件，把它们转换成 `(timestamp, symbol)` 结构的 xarray 面板由对应的 dataset 类完成（见 [dataset](dataset.md) 指南）。
 
 ## 前置条件
 
@@ -24,9 +24,9 @@ Acquisition 是 quantlab 中把厂商原始数据下载到本地 parquet 文件�
 >>> from datetime import date
 >>> from pathlib import Path
 >>> import polars as pl
->>> from quantlab.acquisition.base import Acquisition
+>>> from quantlab.acquisition.base import SymbolBatchAcquisition
 >>> from quantlab.acquisition.config import AcquisitionConfig
->>> class DemoAcquisition(Acquisition):
+>>> class DemoAcquisition(SymbolBatchAcquisition):
 ...     VENDOR = "tiingo"
 ...     RAW_COLUMNS = ("timestamp", "symbol", "vendor", "close")
 ...     def _fetch_page(self, symbols, start_date, end_date, page_token=None):
@@ -300,23 +300,23 @@ uv run python scripts/wrds/etf.py --etf spy,qqq --start 1999-01-01
 uv run python scripts/wrds/nbbo.py --permnos 14593,10107 --start 2024-01-02 --end 2024-01-31
 ```
 
-Tiingo、Alpaca 和 Binance 只有库接口：它们的采集类按本指南的方式通过 `quantlab.acquisition.registry.run` 和 `convert` 驱动。
+Tiingo、Alpaca 和 Binance 只有库接口，项目里没有调用方：它们的采集类按本指南的方式通过 `quantlab.acquisition.registry.download_symbols` 和 `convert` 驱动（见 [registry](registry.md) 指南里的状态说明）。
 
 库的存储根目录取环境变量 `QUANTLAB_DATA_DIR`，否则源码检出时用仓库下的 `data/` 目录，安装的包用 `~/.quantlab/data`。脚本不用它：原始文件的位置由 `--download-dir` 指定，Zarr store 所在的数据根目录由 `--data-dir` 指定，两者都默认为当前目录。每个 store 放在自己的文件夹 `<data-dir>/<category>/<group>/<stem>/<stem>.zarr` 里（WRDS 的 bar 在 `market/wrds/` 下，成分面板在 `universe/wrds/` 下），旁边是它的边车文件和一个简短的 `README.md`（文件夹里没有时由脚本写入）。
 
 ### 下载无风险利率（FRED）
 
-FRED 的 CSV 接口不需要 key，所以 `FredAcquisition` 不读任何凭证。下载时每个序列 id 是一个 symbol。`FredRateDataset` 把一个以年化百分比报价的利率序列转成只有一个 symbol 的面板：`rate` 是原始发布值，`risk_free = rate / 100 / days_per_year` 是每个交易日的小数收益（默认 252）。假日没有观测值，为 NaN。需要在每只股票上使用利率的因子自己沿 symbol 广播，并滞后一个 bar，因为某一天的利率在下一个工作日才发布。
+FRED 的 CSV 接口不需要 key，所以 `FredAcquisition` 不读任何凭证。下载时每个序列 id 是一个 symbol。`FredRateDataset` 把一个以年化百分比报价的利率序列转成只有一个 symbol 的面板：`rate` 是原始发布值，`risk_free = rate / 100 / days_per_year` 是每个交易日的小数收益（默认 252）。假日没有观测值，为 NaN。需要在每只股票上使用利率的因子自己沿 symbol 广播，并滞后一个 bar，因为某一天的利率在下一个工作日才发布。下面的示例用 `download_symbols` 下载一个明确的窗口；每日更新用 `refresh_raw_tier(source, "downloads", series=["DTB3"], start="1954-01-04")` 让同一个原始层保持最新，它包装了 `FredAcquisition`。
 
 ```python
 from quantlab.acquisition.base import DataSourceRegistry
 from quantlab.acquisition.config import AcquisitionConfig
-from quantlab.acquisition.registry import convert, run
+from quantlab.acquisition.registry import convert, download_symbols
 from quantlab.dataset.config import FredRateConfig
 from quantlab.dataset.fred import FredRateDataset
 
 source = DataSourceRegistry.get("fred")
-run(source, AcquisitionConfig(
+download_symbols(source, AcquisitionConfig(
     market="us_equity", frequency="1d", vendor="fred",
     raw_data_dir_path="downloads/fred", watermark_path="downloads/_watermarks/fred",
     symbols=("DTB3",), start_date="1954-01-04",
@@ -397,4 +397,4 @@ RuntimeError: APCA_API_KEY_ID and APCA_API_SECRET_KEY environment variables must
 
 ## 另请参阅
 
-[pageledger](pageledger.md) 指南介绍多页批次内部的续跑；[registry](registry.md) 指南介绍如何按名称查找并运行厂商；[universes](../user-guide/universes.md) 指南介绍标的名单；[dataset](dataset.md) 指南介绍如何把原始文件转换成 xarray 面板。`quantlab.acquisition.base.Acquisition`、`quantlab.acquisition._support.coverage.CoverageLedger` 和 `quantlab.utils.progress` 的类文档字符串列出了全部选项。
+[pageledger](pageledger.md) 指南介绍多页批次内部的续跑；[registry](registry.md) 指南介绍如何按名称查找厂商、从它下载并让它的原始层保持最新；[universes](../user-guide/universes.md) 指南介绍标的名单；[dataset](dataset.md) 指南介绍如何把原始文件转换成 xarray 面板。`quantlab.acquisition.base.SymbolBatchAcquisition`、`quantlab.acquisition._support.coverage.CoverageLedger` 和 `quantlab.utils.progress` 的类文档字符串列出了全部选项。

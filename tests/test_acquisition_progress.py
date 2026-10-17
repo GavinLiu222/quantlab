@@ -42,7 +42,7 @@ def test_attempt_batch_returns_exactly_three_elements(
 ) -> None:
     """The L-6 arity constraint, locked BEFORE the cancel work can widen it.
 
-    `Acquisition._attempt_batch` returns `(symbols, status, message_or_None)`
+    `SymbolBatchAcquisition._attempt_batch` returns `(symbols, status, message_or_None)`
     and two tests in `tests/test_acquisition_batching.py` (`:1097`, and the
     positional call at `:966`) already destructure it. So the cancel token
     (D-17) must reuse the EXISTING first-statement abort seam and the existing
@@ -605,22 +605,22 @@ def test_cancelling_twice_or_after_the_run_is_a_no_op(
 def test_run_forwards_the_reporter_and_the_cancel_token(
     mock_tiingo_client, acquisition_config, tmp_path
 ) -> None:
-    """`registry.run()` is the console's entry point, so both arguments have to
+    """`registry.download_symbols()` is the console's entry point, so both arguments have to
     survive the trip through it (D-14 / D-16 / D-17).
 
     Both are KEYWORD-ONLY with `None` defaults, which is what keeps every
-    existing call site of `run(descriptor, config)` unchanged -- asserted here
+    existing call site of `download_symbols(descriptor, config)` unchanged -- asserted here
     through `inspect.signature` rather than by a call that happens to work.
     """
     import inspect
 
-    from quantlab.acquisition.registry import run
+    from quantlab.acquisition.registry import download_symbols
     from quantlab.acquisition.tiingo import TIINGO_SOURCE
     from quantlab.utils.progress import CallbackProgressReporter, CancelToken
 
-    parameters = inspect.signature(run).parameters
+    parameters = inspect.signature(download_symbols).parameters
     for name in ("reporter", "cancel"):
-        assert name in parameters, f"run() must accept {name}"
+        assert name in parameters, f"download_symbols() must accept {name}"
         assert parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
         assert parameters[name].default is None
 
@@ -630,7 +630,7 @@ def test_run_forwards_the_reporter_and_the_cancel_token(
         vendor="tiingo", symbols=("AAPL", "MSFT"), root=tmp_path / "first"
     )
 
-    result = run(
+    result = download_symbols(
         TIINGO_SOURCE,
         config,
         reporter=CallbackProgressReporter(events.append),
@@ -646,7 +646,7 @@ def test_run_forwards_the_reporter_and_the_cancel_token(
     )
 
     # And the token: a run started with an already-cancelled token fetches
-    # nothing at all, which is only true if `run()` forwarded it.
+    # nothing at all, which is only true if `download_symbols()` forwarded it.
     #
     # A FRESH store (`root=`), deliberately. Against the store the first run
     # just filled, every symbol is already covered, `pending` is empty and
@@ -656,7 +656,7 @@ def test_run_forwards_the_reporter_and_the_cancel_token(
     # that left nothing undone was not cut short.)
     token.cancel()
     mock_tiingo_client.calls = []
-    cancelled = run(
+    cancelled = download_symbols(
         TIINGO_SOURCE,
         acquisition_config(vendor="tiingo", root=tmp_path / "second"),
         cancel=token,
@@ -1339,7 +1339,7 @@ def test_no_task_isolation_was_added() -> None:
     THERE). What quantlab owes it in exchange is exactly what 03.4-05 ships --
     a cancel token it can set and progress events it can render -- and NOT a
     second fan-out mechanism. The fan-outs in this repository are all
-    `joblib.Parallel`: `Acquisition._run_once`'s threading call over download
+    `joblib.Parallel`: `SymbolBatchAcquisition._run_once`'s threading call over download
     batches, `FactorAnalysis._render_to`'s loky call that draws a factor
     report's figures, `dataset_fingerprint`'s threading call over a
     request's variables, and `SharadarClient._download_zip`'s threading call

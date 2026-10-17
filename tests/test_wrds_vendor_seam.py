@@ -173,10 +173,10 @@ def test_wrds_descriptor_lives_in_the_neutral_module() -> None:
     imported from the other -- fails here rather than as a mystifying duplicate
     row much later.
 
-    The capability carries its own `acquisition_cls` / `config_factory` (plan
+    The capability carries its own `symbol_batch_cls` / `config_factory` (plan
     01 Task 1), which is what plan 02's CRSP row differs in. The descriptor
     DEFAULT is still the same pair, so every ingest shell reading
-    `SOURCE.acquisition_cls.DEFAULT_BATCH_SIZE` keeps working.
+    `SOURCE.symbol_batch_cls.DEFAULT_BATCH_SIZE` keeps working.
 
     **This test does NOT pin the capability SET**, and that is deliberate: the
     subject here is the MOVE (one descriptor object, reached from the neutral
@@ -199,10 +199,10 @@ def test_wrds_descriptor_lives_in_the_neutral_module() -> None:
 
     (capability,) = WRDS_SOURCE.capabilities_for("us_equity", "tick", "nbbo")
     assert capability.dataset_cls is NbboPanelDataset
-    assert capability.acquisition_cls is WrdsTaqNbboAcquisition
+    assert capability.symbol_batch_cls is WrdsTaqNbboAcquisition
     assert capability.config_factory == WrdsTaqNbboAcquisition.build_config
 
-    assert WRDS_SOURCE.acquisition_cls is WrdsTaqNbboAcquisition
+    assert WRDS_SOURCE.symbol_batch_cls is WrdsTaqNbboAcquisition
     assert WRDS_SOURCE.config_factory == WrdsTaqNbboAcquisition.build_config
     assert WRDS_SOURCE.required_env == ("WRDS_USERNAME",)
 

@@ -12,7 +12,7 @@ failure manifest listing symbols whose downloads failed.
 requested symbols are already downloaded, which failed in earlier runs, how
 many shards and sidecars exist, and a row-level view of either tier limited
 to chosen symbols and dates. It imports no vendor client and never creates an
-``Acquisition``, so it needs no API key and makes no network request,
+``SymbolBatchAcquisition``, so it needs no API key and makes no network request,
 whatever is called in whatever order. Listing the sources themselves is left
 to ``quantlab.acquisition.registry``, whose import loads every vendor module.
 
@@ -83,7 +83,7 @@ class SourceInspector:
     ) -> dict:
         """Report which symbols are already downloaded for the config's window.
 
-        This runs the same check as ``Acquisition.coverage_report()``,
+        This runs the same check as ``SymbolBatchAcquisition.coverage_report()``,
         through the same ``CoverageLedger`` class, so the two always agree.
         Symbols are validated before any path is built, because each symbol
         becomes a sidecar file name.

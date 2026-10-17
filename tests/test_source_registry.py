@@ -166,7 +166,7 @@ def test_tracer_end_to_end_registry_to_raw_shard(
 ) -> None:
     """One path through every layer this phase touches, asserted end to end.
 
-    Registry -> descriptor -> vendor module -> `Acquisition` base -> raw shard
+    Registry -> descriptor -> vendor module -> `SymbolBatchAcquisition` base -> raw shard
     on disk, in one test. This is deliberately NOT a per-layer unit test: the
     per-layer contracts are pinned separately, and what THIS proves is that the
     seams between them actually meet -- an architectural dead end surfaces here,
@@ -179,7 +179,7 @@ def test_tracer_end_to_end_registry_to_raw_shard(
        anywhere in this test (SC-1);
     2. `is_configured` answers `False` with the key absent and `True` with it
        set -- and answers at all without a credential present (SC-2);
-    3. `run(descriptor, config)` reaches the vendor through the descriptor's
+    3. `download_symbols(descriptor, config)` reaches the vendor through the descriptor's
        own class reference and returns an `AcquisitionResult` naming the
        requested symbols (D-12 / D-14 / D-18);
     4. `_failures.json` still lands on disk beside the watermarks, because the
@@ -190,7 +190,7 @@ def test_tracer_end_to_end_registry_to_raw_shard(
     wholesale.
     """
     from quantlab.acquisition.base import DataSourceRegistry
-    from quantlab.acquisition.registry import is_configured, run
+    from quantlab.acquisition.registry import download_symbols, is_configured
     from quantlab.acquisition.base import AcquisitionResult
 
     descriptor = DataSourceRegistry.get("tiingo")
@@ -203,7 +203,7 @@ def test_tracer_end_to_end_registry_to_raw_shard(
     assert is_configured(descriptor) is True
 
     # (3)
-    result = run(descriptor, config)
+    result = download_symbols(descriptor, config)
 
     assert isinstance(result, AcquisitionResult)
     assert result.vendor == "tiingo"
@@ -249,7 +249,7 @@ def _fake_descriptor(vendor: str, **overrides):
     CONSTRUCTION rather than by re-asserting what the two shipped descriptors
     happen to do. Anything a caller would notice can be overridden.
 
-    `acquisition_cls` defaults to the real `TiingoAcquisition` because D-03's
+    `symbol_batch_cls` defaults to the real `TiingoAcquisition` because D-03's
     "two descriptors may name the same class" case needs exactly that, and
     nothing here constructs it.
     """
@@ -258,7 +258,7 @@ def _fake_descriptor(vendor: str, **overrides):
     fields = {
         "vendor": vendor,
         "display_name": f"Fake {vendor}",
-        "acquisition_cls": tiingo.TiingoAcquisition,
+        "symbol_batch_cls": tiingo.TiingoAcquisition,
         "config_factory": lambda **kw: None,
         "capabilities": (Capability(market="us_equity", frequency="1d"),),
         "required_env": (),
@@ -418,7 +418,7 @@ def test_wrds_descriptor_serves_nbbo_and_crsp_daily_capabilities() -> None:
 
     The descriptor-level pair is asserted to be STILL the TAQ one. That is not
     an arbitrary tie-break: four ingest shells read
-    `SOURCE.acquisition_cls.DEFAULT_BATCH_SIZE` (and friends) directly, and
+    `SOURCE.symbol_batch_cls.DEFAULT_BATCH_SIZE` (and friends) directly, and
     `add-alongside` (plan 01's recorded decision) is what keeps them working.
 
     `supports(..., "quotes")` is asserted False because the Alpaca tick rows
@@ -451,15 +451,15 @@ def test_wrds_descriptor_serves_nbbo_and_crsp_daily_capabilities() -> None:
     assert nbbo.dataset_cls is NbboPanelDataset
     assert crsp_cap.dataset_cls is CrspStockDataset
 
-    assert nbbo.acquisition_cls is wrds_taq.WrdsTaqNbboAcquisition
+    assert nbbo.symbol_batch_cls is wrds_taq.WrdsTaqNbboAcquisition
     assert nbbo.config_factory == wrds_taq.WrdsTaqNbboAcquisition.build_config
-    assert crsp_cap.acquisition_cls is crsp.WrdsCrspDailyAcquisition
+    assert crsp_cap.symbol_batch_cls is crsp.WrdsCrspDailyAcquisition
     assert crsp_cap.config_factory == crsp.WrdsCrspDailyAcquisition.build_config
 
     # Resolved through the PUBLIC resolvers, per triple, not read off the row:
-    # that is the path `registry.run()` takes.
+    # that is the path `registry.download_symbols()` takes.
     assert (
-        source.acquisition_cls_for("us_equity", "tick", "nbbo")
+        source.symbol_batch_cls_for("us_equity", "tick", "nbbo")
         is wrds_taq.WrdsTaqNbboAcquisition
     )
     assert (
@@ -467,7 +467,7 @@ def test_wrds_descriptor_serves_nbbo_and_crsp_daily_capabilities() -> None:
         == wrds_taq.WrdsTaqNbboAcquisition.build_config
     )
     assert (
-        source.acquisition_cls_for("us_equity", "1d", "crsp_daily")
+        source.symbol_batch_cls_for("us_equity", "1d", "crsp_daily")
         is crsp.WrdsCrspDailyAcquisition
     )
     assert (
@@ -476,7 +476,7 @@ def test_wrds_descriptor_serves_nbbo_and_crsp_daily_capabilities() -> None:
     )
 
     # The DESCRIPTOR default is unchanged (the `add-alongside` decision).
-    assert source.acquisition_cls is wrds_taq.WrdsTaqNbboAcquisition
+    assert source.symbol_batch_cls is wrds_taq.WrdsTaqNbboAcquisition
     assert source.config_factory == wrds_taq.WrdsTaqNbboAcquisition.build_config
 
     # One account, one credential name, whichever product is requested.
@@ -488,11 +488,11 @@ def test_wrds_descriptor_serves_nbbo_and_crsp_daily_capabilities() -> None:
 
 
 def test_direct_class_reference_is_the_class_object(isolated_registry) -> None:
-    """D-03: `acquisition_cls` is the CLASS OBJECT, never a dotted string.
+    """D-03: `symbol_batch_cls` is the CLASS OBJECT, never a dotted string.
 
     Asserted with `is`, so a dotted path that happened to resolve to the same
     class would still fail -- the point of D-03 is the direct reference itself,
-    which is what makes `descriptor.acquisition_cls.DEFAULT_BATCH_SIZE`
+    which is what makes `descriptor.symbol_batch_cls.DEFAULT_BATCH_SIZE`
     readable at a call site without a resolver.
 
     The second half is the D-03 corollary: only VENDOR collides. Two
@@ -501,22 +501,22 @@ def test_direct_class_reference_is_the_class_object(isolated_registry) -> None:
     """
     from quantlab.acquisition.base import register_source
 
-    assert isolated_registry.get("tiingo").acquisition_cls is tiingo.TiingoAcquisition
-    assert isolated_registry.get("alpaca").acquisition_cls is alpaca.AlpacaAcquisition
+    assert isolated_registry.get("tiingo").symbol_batch_cls is tiingo.TiingoAcquisition
+    assert isolated_registry.get("alpaca").symbol_batch_cls is alpaca.AlpacaAcquisition
     for descriptor in isolated_registry.all():
         # None only for a vendor its own scripts download (Sharadar, Massive).
-        if descriptor.acquisition_cls is None:
+        if descriptor.symbol_batch_cls is None:
             assert descriptor.vendor in ("sharadar", "massive")
             continue
-        assert isinstance(descriptor.acquisition_cls, type)
-        assert not isinstance(descriptor.acquisition_cls, str)
+        assert isinstance(descriptor.symbol_batch_cls, type)
+        assert not isinstance(descriptor.symbol_batch_cls, str)
 
     twin = _fake_descriptor(
-        "tiingotwin", acquisition_cls=tiingo.TiingoAcquisition
+        "tiingotwin", symbol_batch_cls=tiingo.TiingoAcquisition
     )
     assert register_source(twin) is twin
-    assert isolated_registry.get("tiingotwin").acquisition_cls is (
-        isolated_registry.get("tiingo").acquisition_cls
+    assert isolated_registry.get("tiingotwin").symbol_batch_cls is (
+        isolated_registry.get("tiingo").symbol_batch_cls
     )
 
 
@@ -689,7 +689,7 @@ def test_registry_get_is_empty_and_unknown_safe(
 def test_registry_reaches_no_zarr_writer() -> None:
     """D-14's acquisition-only amendment, proved NEGATIVELY.
 
-    `run()` downloads to the raw parquet tier and stops; the raw-to-Zarr
+    `download_symbols()` downloads to the raw parquet tier and stops; the raw-to-Zarr
     conversion stays in the shells, because the three entry points convert in
     three different modes with three differently-sized RAM guards. The cheapest
     durable proof of "reaches no Zarr writer" is that this module imports no
@@ -785,7 +785,7 @@ def test_enumeration_is_complete_from_a_cold_import() -> None:
     Run with every credential stripped from the child's environment, so this
     doubles as an SC-2 proof: enumeration needs no credential to be present.
     A descriptor that reached its credential at import time -- or an
-    `acquisition_cls` constructed at module scope -- would make the child exit
+    `symbol_batch_cls` constructed at module scope -- would make the child exit
     non-zero here.
     """
     child = _run_child(
@@ -845,7 +845,7 @@ def test_env_names_are_exactly_what_gates_construction(
       would in fact have worked.
 
     Finished with the cheap structural half -- `required_env ==
-    acquisition_cls.CREDENTIAL_ENV_VARS` -- which catches a rename applied in
+    symbol_batch_cls.CREDENTIAL_ENV_VARS` -- which catches a rename applied in
     only one place. That comparison is not a tautology because
     `required_env` is a restated literal on the descriptor, never derived from
     `CREDENTIAL_ENV_VARS`; the other half of that anchoring is asserted in
@@ -867,18 +867,18 @@ def test_env_names_are_exactly_what_gates_construction(
     for name in descriptor.required_env:
         monkeypatch.setenv(name, "not-a-real-credential")
     assert is_configured(descriptor) is True
-    descriptor.acquisition_cls(config)
+    descriptor.symbol_batch_cls(config)
 
     # Direction 2 -- no name is extra.
     for name in descriptor.required_env:
         monkeypatch.delenv(name)
         assert is_configured(descriptor) is False
         with pytest.raises(RuntimeError, match=name):
-            descriptor.acquisition_cls(config)
+            descriptor.symbol_batch_cls(config)
         monkeypatch.setenv(name, "not-a-real-credential")
 
     # The structural half.
-    assert descriptor.required_env == descriptor.acquisition_cls.CREDENTIAL_ENV_VARS
+    assert descriptor.required_env == descriptor.symbol_batch_cls.CREDENTIAL_ENV_VARS
 
 
 def test_is_configured_never_returns_a_credential_value(
@@ -891,7 +891,7 @@ def test_is_configured_never_returns_a_credential_value(
     recognisable sentinel is planted in every credential name and asserted
     ABSENT from every egress path the registry has: both return values, the
     descriptor's `repr`, the whole enumeration's `repr`, the string form of an
-    `AcquisitionResult` produced by a real `run()`, and every loguru record
+    `AcquisitionResult` produced by a real `download_symbols()`, and every loguru record
     emitted while those calls run.
 
     There is deliberately no masked or partially-redacted variant to test:
@@ -906,7 +906,7 @@ def test_is_configured_never_returns_a_credential_value(
     from loguru import logger
 
     from quantlab.acquisition.base import DataSourceRegistry
-    from quantlab.acquisition.registry import credential_status, is_configured, run
+    from quantlab.acquisition.registry import credential_status, download_symbols, is_configured
 
     sentinel = "SENTINEL-c0ffee-DO-NOT-LEAK"
     for name in _CHILD_CREDENTIALS:
@@ -919,7 +919,7 @@ def test_is_configured_never_returns_a_credential_value(
 
         configured = is_configured(tiingo_source)
         status = credential_status(tiingo_source)
-        result = run(tiingo_source, acquisition_config(vendor="tiingo"))
+        result = download_symbols(tiingo_source, acquisition_config(vendor="tiingo"))
 
         rendered = [
             repr(configured),
@@ -1001,7 +1001,7 @@ def test_is_configured_on_a_descriptor_with_no_required_env(
 #
 # The fields are OPTIONAL and the descriptor-level pair stays REQUIRED -- the
 # `add-alongside` decision recorded in 03.10-01-PLAN.md. Four ingest shells
-# read `SOURCE.acquisition_cls` / `SOURCE.config_factory` directly
+# read `SOURCE.symbol_batch_cls` / `SOURCE.config_factory` directly
 # (`DEFAULT_BATCH_SIZE`, `TICK_DATA_TYPES`, ...), and making the descriptor
 # field optional would ripple through all of them for no behavioural gain.
 # ---------------------------------------------------------------------------
@@ -1024,14 +1024,14 @@ def _resolver_descriptor(**overrides):
     fields = {
         "vendor": "resolvervendor",
         "display_name": "Fake resolver vendor",
-        "acquisition_cls": _A0,
+        "symbol_batch_cls": _A0,
         "config_factory": _f0,
         "capabilities": (
             Capability(
                 market="us_equity",
                 frequency="1d",
                 data_type="x",
-                acquisition_cls=_A1,
+                symbol_batch_cls=_A1,
                 config_factory=_f1,
             ),
             Capability(market="us_equity", frequency="1d", data_type="y"),
@@ -1043,16 +1043,16 @@ def _resolver_descriptor(**overrides):
 
 
 def _recording_acquisition(name: str):
-    """A minimal CONCRETE `Acquisition` recording every construction.
+    """A minimal CONCRETE `SymbolBatchAcquisition` recording every construction.
 
-    Its `_fetch_page` returns an EMPTY frame and no next token, so `run()`
+    Its `_fetch_page` returns an EMPTY frame and no next token, so `download_symbols()`
     completes without a vendor request, a credential or a socket. The class
-    carries a `constructed` list so a test can assert WHICH class `run()`
+    carries a `constructed` list so a test can assert WHICH class `download_symbols()`
     reached rather than inferring it from a side effect.
     """
-    from quantlab.acquisition.base import Acquisition
+    from quantlab.acquisition.base import SymbolBatchAcquisition
 
-    class _Recording(Acquisition):
+    class _Recording(SymbolBatchAcquisition):
         VENDOR = "tiingo"
         RAW_COLUMNS = ("timestamp", "symbol", "vendor")
         label = name
@@ -1102,19 +1102,19 @@ def test_capability_resolution_prefers_the_capability_over_the_descriptor_defaul
     the descriptor default would fail the `"x"` case.
 
     The third arm -- a request matching NO capability -- is today's behaviour,
-    and it must stay today's behaviour: every existing `run()` call site
+    and it must stay today's behaviour: every existing `download_symbols()` call site
     reaches the descriptor default through this path.
     """
     descriptor = _resolver_descriptor()
 
-    assert descriptor.acquisition_cls_for("us_equity", "1d", "x") is _A1
+    assert descriptor.symbol_batch_cls_for("us_equity", "1d", "x") is _A1
     assert descriptor.config_factory_for("us_equity", "1d", "x") is _f1
 
-    assert descriptor.acquisition_cls_for("us_equity", "1d", "y") is _A0
+    assert descriptor.symbol_batch_cls_for("us_equity", "1d", "y") is _A0
     assert descriptor.config_factory_for("us_equity", "1d", "y") is _f0
 
     # No capability matches -> the vendor default, unchanged.
-    assert descriptor.acquisition_cls_for("us_equity", "1m", None) is _A0
+    assert descriptor.symbol_batch_cls_for("us_equity", "1m", None) is _A0
     assert descriptor.config_factory_for("us_equity", "1m", None) is _f0
 
 
@@ -1136,7 +1136,7 @@ def test_ambiguous_capability_resolution_refuses_rather_than_picking_by_order() 
 
     descriptor = _resolver_descriptor()
 
-    for resolve in (descriptor.acquisition_cls_for, descriptor.config_factory_for):
+    for resolve in (descriptor.symbol_batch_cls_for, descriptor.config_factory_for):
         with pytest.raises(ValueError) as excinfo:
             resolve("us_equity", "1d", None)
         message = str(excinfo.value)
@@ -1151,19 +1151,19 @@ def test_ambiguous_capability_resolution_refuses_rather_than_picking_by_order() 
                 market="us_equity",
                 frequency="1d",
                 data_type="x",
-                acquisition_cls=_A0,
+                symbol_batch_cls=_A0,
                 config_factory=_f0,
             ),
             Capability(market="us_equity", frequency="1d", data_type="y"),
         )
     )
-    assert agreeing.acquisition_cls_for("us_equity", "1d", None) is _A0
+    assert agreeing.symbol_batch_cls_for("us_equity", "1d", None) is _A0
     assert agreeing.config_factory_for("us_equity", "1d", None) is _f0
 
 
 def test_run_constructs_the_capabilitys_acquisition_class(acquisition_config) -> None:
-    """D-12: `run()` resolves through the capability, not
-    `descriptor.acquisition_cls`.
+    """D-12: `download_symbols()` resolves through the capability, not
+    `descriptor.symbol_batch_cls`.
 
     The resolver being correct proves nothing on its own -- the failure this
     guards against is a resolver that exists and is never called, which is
@@ -1172,10 +1172,10 @@ def test_run_constructs_the_capabilitys_acquisition_class(acquisition_config) ->
 
     The key comes off the config: `(market, frequency, kwargs["data_type"])`,
     which is `Capability`'s own key. Asserted on the RECORDED construction, so
-    a `run()` that resolved correctly and then constructed the default anyway
+    a `download_symbols()` that resolved correctly and then constructed the default anyway
     still fails here.
     """
-    from quantlab.acquisition.registry import run
+    from quantlab.acquisition.registry import download_symbols
 
     _A0.constructed.clear()
     _A1.constructed.clear()
@@ -1183,7 +1183,7 @@ def test_run_constructs_the_capabilitys_acquisition_class(acquisition_config) ->
     descriptor = _resolver_descriptor()
     config = acquisition_config(vendor="tiingo", kwargs={"data_type": "x"})
 
-    result = run(descriptor, config)
+    result = download_symbols(descriptor, config)
 
     assert result.vendor == "tiingo"
     assert len(_A1.constructed) == 1
@@ -1210,14 +1210,14 @@ def test_capability_defaults_leave_the_new_fields_none() -> None:
 
     capability = Capability(market="us_equity", frequency="1d")
 
-    assert capability.acquisition_cls is None
+    assert capability.symbol_batch_cls is None
     assert capability.config_factory is None
     assert capability.data_type is None
     assert capability.dataset_cls is None
 
     names = [field.name for field in dataclasses.fields(Capability)]
-    assert names.index("acquisition_cls") > names.index("dataset_cls")
-    assert names.index("config_factory") > names.index("acquisition_cls")
+    assert names.index("symbol_batch_cls") > names.index("dataset_cls")
+    assert names.index("config_factory") > names.index("symbol_batch_cls")
 
 
 def test_every_registered_capability_resolves_to_its_own_class_or_the_default() -> None:
@@ -1237,8 +1237,8 @@ def test_every_registered_capability_resolves_to_its_own_class_or_the_default() 
         for capability in descriptor.capabilities:
             key = (capability.market, capability.frequency, capability.data_type)
 
-            assert descriptor.acquisition_cls_for(*key) is (
-                capability.acquisition_cls or descriptor.acquisition_cls
+            assert descriptor.symbol_batch_cls_for(*key) is (
+                capability.symbol_batch_cls or descriptor.symbol_batch_cls
             ), (descriptor.vendor, key)
             assert descriptor.config_factory_for(*key) == (
                 capability.config_factory or descriptor.config_factory

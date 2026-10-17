@@ -1,9 +1,10 @@
 """Massive in the data-source registry (#238).
 
 Massive's raw tier is one vendor file per data type and trading day (pulled by
-``MassiveClient``), not the symbol-batched hive tree an ``Acquisition`` writes,
-so its descriptor names no acquisition class: ``run()`` refuses it and points at
-``scripts/massive/``. Everything else an operator surface reads is there: the
+``MassiveClient``), not the symbol-batched hive tree a
+``SymbolBatchAcquisition`` writes, so its descriptor names no symbol-batch
+class: ``download_symbols()`` refuses it and points at ``refresh_raw_tier()``.
+Everything else an operator surface reads is there: the
 data types as capabilities, the credential names, and ``convert()`` for the
 trade files.
 """
@@ -76,14 +77,14 @@ def test_is_configured_follows_both_variables(monkeypatch):
     assert is_configured(_source()) is True
 
 
-def test_run_refuses_and_points_at_the_scripts(acquisition_config):
-    from quantlab.acquisition.registry import run
+def test_download_symbols_refuses_and_points_at_the_raw_tier_refresh(acquisition_config):
+    from quantlab.acquisition.registry import download_symbols
 
     source = _source()
-    assert source.acquisition_cls is None
+    assert source.symbol_batch_cls is None
     assert source.config_factory is None
-    with pytest.raises(ValueError, match="scripts/massive"):
-        run(source, acquisition_config(vendor="tiingo"))
+    with pytest.raises(ValueError, match="refresh_raw_tier"):
+        download_symbols(source, acquisition_config(vendor="tiingo"))
 
 
 def test_convert_builds_the_trade_bar_store(tmp_path):

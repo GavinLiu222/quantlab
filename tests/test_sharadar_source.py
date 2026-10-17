@@ -1,9 +1,10 @@
 """Sharadar in the data-source registry (#165).
 
 Sharadar's raw tier is whole tables (bulk zips and date windows pulled by
-``SharadarClient``), not the symbol-batched hive tree an ``Acquisition`` writes,
-so its descriptor names no acquisition class: ``run()`` refuses it and points at
-``scripts/sharadar/``. Everything else an operator surface reads is there: the
+``SharadarClient``), not the symbol-batched hive tree a
+``SymbolBatchAcquisition`` writes, so its descriptor names no symbol-batch
+class: ``download_symbols()`` refuses it and points at ``refresh_raw_tier()``.
+Everything else an operator surface reads is there: the
 tables as capabilities, the credential name, and ``convert()`` for the price
 tables.
 """
@@ -88,14 +89,14 @@ def test_is_configured_follows_the_key(monkeypatch):
     assert is_configured(_source()) is True
 
 
-def test_run_refuses_and_points_at_the_scripts(acquisition_config):
-    from quantlab.acquisition.registry import run
+def test_download_symbols_refuses_and_points_at_the_raw_tier_refresh(acquisition_config):
+    from quantlab.acquisition.registry import download_symbols
 
     source = _source()
-    assert source.acquisition_cls is None
+    assert source.symbol_batch_cls is None
     assert source.config_factory is None
-    with pytest.raises(ValueError, match="scripts/sharadar"):
-        run(source, acquisition_config(vendor="tiingo"))
+    with pytest.raises(ValueError, match="refresh_raw_tier"):
+        download_symbols(source, acquisition_config(vendor="tiingo"))
 
 
 def test_convert_builds_the_sep_store(tmp_path, monkeypatch):

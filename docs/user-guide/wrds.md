@@ -177,18 +177,18 @@ explains.
 ### Downloading from Python
 
 The CRSP capability has its own config factory. Resolve it through the
-registry and pass the result to `run()`; symbols are PERMNOs as strings. This
+registry and pass the result to `download_symbols()`; symbols are PERMNOs as strings. This
 needs a WRDS account:
 
 ```python
 from quantlab.acquisition.base import DataSourceRegistry
-from quantlab.acquisition.registry import run
+from quantlab.acquisition.registry import download_symbols
 
 wrds = DataSourceRegistry.get("wrds")
 factory = wrds.config_factory_for("us_equity", "1d", "crsp_daily")
 config = factory(("14593", "13407"), start_date="2020-01-01", end_date="2024-12-31",
                  kwargs={"clip_to_product_end": True})
-result = run(wrds, config)
+result = download_symbols(wrds, config)
 ```
 
 This downloads the raw tier only. The scripts add the reference pull and the
@@ -551,7 +551,7 @@ cfg = WrdsTaqNbboBarsAcquisition.build_config(
     ("AAPL", "MSFT"), start_date="2024-01-22", end_date="2024-01-26",
     drop_locked=True, keep_qu_cond=("R",),
 )
-registry.run(WRDS_SOURCE, cfg)
+registry.download_symbols(WRDS_SOURCE, cfg)
 ```
 
 Because the settings shaped the bars before they were stored, a server-bar

@@ -143,7 +143,7 @@ def test_credential_never_exposed_on_config_surface(mock_tiingo_client, tmp_path
 # (260906-0iy Task 2, D-03)
 #
 # These behaviours belonged to a separate `ConcurrentTiingoAcquisition` until
-# 03.2-03 hoisted the orchestration onto `Acquisition` and retired that name
+# 03.2-03 hoisted the orchestration onto `SymbolBatchAcquisition` and retired that name
 # (D-02, 03.1 D-03). They are unchanged; only the class that carries them is.
 #
 # A ~15k-symbol, multi-hour backfill makes resumability and per-symbol failure

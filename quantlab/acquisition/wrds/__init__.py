@@ -49,9 +49,9 @@ from quantlab.dataset.nbbo.bars import NbboBarsDataset
 
 #: The registered descriptor for the WRDS account.
 #:
-#: The descriptor's own ``acquisition_cls`` and ``config_factory`` are the
+#: The descriptor's own ``symbol_batch_cls`` and ``config_factory`` are the
 #: vendor default (the TAQ product); ingest scripts read
-#: ``SOURCE.acquisition_cls.DEFAULT_BATCH_SIZE`` from it. Each capability row
+#: ``SOURCE.symbol_batch_cls.DEFAULT_BATCH_SIZE`` from it. Each capability row
 #: also names its own pair, so a request for ``crsp_daily`` resolves to the
 #: CRSP class rather than to the default. ``display_name`` mentions both
 #: products because choosing this source means choosing the account.
@@ -59,7 +59,7 @@ WRDS_SOURCE = register_source(
     SourceDescriptor(
         vendor="wrds",
         display_name="WRDS (NYSE TAQ millisecond NBBO; CRSP Stock v2 daily)",
-        acquisition_cls=taq.WrdsTaqNbboAcquisition,
+        symbol_batch_cls=taq.WrdsTaqNbboAcquisition,
         config_factory=taq.WrdsTaqNbboAcquisition.build_config,
         capabilities=(
             Capability(
@@ -69,7 +69,7 @@ WRDS_SOURCE = register_source(
                 dataset_cls=NbboPanelDataset,
                 earliest_available="2003-09-10",
                 entitlement="WRDS NYSE TAQ millisecond subscription",
-                acquisition_cls=taq.WrdsTaqNbboAcquisition,
+                symbol_batch_cls=taq.WrdsTaqNbboAcquisition,
                 config_factory=taq.WrdsTaqNbboAcquisition.build_config,
             ),
             # The same NBBO records, resampled into one-minute bars on the
@@ -82,7 +82,7 @@ WRDS_SOURCE = register_source(
                 dataset_cls=NbboBarsDataset,
                 earliest_available="2003-09-10",
                 entitlement="WRDS NYSE TAQ millisecond subscription",
-                acquisition_cls=taq_bars.WrdsTaqNbboBarsAcquisition,
+                symbol_batch_cls=taq_bars.WrdsTaqNbboBarsAcquisition,
                 config_factory=taq_bars.WrdsTaqNbboBarsAcquisition.build_config,
             ),
             # CRSP Stock v2 daily: a second acquisition class and config
@@ -98,7 +98,7 @@ WRDS_SOURCE = register_source(
                 entitlement=(
                     "WRDS CRSP annual-update Stock v2 (crsp_a_stock)"
                 ),
-                acquisition_cls=crsp.WrdsCrspDailyAcquisition,
+                symbol_batch_cls=crsp.WrdsCrspDailyAcquisition,
                 config_factory=crsp.WrdsCrspDailyAcquisition.build_config,
             ),
         ),

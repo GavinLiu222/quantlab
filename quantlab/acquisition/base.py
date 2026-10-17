@@ -1,7 +1,15 @@
-"""Download raw vendor data into a local tree of parquet files.
+"""The symbol-batched download family, and the registration of every source.
 
-``Acquisition`` is the abstract base class every data-vendor client
-subclasses. A subclass declares ``VENDOR`` and ``RAW_COLUMNS`` and implements
+``SymbolBatchAcquisition`` is the abstract base of one download family: a
+vendor queried one symbol batch at a time over a date window (Tiingo, Alpaca,
+FRED, the retired WRDS CRSP and TAQ downloads). It is not the base of every
+download. Sharadar's whole tables and Massive's daily files and REST
+endpoints are pulled by their own clients, and every vendor the daily update
+keeps current registers a ``RawTierRefresh`` (``quantlab.acquisition.refresh``)
+instead (ADR 0049). The module also holds ``SourceDescriptor``,
+``Capability`` and ``DataSourceRegistry``, which describe every vendor.
+
+A subclass declares ``VENDOR`` and ``RAW_COLUMNS`` and implements
 ``_fetch_page``, which issues one request and returns one page of rows. The
 base class supplies everything around that request: splitting the symbol list
 into batches, following pagination, fetching batches concurrently on worker
@@ -170,8 +178,8 @@ class AcquisitionResult:
     coverage: dict
 
 
-class Acquisition(ABC):
-    """Abstract base for config-driven, resumable raw-data downloads.
+class SymbolBatchAcquisition(ABC):
+    """Abstract base of the symbol-batched downloads: a roster over a window, resumable.
 
     A subclass declares ``VENDOR`` and ``RAW_COLUMNS`` and implements
     ``_fetch_page``. The base class turns that single request into a
@@ -219,7 +227,7 @@ class Acquisition(ABC):
     A minimal vendor client, where ``client`` stands for the vendor's own
     HTTP wrapper and returns every row in one page::
 
-        class DemoAcquisition(Acquisition):
+        class DemoAcquisition(SymbolBatchAcquisition):
             VENDOR = "tiingo"
             RAW_COLUMNS = ("timestamp", "symbol", "close", "vendor")
 
@@ -527,7 +535,7 @@ class Acquisition(ABC):
 
     #: The call that fixes a legacy watermark (one with no recorded start),
     #: quoted in the warning so the problem comes with its fix.
-    STAMP_COMMAND_HINT = "Acquisition(config).stamp_watermarks('<START_DATE>')"
+    STAMP_COMMAND_HINT = "SymbolBatchAcquisition(config).stamp_watermarks('<START_DATE>')"
 
     #: Whether a run that used up the vendor's request quota (its
     #: "allocation") waits for it to reset and then resumes. Off by default,
@@ -2046,9 +2054,9 @@ class Capability:
         ``(timestamp, symbol)`` grid. ``convert()`` refuses a capability
         whose ``dataset_cls`` is ``None``, so adding a conversion means
         filling this field, not adding a branch to ``convert()``.
-    acquisition_cls : type[Acquisition] or None, default None
+    symbol_batch_cls : type[SymbolBatchAcquisition] or None, default None
         The class that downloads this capability, or ``None`` to use the
-        descriptor's own ``acquisition_cls``. One vendor account can serve
+        descriptor's own ``symbol_batch_cls``. One vendor account can serve
         several products through different classes; WRDS, for example,
         serves both TAQ quote data and CRSP daily data.
     config_factory : callable or None, default None
@@ -2078,7 +2086,7 @@ class Capability:
     earliest_available: str | None = None
     entitlement: str | None = None
     dataset_cls: type[MarketDataset] | None = None
-    acquisition_cls: type[Acquisition] | None = None
+    symbol_batch_cls: type[SymbolBatchAcquisition] | None = None
     config_factory: Callable[..., AcquisitionConfig] | None = None
 
 
@@ -2097,29 +2105,30 @@ class SourceDescriptor:
         The vendor's short name, for example ``"tiingo"``.
     display_name : str
         A human-readable name for listings.
-    acquisition_cls : type[Acquisition] or None
+    symbol_batch_cls : type[SymbolBatchAcquisition] or None
         The default class that downloads from this vendor. A capability may
         name a different one. ``None`` for a vendor whose raw tier is not a
-        symbol-batched download (Sharadar's whole tables): its own client
-        and scripts download it, and ``run()`` refuses it.
+        symbol-batched download (Sharadar's whole tables, Massive's daily
+        files and REST pages): its ``raw_tier_refresh`` and scripts download
+        it, and ``download_symbols()`` refuses it.
     config_factory : callable or None
         The default function that builds an ``AcquisitionConfig`` for this
         vendor, usually a ``functools.partial`` over the shared config
         factory with ``vendor`` filled in; ``None`` exactly when
-        ``acquisition_cls`` is.
+        ``symbol_batch_cls`` is.
     capabilities : tuple of Capability
         Every ``(market, frequency, data_type)`` combination the vendor
         serves. Must not be empty.
     required_env : tuple of str
         Names of the environment variables that hold the vendor's
         credentials. Never a value, and never anything derived from one.
-        They are written out here rather than read from ``acquisition_cls``
+        They are written out here rather than read from ``symbol_batch_cls``
         so that a test can check the two against each other.
     universe_categories : tuple of UniverseCategory, default ()
         Symbol universes, such as S&P 500 constituents, that a user interface
         might offer beside this source. Informational only: the actual symbol
-        list comes from ``UniverseCatalog``, and ``run()`` never reads this
-        field.
+        list comes from ``UniverseCatalog``, and ``download_symbols()`` never
+        reads this field.
     raw_tier_refresh : RawTierRefresh or None, default None
         The function that keeps the vendor's raw tier current from its
         watermarks (``quantlab.acquisition.refresh``), which
@@ -2128,11 +2137,12 @@ class SourceDescriptor:
 
     Notes
     -----
-    ``acquisition_cls`` is a direct class reference, not a dotted path
+    ``symbol_batch_cls`` is a direct class reference, not a dotted path
     resolved at runtime. The cost is that importing this module imports
-    every vendor's client library. The annotation names the ``Acquisition``
-    base class, so the top of this module imports no vendor module, and each
-    descriptor can be defined beside the class it describes.
+    every vendor's client library. The annotation names the
+    ``SymbolBatchAcquisition`` base class, so the top of this module
+    imports no vendor module, and each descriptor can be defined beside
+    the client it describes.
 
     Examples
     --------
@@ -2148,7 +2158,7 @@ class SourceDescriptor:
 
     vendor: Vendor
     display_name: str
-    acquisition_cls: type[Acquisition] | None
+    symbol_batch_cls: type[SymbolBatchAcquisition] | None
     config_factory: Callable[..., AcquisitionConfig] | None
     capabilities: tuple[Capability, ...]
     required_env: tuple[str, ...]
@@ -2245,7 +2255,7 @@ class SourceDescriptor:
     ) -> object:
         """Resolve ``field`` for a request, preferring the capability's value.
 
-        This is the shared rule behind ``acquisition_cls_for`` and
+        This is the shared rule behind ``symbol_batch_cls_for`` and
         ``config_factory_for``. With no matching capability, the descriptor's
         own field is returned. A matching capability that leaves the field
         ``None`` contributes the descriptor's default, so several capabilities
@@ -2276,15 +2286,15 @@ class SourceDescriptor:
             )
         return first
 
-    def acquisition_cls_for(
+    def symbol_batch_cls_for(
         self,
         market: Market,
         frequency: Frequency,
         data_type: str | None = None,
-    ) -> type[Acquisition] | None:
-        """Return the ``Acquisition`` subclass that serves a request.
+    ) -> type[SymbolBatchAcquisition] | None:
+        """Return the ``SymbolBatchAcquisition`` subclass that serves a request.
 
-        This is the matching capability's ``acquisition_cls`` when it names
+        This is the matching capability's ``symbol_batch_cls`` when it names
         one, and the descriptor's default otherwise.
 
         Parameters
@@ -2298,9 +2308,9 @@ class SourceDescriptor:
 
         Returns
         -------
-        type[Acquisition] or None
+        type[SymbolBatchAcquisition] or None
             The class to construct for the download; ``None`` when the
-            vendor is not downloaded through an ``Acquisition``.
+            vendor has no symbol-batched download.
 
         Raises
         ------
@@ -2311,13 +2321,13 @@ class SourceDescriptor:
         Examples
         --------
         >>> source = DataSourceRegistry.get("wrds")
-        >>> source.acquisition_cls_for("us_equity", "1d").__name__
+        >>> source.symbol_batch_cls_for("us_equity", "1d").__name__
         'WrdsCrspDailyAcquisition'
-        >>> source.acquisition_cls_for("us_equity", "tick", "nbbo").__name__
+        >>> source.symbol_batch_cls_for("us_equity", "tick", "nbbo").__name__
         'WrdsTaqNbboAcquisition'
         """
         return self._resolve_capability_field(  # type: ignore[return-value]
-            "acquisition_cls", market, frequency, data_type
+            "symbol_batch_cls", market, frequency, data_type
         )
 
     def config_factory_for(
@@ -2328,7 +2338,7 @@ class SourceDescriptor:
     ) -> Callable[..., AcquisitionConfig]:
         """Return the ``AcquisitionConfig`` factory that serves a request.
 
-        Resolved by the same rule as ``acquisition_cls_for``.
+        Resolved by the same rule as ``symbol_batch_cls_for``.
 
         Parameters
         ----------
@@ -2486,7 +2496,7 @@ def register_source(descriptor: SourceDescriptor) -> SourceDescriptor:
             SourceDescriptor(
                 vendor="example",
                 display_name="Example Vendor",
-                acquisition_cls=ExampleAcquisition,
+                symbol_batch_cls=ExampleAcquisition,
                 config_factory=functools.partial(
                     stock_acquisition_config, vendor="example"
                 ),

@@ -33,7 +33,7 @@ raw/demo/month=2024-01/part-5b7fc3dffa5ab4a0-00000.pqt
 
 A *watermark* records the date range of a symbol's data already on disk, for
 example `{"last_date": "2024-03-29", "start_date": "2024-01-02"}`. Before each
-pass, `Acquisition._run` asks `CoverageLedger` (`quantlab.acquisition._support.coverage`)
+pass, `SymbolBatchAcquisition._run` asks `CoverageLedger` (`quantlab.acquisition._support.coverage`)
 which requested symbols are not yet covered for the requested window, and
 fetches only those. A watermark is written only after the symbol's whole
 batch has been fetched and written, so a symbol interrupted mid-download has
@@ -50,7 +50,7 @@ one record read and written by one module, `quantlab.utils.watermark`
 
 | granularity | file | holds | written by |
 |---|---|---|---|
-| `"symbol"` | `<watermark_path>/<SYMBOL>.json` | `last_date`, `start_date`, `no_data` | `Acquisition._write_watermark` |
+| `"symbol"` | `<watermark_path>/<SYMBOL>.json` | `last_date`, `start_date`, `no_data` | `SymbolBatchAcquisition._write_watermark` |
 | `"table"` | `sharadar/<table>/_watermark.json` | `table`, `through` | `quantlab.acquisition.sharadar.raw_tier.write_table_watermark` |
 | `"daily_file"` | `massive/<type>/_watermark.json` | `data_type`, `through` | `quantlab.acquisition.massive.raw_tier.write_day_file_watermark` |
 | `"endpoint"` | `massive/rest/<endpoint>/_watermark.json` | `endpoint`, `field`, `through` | `quantlab.acquisition.massive.raw_tier.write_rest_watermark` |
@@ -79,7 +79,7 @@ A *batch* is one request covering several symbols. Vendors such as Alpaca
 answer it as a chain of pages linked by opaque tokens, so a batch can itself
 be interrupted halfway. The *page ledger* (`quantlab.acquisition._support.page_ledger`)
 records, per batch, every page fetched, the token the next request must send,
-and the shard files each page was written to. `Acquisition._fetch_batch` is
+and the shard files each page was written to. `SymbolBatchAcquisition._fetch_batch` is
 the only pagination loop, and it resumes from the ledger:
 
 ```python

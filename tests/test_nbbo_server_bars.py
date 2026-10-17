@@ -150,7 +150,7 @@ def _download_bars(tmp_path, tickers, start, end, **settings):
     cfg = WrdsTaqNbboBarsAcquisition.build_config(
         tuple(tickers), start_date=start, end_date=end, **settings
     )
-    registry.run(WRDS_SOURCE, cfg)
+    registry.download_symbols(WRDS_SOURCE, cfg)
     return cfg
 
 
@@ -192,7 +192,7 @@ def test_server_bars_convert_to_the_tick_panel_on_the_same_records(
     tick_acq = WrdsTaqNbboAcquisition.build_config(
         tuple(tickers), start_date=start, end_date=end
     )
-    registry.run(WRDS_SOURCE, tick_acq)
+    registry.download_symbols(WRDS_SOURCE, tick_acq)
     tick_cfg = NbboDatasetConfig(
         zarr_file_path=str(tmp_path / "ticks.zarr"),
         raw_data_dir_path=tick_acq.raw_data_dir_path,
@@ -340,13 +340,13 @@ def test_a_page_short_of_the_server_count_fails_its_batch(mock_wrds_session, tmp
     cfg = WrdsTaqNbboBarsAcquisition.build_config(
         tuple(tickers), start_date=start, end_date=end
     )
-    result = registry.run(WRDS_SOURCE, cfg)
+    result = registry.download_symbols(WRDS_SOURCE, cfg)
     assert "AAPL" in result.failures
     assert "server counted [390]" in result.failures["AAPL"]
     assert not list((Path(cfg.raw_data_dir_path) / "nbbo_bars").rglob("*.pqt"))
 
     mock_wrds_session.bars_short_by = {}
-    result = registry.run(WRDS_SOURCE, cfg)
+    result = registry.download_symbols(WRDS_SOURCE, cfg)
     assert result.failures == {}
     assert len(list((Path(cfg.raw_data_dir_path) / "nbbo_bars").rglob("*.pqt"))) == 1
 
@@ -415,11 +415,11 @@ def test_the_registry_resolves_the_bars_capability():
     from quantlab.dataset.nbbo.bars import NbboBarsDataset
 
     (bars,) = WRDS_SOURCE.capabilities_for("us_equity", "1m", "nbbo_bars")
-    assert bars.acquisition_cls is WrdsTaqNbboBarsAcquisition
+    assert bars.symbol_batch_cls is WrdsTaqNbboBarsAcquisition
     assert bars.config_factory == WrdsTaqNbboBarsAcquisition.build_config
     assert bars.dataset_cls is NbboBarsDataset
     (ticks,) = WRDS_SOURCE.capabilities_for("us_equity", "tick", "nbbo")
-    assert ticks.acquisition_cls is WrdsTaqNbboAcquisition
+    assert ticks.symbol_batch_cls is WrdsTaqNbboAcquisition
     assert ticks.dataset_cls is NbboPanelDataset
 
 

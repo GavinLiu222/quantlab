@@ -238,7 +238,7 @@ CrspReferenceTables.pull → CrspMembership（仅 --index）+ CrspSymbology    �
   ▼                                                                       │
 SOURCE.config_factory_for("us_equity", "tick", "nbbo")(tickers...)        │
   ▼                                                                       │
-registry.run(SOURCE, ...)                                                 │
+registry.download_symbols(SOURCE, ...)                                                 │
   │  每个 (交易日, 批次) 一次 COPY；COPY 前 count(*) 一次核对行数               │
   ▼                                                                       │
 原始分片 <download-dir>/wrds/nbbo/...                                       │

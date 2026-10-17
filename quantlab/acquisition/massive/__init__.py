@@ -19,9 +19,9 @@ REST news articles (#357), the short interest panel
 kept to check Trade bars against.
 
 Massive's raw tier is one vendor file per data type and trading day, pulled by
-``MassiveClient``, not the symbol-batched hive tree an ``Acquisition``
-writes. The descriptor therefore names no acquisition class and no config
-factory: ``registry.run()`` refuses it. Its raw-tier refresh is
+``MassiveClient``, not the symbol-batched hive tree a ``SymbolBatchAcquisition``
+writes. The descriptor therefore names no symbol-batch class and no config
+factory: ``registry.download_symbols()`` refuses it. Its raw-tier refresh is
 ``quantlab.acquisition.massive.refresh.refresh_raw_tier`` (every REST endpoint
 from its watermark), which ``registry.refresh_raw_tier`` calls; the daily
 files are downloaded beside their conversion
@@ -61,7 +61,7 @@ MASSIVE_SOURCE = register_source(
     SourceDescriptor(
         vendor="massive",
         display_name="Massive (US equities, every SIP trade; daily S3 files)",
-        acquisition_cls=None,
+        symbol_batch_cls=None,
         config_factory=None,
         capabilities=(
             # Every SIP trade; converted to Trade bars on the Massive ticker axis.

@@ -123,7 +123,7 @@ def session(mock_crsp_session) -> ReferenceRecordingSession:
     class-level fixture state and keeps the autouse network tripwire live --
     and the instance is built here rather than through `shared()`, because
     `CrspReferenceTables` takes its session as an argument: the reference pull
-    is not an `Acquisition` and reaches no module-level singleton.
+    is not a `SymbolBatchAcquisition` and reaches no module-level singleton.
     """
     return ReferenceRecordingSession("test-wrds-user-not-real")
 

@@ -1046,7 +1046,7 @@ def run_crsp_pull(
         end_date=end_date,
         kwargs=kwargs,
     )
-    result = registry.run(WRDS_SOURCE, cfg)
+    result = registry.download_symbols(WRDS_SOURCE, cfg)
     return cfg, result
 
 

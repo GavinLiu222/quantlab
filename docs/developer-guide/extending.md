@@ -57,12 +57,31 @@ modules by their full dotted path, and do not add re-exports.
 
 ## A data source
 
-A data source is a vendor quantlab can download from. Adding one takes an
-`Acquisition` subclass, which knows how to make one request, and a
-`SourceDescriptor` registered with `quantlab.acquisition.registry`, which tells the rest of
-quantlab what the vendor serves.
+A data source is a vendor quantlab can download from. Every source is one
+`SourceDescriptor` registered with `quantlab.acquisition.registry`, which tells
+the rest of quantlab what the vendor serves. How the raw tier is downloaded
+depends on the vendor's API, and the descriptor says it in two fields
+(ADR 0049):
 
-`Acquisition` (`quantlab.acquisition.base`) owns everything else: batching,
+- `raw_tier_refresh`: a function `(download_dir, *, end=None, **options)`
+  returning a `RawTierRefreshResult` (`quantlab.acquisition.refresh`) that
+  brings every part of the raw tier from its watermark up to `end`. A vendor
+  the daily update keeps current registers one, and
+  `registry.refresh_raw_tier` calls it. Sharadar
+  (`quantlab/acquisition/sharadar/refresh.py`), Massive
+  (`quantlab/acquisition/massive/refresh.py`) and FRED
+  (`quantlab/acquisition/fred.py`) are the references.
+- `symbol_batch_cls`: a `SymbolBatchAcquisition` subclass, for a vendor queried
+  one batch of symbols at a time over a date window; `registry.download_symbols`
+  runs it over an `AcquisitionConfig`. A vendor whose raw tier is whole tables
+  or daily files (Sharadar, Massive) leaves it and `config_factory` as `None`.
+
+A symbol-batched vendor the daily update keeps current has both, its refresh
+wrapping its `SymbolBatchAcquisition` (FRED). The rest of this section builds a
+symbol-batched source.
+
+`SymbolBatchAcquisition` (`quantlab.acquisition.base`) owns everything but the
+request itself: batching,
 worker threads, pagination, resuming an interrupted run, per-symbol
 watermarks, the failure manifest, credential scrubbing and the Parquet shard
 layout. A subclass sets `VENDOR` and `RAW_COLUMNS` and implements one method,
@@ -77,7 +96,7 @@ import numpy as np
 import pandas as pd
 import polars as pl
 
-from quantlab.acquisition.base import Acquisition
+from quantlab.acquisition.base import SymbolBatchAcquisition
 from quantlab.acquisition.config import AcquisitionConfig
 from quantlab.dataset.stock import StockDataset
 from quantlab.acquisition.base import Capability, SourceDescriptor, register_source
@@ -85,7 +104,7 @@ from quantlab.acquisition.base import Capability, SourceDescriptor, register_sou
 FIELDS = ("open", "high", "low", "close", "volume")
 
 
-class DemoAcquisition(Acquisition):
+class DemoAcquisition(SymbolBatchAcquisition):
     """Serves a random walk per symbol instead of calling a real API."""
 
     VENDOR = "demo"
@@ -120,7 +139,7 @@ DEMO_SOURCE = register_source(
     SourceDescriptor(
         vendor="demo",
         display_name="Demo random walk",
-        acquisition_cls=DemoAcquisition,
+        symbol_batch_cls=DemoAcquisition,
         config_factory=demo_acquisition_config,
         capabilities=(
             Capability(market="us_equity", frequency="1d", dataset_cls=StockDataset),
@@ -131,21 +150,21 @@ DEMO_SOURCE = register_source(
 ```
 
 Once registered, the source is driven through the registry like any built-in
-vendor. `run()` downloads, `convert()` turns the raw tier into a Zarr panel
+vendor. `download_symbols()` downloads, `convert()` turns the raw tier into a Zarr panel
 with the capability's `dataset_cls`:
 
 ```python
 from quantlab.dataset.config import DatasetConfig
 from quantlab.acquisition.base import DataSourceRegistry
-from quantlab.acquisition.registry import convert, run
+from quantlab.acquisition.registry import convert, download_symbols
 
 source = DataSourceRegistry.get("demo")
 config = source.config_factory_for("us_equity", "1d")(
     ("AAA", "BBB", "CCC"), root, start_date="2024-01-02", end_date="2024-03-29"
 )
-result = run(source, config)
+result = download_symbols(source, config)
 print("succeeded:", result.succeeded)
-again = run(source, config)  # everything is covered, nothing is fetched
+again = download_symbols(source, config)  # everything is covered, nothing is fetched
 print("second run coverage:", again.coverage)
 
 dataset_config = DatasetConfig(

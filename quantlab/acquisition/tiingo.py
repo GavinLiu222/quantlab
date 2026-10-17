@@ -2,7 +2,7 @@
 
 ``TiingoAcquisition`` is the Tiingo-specific part of the acquisition layer.
 It asks Tiingo's daily price endpoint for one symbol's whole date range per
-request and hands the rows to the shared ``Acquisition`` base class, which
+request and hands the rows to the shared ``SymbolBatchAcquisition`` base class, which
 handles resuming, concurrency, per-batch failures and writing the raw parquet
 files (*shards*). Tiingo limits each account to a number of requests per hour
 (its "request allocation", called the *quota* here); running out of it stops
@@ -20,7 +20,7 @@ from tiingo import TiingoClient
 
 from quantlab.acquisition._support.request_policy import require_env
 from quantlab.acquisition.base import Capability, SourceDescriptor, register_source
-from quantlab.acquisition.base import Acquisition
+from quantlab.acquisition.base import SymbolBatchAcquisition
 from quantlab.acquisition.config import AcquisitionConfig
 from quantlab.acquisition.config import stock_acquisition_config
 from quantlab.dataset.stock import StockDataset
@@ -43,8 +43,8 @@ _FREQUENCY_MAP = {"1d": "daily"}
 _TIINGO_EOD_COLUMNS = tuple(TiingoColumns.EOD.split(","))
 
 
-class TiingoAcquisition(Acquisition):
-    """Download Tiingo end-of-day prices through the shared ``Acquisition`` base.
+class TiingoAcquisition(SymbolBatchAcquisition):
+    """Download Tiingo end-of-day prices through the shared ``SymbolBatchAcquisition`` base.
 
     Tiingo's price endpoint takes one symbol per call and returns the whole
     requested date range in one response. So this vendor uses
@@ -102,7 +102,7 @@ class TiingoAcquisition(Acquisition):
 
     VENDOR = "tiingo"
 
-    #: The one credential ``Acquisition._scrub`` hides before a message
+    #: The one credential ``SymbolBatchAcquisition._scrub`` hides before a message
     #: reaches a log line or the failure manifest. Taken from the
     #: module-level constant, not from the client class tests replace.
     CREDENTIAL_ENV_VARS = (KEY_ENV,)
@@ -320,7 +320,7 @@ TIINGO_SOURCE = register_source(
     SourceDescriptor(
         vendor="tiingo",
         display_name="Tiingo EOD",
-        acquisition_cls=TiingoAcquisition,
+        symbol_batch_cls=TiingoAcquisition,
         # One factory serves both vendors, differing by this keyword.
         config_factory=functools.partial(stock_acquisition_config, vendor="tiingo"),
         # Daily US equities only. ``data_type=None`` means this vendor has no

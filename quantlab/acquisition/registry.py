@@ -1,24 +1,32 @@
 """Registry of every data source quantlab can download from.
 
-A data source is one vendor, such as Tiingo, Alpaca or WRDS. Each vendor is
+A data source is one vendor, such as Sharadar, Massive or FRED. Each vendor is
 described once by a ``SourceDescriptor``: the names of the environment
-variables that hold its credentials, the ``Acquisition`` class that downloads
-from it, and the ``Capability`` rows it actually serves. A capability is one
+variables that hold its credentials, the ``Capability`` rows it actually
+serves, and how its raw tier is downloaded. A capability is one
 ``(market, frequency, data_type)`` combination, for example US equities at
 daily frequency.
 
-Downloading and converting are two separate steps. An acquisition writes a
-raw tier: the vendor's data as parquet files on disk, plus small watermark
-files that record how far each symbol has been downloaded so that a later run
-can resume. A dataset class then converts the raw tier into a Zarr store
-holding a panel, an ``xarray.Dataset`` indexed by ``timestamp`` and
-``symbol``. The module-level functions ``run()`` and ``convert()`` perform
-these two steps without the caller naming any vendor class. A vendor the
-daily update keeps current also registers a raw-tier refresh, which
-``refresh_raw_tier()`` calls.
+Downloading and converting are two separate steps. A download writes a raw
+tier: the vendor's data as files on disk, plus small watermark files that
+record how far each part has been downloaded so that a later run can resume.
+A dataset class then converts the raw tier into a Zarr store holding a panel,
+an ``xarray.Dataset`` indexed by ``timestamp`` and ``symbol``; ``convert()``
+does that without the caller naming any vendor class.
+
+There are two ways to download, by what the caller knows (ADR 0049):
+
+- ``refresh_raw_tier()`` keeps a vendor's raw tier current from its
+  watermarks up to today. It is the one way to keep a raw tier current, and
+  what the daily update calls. It runs the function the vendor registered as
+  ``SourceDescriptor.raw_tier_refresh`` (Sharadar, Massive, FRED).
+- ``download_symbols()`` downloads an explicit roster over an explicit window
+  (an ``AcquisitionConfig``) through the vendor's
+  ``SymbolBatchAcquisition`` class (Tiingo, Alpaca, FRED, the retired WRDS
+  CRSP and TAQ downloads).
 
 Descriptors register themselves by calling ``register_source``
-(``quantlab.acquisition.base``) beside the acquisition class they describe,
+(``quantlab.acquisition.base``) in the vendor's module,
 which adds them to ``DataSourceRegistry``. The vendor modules are imported at
 the bottom of this file and never import it, so
 ``import quantlab.acquisition.registry`` alone makes every source available.
@@ -111,7 +119,7 @@ def credential_status(descriptor: SourceDescriptor) -> dict[str, bool]:
     return {name: bool(os.environ.get(name)) for name in descriptor.required_env}
 
 
-def run(
+def download_symbols(
     descriptor: SourceDescriptor,
     config: AcquisitionConfig,
     *,
@@ -119,14 +127,19 @@ def run(
     reporter: ProgressReporter | None = None,
     cancel: CancelToken | None = None,
 ) -> AcquisitionResult:
-    """Download a raw tier in the current process and return the outcome.
+    """Download a roster of symbols over a window, in the current process.
 
-    The acquisition class is looked up from the descriptor's capability for
-    ``(config.market, config.frequency, config.kwargs["data_type"])``, so the
-    caller never names a vendor class. Constructing that class is the first
-    point at which a credential is required. The run writes raw parquet files
-    (shards) and watermark files and stops there; converting them to Zarr is
-    the separate ``convert()`` step.
+    This is the symbol-batched download: ``config`` names the symbols and
+    the window, and the vendor's ``SymbolBatchAcquisition`` class fetches
+    them in batches. The class is looked up from the descriptor's capability
+    for ``(config.market, config.frequency, config.kwargs["data_type"])``, so
+    the caller never names a vendor class. Constructing that class is the
+    first point at which a credential is required. The download writes raw
+    parquet files (shards) and watermark files and stops there; converting
+    them to Zarr is the separate ``convert()`` step.
+
+    Keeping a vendor's whole raw tier current from its watermarks, with no
+    roster or window, is ``refresh_raw_tier()`` instead (ADR 0049).
 
     Parameters
     ----------
@@ -136,29 +149,29 @@ def run(
         What to download; its ``market``, ``frequency`` and optional
         ``kwargs["data_type"]`` pick the capability.
     refresh : bool, default False
-        If True, call ``refresh()``, which downloads the covered window
-        again. Otherwise call ``download()``, which fills only what is
-        missing.
+        If True, call ``SymbolBatchAcquisition.refresh()``, which downloads
+        the covered window again. Otherwise call ``download()``, which fills
+        only what is missing.
     reporter : ProgressReporter or None, default None
         Receives a ``ProgressEvent`` per batch. ``None`` keeps the default
         progress bar on stderr.
     cancel : CancelToken or None, default None
-        Setting the token stops the run at the next batch boundary.
+        Setting the token stops the download at the next batch boundary.
         Completed batches stay on disk, and a later call resumes from them.
 
     Returns
     -------
     AcquisitionResult
         The result the acquisition stored on its ``last_result`` attribute.
-        Its ``failures`` are the ones this run met. The failure manifest on
-        disk (a JSON file of failed symbols) accumulates across runs and may
+        Its ``failures`` are the ones this call met. The failure manifest on
+        disk (a JSON file of failed symbols) accumulates across calls and may
         name more symbols; read it through ``SourceInspector.failures``.
 
     Raises
     ------
     ValueError
-        If the source names no acquisition class (Sharadar): its own
-        scripts download it.
+        If the source has no symbol-batched download (Sharadar, Massive):
+        its raw tier is kept current by ``refresh_raw_tier()``.
 
     Examples
     --------
@@ -167,7 +180,7 @@ def run(
         from quantlab.acquisition.config import AcquisitionConfig
         from quantlab.utils.progress import CancelToken
         from quantlab.acquisition.base import DataSourceRegistry
-        from quantlab.acquisition.registry import run
+        from quantlab.acquisition.registry import download_symbols
 
         source = DataSourceRegistry.get("tiingo")
         config = AcquisitionConfig(
@@ -178,19 +191,34 @@ def run(
             start_date="2024-01-01", end_date="2024-05-31",
         )
         token = CancelToken()
-        result = run(source, config, cancel=token)
-        result.failures  # {symbol: reason} for this run only
+        result = download_symbols(source, config, cancel=token)
+        result.failures  # {symbol: reason} for this call only
+
+    A vendor without a symbol-batched download is refused before anything
+    is touched:
+
+    >>> from quantlab.acquisition.base import DataSourceRegistry
+    >>> from quantlab.acquisition.config import AcquisitionConfig
+    >>> config = AcquisitionConfig(
+    ...     market="us_equity", frequency="1d", vendor="sharadar",
+    ...     raw_data_dir_path="downloads/sharadar", watermark_path="downloads/_w",
+    ...     symbols=("AAPL",), start_date="2024-01-01",
+    ... )
+    >>> download_symbols(DataSourceRegistry.get("sharadar"), config)  # doctest: +ELLIPSIS
+    Traceback (most recent call last):
+    ...
+    ValueError: Sharadar ... has no symbol-batched download; keep its raw tier current ...
     """
-    acquisition_cls = descriptor.acquisition_cls_for(
+    symbol_batch_cls = descriptor.symbol_batch_cls_for(
         config.market, config.frequency, (config.kwargs or {}).get("data_type")
     )
-    if acquisition_cls is None:
+    if symbol_batch_cls is None:
         raise ValueError(
-            f"{descriptor.display_name} is not downloaded through run(): its "
-            f"raw tier is whole tables, pulled by the vendor's own client. Use "
-            f"scripts/{descriptor.vendor}/ (see docs/{descriptor.vendor}.md)."
+            f"{descriptor.display_name} has no symbol-batched download; keep "
+            f"its raw tier current with refresh_raw_tier() (see "
+            f"docs/{descriptor.vendor}.md)."
         )
-    acquisition = acquisition_cls(config)
+    acquisition = symbol_batch_cls(config)
     acquisition.attach(reporter=reporter, cancel=cancel)
     if refresh:
         acquisition.refresh()
@@ -214,6 +242,11 @@ def refresh_raw_tier(
     vendor, never a client: Sharadar's daily table plan, Massive's REST
     endpoints, FRED's series. It writes the raw tier only; the stores are
     brought up to date afterwards from it.
+
+    This is the registry's one way to keep a raw tier current (ADR 0049). A
+    vendor whose download is symbol-batched serves it by wrapping its
+    ``SymbolBatchAcquisition`` in its refresh, as FRED does; downloading an
+    explicit roster over an explicit window is ``download_symbols()``.
 
     Parameters
     ----------
@@ -254,11 +287,12 @@ def refresh_raw_tier(
     >>> refresh_raw_tier(DataSourceRegistry.get("tiingo"), "downloads")
     Traceback (most recent call last):
     ...
-    ValueError: Tiingo EOD registers no raw-tier refresh; download it with run().
+    ValueError: Tiingo EOD registers no raw-tier refresh; download it with download_symbols().
     """
     if descriptor.raw_tier_refresh is None:
         raise ValueError(
-            f"{descriptor.display_name} registers no raw-tier refresh; download it with run()."
+            f"{descriptor.display_name} registers no raw-tier refresh; download it with "
+            f"download_symbols()."
         )
     return descriptor.raw_tier_refresh(download_dir, end=end, **options)
 
@@ -276,7 +310,7 @@ def convert(
 ) -> ConversionResult:
     """Convert an already downloaded raw tier into a Zarr store, in-process.
 
-    This is the second step after ``run()``. It reads the raw parquet tier
+    This is the second step after a download. It reads the raw parquet tier
     and writes the store through the capability's ``dataset_cls``, one time
     window at a time. It uses no vendor client and no credential. The
     capability is looked up by ``(dataset_config.market,
@@ -329,7 +363,7 @@ def convert(
 
     Examples
     --------
-    Needs a raw tier already downloaded by ``run()``::
+    Needs a raw tier already downloaded by ``download_symbols()``::
 
         from quantlab.dataset.config import DatasetConfig
         from quantlab.acquisition.base import DataSourceRegistry
@@ -348,6 +382,8 @@ def convert(
     A capability the vendor serves but no dataset can express is refused
     without touching disk:
 
+    >>> from quantlab.acquisition.base import DataSourceRegistry
+    >>> from quantlab.dataset.config import DatasetConfig
     >>> tick_config = DatasetConfig(
     ...     raw_data_dir_path="data/alpaca", zarr_file_path="data/out.zarr",
     ...     market="us_equity",
