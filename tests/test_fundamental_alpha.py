@@ -90,6 +90,7 @@ def _panel():
     for name in ("net_shares_P", "net_shares_S", "net_value", "insiders_buying", "insiders_selling"):
         data[name][:30] = 0.0
         data[name][::17, 3] = np.nan  # a symbol SF2 does not list on some days
+    data["adjClose"][600:, 7] = np.nan  # delisted: no insider flow, not a zero one
     panel = xr.Dataset(
         {name: (("timestamp", "symbol"), values) for name, values in data.items()},
         coords={"timestamp": DAYS.values, "symbol": SYMBOLS},
@@ -164,7 +165,7 @@ def _reference(panel, truth) -> dict[str, np.ndarray]:
         holders_before = np.where(has_before, truth["holders"][np.maximum(q_shown - 1, 0), cols], np.nan)
 
         def flow(name):
-            x = np.nan_to_num(v[name], nan=0.0)
+            x = np.where(np.isfinite(v["adjClose"]), np.nan_to_num(v[name], nan=0.0), np.nan)
             x[:30] = np.nan  # no flow before the first trade of any symbol
             return pd.DataFrame(x)
 

@@ -43,8 +43,9 @@ reports ago" is the last value shown for the report ``k`` distinct fiscal
 periods before the one shown now (``report_lags``); it is NaN when that
 report is missing or the periods are not ``k`` quarters apart, so a skipped
 filing never passes for a year-ago one. Holdings lag by ``quarter_end`` in
-the same way. Insider flows are 0 on a trading day without a filing and NaN
-before the first bar any symbol has one (SF2 starts in 2008).
+the same way. Insider flows are 0 on a bar with a price (``adjClose``) and
+no filing, NaN on a bar without a price and before the first bar any symbol
+has a filing (SF2 starts in 2008), so a delisted stock is not a zero flow.
 
 The factor is batch only. Inputs are exported as float32.
 
@@ -103,9 +104,9 @@ OUTPUT_COLUMNS: dict[str, tuple[str, ...]] = {
     "breadth_change": ("holders",),
     "institutional_ownership": ("value_held", "marketcap"),
     "io_change": ("value_held", "marketcap"),
-    "insider_npr": ("net_shares_P", "net_shares_S"),
-    "insider_net_buy": ("net_value", "marketcap"),
-    "insider_breadth": ("insiders_buying", "insiders_selling"),
+    "insider_npr": ("net_shares_P", "net_shares_S", "adjClose"),
+    "insider_net_buy": ("net_value", "marketcap", "adjClose"),
+    "insider_breadth": ("insiders_buying", "insiders_selling", "adjClose"),
 }
 
 _F_SCORE_LAGGED = ("netinc", "assetsavg", "debtnc", "currentratio", "grossmargin", "assetturnover")
@@ -486,8 +487,8 @@ class FundamentalAlpha(FactorKunQuant):
         The period-end keys are not graph inputs: they drive ``report_lags``.
         ``marketcap__quarter_end`` is DAILY's market cap on the last bar on or
         before each cell's 13F ``quarter_end``. The insider flows are 0
-        where NaN, except before the first bar on which any symbol has a
-        non-zero flow.
+        where NaN on a bar with a price, NaN without a price and before the
+        first bar on which any symbol has a non-zero flow.
         """
         params = self._parameters()
         outputs = self.get_factor_names()
@@ -517,7 +518,7 @@ class FundamentalAlpha(FactorKunQuant):
                 flow = arrays[column]
                 started = np.flatnonzero(np.nansum(np.abs(flow), axis=1) > 0)
                 first = started[0] if len(started) else flow.shape[0]
-                filled = np.nan_to_num(flow, nan=0.0)
+                filled = np.where(np.isfinite(arrays["adjClose"]), np.nan_to_num(flow, nan=0.0), np.nan)
                 filled[:first] = np.nan
                 arrays[column] = np.ascontiguousarray(filled)
         lags = params.lags(outputs)
