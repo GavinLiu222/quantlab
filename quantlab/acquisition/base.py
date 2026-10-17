@@ -2019,7 +2019,8 @@ class SourceDescriptor:
     Notes
     -----
     ``symbol_batch_cls`` is a direct class reference, not a dotted path
-    resolved at runtime. The cost is that importing this module imports
+    resolved at runtime. The cost is that ``quantlab.acquisition.registry``,
+    which imports every vendor module to register its descriptor, imports
     every vendor's client library. The annotation names the
     ``SymbolBatchAcquisition`` base class, so the top of this module
     imports no vendor module, and each descriptor can be defined beside
@@ -2296,7 +2297,7 @@ class DataSourceRegistry:
         Examples
         --------
         >>> len(DataSourceRegistry.all())
-        3
+        6
         >>> DataSourceRegistry.all()[0].vendor
         'alpaca'
         """

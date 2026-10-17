@@ -485,8 +485,9 @@ def convert(
 #
 # Importing a vendor module registers its descriptor, so this module imports
 # all of them to make `import quantlab.acquisition.registry` alone list every source.
-# They cannot go at the top, because each vendor module imports this module
-# for `register_source`. They also stay out of
+# A vendor module registers through `quantlab.acquisition.base.register_source`
+# and imports this module only inside functions (the Sharadar and Massive
+# refresh helpers, `wrds.rebuild`). They also stay out of
 # `quantlab/acquisition/__init__.py`, which is kept empty so that the
 # credential-free inspector in `quantlab.acquisition._support` can be
 # imported without loading any vendor client.

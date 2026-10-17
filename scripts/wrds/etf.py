@@ -138,6 +138,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     add_max_workers_arg(parser, default=ACQ.DEFAULT_MAX_WORKERS)
     add_output_dir_args(
         parser,
+        download_help=(
+            "Directory for the raw downloads. The raw files go to "
+            "<download-dir>/<vendor>/<data type>/ (wrds/crsp_daily/ or "
+            "wrds/nbbo/), the watermarks that --refresh reads to "
+            "<download-dir>/_watermarks/<vendor>/<data type>/ and, for CRSP, "
+            "the reference tables to <download-dir>/_reference/. Default: the "
+            "current directory. It is created as needed."
+        ),
         data_help=(
             "The data root. Each ETF goes to "
             "<data-dir>/market/wrds/wrds_crsp_<name>_1d/wrds_crsp_<name>_1d.zarr, "

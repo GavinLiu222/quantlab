@@ -77,9 +77,11 @@ def stock_acquisition_config(
     subdir: str = "nasdaq_data",
     vendor: Vendor = "tiingo",
 ):
-    """Build the ``AcquisitionConfig`` for a daily US-equity download.
+    """Build the ``AcquisitionConfig`` for a symbol-batched download.
 
-    Raw shards are written beneath ``{subdir}/{vendor}`` and watermarks
+    Tiingo and Alpaca use it for their US-equity bars, and FRED for its
+    rate series (``vendor="fred"``, ``subdir="macro"``), which file under
+    the same ``downloads/us_equity/1d/`` tree. Raw shards are written beneath ``{subdir}/{vendor}`` and watermarks
     beneath ``{subdir}/_watermarks/{vendor}``, both under
     ``downloads/{market}/{frequency}/``. The watermark directory is a sibling
     of the raw root rather than inside it because a polars directory scan

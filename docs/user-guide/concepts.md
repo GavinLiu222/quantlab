@@ -30,9 +30,9 @@ vendor API --> acquisition --> raw tier --> dataset --> factors, labels --> mode
 | Selection | a prediction panel | a target-weight panel | a strategy-specific class |
 | Backtest | target weights and prices | a simulation, metrics and a run directory | `quantlab.backtest.base.BaseBacktester` |
 
-Acquisition downloads raw data from a vendor (Tiingo, Alpaca or WRDS) and writes it unchanged
-to a directory tree of parquet files, the raw tier. Keeping the vendor's rows as they arrived
-means a change of mind about cleaning or filtering is a re-conversion, not a re-download.
+Acquisition downloads raw data from a vendor (Sharadar, Massive, FRED, Tiingo, Alpaca or WRDS)
+and writes it unchanged to a directory tree of parquet files, the raw tier. Keeping the vendor's
+rows as they arrived means a change of mind about cleaning or filtering is a re-conversion, not a re-download.
 Downloads are resumable: completed pieces are recorded on disk and skipped next time. See
 [data sources](data-sources.md).
 

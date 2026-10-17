@@ -38,8 +38,8 @@ def add_output_dir_args(
     parser : argparse.ArgumentParser
         The parser to extend.
     download_help : str or None, default None
-        Help text for ``--download-dir`` when the vendor's raw layout differs
-        from the WRDS one the default text describes.
+        Help text for ``--download-dir`` when the script names where under
+        ``<download-dir>/<vendor>/`` its raw files go.
     data_help : str or None, default None
         Help text for ``--data-dir`` when the script names the stores it
         writes or reads under the data root.
@@ -62,12 +62,9 @@ def add_output_dir_args(
         type=str,
         default=".",
         help=download_help or (
-            "Directory for the raw downloads. The raw files go to "
-            "<download-dir>/<vendor>/<data type>/ (wrds/crsp_daily/ or "
-            "wrds/nbbo/), the watermarks that --refresh reads to "
-            "<download-dir>/_watermarks/<vendor>/<data type>/ and, for CRSP, "
-            "the reference tables to <download-dir>/_reference/. Default: the "
-            "current directory. It is created as needed."
+            "Directory for the raw downloads, which go under "
+            "<download-dir>/<vendor>/. Default: the current directory. It is "
+            "created as needed."
         ),
     )
     parser.add_argument(
