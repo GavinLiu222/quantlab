@@ -63,7 +63,7 @@ def main() -> int:
 
     result = refresh_raw_tier(DataSourceRegistry.get("massive"), download_dir, end=args.end, endpoints=names)
     for part in result.parts:
-        print(f"{part.name}: {part.summary}." if part.ok else f"{part.name}: failed: {part.error}", flush=True)
+        print(f"{part.line}." if part.ok else part.line, flush=True)
     return 1 if result.failed else 0
 
 

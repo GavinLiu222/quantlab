@@ -96,7 +96,7 @@ def refresh_raw_tier(
         try:
             done = client.pull(name, download_dir, end=end, today=today)
         except (MassiveEntitlementError, MassiveTransportError, ValueError) as error:
-            parts.append(RefreshedPart(name, "", error=str(error)))
+            parts.append(RefreshedPart.failure(name, str(error)))
             continue
         parts.append(RefreshedPart(
             name,

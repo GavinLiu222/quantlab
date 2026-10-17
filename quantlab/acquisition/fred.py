@@ -282,7 +282,7 @@ def refresh_raw_tier(
     )).download()
     result = acquisition.last_result
     return RawTierRefreshResult("fred", tuple(
-        RefreshedPart(name, "", error=result.failures[name]) if name in result.failures
+        RefreshedPart.failure(name, result.failures[name]) if name in result.failures
         else RefreshedPart(name, "downloaded")
         for name in result.requested
     ))

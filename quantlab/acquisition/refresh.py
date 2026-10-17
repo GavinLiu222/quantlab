@@ -18,7 +18,7 @@ Examples
 >>> from datetime import date
 >>> result = RawTierRefreshResult("example", (
 ...     RefreshedPart("prices", "40 rows through 2024-01-05"),
-...     RefreshedPart("news", "", error="HTTP 503"),
+...     RefreshedPart.failure("news", "HTTP 503"),
 ... ))
 >>> result.failed
 ('news',)
@@ -36,28 +36,54 @@ from typing import Protocol
 
 @dataclass(frozen=True)
 class RefreshedPart:
-    """What a refresh did for one part of a raw tier.
+    """What a refresh did for one part of a raw tier: refreshed, with a summary, or failed, with an error.
+
+    ``RefreshedPart(name, summary)`` is a part refreshed;
+    ``RefreshedPart.failure(name, error)`` one that was not. A part holds
+    exactly one of the two.
 
     Attributes
     ----------
     name : str
         The part: a table code, an endpoint name or a series id.
-    summary : str
-        One line saying what was pulled (rows, pages, the watermark after).
+    summary : str or None, default None
+        For a part refreshed, one line saying what was pulled (rows, pages,
+        the watermark after).
     error : str or None, default None
-        Why the part was not refreshed; ``None`` when it was.
+        For a part not refreshed, why.
+
+    Raises
+    ------
+    ValueError
+        If neither or both of ``summary`` and ``error`` are given.
 
     Examples
     --------
-    >>> RefreshedPart("sep", "window to 2024-01-05").ok
-    True
-    >>> RefreshedPart("sf1", "", error="HTTP 404").ok
-    False
+    >>> RefreshedPart("sep", "window to 2024-01-05").line
+    'sep: window to 2024-01-05'
+    >>> RefreshedPart.failure("sf1", "HTTP 404").line
+    'sf1: failed: HTTP 404'
     """
 
     name: str
-    summary: str
+    summary: str | None = None
     error: str | None = None
+
+    def __post_init__(self) -> None:
+        """Check the part is either refreshed or failed."""
+        if (self.summary is None) == (self.error is None):
+            raise ValueError(f"{self.name}: a refreshed part has a summary, a failed one an error; not both or neither.")
+
+    @classmethod
+    def failure(cls, name: str, error: str) -> RefreshedPart:
+        """Return the part ``name``, not refreshed because of ``error``.
+
+        Examples
+        --------
+        >>> RefreshedPart.failure("news", "HTTP 503").ok
+        False
+        """
+        return cls(name, error=error)
 
     @property
     def ok(self) -> bool:
@@ -65,10 +91,21 @@ class RefreshedPart:
 
         Examples
         --------
-        >>> RefreshedPart("dividends", "", error="refused").ok
-        False
+        >>> RefreshedPart("dividends", "3 pages").ok
+        True
         """
         return self.error is None
+
+    @property
+    def line(self) -> str:
+        """``<name>: <summary>``, or ``<name>: failed: <error>``.
+
+        Examples
+        --------
+        >>> RefreshedPart("DTB3", "downloaded").line
+        'DTB3: downloaded'
+        """
+        return f"{self.name}: {self.summary}" if self.ok else f"{self.name}: failed: {self.error}"
 
 
 @dataclass(frozen=True)
@@ -100,7 +137,7 @@ class RawTierRefreshResult:
 
         Examples
         --------
-        >>> RawTierRefreshResult("massive", (RefreshedPart("news", "", error="x"),)).failed
+        >>> RawTierRefreshResult("massive", (RefreshedPart.failure("news", "x"),)).failed
         ('news',)
         """
         return tuple(part.name for part in self.parts if not part.ok)
@@ -115,10 +152,7 @@ class RawTierRefreshResult:
         """
         if not self.parts:
             return "nothing refreshed"
-        return "; ".join(
-            f"{part.name}: {part.summary}" if part.ok else f"{part.name}: failed: {part.error}"
-            for part in self.parts
-        )
+        return "; ".join(part.line for part in self.parts)
 
 
 class RawTierRefresh(Protocol):

@@ -230,3 +230,14 @@ def test_the_plan_refreshes_each_vendor_through_one_action():
     assert {action for action, _, _ in steps} <= set(update.ACTIONS)
     assert update.Update(plan, Path("/data"), Path("/downloads"), dry_run=True).writes(
         "refresh", {"vendor": "massive"}) == []
+
+
+def test_a_part_is_either_refreshed_or_failed():
+    from quantlab.acquisition.refresh import RefreshedPart
+
+    failed = RefreshedPart.failure("news", "HTTP 503")
+    assert not failed.ok and failed.summary is None and failed.line == "news: failed: HTTP 503"
+    with pytest.raises(ValueError):
+        RefreshedPart("news")
+    with pytest.raises(ValueError):
+        RefreshedPart("news", "3 pages", error="HTTP 503")

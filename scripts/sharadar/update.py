@@ -183,7 +183,7 @@ if __name__ == "__main__":
         except (SharadarEntitlementError, RuntimeError, ValueError) as exc:
             parser.exit(1, f"{exc}\n")
         for part in pulled.parts:
-            print(f"{part.name}: {part.summary}")
+            print(part.line)
 
     outcome = update_stores(
         download_dir, data_dir, rebuild_dropped=args.rebuild_dropped, keep_dropped=args.keep_dropped
