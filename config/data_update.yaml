@@ -44,8 +44,9 @@ stages:
       - update: market/sharadar/sharadar_iwv_1d
       - fred: {series: [DTB3], start: "1954-01-04", store: market/fred/fred_dtb3_1d}
       - benchmarks: {tickers: [vt, spy, acwi], writes: [market/benchmarks/]}
-      # Massive's REST endpoints (splits, dividends) into the raw tier, each from its watermark
-      # (docs/massive.md, "REST pulls"); raw files only, so a failure holds nothing.
+      # Every Massive REST endpoint (quantlab.acquisition.massive.rest.ENDPOINTS: the ones the
+      # intraday stage's REST panels read and the raw-only tables) into the raw tier, each from its
+      # watermark (docs/massive.md, "REST pulls"); raw files only, so a failure holds nothing.
       - run:
           script: scripts/massive/rest_pull.py
           args: [--download-dir, "{download_dir}"]

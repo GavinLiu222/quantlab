@@ -54,9 +54,10 @@ no price copy cut to the roster: SEP is brought up by the raw stage and the memb
 common-stock membership (`universe/sharadar/sharadar_common_stock_membership`, every security of SEP from
 its first to its last priced bar, `CommonStockConstituentDataset`, see the
 [constituent guide](constituent.md)), allowed to fail. The raw stage also runs
-`scripts/massive/rest_pull.py`, which brings Massive's REST endpoints (splits, dividends, short volume, news, 8-K disclosures and
-their taxonomy, and the raw-only tables: filing text, Form 3/4, 13-F, reference tickers, ticker events, and a daily
-Float snapshot) up in the raw tier from each endpoint's watermark (see "REST pulls" in the [Massive guide](massive.md));
+`scripts/massive/rest_pull.py`, which brings every Massive REST endpoint (splits, dividends, news, short interest,
+short volume, IPOs, 8-K disclosures and their taxonomy, and the raw-only tables: 10-K sections, 8-K text, risk
+factors, Form 3/4, 13-F, reference tickers, ticker events, and a daily Float snapshot) up in the raw tier from each
+endpoint's watermark (see "REST pulls" in the [Massive guide](massive.md));
 it writes raw files only (`writes: []`) and is allowed to fail. WRDS data is not in the
 daily update; run `scripts/wrds/*.py` when the vendor publishes.
 
@@ -77,12 +78,12 @@ disagree, and a disagreement never fails the step; docs/massive.md, "Adjusted by
 events"), and
 `scripts/massive/dividends.py` appends the days SEP, the REST pull and the map all reach to the
 dividend panel `market/massive/massive_dividends_1d` (Massive's dividends and splits placed on
-permatickers through the map), `scripts/massive/short_interest.py` does the same for the short
-interest panel `market/massive/massive_short_interest_1d` (a release shown from settlement + 8 trading
-days), `scripts/massive/short_volume.py` appends the same days to the short volume panel
-`market/massive/massive_short_volume_1d`, `scripts/massive/news.py` to the news panel
+permatickers through the map), `scripts/massive/news.py` does the same for the news panel
 `market/massive/massive_news_1d` (Massive's news counted per permaticker),
-`scripts/massive/disclosures.py` does the same for the 8-K
+`scripts/massive/short_interest.py` for the short interest panel
+`market/massive/massive_short_interest_1d` (a release shown from settlement + 8 trading days),
+`scripts/massive/short_volume.py` for the short volume panel `market/massive/massive_short_volume_1d`,
+`scripts/massive/disclosures.py` for the 8-K
 disclosure panel `market/massive/massive_disclosures_1d` (one flag per primary category of Massive's
 disclosure taxonomy), and `scripts/massive/ipos.py` for the IPO panel `market/massive/massive_ipos_1d`
 (listed IPOs on their listing day). The scripts are `run` steps with `allow_failure: true`; the
