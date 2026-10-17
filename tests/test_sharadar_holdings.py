@@ -251,3 +251,23 @@ def test_an_update_that_adds_a_security_gives_it_its_earlier_quarters(tmp_path, 
     assert _value_on(after, "holders", "2024-05-15", permaticker=202) == 7.0
     assert _value_on(after, "holders", "2024-08-30", permaticker=202) == 7.0
     assert after.identical(_panel(tmp_path / "rebuilt", root))
+
+
+def test_the_value_held_shows_over_the_same_days_as_the_shares_held_in_usd(tmp_path, today):
+    # #349: SF3A writes ``shrvalue`` in USD millions (INDICATORS, 2026-10-16).
+    sf3a = [
+        sf3a_row("2023-12-31", "AAA", 50, 1000.0, shrvalue=12.5),  # SYNTHETIC
+        sf3a_row("2024-03-31", "AAA", 60, 1500.0, shrvalue=20.0),  # SYNTHETIC
+        sf3a_row("2023-12-31", "BBB", 5, 10.0, shrvalue=0.3),  # SYNTHETIC
+    ]
+    panel = _panel(tmp_path, _bulk(_vendor(sf3a, tickers=("AAA", "BBB")), tmp_path / "dl"))
+
+    assert _value_on(panel, "value_held", "2024-05-14") == 12_500_000.0
+    assert _value_on(panel, "value_held", "2024-05-15") == 20_000_000.0
+    assert _value_on(panel, "value_held", "2024-05-14", 202) == 300_000.0
+    # BBB has no March row: from 2024-05-15 its value is gone with its shares.
+    assert np.isnan(_value_on(panel, "value_held", "2024-05-15", 202))
+    assert panel["value_held"].attrs["unit"] == "USD"
+    np.testing.assert_array_equal(
+        panel["value_held"].isnull().values, panel["shares_held"].isnull().values
+    )
