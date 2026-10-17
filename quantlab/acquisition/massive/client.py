@@ -577,6 +577,9 @@ class MassiveClient:
             retries=self.retries,
             backoff=self.backoff,
             sleep=self.sleep,
+            vendor="Massive",
+            credential=API_KEY_ENV,
+            refusal_error=MassiveEntitlementError,
         )
 
     def _retrying(self, what: str, attempt: Callable[[], object]):
@@ -902,14 +905,7 @@ class MassiveClient:
             if missing_ok and response.status == 404:
                 return None
             if response.status in REFUSAL_STATUSES:
-                raise policy.refusal(
-                    response.status,
-                    vendor="Massive",
-                    where=where,
-                    detail=_vendor_error(response.body),
-                    credential=API_KEY_ENV,
-                    error=MassiveEntitlementError,
-                )
+                raise policy.refusal(response.status, where=where, detail=_vendor_error(response.body))
             # Every other failure is retried, a 4xx too: Massive's own words go in the message.
             if response.status == 429 or response.status >= 500:
                 raise MassiveTransportError(f"HTTP {response.status} on {where}")

@@ -1,7 +1,6 @@
 """How every vendor client sends a request: retries, refusals, credentials and secrets.
 
-One module holds what the Sharadar, Massive, FRED, Tiingo and Alpaca
-clients used to write each on their own (#361):
+The rules the Sharadar, Massive, FRED, Tiingo and Alpaca clients share:
 
 - **Credentials** come from the environment only (``require_env``): a missing
   variable fails before any request, naming every variable missing.
@@ -10,7 +9,8 @@ clients used to write each on their own (#361):
   that doubles from ``backoff`` on each attempt, or after the server's
   ``Retry-After`` when the error carries one (``retry_after``).
 - **Refusals.** A 401 or 403 to a keyed request becomes the client's
-  entitlement error naming the endpoint (``RequestPolicy.refusal``).
+  entitlement error naming the endpoint (``RequestPolicy.refusal``); the
+  vendor, the credential and the error are the policy's own.
 - **Secrets.** A key travels in a header only: ``RequestPolicy.keyless``
   drops ``apiKey``, and any parameter carrying a secret, from a URL the
   vendor hands back (a ``next_url``). Every message the policy logs or puts in
@@ -187,6 +187,13 @@ class RequestPolicy:
         Seconds before the first retry; doubled on each later one.
     sleep : callable, default time.sleep
         How the policy waits.
+    vendor : str, default "the vendor"
+        The vendor's name, which starts a refusal's message.
+    credential : str, default ""
+        The variable the key comes from, named in a refusal so the reader
+        knows what to check.
+    refusal_error : type of Exception, default PermissionError
+        The client's entitlement error, which ``refusal`` returns.
 
     Examples
     --------
@@ -208,6 +215,9 @@ class RequestPolicy:
     retries: int = 5
     backoff: float = 2.0
     sleep: Callable[[float], None] = time.sleep
+    vendor: str = "the vendor"
+    credential: str = ""
+    refusal_error: type[Exception] = PermissionError
 
     def scrub(self, text: str) -> str:
         """Return ``text`` with every secret of the policy replaced.
@@ -236,48 +246,43 @@ class RequestPolicy:
         ]
         return urlunsplit(parts._replace(query=urlencode(query)))
 
-    def refusal(
-        self, status: int, *, vendor: str, where: str, detail: str, credential: str, error: type[Exception]
-    ) -> Exception | None:
+    def refusal(self, status: int, *, where: str, detail: str) -> Exception | None:
         """Return the entitlement error for a 401 or 403, or ``None`` for any other status.
 
         Parameters
         ----------
         status : int
             The response's status.
-        vendor : str
-            The vendor's name, which starts the message.
         where : str
             The endpoint or table refused, named in the message.
         detail : str
             The vendor's own words (the body's start or its error field).
-        credential : str
-            The variable the key comes from, named so the reader knows what to check.
-        error : type of Exception
-            The client's entitlement error.
 
         Returns
         -------
         Exception or None
-            ``error`` with a scrubbed message: a 401 says the key was
-            refused, a 403 that the plan is not entitled to ``where``.
+            ``refusal_error`` with a scrubbed message naming ``vendor`` and
+            ``credential``: a 401 says the key was refused, a 403 that the
+            plan is not entitled to ``where``.
 
         Examples
         --------
-        >>> RequestPolicy({}).refusal(403, vendor="Demo", where="/v1/x", detail="no", credential="DEMO_KEY",
-        ...                           error=PermissionError)
+        >>> policy = RequestPolicy({}, vendor="Demo", credential="DEMO_KEY")
+        >>> policy.refusal(403, where="/v1/x", detail="no")
         PermissionError('Demo refused /v1/x (HTTP 403): the plan is not entitled to it, or DEMO_KEY is not a key whose plan covers it (no).')
+        >>> policy.refusal(404, where="/v1/x", detail="no") is None
+        True
         """
         if status == 401:
-            message = f"{vendor} refused the API key on {where} (HTTP 401: {detail}); check {credential}."
+            message = f"{self.vendor} refused the API key on {where} (HTTP 401: {detail}); check {self.credential}."
         elif status == 403:
             message = (
-                f"{vendor} refused {where} (HTTP 403): the plan is not entitled to it, or "
-                f"{credential} is not a key whose plan covers it ({detail})."
+                f"{self.vendor} refused {where} (HTTP 403): the plan is not entitled to it, or "
+                f"{self.credential} is not a key whose plan covers it ({detail})."
             )
         else:
             return None
-        return error(self.scrub(message))
+        return self.refusal_error(self.scrub(message))
 
     def back_off(self, attempt: int, announce: Callable[[float], str], wait: float | None = None) -> None:
         """Log a retryable failure and wait before retry ``attempt + 1``.

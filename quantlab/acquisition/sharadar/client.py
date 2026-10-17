@@ -694,6 +694,9 @@ class SharadarClient:
             retries=self._max_retries,
             backoff=self._backoff_seconds,
             sleep=self._sleep,
+            vendor="Sharadar",
+            credential=f"{API_KEY_ENV} (a paid sharadar.com key)",
+            refusal_error=SharadarEntitlementError,
         )
 
     def _get(
@@ -726,11 +729,8 @@ class SharadarClient:
             if keyed and response.status in REFUSAL_STATUSES:
                 raise policy.refusal(
                     response.status,
-                    vendor="Sharadar",
                     where=f"table {spec.code!r} (API name {spec.api_name!r})",
                     detail=repr(_text(response)),
-                    credential=f"{API_KEY_ENV} (a paid sharadar.com key)",
-                    error=SharadarEntitlementError,
                 )
             if response.status in self.RETRY_STATUSES:
                 response.close()
