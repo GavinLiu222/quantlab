@@ -23,7 +23,8 @@ Run every morning after ``download.py`` has built the stores. One run:
    ``sharadar_sp500_membership.zarr``, ``sharadar_sf1_arq.zarr``,
    ``sharadar_sf1_art.zarr``, ``sharadar_daily_1d.zarr``,
    ``sharadar_events_1d.zarr``, ``sharadar_insiders_1d.zarr``,
-   ``sharadar_holdings_1d.zarr``, ``sharadar_industry_1d.zarr``,
+   ``sharadar_holdings_1d.zarr``, ``sharadar_actions_1d.zarr``,
+   ``sharadar_industry_1d.zarr``,
    ``sharadar_sf1_fiscal_years.zarr`` and ``sharadar_share_class_1d.zarr``),
    each from the
    first day it already holds: new bars are appended and earlier rows are
@@ -33,7 +34,10 @@ Run every morning after ``download.py`` has built the stores. One run:
    run's TICKERS snapshot, then TICKERS, the ACTIONS ticker changes and the
    store's ticker sidecar), so a ticker change between pulls never stops the
    update; a row still unmapped is left out and listed in
-   ``<store>.unmapped.json``.
+   ``<store>.unmapped.json``. A panel store (events, insiders, holdings,
+   actions, industry, fiscal years, share class) not built yet is built
+   whole from the raw tier, beside a ``README.md`` and a ``component.json``,
+   so a panel added after ``download.py`` ran needs no other step.
 
 SF3 (every 13F holding, 400 MB) and SF3B (holdings by investor) feed no
 store and are not refreshed here; ``download.py`` pulls them whole.
@@ -85,6 +89,7 @@ from quantlab.acquisition.sharadar.client import (
 from quantlab.dataset.config import (
     SPY_PERMATICKER,
     ConstituentDatasetConfig,
+    SharadarActionsConfig,
     SharadarDailyConfig,
     SharadarDatasetConfig,
     SharadarEventsConfig,
@@ -95,6 +100,8 @@ from quantlab.dataset.config import (
     SharadarInsidersConfig,
     SharadarShareClassConfig,
 )
+from quantlab.core.store_folder import save_component
+from quantlab.dataset.sharadar.actions import SharadarActionsDataset
 from quantlab.dataset.sharadar.daily import SharadarDailyDataset
 from quantlab.dataset.sharadar.events import SharadarEventsDataset
 from quantlab.dataset.sharadar.fiscal_years import SharadarFiscalYearsDataset
@@ -153,6 +160,7 @@ PANEL_STORES = {
     "sharadar_events_1d": (SharadarEventsConfig, SharadarEventsDataset),
     "sharadar_insiders_1d": (SharadarInsidersConfig, SharadarInsidersDataset),
     "sharadar_holdings_1d": (SharadarHoldingsConfig, SharadarHoldingsDataset),
+    "sharadar_actions_1d": (SharadarActionsConfig, SharadarActionsDataset),
     "sharadar_industry_1d": (SharadarIndustryConfig, SharadarIndustryDataset),
     "sharadar_sf1_fiscal_years": (SharadarFiscalYearsConfig, SharadarFiscalYearsDataset),
     "sharadar_share_class_1d": (SharadarShareClassConfig, SharadarShareClassDataset),
@@ -212,6 +220,23 @@ def _update_store(path: Path, make, rebuild_except: set[str] | None, failures: l
     except Exception:  # noqa: BLE001
         failures.append(path.name)
         print(f"{path.name}: rebuild failed:\n{traceback.format_exc()}")
+
+
+def _build_store(path: Path, config_cls, dataset_cls, vendor_root: Path, failures: list) -> None:
+    """Build a panel store not built yet from the whole raw tier, with its README.md and component.json."""
+    try:
+        config = config_cls(zarr_file_path=str(path), raw_data_dir_path=str(vendor_root))
+        print(f"{path.name}: not built yet; building it from the raw tier")
+        print_conversion_result(dataset_cls(config).update().last_chunk_result)
+        summary = (dataset_cls.__doc__ or "").strip().splitlines()[0]
+        readme = None if (path.parent / "README.md").exists() else (
+            f"# {path.stem}\n\n{summary}\n\nBuilt and appended every morning by "
+            f"`scripts/sharadar/update.py` (`{dataset_cls.__module__}.{dataset_cls.__name__}`).\n"
+        )
+        save_component(dataset_cls(config), path.parent, readme=readme)
+    except Exception:  # noqa: BLE001 - one store's failure must not stop the others
+        failures.append(path.name)
+        print(f"{path.name}: build failed:\n{traceback.format_exc()}")
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -288,7 +313,7 @@ if __name__ == "__main__":
     missing = [
         str(path) for path in (
             *(store_path(market_dir, stem) for stem in (
-                *PRICE_STORES, *FUNDAMENTALS_STORES, DAILY_STORE, *PANEL_STORES
+                *PRICE_STORES, *FUNDAMENTALS_STORES, DAILY_STORE
             )),
             membership_path,
         )
@@ -354,6 +379,9 @@ if __name__ == "__main__":
         rebuild_except, failures,
     )
     for store, (config_cls, dataset_cls) in PANEL_STORES.items():
+        if not store_path(market_dir, store).exists():
+            _build_store(store_path(market_dir, store), config_cls, dataset_cls, vendor_root, failures)
+            continue
         _update_store(
             store_path(market_dir, store),
             lambda start, store=store, config_cls=config_cls, dataset_cls=dataset_cls: dataset_cls(
