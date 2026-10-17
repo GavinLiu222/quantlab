@@ -42,6 +42,39 @@ of the config's start date. The failure manifest lists symbols whose download
 failed, with the reason; it accumulates across runs, and a later success
 removes the entry.
 
+### The watermark record
+
+Every raw tier keeps a watermark, at its own granularity, and all of them are
+one record read and written by one module, `quantlab.utils.watermark`
+(`Watermark`, `read_watermark(path, granularity)`, `write_watermark(path, watermark)`):
+
+| granularity | file | holds | written by |
+|---|---|---|---|
+| `"symbol"` | `<watermark_path>/<SYMBOL>.json` | `last_date`, `start_date`, `no_data` | `Acquisition._write_watermark` |
+| `"table"` | `sharadar/<table>/_watermark.json` | `table`, `through` | `quantlab.acquisition.sharadar.raw_tier.write_table_watermark` |
+| `"daily_file"` | `massive/<type>/_watermark.json` | `data_type`, `through` | `quantlab.acquisition.massive.raw_tier.write_day_file_watermark` |
+| `"endpoint"` | `massive/rest/<endpoint>/_watermark.json` | `endpoint`, `field`, `through` | `quantlab.acquisition.massive.raw_tier.write_rest_watermark` |
+
+A snapshot endpoint's watermark is the `"endpoint"` record with `field`
+`"snapshot"`, its `through` the day of the last snapshot. The shapes are the
+files the raw tiers already hold, so no raw tier is migrated (locked by
+`tests/test_watermark_record.py`). The readers stay in the dataset layer
+(`CoverageLedger.read_coverage`, `quantlab.dataset.sharadar.tables.read_watermark`
+and `raw_through`, `quantlab.dataset.massive.raw.read_watermark` and
+`read_rest_watermark`); the writers, like every other raw-tier writer (REST
+pages, bulk-pull records, the TICKERS history), are in the acquisition layer.
+
+Two rules are shared: `resume_from(through, start, overlap_days)` (the day
+after the watermark, less an overlap, never before `start`), used by Massive's
+day files and REST endpoints, and `holds(through, day)`, by which a snapshot
+already taken today is skipped and a REST watermark never moves back. Three
+differences are kept on purpose. A corrupt per-symbol sidecar reads as no
+watermark (a refresh must never crash on one), while a corrupt file of the
+other granularities raises. A per-symbol watermark is the `last_date` string as
+recorded, which `refresh()` resumes from per batch of symbols sharing it.
+Sharadar's table watermark may move back: a date-window pull records the
+window's last day, and an updated pull the day it started, whatever was there.
+
 A *batch* is one request covering several symbols. Vendors such as Alpaca
 answer it as a chain of pages linked by opaque tokens, so a batch can itself
 be interrupted halfway. The *page ledger* (`quantlab.acquisition._support.page_ledger`)

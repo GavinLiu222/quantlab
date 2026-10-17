@@ -35,7 +35,7 @@ def view(built, tmp_path):
     from quantlab.dataset.massive.day_bars import MassiveDayBarDataset
     from quantlab.dataset.massive.permaticker_bars import PermatickerDayBarDataset
 
-    from quantlab.dataset.massive.raw import write_rest_watermark
+    from quantlab.acquisition.massive.raw_tier import write_rest_watermark
 
     trade_bars, ticker_map, _ = built
     # Both REST pulls ran and found no split or dividend: the store's adjusted prices are its raw ones.

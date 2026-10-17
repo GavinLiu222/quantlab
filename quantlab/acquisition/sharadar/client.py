@@ -61,13 +61,17 @@ import requests
 from joblib import Parallel, delayed
 from loguru import logger
 
+from quantlab.acquisition.sharadar.raw_tier import (
+    fold_tickers_history,
+    prune_tickers_snapshots,
+    write_bulk_pull,
+    write_table_watermark,
+)
 from quantlab.dataset.sharadar.tables import (
     UPDATED_PREFIX,
     VENDOR_DIR,
     WINDOW_PREFIX,
     SharadarTable,
-    fold_tickers_history,
-    prune_tickers_snapshots,
     raw_table_dir,
     read_watermark,
     scan_raw_table,
@@ -76,8 +80,6 @@ from quantlab.dataset.sharadar.tables import (
     updated_file,
     vendor_today,
     window_file,
-    write_bulk_pull,
-    write_watermark,
 )
 from quantlab.utils.atomic import write_parquet_atomically
 
@@ -320,7 +322,7 @@ class SharadarClient:
         fold_tickers_history(vendor_root)
         prune_tickers_snapshots(vendor_root)
         if "date" in spec.schema:
-            write_watermark(vendor_root, code, vendor_today())
+            write_table_watermark(vendor_root, code, vendor_today())
         logger.info(f"Sharadar {code}: bulk pull (years={years}) written to {target}")
         return target
 
@@ -401,7 +403,7 @@ class SharadarClient:
         rows = pl.concat(frames) if frames else pl.DataFrame(schema=spec.schema)
         target = window_file(vendor_root, code, datetime.now(UTC), start, end)
         write_parquet_atomically(target, rows)
-        write_watermark(vendor_root, code, end)
+        write_table_watermark(vendor_root, code, end)
         logger.info(
             f"Sharadar {code}: {rows.height} row(s) over {start}..{end} written to {target}"
         )
@@ -488,7 +490,7 @@ class SharadarClient:
         rows = self._pull_updated(spec, key, since, page_rows)
         target = updated_file(vendor_root, code, datetime.now(UTC), since)
         write_parquet_atomically(target, rows)
-        write_watermark(vendor_root, code, started)
+        write_table_watermark(vendor_root, code, started)
         logger.info(
             f"Sharadar {code}: {rows.height} row(s) updated since {since} written to {target}"
         )

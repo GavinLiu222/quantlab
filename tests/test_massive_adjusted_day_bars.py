@@ -76,7 +76,8 @@ SPLITS = [  # SYNTHETIC
 
 
 def _write_table(root: Path, code: str, rows: list[dict]) -> None:
-    from quantlab.dataset.sharadar.tables import TABLES, bulk_file, write_bulk_pull
+    from quantlab.acquisition.sharadar.raw_tier import write_bulk_pull
+    from quantlab.dataset.sharadar.tables import TABLES, bulk_file
 
     schema = TABLES[code].schema
     frame = pl.DataFrame(
@@ -93,7 +94,7 @@ def _write_table(root: Path, code: str, rows: list[dict]) -> None:
 
 
 def _sharadar(root: Path, through: date) -> None:
-    from quantlab.dataset.sharadar.tables import write_watermark
+    from quantlab.acquisition.sharadar.raw_tier import write_table_watermark
 
     _write_table(root, "tickers", [
         tickers_row("SEP", 101, "SPL", firstpricedate="2015-01-02"),  # SYNTHETIC
@@ -119,8 +120,8 @@ def _sharadar(root: Path, through: date) -> None:
         if day <= through
     ])
     _write_table(root, "sfp", [])
-    write_watermark(root, "sep", through)
-    write_watermark(root, "actions", through)
+    write_table_watermark(root, "sep", through)
+    write_table_watermark(root, "actions", through)
 
 
 def _day_aggs(massive: Path, day: date) -> None:
@@ -134,7 +135,8 @@ def _day_aggs(massive: Path, day: date) -> None:
 
 
 def _rest(massive: Path, through: date) -> None:
-    from quantlab.dataset.massive.raw import rest_page_file, write_rest_page, write_rest_watermark
+    from quantlab.acquisition.massive.raw_tier import write_rest_page, write_rest_watermark
+    from quantlab.dataset.massive.raw import rest_page_file
 
     pulled = datetime(2024, 3, 12, 1, tzinfo=UTC)
     write_rest_page(rest_page_file(massive, "dividends", pulled, 1), DIVIDENDS)
@@ -294,7 +296,7 @@ def test_an_event_the_map_cannot_place_is_counted_not_guessed(built):
 
 
 def test_a_day_is_appended_only_once_both_pulls_hold_it(tmp_path):
-    from quantlab.dataset.massive.raw import write_rest_watermark
+    from quantlab.acquisition.massive.raw_tier import write_rest_watermark
 
     _raw(tmp_path)
     write_rest_watermark(_paths(tmp_path)["massive"], "splits", "execution_date", D4)

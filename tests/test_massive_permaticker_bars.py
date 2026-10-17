@@ -30,7 +30,8 @@ def _utc(day: date, clock: str) -> datetime:
 
 
 def _write_table(root: Path, code: str, rows: list[dict]) -> None:
-    from quantlab.dataset.sharadar.tables import TABLES, bulk_file, write_bulk_pull
+    from quantlab.acquisition.sharadar.raw_tier import write_bulk_pull
+    from quantlab.dataset.sharadar.tables import TABLES, bulk_file
 
     schema = TABLES[code].schema
     frame = pl.DataFrame(
