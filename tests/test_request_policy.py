@@ -57,7 +57,7 @@ def _massive(http_get, sleeps=None):
 
 
 def _massive_replies(*replies):
-    from quantlab.acquisition.massive.client import HttpResponse
+    from quantlab.acquisition._support.http import HttpResponse
 
     queue = list(replies)
     calls = []

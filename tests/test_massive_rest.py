@@ -59,7 +59,7 @@ class FakeVendor:
         self.replies = list(replies or [])  # canned (status, body) replies served first
 
     def __call__(self, url, *, params, headers):
-        from quantlab.acquisition.massive.client import HttpResponse
+        from quantlab.acquisition._support.http import HttpResponse
 
         self.calls.append((url, dict(params), dict(headers)))
         if self.replies:
@@ -230,7 +230,7 @@ def test_the_key_appears_in_no_file_url_or_log_line(env, tmp_path, log_lines):
 
 
 def test_a_next_url_carrying_a_key_is_stripped_of_it(env, tmp_path):
-    from quantlab.acquisition.massive.client import HttpResponse
+    from quantlab.acquisition._support.http import HttpResponse
 
     pages = iter([
         {"results": SPLITS[:1], "next_url": f"https://api.massive.com/stocks/v1/splits?cursor=1&apiKey={KEY}"},
@@ -270,7 +270,7 @@ def test_dividends_page_on_their_ex_date(env, tmp_path):
 
 
 def test_a_snapshot_endpoint_is_pulled_whole_without_a_watermark(env, tmp_path):
-    from quantlab.acquisition.massive.client import HttpResponse
+    from quantlab.acquisition._support.http import HttpResponse
     from quantlab.acquisition.massive.rest import RestEndpoint
 
     pages = iter([

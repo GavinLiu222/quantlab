@@ -51,16 +51,15 @@ import shutil
 import tempfile
 import time
 import zipfile
-from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import polars as pl
-import requests
 from joblib import Parallel, delayed
 from loguru import logger
 
+from quantlab.acquisition._support.http import HttpResponse, Transport, http_get
 from quantlab.acquisition._support.request_policy import (
     REFUSAL_STATUSES,
     RETRY_STATUSES,
@@ -125,78 +124,26 @@ class SharadarTransportError(TransientError):
     """
 
 
-@dataclass(frozen=True)
-class Response:
-    """One HTTP response as the transport returns it.
+#: Seconds to connect, and to wait for each read of a body (a bulk zip streams for minutes).
+TIMEOUT = (30, 300)
 
-    Attributes
-    ----------
-    status : int
-        The HTTP status code.
-    headers : Mapping[str, str]
-        The response headers.
-    body : Iterable[bytes]
-        The body in chunks, so a gigabyte zip is never held in memory.
-    close : callable
-        Releases the connection; called on a response the client discards.
+
+def default_transport(url: str, *, params: Mapping[str, str], headers: Mapping[str, str]) -> HttpResponse:
+    """Send one GET without following redirects; the client's default transport.
+
+    ``quantlab.acquisition._support.http.http_get`` with ``TIMEOUT``, raising
+    ``SharadarTransportError`` for a connection that fails or breaks.
+    Following a redirect would send the key in ``x-api-key`` to the storage
+    host; the client follows the bulk pull's 302 itself, without it.
+
+    Examples
+    --------
+    Needs the network and ``SHARADAR_API_KEY``::
+
+        headers = {"x-api-key": os.environ[API_KEY_ENV]}
+        default_transport(f"{DATA_URL}/SEP", params={"ticker": "AAPL"}, headers=headers).status
     """
-
-    status: int
-    headers: Mapping[str, str]
-    body: Iterable[bytes]
-    close: Callable[[], None] = lambda: None
-
-
-#: The transport's signature: ``transport(url, params=..., headers=...)``.
-Transport = Callable[..., Response]
-
-
-def http_get(url: str, *, params: Mapping[str, str], headers: Mapping[str, str]) -> Response:
-    """Send one GET without following redirects; the default transport.
-
-    Parameters
-    ----------
-    url : str
-        The URL, which may carry its own query string (a pre-signed URL).
-    params : Mapping[str, str]
-        Query parameters to add.
-    headers : Mapping[str, str]
-        Request headers.
-
-    Returns
-    -------
-    Response
-        The status, headers and the streamed body.
-
-    Raises
-    ------
-    SharadarTransportError
-        If the connection fails to open, or breaks while the body is read.
-    """
-    try:
-        response = requests.get(
-            url,
-            params=dict(params),
-            headers=dict(headers),
-            stream=True,
-            allow_redirects=False,
-            timeout=(30, 300),
-        )
-    except requests.RequestException as exc:
-        raise SharadarTransportError(str(exc)) from exc
-
-    def body() -> Iterable[bytes]:
-        try:
-            yield from response.iter_content(chunk_size=1 << 20)
-        except requests.RequestException as exc:
-            raise SharadarTransportError(str(exc)) from exc
-
-    return Response(
-        status=response.status_code,
-        headers=response.headers,
-        body=body(),
-        close=response.close,
-    )
+    return http_get(url, params=params, headers=headers, timeout=TIMEOUT, error=SharadarTransportError)
 
 
 class SharadarClient:
@@ -204,9 +151,10 @@ class SharadarClient:
 
     Parameters
     ----------
-    transport : callable, default ``http_get``
-        Sends one GET: ``transport(url, params=..., headers=...)`` returns a
-        ``Response`` and must not follow redirects.
+    transport : callable, default ``default_transport``
+        Sends one GET: ``transport(url, params=..., headers=...)`` returns an
+        ``HttpResponse`` (``quantlab.acquisition._support.http``) and must not
+        follow redirects.
     max_retries : int, default 5
         Retries after a 429 or 5xx before ``SharadarHttpError`` is raised.
     backoff_seconds : float, default 2.0
@@ -232,7 +180,7 @@ class SharadarClient:
 
     def __init__(
         self,
-        transport: Transport = http_get,
+        transport: Transport = default_transport,
         *,
         max_retries: int = 5,
         backoff_seconds: float = 2.0,
@@ -670,7 +618,7 @@ class SharadarClient:
 
     @staticmethod
     def _write_body(
-        spec: SharadarTable, response: Response, archive: Path, *, offset: int, length: int | None
+        spec: SharadarTable, response: HttpResponse, archive: Path, *, offset: int, length: int | None
     ) -> None:
         """Write a response body into ``archive`` at ``offset``, checking its length.
 
@@ -721,7 +669,7 @@ class SharadarClient:
         params: Mapping[str, str],
         headers: Mapping[str, str],
         keyed: bool = True,
-    ) -> Response:
+    ) -> HttpResponse:
         """Send one GET, retrying rate limits and server errors.
 
         ``keyed`` says whether the request carries the key. A 401 or 403 on
@@ -738,7 +686,7 @@ class SharadarClient:
         """
         policy = self._policy
 
-        def attempt() -> Response:
+        def attempt() -> HttpResponse:
             response = self._transport(url, params=params, headers=headers)
             if keyed and response.status in REFUSAL_STATUSES:
                 raise policy.refusal(
@@ -823,14 +771,14 @@ class _BrokenBody(SharadarTransportError):
         self.written = written
 
 
-def _range_total(response: Response) -> int | None:
+def _range_total(response: HttpResponse) -> int | None:
     """Return the full size from a 206's ``Content-Range: bytes a-b/total``."""
     value = response.headers.get("Content-Range", "")
     _, _, total = value.rpartition("/")
     return int(total) if total.isdigit() else None
 
 
-def _text(response: Response, limit: int | None = 300) -> str:
+def _text(response: HttpResponse, limit: int | None = 300) -> str:
     """Return a body as text (its first ``limit`` bytes, or all of it), then close the response."""
     body = io.BytesIO()
     try:

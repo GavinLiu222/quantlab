@@ -51,8 +51,8 @@ class FakeVendor:
         self.fail_after: int | None = None  # calls served before every later call breaks
 
     def __call__(self, url, *, params, headers):
+        from quantlab.acquisition._support.http import HttpResponse
         from quantlab.acquisition.massive.client import (
-            HttpResponse,
             MassiveTransportError,
         )
 

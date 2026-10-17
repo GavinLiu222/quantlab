@@ -263,7 +263,8 @@ def test_a_transport_error_is_retried_after_a_back_off(env, tmp_path):
 
 
 def test_the_condition_table_is_pulled_across_pages_with_the_key_in_a_header(env, tmp_path):
-    from quantlab.acquisition.massive.client import CONDITIONS_URL, HttpResponse
+    from quantlab.acquisition._support.http import HttpResponse
+    from quantlab.acquisition.massive.client import CONDITIONS_URL
     from quantlab.dataset.massive.raw import latest_conditions, read_conditions
 
     calls = []
@@ -288,8 +289,8 @@ def test_the_condition_table_is_pulled_across_pages_with_the_key_in_a_header(env
 
 
 def test_a_refused_key_on_the_condition_table_says_so(env, tmp_path):
+    from quantlab.acquisition._support.http import HttpResponse
     from quantlab.acquisition.massive.client import (
-        HttpResponse,
         MassiveEntitlementError,
     )
 
@@ -301,12 +302,24 @@ def test_a_refused_key_on_the_condition_table_says_so(env, tmp_path):
 
 
 def test_a_throttled_condition_pull_is_retried(env, tmp_path):
-    from quantlab.acquisition.massive.client import HttpResponse
+    from quantlab.acquisition._support.http import HttpResponse
 
     replies = [HttpResponse(429, b""), HttpResponse(200, json.dumps({"results": CONDITION_RECORDS}).encode())]
     sleeps: list[float] = []
     _client(http_get=lambda url, *, params, headers: replies.pop(0), sleeps=sleeps).condition_table(tmp_path)
     assert len(sleeps) == 1
+
+
+def test_a_throttled_rest_pull_waits_the_retry_after_massive_asks_for(env, tmp_path):
+    from quantlab.acquisition._support.http import HttpResponse
+
+    replies = [
+        HttpResponse(429, b"", {"Retry-After": "7"}),
+        HttpResponse(200, json.dumps({"results": CONDITION_RECORDS}).encode()),
+    ]
+    sleeps: list[float] = []
+    _client(http_get=lambda url, *, params, headers: replies.pop(0), sleeps=sleeps).condition_table(tmp_path)
+    assert sleeps == [7.0]
 
 
 def test_a_missing_credential_fails_before_any_transfer_naming_the_variables(monkeypatch):

@@ -186,7 +186,8 @@ def _series(panel: xr.Dataset, variable: str, symbol: int) -> list:
 
 
 def test_the_pull_asks_by_listing_date_with_sort_and_order_and_keeps_every_record(tmp_path, monkeypatch):
-    from quantlab.acquisition.massive.client import HttpResponse, MassiveClient
+    from quantlab.acquisition._support.http import HttpResponse
+    from quantlab.acquisition.massive.client import MassiveClient
     from quantlab.dataset.massive.raw import read_rest_records, read_rest_watermark
 
     monkeypatch.setenv("MASSIVE_API_KEY", "synthetic-api-key")  # SYNTHETIC

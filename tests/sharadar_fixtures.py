@@ -405,7 +405,7 @@ class FakeTransport:
         self._lock = threading.Lock()
 
     def __call__(self, url: str, *, params: dict, headers: dict):
-        from quantlab.acquisition.sharadar.client import Response
+        from quantlab.acquisition._support.http import HttpResponse
 
         route = url.split("?")[0]
         with self._lock:
@@ -425,7 +425,7 @@ class FakeTransport:
             reply_headers["Content-Range"] = f"bytes {first}-{last}/{len(reply.body)}"
         # Two chunks, so the client must join a streamed body.
         half = len(body) // 2
-        return Response(
+        return HttpResponse(
             status=status,
             headers=reply_headers,
             body=_broken(body[:half]) if reply.breaks else iter([body[:half], body[half:]]),
@@ -479,7 +479,7 @@ class FakeVendor:
         self.fail_on: set[str] = set()
 
     def __call__(self, url: str, *, params: dict, headers: dict):
-        from quantlab.acquisition.sharadar.client import Response
+        from quantlab.acquisition._support.http import HttpResponse
 
         self.calls.append(Call(url, dict(params), dict(headers)))
         route = url.split("?")[0]
@@ -487,12 +487,12 @@ class FakeVendor:
             api = route.rsplit("/", 1)[1].split(".")[0]
             columns, rows = self.tables[api]
             body = bulk_zip(f"{api}.csv", csv_text(columns, rows))
-            return Response(status=200, headers={}, body=iter([body]))
+            return HttpResponse(status=200, headers={}, body=iter([body]))
         api = route.removeprefix(f"{API}/")
         columns, rows = self.tables[api]
         if "years" in params:
             signed = SIGNED.format(table=api)
-            return Response(status=302, headers={"Location": signed}, body=iter([b""]))
+            return HttpResponse(status=302, headers={"Location": signed}, body=iter([b""]))
         if "lastupdated.gte" in params:
             # An updated pull: rows changed since a day, from a ticker on, in
             # ticker order; within a ticker the vendor's order is its own,
@@ -504,18 +504,18 @@ class FakeVendor:
             ]
             selected.sort(key=lambda r: r["ticker"])
             page = selected[: int(params.get("limit", 10000))]
-            return Response(
+            return HttpResponse(
                 status=200, headers={}, body=iter([csv_text(columns, page).encode()])
             )
         if params["from"] in self.fail_on:
-            return Response(status=404, headers={}, body=iter([b"not found (SYNTHETIC)"]))
+            return HttpResponse(status=404, headers={}, body=iter([b"not found (SYNTHETIC)"]))
         selected = [r for r in rows if params["from"] <= r["date"] <= params["to"]]
         if "sort" in params:
             field_name = params["sort"].split(".")[0]
             selected.sort(key=lambda r: str(r[field_name]))
         offset, limit = int(params.get("offset", 0)), int(params.get("limit", 10000))
         page = selected[offset : offset + limit]
-        return Response(
+        return HttpResponse(
             status=200, headers={}, body=iter([csv_text(columns, page).encode()])
         )
 

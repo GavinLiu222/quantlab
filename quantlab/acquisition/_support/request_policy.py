@@ -16,9 +16,12 @@ The rules the Sharadar, Massive, FRED, Tiingo and Alpaca clients share:
   vendor hands back (a ``next_url``). Every message the policy logs or puts in
   an error has each secret replaced (``scrub``).
 
-Waiting is injected (``sleep``), so tests run without waiting. What a status
-*means* stays with each client: Sharadar retries exactly
-``RETRY_STATUSES``; Massive retries every status but 401/403/404; the
+Waiting is injected (``sleep``), so tests run without waiting. The Sharadar
+and Massive REST clients send through the one GET of
+``quantlab.acquisition._support.http``, whose response carries its headers, so
+both honour ``Retry-After``. What a status *means* stays with each client:
+Sharadar retries exactly ``RETRY_STATUSES``; Massive retries every status but
+401/403 (and a 404 to an id it pulls, which means no record); the
 symbol-batched ``SymbolBatchAcquisition`` family decides per vendor whether a 429 is a
 rate limit to wait out or a quota that stops the run.
 

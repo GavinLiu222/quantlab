@@ -86,7 +86,8 @@ class NewsVendor:
         self.fail_after: int | None = None
 
     def __call__(self, url, *, params, headers):
-        from quantlab.acquisition.massive.client import HttpResponse, MassiveTransportError
+        from quantlab.acquisition._support.http import HttpResponse
+        from quantlab.acquisition.massive.client import MassiveTransportError
 
         if self.fail_after is not None and len(self.calls) == self.fail_after:
             raise MassiveTransportError("connection reset")

@@ -101,14 +101,14 @@ def test_the_sharadar_refresh_pulls_the_table_plan_in_order(tmp_path, sharadar_k
 
 
 def test_a_failed_updated_pull_falls_back_to_the_bulk_table(tmp_path, sharadar_key):
-    from quantlab.acquisition.sharadar.client import Response
+    from quantlab.acquisition._support.http import HttpResponse
 
     vendor = _sharadar_vendor(["2024-01-02"])
     _bulk_everything(vendor, tmp_path)
 
     def refusing_updates_to_daily(url, *, params, headers):
         if url.endswith("/daily") and "lastupdated.gte" in params:
-            return Response(status=404, headers={}, body=iter([b"timed out (SYNTHETIC)"]))
+            return HttpResponse(status=404, headers={}, body=iter([b"timed out (SYNTHETIC)"]))
         return vendor(url, params=params, headers=headers)
 
     result = _refresh("sharadar", tmp_path, end=date(2024, 1, 2),
@@ -163,7 +163,7 @@ def massive_env(monkeypatch):
 
 def _splits_only(url, *, params, headers):
     """Massive's REST API entitled to the splits endpoint alone, one page."""
-    from quantlab.acquisition.massive.client import HttpResponse
+    from quantlab.acquisition._support.http import HttpResponse
 
     if not url.startswith("https://api.massive.com/stocks/v1/splits"):
         return HttpResponse(403, b'{"status":"NOT_AUTHORIZED","message":"not entitled (SYNTHETIC)"}')
@@ -212,7 +212,7 @@ def test_a_programming_error_in_the_massive_refresh_is_not_taken_for_a_failed_en
 
 
 def test_a_massive_page_the_client_cannot_read_fails_that_endpoint(tmp_path, massive_env):
-    from quantlab.acquisition.massive.client import HttpResponse
+    from quantlab.acquisition._support.http import HttpResponse
 
     def splits_without_their_date(url, *, params, headers):
         if url.startswith("https://api.massive.com/stocks/v1/splits"):
@@ -245,7 +245,7 @@ def test_the_massive_refresh_refuses_without_the_credentials_before_any_endpoint
 
 def _sharadar_with_events_failing(tmp_path, monkeypatch):
     """Sharadar with every table bulk-pulled, then the events window answering HTTP 404."""
-    from quantlab.acquisition.sharadar.client import Response
+    from quantlab.acquisition._support.http import HttpResponse
 
     monkeypatch.setenv("SHARADAR_API_KEY", "synthetic-key")  # SYNTHETIC
     vendor = _sharadar_vendor(["2024-01-02"])
@@ -253,7 +253,7 @@ def _sharadar_with_events_failing(tmp_path, monkeypatch):
 
     def events_failing(url, *, params, headers):
         if url.endswith("/events") and "from" in params:
-            return Response(status=404, headers={}, body=iter([b"not found (SYNTHETIC)"]))
+            return HttpResponse(status=404, headers={}, body=iter([b"not found (SYNTHETIC)"]))
         return vendor(url, params=params, headers=headers)
 
     result = _refresh("sharadar", tmp_path, end=date(2024, 1, 2), client=_sharadar_client(events_failing))
@@ -262,7 +262,7 @@ def _sharadar_with_events_failing(tmp_path, monkeypatch):
 
 def _massive_with_dividends_failing(tmp_path, monkeypatch):
     """Massive with the dividends endpoint answering HTTP 500 past every retry."""
-    from quantlab.acquisition.massive.client import HttpResponse
+    from quantlab.acquisition._support.http import HttpResponse
 
     monkeypatch.setenv("MASSIVE_API_KEY", MASSIVE_KEY)
     monkeypatch.setenv("MASSIVE_S3_ACCESS_KEY_ID", "synthetic-access-id")  # SYNTHETIC

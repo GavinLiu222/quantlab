@@ -16,8 +16,9 @@ before any transfer, naming the variables. The API key travels in an
 
 Two seams carry every transfer, and tests replace both: the *object store*
 (``size`` of a key and ``read`` of a byte range; the default signs S3
-requests with boto3) and ``http_get`` (one REST GET; the default is
-``rest_get``). The client tells three failures apart:
+requests with boto3) and ``http_get`` (one REST GET returning an
+``HttpResponse`` of ``quantlab.acquisition._support.http``; the default is
+``rest_transport``). The client tells three failures apart:
 ``MassiveNotPublishedError`` (no file for that day: a holiday, or today
 before the vendor publishes), ``MassiveEntitlementError`` (the key was
 refused, or the day is outside the plan's window) and
@@ -29,7 +30,8 @@ the raw tier: it pages on the endpoint's date field from the day after its
 watermark, follows every ``next_url`` (stripped of any key), writes each page
 as the vendor returned it and moves the watermark after each page, so a rerun
 asks only for what is new and an interrupted backfill resumes. HTTP 429 and
-5xx are retried after the same back-off; 401 and 403 raise
+5xx are retried after the same back-off, or after the ``Retry-After`` the
+response gives; 401 and 403 raise
 ``MassiveEntitlementError`` naming the endpoint.
 
 A file is downloaded in ``streams`` byte ranges of ``part_bytes`` at once, each
@@ -74,15 +76,16 @@ from typing import Any, Protocol
 from urllib.parse import quote
 
 import exchange_calendars as xcals
-import requests
 from joblib import Parallel, delayed
 from loguru import logger
 
+from quantlab.acquisition._support.http import HttpResponse, Transport, http_get
 from quantlab.acquisition._support.request_policy import (
     REFUSAL_STATUSES,
     RequestPolicy,
     TransientError,
     require_env,
+    retry_after,
 )
 from quantlab.acquisition.massive.rest import ENDPOINTS, RestEndpoint
 from quantlab.acquisition.massive.raw_tier import (
@@ -388,37 +391,32 @@ class S3ObjectStore:
             raise self._translate(error, key) from error
 
 
-@dataclass(frozen=True)
-class HttpResponse:
-    """One REST response: its status and body."""
-
-    status: int
-    body: bytes
+#: Seconds to connect to the REST API, and to wait for each read.
+REST_TIMEOUT = (30, 120)
 
 
-#: The REST seam: ``http_get(url, params=..., headers=...)``.
-HttpGet = Callable[..., HttpResponse]
+def rest_transport(url: str, *, params: Mapping[str, str], headers: Mapping[str, str]) -> HttpResponse:
+    """Send one REST GET; the client's default ``http_get``.
 
-
-def rest_get(url: str, *, params: Mapping[str, str], headers: Mapping[str, str]) -> HttpResponse:
-    """Send one GET; the default REST transport.
-
-    Raises
-    ------
-    MassiveTransportError
-        If the connection fails.
+    ``quantlab.acquisition._support.http.http_get`` with ``REST_TIMEOUT``,
+    following redirects (``requests`` drops ``Authorization`` on a redirect to
+    another host), and raising ``MassiveTransportError`` for a connection that
+    fails or breaks.
 
     Examples
     --------
     Needs the network; without a key Massive answers 401::
 
-        rest_get(CONDITIONS_URL, params={"asset_class": "stocks"}, headers={}).status
+        rest_transport(CONDITIONS_URL, params={"asset_class": "stocks"}, headers={}).status
     """
-    try:
-        response = requests.get(url, params=dict(params), headers=dict(headers), timeout=(30, 120))
-    except requests.RequestException as error:
-        raise MassiveTransportError(f"{type(error).__name__} on {url.split('?')[0]}") from error
-    return HttpResponse(response.status_code, response.content)
+    return http_get(
+        url,
+        params=params,
+        headers=headers,
+        timeout=REST_TIMEOUT,
+        error=MassiveTransportError,
+        follow_redirects=True,
+    )
 
 
 @dataclass(frozen=True)
@@ -504,7 +502,8 @@ class MassiveClient:
     store : ObjectStore, optional
         The S3 seam; an ``S3ObjectStore`` when omitted.
     http_get : callable, optional
-        The REST seam; ``rest_get`` when omitted.
+        The REST seam: ``http_get(url, params=..., headers=...)`` returns an
+        ``HttpResponse``; ``rest_transport`` when omitted.
     streams : int, default 16
         Byte ranges in flight at once, all of one file; also the S3
         connection pool's size.
@@ -546,7 +545,7 @@ class MassiveClient:
         *,
         credentials: MassiveCredentials | None = None,
         store: ObjectStore | None = None,
-        http_get: HttpGet | None = None,
+        http_get: Transport | None = None,
         streams: int = 16,
         files: int = 4,
         part_bytes: int = 32 << 20,
@@ -568,7 +567,7 @@ class MassiveClient:
         self.store = store if store is not None else S3ObjectStore(
             self.credentials, max_connections=streams, read_timeout=read_timeout
         )
-        self.http_get = http_get if http_get is not None else rest_get
+        self.http_get = http_get if http_get is not None else rest_transport
         self.retries = retries
         self.backoff = backoff
         self.sleep = sleep
@@ -910,19 +909,22 @@ class MassiveClient:
 
         def attempt() -> dict | None:
             response = self.http_get(url, params=params, headers=headers)
+            body = response.read()
             if missing_ok and response.status == 404:
                 return None
             if response.status in REFUSAL_STATUSES:
-                raise policy.refusal(response.status, where=where, detail=_vendor_error(response.body))
+                raise policy.refusal(response.status, where=where, detail=_vendor_error(body))
             # Every other failure is retried, a 4xx too: Massive's own words go in the message.
             if response.status == 429 or response.status >= 500:
-                raise MassiveTransportError(f"HTTP {response.status} on {where}")
+                raise MassiveTransportError(
+                    f"HTTP {response.status} on {where}", retry_after=retry_after(response.headers)
+                )
             if response.status != 200:
                 raise MassiveTransportError(
-                    policy.scrub(f"HTTP {response.status} on {where}: {_vendor_error(response.body)}")
+                    policy.scrub(f"HTTP {response.status} on {where}: {_vendor_error(body)}")
                 )
             try:
-                return json.loads(response.body)
+                return json.loads(body)
             except ValueError as error:
                 raise MassiveResponseError(f"{where} answered 200 with a body that is not JSON: {error}") from error
 
