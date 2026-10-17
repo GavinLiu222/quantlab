@@ -4,8 +4,9 @@ Institutions file their 13F holdings up to 45 days after each calendar
 quarter's end. SF3 holds every holding (security, investor, security type,
 quarter); SF3A is the vendor's sum of SF3 by security and quarter, and is
 what this panel reads: ``shrholders`` (institutions holding the common
-stock) and ``shrunits`` (their shares, in thousands). On the 2026-10-05
-pull, SF3A equals SF3 summed by hand up to rounding.
+stock), ``shrunits`` (their shares, in thousands) and ``shrvalue`` (the
+shares' value, in USD millions). On the 2026-10-05 pull, SF3A's holders
+and shares equal SF3 summed by hand up to rounding.
 
 SF3 has no filing date, and a quarter's rows fill in as the filings arrive:
 40 days after a quarter end, SF3A's newest quarter can hold a few dozen
@@ -19,6 +20,8 @@ all available on it, and the latest of them is the one shown. Variables:
 
 - ``holders``: institutions holding the stock;
 - ``shares_held``: the shares they hold (``shrunits`` times 1,000);
+- ``value_held``: the value of those shares in USD (``shrvalue`` times
+  1,000,000), as the filers report it at the quarter end;
 - ``quarter_end``: the quarter shown.
 
 The ``symbol`` axis is the int64 permaticker. SF3 keys holdings by the
@@ -72,11 +75,18 @@ AVAILABILITY_LAG = timedelta(days=45)
 VARIABLES: dict[str, dict] = {
     "holders": {"unit": "institutions", "description": "13F filers holding the common stock"},
     "shares_held": {"unit": "shares", "description": "common shares 13F filers hold"},
+    "value_held": {
+        "unit": "USD",
+        "description": "value of the common shares 13F filers hold, as reported at the quarter end",
+    },
     "quarter_end": {"description": "calendar quarter end of the 13F holdings shown"},
 }
 
 #: SF3A writes shares in thousands.
 UNITS_SCALE = 1_000.0
+
+#: SF3A writes values in USD millions (INDICATORS, ``shrvalue``).
+VALUE_SCALE = 1_000_000.0
 
 #: Number of offending keys an error message lists.
 _ERROR_SAMPLE = 5
@@ -97,7 +107,7 @@ class SharadarHoldingsDataset(ReleasePanelDataset):
 
         ds = SharadarHoldingsDataset(config).update()
         sorted(ds.panel("2024-01-02", "2024-01-05").data_vars)
-        # ['holders', 'quarter_end', 'shares_held']
+        # ['holders', 'quarter_end', 'shares_held', 'value_held']
     """
 
     #: The config class used to rebuild this dataset from a saved config.
@@ -136,7 +146,7 @@ class SharadarHoldingsDataset(ReleasePanelDataset):
         pl.DataFrame
             ``symbol``, ``quarter_end``, ``available`` (a trading day; a
             quarter the calendar does not reach yet is left out),
-            ``holders`` and ``shares_held``.
+            ``holders``, ``shares_held`` and ``value_held``.
 
         Raises
         ------
@@ -162,6 +172,7 @@ class SharadarHoldingsDataset(ReleasePanelDataset):
                     pl.col("date").str.to_date().alias("quarter_end"),
                     "shrholders",
                     "shrunits",
+                    "shrvalue",
                     "permaticker",
                 ),
                 store_path=self.config.zarr_file_path,
@@ -181,6 +192,7 @@ class SharadarHoldingsDataset(ReleasePanelDataset):
                     "available",
                     pl.col("shrholders").cast(pl.Float64).alias("holders"),
                     (pl.col("shrunits") * UNITS_SCALE).alias("shares_held"),
+                    (pl.col("shrvalue") * VALUE_SCALE).alias("value_held"),
                 )
             )
 
@@ -248,7 +260,9 @@ class SharadarHoldingsDataset(ReleasePanelDataset):
             on_grid(days, symbols)
             .join(current, on="timestamp", how="left")
             .join(
-                quarters.select("symbol", "quarter_end", "holders", "shares_held"),
+                quarters.select(
+                    "symbol", "quarter_end", "holders", "shares_held", "value_held"
+                ),
                 on=["symbol", "quarter_end"],
                 how="left",
             )
