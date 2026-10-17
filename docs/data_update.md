@@ -54,8 +54,9 @@ no price copy cut to the roster: SEP is brought up by the raw stage and the memb
 common-stock membership (`universe/sharadar/sharadar_common_stock_membership`, every security of SEP from
 its first to its last priced bar, `CommonStockConstituentDataset`, see the
 [constituent guide](constituent.md)), allowed to fail. The raw stage also runs
-`scripts/massive/rest_pull.py`, which brings Massive's REST endpoints (splits and dividends) up
-in the raw tier from each endpoint's watermark (see "REST pulls" in the [Massive guide](massive.md));
+`scripts/massive/rest_pull.py`, which brings Massive's REST endpoints (splits, dividends and
+the raw-only tables: filing text, Form 3/4, 13-F, reference tickers, ticker events, and a daily
+Float snapshot) up in the raw tier from each endpoint's watermark (see "REST pulls" in the [Massive guide](massive.md));
 it writes raw files only (`writes: []`) and is allowed to fail. WRDS data is not in the
 daily update; run `scripts/wrds/*.py` when the vendor publishes.
 

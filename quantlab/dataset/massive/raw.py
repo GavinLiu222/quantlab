@@ -24,7 +24,15 @@ endpoint's watermark beside them::
     <download-dir>/massive/rest/splits/_watermark.json
 
 A row may be in several files (a page re-read past the watermark);
-``read_rest_records`` keeps each record's newest copy.
+``read_rest_records`` keeps each record's newest copy. A snapshot endpoint
+(the Float table) has the same layout, each snapshot every page of one pull
+(``rest_snapshots``, ``read_rest_snapshot``); a table kept as of each
+session (the reference tickers) has one directory a session::
+
+    <download-dir>/massive/rest/tickers/2024/2024-03-11/20261016T120000000000_000001.jsonl
+
+read by ``rest_as_of_days`` and ``read_rest_as_of``. Pages of a snapshot
+wait in ``rest/<endpoint>/_pending/`` until it is whole; nothing reads it.
 The client (``quantlab.acquisition.massive.client``) writes this tree, and
 ``quantlab.dataset.massive.trade_bars`` reads it; both take every path from
 here.
@@ -85,6 +93,10 @@ REST_DIR = "rest"
 
 #: Suffix of one REST page file.
 REST_PAGE_SUFFIX = ".jsonl"
+
+#: The directory, in an endpoint's, where a snapshot's pages wait until the
+#: snapshot is whole; nothing reads it.
+REST_PENDING_DIR = "_pending"
 
 #: The columns of a trade file, in the vendor's order, read with these
 #: types. ``size`` is a float: recent years carry fractional shares.
@@ -404,7 +416,126 @@ def rest_page_files(vendor_root: str | Path, endpoint: str) -> list[Path]:
     root = rest_dir(vendor_root, endpoint)
     if not root.exists():
         return []
-    return sorted(root.glob(f"*/*{REST_PAGE_SUFFIX}"), key=lambda path: path.name)
+    pages = (path for path in root.glob(f"*/*{REST_PAGE_SUFFIX}") if not path.parent.name.startswith("_"))
+    return sorted(pages, key=lambda path: path.name)
+
+
+def rest_pending_dir(vendor_root: str | Path, endpoint: str) -> Path:
+    """Return where a snapshot's pages wait until the snapshot is whole.
+
+    Examples
+    --------
+    >>> rest_pending_dir("/d/massive", "float")
+    PosixPath('/d/massive/rest/float/_pending')
+    """
+    return rest_dir(vendor_root, endpoint) / REST_PENDING_DIR
+
+
+def _pull_stamp(path: Path) -> datetime:
+    """Return the UTC pull time a page file is named by."""
+    return datetime.strptime(path.name.split("_")[0], _STAMP_FORMAT).replace(tzinfo=UTC)
+
+
+def rest_snapshots(vendor_root: str | Path, endpoint: str) -> list[datetime]:
+    """Return the pull times (UTC) of a snapshot endpoint's whole snapshots, oldest first.
+
+    A snapshot is every page of one pull; one interrupted before its last
+    page left none (``MassiveClient.pull``).
+
+    Examples
+    --------
+    Needs a raw tier on disk::
+
+        rest_snapshots("/data/quantlab/downloads/massive", "float")[-1]
+    """
+    return sorted({_pull_stamp(path) for path in rest_page_files(vendor_root, endpoint)})
+
+
+def read_rest_snapshot(vendor_root: str | Path, endpoint: str, pulled_at: datetime | None = None) -> list[dict]:
+    """Return the records of one snapshot, in the vendor's order, verbatim.
+
+    Parameters
+    ----------
+    vendor_root : str or Path
+        ``<download-dir>/massive``.
+    endpoint : str
+        A snapshot endpoint's name (``RestEndpoint.date_field`` ``None``).
+    pulled_at : datetime, optional
+        The snapshot's pull time, from ``rest_snapshots``; the newest
+        snapshot when omitted.
+
+    Raises
+    ------
+    ValueError
+        If the endpoint has no such snapshot.
+
+    Examples
+    --------
+    Needs a raw tier on disk; every day's Float table::
+
+        root = "/data/quantlab/downloads/massive"
+        history = {stamp: read_rest_snapshot(root, "float", stamp) for stamp in rest_snapshots(root, "float")}
+    """
+    pages = rest_page_files(vendor_root, endpoint)
+    stamps = sorted({_pull_stamp(path) for path in pages})
+    if not stamps or (pulled_at is not None and pulled_at not in stamps):
+        raise ValueError(f"Massive {endpoint} has no snapshot pulled at {pulled_at} under {str(vendor_root)!r}.")
+    chosen = stamps[-1] if pulled_at is None else pulled_at
+    return [record for path in pages if _pull_stamp(path) == chosen for record in _read_page(path)]
+
+
+def rest_as_of_dir(vendor_root: str | Path, endpoint: str, day: date) -> Path:
+    """Return the directory of an endpoint's table as of ``day`` (``RestEndpoint.as_of_param``).
+
+    Examples
+    --------
+    >>> rest_as_of_dir("/d/massive", "tickers", date(2024, 3, 11))
+    PosixPath('/d/massive/rest/tickers/2024/2024-03-11')
+    """
+    return rest_dir(vendor_root, endpoint) / f"{day:%Y}" / day.isoformat()
+
+
+def rest_as_of_days(vendor_root: str | Path, endpoint: str) -> list[date]:
+    """Return the days an endpoint's table is kept as of, ascending.
+
+    Examples
+    --------
+    Needs a raw tier on disk::
+
+        rest_as_of_days("/data/quantlab/downloads/massive", "tickers")[-1]
+    """
+    root = rest_dir(vendor_root, endpoint)
+    if not root.exists():
+        return []
+    return sorted(date.fromisoformat(path.name) for path in root.glob("[0-9]*/[0-9]*-[0-9]*-[0-9]*") if path.is_dir())
+
+
+def read_rest_as_of(vendor_root: str | Path, endpoint: str, day: date) -> list[dict]:
+    """Return an endpoint's table as of ``day``, in the vendor's order, verbatim.
+
+    Raises
+    ------
+    ValueError
+        If the table is not kept as of ``day``.
+
+    Examples
+    --------
+    Needs a raw tier on disk; the tickers listed on 2024-03-11::
+
+        tickers = read_rest_as_of("/data/quantlab/downloads/massive", "tickers", date(2024, 3, 11))
+        {row["ticker"]: row["composite_figi"] for row in tickers}
+    """
+    pages = sorted(rest_as_of_dir(vendor_root, endpoint, day).glob(f"*{REST_PAGE_SUFFIX}"))
+    if not pages:
+        raise ValueError(f"Massive {endpoint} is not kept as of {day} under {str(vendor_root)!r}.")
+    newest = _pull_stamp(pages[-1])  # a day pulled again keeps its newest pull
+    return [record for path in pages if _pull_stamp(path) == newest for record in _read_page(path)]
+
+
+def _read_page(path: Path) -> list[dict]:
+    """Return one page file's records."""
+    with path.open(encoding="utf-8") as handle:
+        return [json.loads(line) for line in handle if line.strip()]
 
 
 def read_rest_records(vendor_root: str | Path, endpoint: str, key: str = "id") -> list[dict]:
@@ -420,8 +551,10 @@ def read_rest_records(vendor_root: str | Path, endpoint: str, key: str = "id") -
         ``<download-dir>/massive``.
     endpoint : str
         The endpoint's name (``quantlab.acquisition.massive.rest.ENDPOINTS``).
-    key : str, default "id"
-        The field identifying a record.
+    key : str or None, default "id"
+        The field identifying a record; ``None`` identifies a record by all
+        its fields, for an endpoint whose records have no id
+        (``RestEndpoint.key``).
 
     Raises
     ------
@@ -442,10 +575,14 @@ def read_rest_records(vendor_root: str | Path, endpoint: str, key: str = "id") -
                 if not line.strip():
                     continue
                 record = json.loads(line)
-                if key not in record:
+                if key is None:
+                    identity = line.strip()  # pages are written with sorted keys
+                elif key in record:
+                    identity = record[key]
+                else:
                     raise ValueError(f"A Massive {endpoint} record in {str(path)!r} has no {key!r}: {record}")
-                records.pop(record[key], None)
-                records[record[key]] = record
+                records.pop(identity, None)
+                records[identity] = record
     return list(records.values())
 
 

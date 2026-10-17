@@ -62,6 +62,7 @@ from __future__ import annotations
 import gzip
 import json
 import os
+import shutil
 import threading
 import time
 import zlib
@@ -70,7 +71,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import exchange_calendars as xcals
 import requests
@@ -83,9 +84,14 @@ from quantlab.dataset.massive.raw import (
     VENDOR_DIR,
     conditions_file,
     raw_file,
+    read_rest_as_of,
+    read_rest_records,
     read_rest_watermark,
     read_watermark,
+    rest_as_of_days,
+    rest_as_of_dir,
     rest_page_file,
+    rest_pending_dir,
     s3_key,
     write_rest_page,
     write_rest_watermark,
@@ -821,14 +827,19 @@ class MassiveClient:
                     self.sleep(wait_seconds)
                     wait_seconds *= 2
 
-    def _get_json(self, url: str, params: Mapping[str, str]) -> dict:
-        """GET ``url`` with the key in a header; retry throttling, 5xx and transport errors."""
+    def _get_json(self, url: str, params: Mapping[str, str], *, missing_ok: bool = False) -> dict | None:
+        """GET ``url`` with the key in a header; retry throttling, 5xx and transport errors.
+
+        With ``missing_ok`` a 404 returns ``None`` instead of raising.
+        """
         headers = {"Authorization": f"Bearer {self.credentials.api_key}"}
         # Never the query: a next_url carries a cursor, and logs print this.
         where = url.split("?")[0]
 
-        def attempt() -> dict:
+        def attempt() -> dict | None:
             response = self.http_get(url, params=params, headers=headers)
+            if missing_ok and response.status == 404:
+                return None
             if response.status == 401:
                 raise MassiveEntitlementError(
                     f"Massive refused the API key on {where} ({response.status}: "
@@ -915,6 +926,12 @@ class MassiveClient:
             endpoint = ENDPOINTS[endpoint]
         vendor_root = Path(download_root) / VENDOR_DIR
         pulled_at = datetime.now(UTC)
+        if endpoint.ids_from is not None:
+            return self._pull_ids(endpoint, vendor_root, pulled_at, end)
+        if endpoint.as_of_param is not None:
+            return self._pull_as_of(endpoint, vendor_root, end, today)
+        if endpoint.date_field is None:
+            return self._pull_snapshot(endpoint, vendor_root, pulled_at, today)
         field = endpoint.date_field
         params: dict[str, str] = {**endpoint.params, "limit": str(endpoint.limit)}
         watermark = cap = None
@@ -957,6 +974,141 @@ class MassiveClient:
             url, params = (_without_key(following) if following else None), {}
         logger.info(f"Massive: {endpoint.name}: {rows:,} row(s) in {pages} page(s); watermark {watermark}.")
         return RestPull(endpoint.name, pages, rows, watermark, tuple(files))
+
+    def _pull_snapshot(
+        self, endpoint: RestEndpoint, vendor_root: Path, pulled_at: datetime, today: date | None
+    ) -> RestPull:
+        """Pull a snapshot endpoint whole; its pages appear only once the last one is in."""
+        today = today if today is not None else _new_york_today()
+        watermark = read_rest_watermark(vendor_root, endpoint.name) if endpoint.once_a_day else None
+        if watermark is not None and watermark >= today:
+            logger.info(f"Massive: {endpoint.name}: today's snapshot ({today}) is already kept.")
+            return RestPull(endpoint.name, 0, 0, watermark)
+        pending = rest_pending_dir(vendor_root, endpoint.name)
+        shutil.rmtree(pending, ignore_errors=True)  # an interrupted snapshot's pages
+        staged: list[Path] = []
+        rows = pages = 0
+        for records in self._pages(endpoint.url, {**endpoint.params, "limit": str(endpoint.limit)}):
+            pages += 1
+            if records:
+                final = rest_page_file(vendor_root, endpoint.name, pulled_at, len(staged) + 1)
+                write_rest_page(pending / final.name, records)
+                staged.append(final)
+                rows += len(records)
+        for final in staged:
+            final.parent.mkdir(parents=True, exist_ok=True)
+            (pending / final.name).replace(final)
+        shutil.rmtree(pending, ignore_errors=True)
+        if endpoint.once_a_day:
+            write_rest_watermark(vendor_root, endpoint.name, "snapshot", today)
+            watermark = today
+        logger.info(f"Massive: {endpoint.name}: snapshot of {rows:,} row(s) in {len(staged)} page file(s).")
+        return RestPull(endpoint.name, pages, rows, watermark, tuple(staged))
+
+    def _pull_as_of(
+        self, endpoint: RestEndpoint, vendor_root: Path, end: date | None, today: date | None
+    ) -> RestPull:
+        """Pull a table whole as of every session after the watermark; a session appears once it is whole."""
+        watermark = read_rest_watermark(vendor_root, endpoint.name)
+        start = endpoint.earliest if watermark is None else max(endpoint.earliest, watermark + timedelta(days=1))
+        cap = (today if today is not None else _new_york_today()) - timedelta(days=1)
+        if end is not None:
+            cap = min(cap, end)
+        sessions = _sessions(start, cap)
+        logger.info(f"Massive: pulling {endpoint.name} as of {len(sessions)} session(s) from {start} "
+                    f"(watermark {watermark}).")
+        pending = rest_pending_dir(vendor_root, endpoint.name)
+        pages = rows = 0
+        files: list[Path] = []
+        for day in sessions:
+            pulled_at = datetime.now(UTC)
+            staged = pending / day.isoformat()
+            shutil.rmtree(staged, ignore_errors=True)  # an interrupted pull of this session
+            names: list[str] = []
+            params = {endpoint.as_of_param: day.isoformat(), **endpoint.params, "limit": str(endpoint.limit)}
+            for records in self._pages(endpoint.url, params):
+                pages += 1
+                if records:
+                    name = rest_page_file(vendor_root, endpoint.name, pulled_at, len(names) + 1).name
+                    write_rest_page(staged / name, records)
+                    names.append(name)
+                    rows += len(records)
+            final = rest_as_of_dir(vendor_root, endpoint.name, day)
+            if names:
+                final.mkdir(parents=True, exist_ok=True)
+            for name in names:
+                (staged / name).replace(final / name)
+                files.append(final / name)
+            shutil.rmtree(staged, ignore_errors=True)
+            write_rest_watermark(vendor_root, endpoint.name, endpoint.as_of_param, day)
+            watermark = day
+        shutil.rmtree(pending, ignore_errors=True)
+        logger.info(f"Massive: {endpoint.name}: {rows:,} row(s) in {pages} page(s); watermark {watermark}.")
+        return RestPull(endpoint.name, pages, rows, watermark, tuple(files))
+
+    def _pull_ids(self, endpoint: RestEndpoint, vendor_root: Path, pulled_at: datetime, end: date | None) -> RestPull:
+        """Pull an endpoint one id at a time, for the ids new or changed in its source's new sessions."""
+        source = ENDPOINTS[endpoint.ids_from]
+        watermark = read_rest_watermark(vendor_root, endpoint.name)
+        days = [day for day in rest_as_of_days(vendor_root, source.name)
+                if (watermark is None or day > watermark) and (end is None or day <= end)]
+        if not days:
+            logger.info(f"Massive: {endpoint.name}: no new session of {source.name} after {watermark}.")
+            return RestPull(endpoint.name, 0, 0, watermark)
+        kept = {record[endpoint.key] for record in read_rest_records(vendor_root, endpoint.name, endpoint.key)}
+        previous: dict[str, object] = {}
+        if watermark is not None and watermark in rest_as_of_days(vendor_root, source.name):
+            previous = {r[endpoint.id_field]: r.get(source.key)
+                        for r in read_rest_as_of(vendor_root, source.name, watermark) if r.get(endpoint.id_field)}
+        wanted: set[str] = set()
+        for day in days:
+            for record in read_rest_as_of(vendor_root, source.name, day):
+                ident = record.get(endpoint.id_field)
+                if not ident:
+                    continue
+                value = record.get(source.key)
+                if ident not in kept or (ident in previous and previous[ident] != value):
+                    wanted.add(ident)
+                previous[ident] = value
+        logger.info(f"Massive: pulling {endpoint.name} for {len(wanted):,} {endpoint.id_field}(s) "
+                    f"of {source.name} through {days[-1]}.")
+        batch: list[dict] = []
+        files: list[Path] = []
+        rows = missing = 0
+
+        def flush() -> None:
+            path = rest_page_file(vendor_root, endpoint.name, pulled_at, len(files) + 1)
+            write_rest_page(path, batch)
+            files.append(path)
+            batch.clear()
+
+        for ident in sorted(wanted):
+            page = self._get_json(endpoint.url.format(id=quote(ident, safe="")), endpoint.params, missing_ok=True)
+            if page is None:
+                missing += 1
+                continue
+            record = page.get("results")
+            if not isinstance(record, dict) or record.get(endpoint.key) != ident:
+                raise ValueError(f"Massive {endpoint.name} for {ident!r} returned no record keyed by "
+                                 f"{endpoint.key!r}: {record}")
+            batch.append(record)
+            rows += 1
+            if len(batch) >= endpoint.limit:
+                flush()
+        if batch:
+            flush()
+        write_rest_watermark(vendor_root, endpoint.name, source.name, days[-1])
+        logger.info(f"Massive: {endpoint.name}: {rows:,} record(s), {missing:,} unknown to Massive (404); "
+                    f"watermark {days[-1]}.")
+        return RestPull(endpoint.name, len(wanted), rows, days[-1], tuple(files))
+
+    def _pages(self, url: str | None, params: Mapping[str, str]) -> Iterator[list[dict]]:
+        """Yield each page's records from ``url``, following every ``next_url`` stripped of a key."""
+        while url:
+            page = self._get_json(url, params)
+            yield page.get("results") or []
+            following = page.get("next_url")
+            url, params = (_without_key(following) if following else None), {}
 
     def condition_table(self, download_root: str | Path) -> Path:
         """Pull the stock condition table over REST and store it as a snapshot.
