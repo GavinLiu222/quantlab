@@ -36,11 +36,12 @@ def test_the_registry_lists_massive_and_its_data_types():
     assert {c.market for c in source.capabilities} == {"us_equity"}
 
 
-def test_only_the_trades_convert_through_the_registry():
+def test_the_trades_and_the_day_aggregates_convert_through_the_registry():
+    from quantlab.dataset.massive.day_bars import MassiveDayBarDataset
     from quantlab.dataset.massive.trade_bars import MassiveTradeBarDataset
 
     by_type = {c.data_type: c.dataset_cls for c in _source().capabilities}
-    assert by_type == {"trades": MassiveTradeBarDataset, "minute_aggs": None, "day_aggs": None}
+    assert by_type == {"trades": MassiveTradeBarDataset, "minute_aggs": None, "day_aggs": MassiveDayBarDataset}
 
 
 def test_the_credentials_are_the_clients_own_variables():

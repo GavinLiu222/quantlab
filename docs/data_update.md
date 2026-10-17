@@ -64,12 +64,15 @@ to the status file afterwards, the state kept), so nothing waiting for `done` wa
 Massive's intraday trades up (see the [Massive guide](massive.md)):
 `scripts/massive/convert.py --download` downloads the days after the Trade bar store's last
 (trades, minute and day aggregates) and appends their one-minute Trade bars to
-`market/massive/massive_trade_bars_1m`, then `scripts/massive/ticker_map.py` appends those days'
+`market/massive/massive_trade_bars_1m`, `scripts/massive/day_bars.py` appends the new day
+aggregates to Massive's own daily bars `market/massive/massive_day_bars_1d`, then
+`scripts/massive/ticker_map.py` appends those days'
 rows to the Ticker map `market/massive/massive_ticker_map`, up to the last bar of Sharadar's SEP
-store, which the raw stage has brought up. Both are `run` steps with `allow_failure: true`, each
-does at most five days (`--max-days 5`; a store far behind is caught up by a run of its own), and
-neither store is in `ready`: Massive publishes a day's files at about 00:30 ET the next day, and a late file
-never holds the paper trading, which reads neither store. Both scripts write their folder's
+store, which the raw stage has brought up. All three are `run` steps with `allow_failure: true`; the
+conversion and the map do at most five days each (`--max-days 5`; a store far behind is caught up by a
+run of its own), the day bars every new day on disk, and none of the stores is
+in `ready`: Massive publishes a day's files at about 00:30 ET the next day, and a late file
+never holds the paper trading, which reads none of these stores. Each script writes its folder's
 `component.json` and `README.md` when missing.
 
 ```bash

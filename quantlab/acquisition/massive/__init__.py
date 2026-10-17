@@ -7,9 +7,10 @@ so importing the client also registers the source.
 ``MASSIVE_SOURCE`` registers Massive (Stocks Developer) with
 ``quantlab.acquisition.registry`` so an operator surface lists it: one
 ``Capability`` per data type of the raw tier (``quantlab.dataset.massive.raw.DATA_TYPES``),
-the credential variables, and the dataset class that builds Trade bars from
-the trade files (ADR 0030). The minute and day aggregates are raw only: they
-are kept to check Trade bars against.
+the credential variables, and the dataset classes that build Trade bars from
+the trade files (ADR 0030) and the Day aggregate store ``massive_day_bars_1d``
+from the day aggregates (#352). The minute aggregates are raw only: they are
+kept to check Trade bars against.
 
 Massive's raw tier is one vendor file per data type and trading day, pulled by
 ``MassiveClient``, not the symbol-batched hive tree an ``Acquisition``
@@ -29,6 +30,7 @@ Examples
 """
 
 from quantlab.acquisition.base import Capability, SourceDescriptor, register_source
+from quantlab.dataset.massive.day_bars import MassiveDayBarDataset
 from quantlab.dataset.massive.trade_bars import MassiveTradeBarDataset
 
 #: The plan every data type needs; it serves a rolling ten-year window.
@@ -55,13 +57,15 @@ MASSIVE_SOURCE = register_source(
                 earliest_available=_EARLIEST,
                 entitlement=_ENTITLEMENT,
             ),
-            # Massive's own bars, raw only: the Trade bars are checked against them.
+            # Massive's own minute bars, raw only: the Trade bars are checked against them.
             Capability(
                 market="us_equity", frequency="1m", data_type="minute_aggs",
                 earliest_available=_EARLIEST, entitlement=_ENTITLEMENT,
             ),
+            # Massive's own daily bars; the Day aggregate store on the Massive ticker axis.
             Capability(
                 market="us_equity", frequency="1d", data_type="day_aggs",
+                dataset_cls=MassiveDayBarDataset,
                 earliest_available=_EARLIEST, entitlement=_ENTITLEMENT,
             ),
         ),

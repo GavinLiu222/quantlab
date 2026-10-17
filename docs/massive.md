@@ -202,6 +202,33 @@ hourly = MassiveTradeBarDataset(config).resample("1h").panel("2016-11-25", "2016
 
 `resample("5m")` of the one-minute store equals converting the trades at 5m: bit for bit on every variable but `dollar_volume`, whose sums are added in another order (relative differences up to 4e-16 on 2016-11-25 and 2016-11-28).
 
+## Day aggregates
+
+`MassiveDayBarDataset` (`quantlab.dataset.massive.day_bars`) keeps Massive's own daily bars, the `day_aggs` files, as a store on the Massive ticker axis, `massive_day_bars_1d` (the two-store pattern of the Trade bars, [ADR 0031](adr/0031-trade-bars-are-stored-on-the-massive-ticker-the-ticker-map-names-the-security.md)):
+
+```python
+from quantlab.dataset.config import MassiveDayBarsDatasetConfig
+from quantlab.dataset.massive.day_bars import MassiveDayBarDataset
+
+days = MassiveDayBarDataset(MassiveDayBarsDatasetConfig(
+    zarr_file_path="/data/quantlab/market/massive/massive_day_bars_1d/massive_day_bars_1d.zarr",
+    raw_data_dir_path="/data/quantlab/downloads/massive",
+    start_date="2016-10-10",
+))
+days.update()                                   # build, or append the new days
+panel = days.panel("2024-11-26", "2024-11-29")  # symbol: Massive tickers
+```
+
+| Variable | From the file | Without a bar that day |
+|---|---|---|
+| `open`, `high`, `low`, `close` | the same columns, raw (not adjusted) | NaN |
+| `volume` | `volume` | 0 |
+| `n_trades` | `transactions` | 0 |
+
+Every variable is float64, one bar per trading day labelled with its date (midnight, as SEP's bars). Every ticker of every file is a column, spelled as Massive spells it (`BRK.A`, `AApB`), exchange test symbols included; no Sharadar data is read. The days are those of the raw tier's files, and a file whose day is not an XNYS session is refused. `symbols` is refused: the axis is every ticker. A config without `end_date` takes every raw day, so `update()` appends the files after the store's last day; a ticker first met on one of them is appended at the end of the symbol axis without rewriting what is stored ([ADR 0032](adr/0032-a-stores-symbol-axis-grows-at-its-end.md)), with NaN prices and zero volume before. A store built day by day equals one built at once, up to the order of its columns.
+
+The shared store is `<data-dir>/market/massive/massive_day_bars_1d/`, beside its `README.md` and `component.json`. `scripts/massive/day_bars.py --download-dir ... --data-dir ...` writes the folder when it is missing (the config starting at the first day-aggregate file on disk) and appends the new days; it downloads nothing, the day aggregates being downloaded by `scripts/massive/convert.py --download`. The daily data update runs it after the conversion ([data_update.md](data_update.md)). A column is a ticker, not a security: read the bars as securities through the Ticker map (below).
+
 ## The Ticker map
 
 A Massive ticker is not a security: one ticker can belong to different securities on different days, and Sharadar names a security by the tickers of a later pull. The Ticker map (`quantlab.dataset.massive.ticker_map.TickerMap`, ADR 0031) says, for each day and Massive ticker of that day's day aggregates, which Sharadar permaticker traded under it, or none, with the evidence. It reads Massive's day aggregates and Sharadar's TICKERS, ACTIONS, SEP and SFP from the raw tier, and is the only way from Massive tickers to Sharadar's securities.
