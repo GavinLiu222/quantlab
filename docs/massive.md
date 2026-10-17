@@ -310,6 +310,61 @@ The resolver's fallbacks for Sharadar's own files are not used, so a ticker whos
 
 The shared map is `<data-dir>/market/massive/massive_ticker_map/`, beside its `README.md` and `component.json`. `scripts/massive/ticker_map.py --download-dir ... --data-dir ...` appends the days with day aggregates on disk that it lacks, up to the last bar of Sharadar's SEP store (a day is never mapped before Sharadar's closes of it are in); `--rebuild` maps every day again. The daily data update runs it after the conversion ([data_update.md](data_update.md)).
 
+## Placing REST rows on permatickers
+
+Massive's REST endpoints name a security by its ticker. A panel on the permaticker axis places each row with `TickerPlacement` (`quantlab.dataset.massive.placement`): the row goes to the permaticker the Ticker map gives its ticker on the row's own placement day (an ex-date, an execution date, a settlement date plus its lag, a publication day), so a reused ticker sends each row to the security that held it that day. The placement day must be a trading day, so a vendor date is rolled onto the calendar first (`TradingCalendar.place`). A row naming several tickers is exploded into one row per ticker first and counts once for each one placed.
+
+```python
+from quantlab.dataset.massive.placement import TickerPlacement
+
+placement = TickerPlacement(ticker_map, owner="MyPanel")
+placed = placement.place(rows, source="dividends:ex", day="available")  # adds `permaticker`
+placement.leave_out(other_rows, source="dividends", reason="currency CAD, not USD", day="ex_dividend_date")
+placement.write_report(store_path)  # <store>.unplaced.json, deleted when nothing is left out
+```
+
+A row the map cannot place is never guessed. It is left out and counted in the store's sidecar `<store>.unplaced.json`, `{"owner", "rows", "unplaced": [{"source", "ticker", "first_date", "last_date", "rows", "reason"}]}`, with one of these reasons:
+
+| Reason | When |
+|---|---|
+| `unmapped: <the map's reason>` | the map's row of the ticker and day has no permaticker |
+| `the ticker is not in Massive's day aggregates that day` | the map has no row of the ticker that day |
+| `the Ticker map does not hold the day` | the map has not mapped the day |
+
+A panel's own reasons for leaving a row out (no amount, another currency) go in the same report through `leave_out`. `TickerMap.read_days(days, tickers)` reads only the map's files and tickers a placement needs.
+
+## Dividends and splits
+
+`MassiveDividendDataset` (`quantlab.dataset.massive.dividends`) builds the dividend panel `massive_dividends_1d` from the REST `dividends` and `splits` pulls, on Sharadar's permaticker axis and SEP's trading calendar:
+
+```python
+from quantlab.dataset.config import MassiveDividendsConfig
+from quantlab.dataset.massive.dividends import MassiveDividendDataset
+
+dividends = MassiveDividendDataset(MassiveDividendsConfig(
+    zarr_file_path="/data/quantlab/market/massive/massive_dividends_1d/massive_dividends_1d.zarr",
+    raw_data_dir_path="/data/quantlab/downloads/sharadar",
+    massive_dir="/data/quantlab/downloads/massive",
+    ticker_map_path="/data/quantlab/market/massive/massive_ticker_map/massive_ticker_map",
+    start_date="2016-10-10",
+))
+dividends.update()
+panel = dividends.panel("2024-01-02", "2024-12-31")
+```
+
+| Variable | Value | Placement |
+|---|---|---|
+| `dividend_declared` | declared `cash_amount` per share (USD) | every trading day from the `declaration_date` through the `ex_dividend_date` |
+| `dividend_days_to_ex` | trading days from the day to that ex-date | the same days; 0 on the ex-date |
+| `dividend_cash` | `cash_amount` per share (USD) of every dividend going ex, summed | the `ex_dividend_date` |
+| `split_ratio` | `split_to / split_from` of every split, multiplied | the `execution_date` |
+
+A cell without one is NaN. A security with several declared dividends pending shows the one going ex soonest (summed when several go ex that day); a dividend with no declaration date has no declared spell, and one declared before the store's first day is shown from that day. The days to the ex-date are counted on the NYSE calendar, so an ex-date after the store's last day counts too. A vendor date that is not a trading day rolls onto the next one. A declared dividend is shown on its declaration date's bar even when declared after the close, so a signal formed at a bar's close should read it one bar back.
+
+The amounts are as declared on the day: `split_adjusted_cash_amount` and `historical_adjustment_factor` are never read, so a later event never rewrites the panel's history. Each record is placed through the Ticker map (above) on its own day: the ex-date for the cash, the execution date for the split, the first day shown for a declared dividend. Rows the map cannot place, and dividends not in USD or without an amount, are counted in `massive_dividends_1d.zarr.unplaced.json`. The columns are the universe's permatickers, by default SEP's domestic common stock (the universe fields work as for a Sharadar price panel); a record placed on another security (a fund) is dropped. The store is built through the last day SEP, both REST pulls and the Ticker map all reach, so `update()` appends a day once each holds it, and a store built day by day equals one built at once. A missing pull or an empty map is refused, naming the script to run.
+
+The shared store is `<data-dir>/market/massive/massive_dividends_1d/`, beside its `README.md` and `component.json`. `scripts/massive/dividends.py --download-dir ... --data-dir ...` writes the folder when it is missing (the config starting at the Ticker map's first day) and appends the new days; the daily data update runs it after the Ticker map ([data_update.md](data_update.md)).
+
 ## Reading Trade bars as securities
 
 `PermatickerTradeBarDataset` reads the Trade bar store through the Ticker map and returns the bars on the permaticker axis. It is the one way to read the store as securities, and a drop-in dataset for factors, models and backtests:

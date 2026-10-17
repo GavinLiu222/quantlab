@@ -1026,6 +1026,40 @@ class SharadarShareClassConfig(SharadarDatasetConfig):
 
 
 @dataclass(kw_only=True, frozen=True)
+class MassiveDividendsConfig(SharadarDatasetConfig):
+    """Config of the Massive dividend panel on the permaticker axis (#351).
+
+    Massive's dividend and split records (the REST raw tier under
+    ``massive_dir``) are placed on permatickers through the Ticker map at
+    ``ticker_map_path``, on SEP's trading calendar. ``raw_data_dir_path`` is
+    Sharadar's raw tier: SEP's dates are the calendar and SEP's TICKERS rows
+    the universe, whose fields work as for a price panel (the default is
+    domestic common stock).
+
+    Examples
+    --------
+    >>> cfg = MassiveDividendsConfig(
+    ...     zarr_file_path="/data/zarrs/massive_dividends_1d.zarr",
+    ...     raw_data_dir_path="/data/downloads/sharadar",
+    ...     massive_dir="/data/downloads/massive",
+    ...     ticker_map_path="/data/market/massive/massive_ticker_map/massive_ticker_map",
+    ... )
+    >>> cfg.vendor, cfg.table
+    ('massive', 'sep')
+    """
+
+    #: Massive's records; the calendar and the universe are Sharadar's.
+    vendor: Vendor | None = "massive"
+    #: Always SEP: its TICKERS rows give the universe, its dates the calendar.
+    table: str = "sep"
+    #: Massive's raw tier (``<download-dir>/massive``), holding the REST pulls
+    #: ``rest/dividends`` and ``rest/splits`` and the day aggregates.
+    massive_dir: str
+    #: The Ticker map's directory (``TickerMapConfig.path``).
+    ticker_map_path: str
+
+
+@dataclass(kw_only=True, frozen=True)
 class SharadarListingConfig(SharadarDatasetConfig):
     """Config of the point-in-time listing panel (SIC series and exchange) on the permaticker axis.
 

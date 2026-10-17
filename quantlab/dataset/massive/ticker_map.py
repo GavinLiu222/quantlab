@@ -333,6 +333,40 @@ class TickerMap(Component):
             return pl.DataFrame(schema=ROW_SCHEMA)
         return pl.read_parquet(files).select(list(ROW_SCHEMA)).sort("date", "ticker")
 
+    def read_days(self, days: Iterable[str | date], tickers: Iterable[str] | None = None) -> pl.DataFrame:
+        """Return the rows of some mapped days, of some tickers only.
+
+        Reads only the day files asked for, and with ``tickers`` only their
+        rows: a placement of a few hundred thousand REST rows over ten years
+        reads the map's files once, not as a whole.
+
+        Parameters
+        ----------
+        days : iterable of str or date
+            The days; one the map does not hold is skipped.
+        tickers : iterable of str, optional
+            The Massive tickers wanted; ``None`` for every one.
+
+        Returns
+        -------
+        pl.DataFrame
+            Rows of ``ROW_SCHEMA``, by date and ticker.
+
+        Examples
+        --------
+        AAPL's permaticker on one day::
+
+            ticker_map.read_days(["2020-03-02"], tickers=["AAPL"])["permaticker"].to_list()
+        """
+        mapped = set(self.days())
+        files = [self.day_file(self.path, day) for day in sorted({_as_date(d) for d in days}) if day in mapped]
+        if not files:
+            return pl.DataFrame(schema=ROW_SCHEMA)
+        scan = pl.scan_parquet(files).select(list(ROW_SCHEMA))
+        if tickers is not None:
+            scan = scan.filter(pl.col("ticker").is_in(sorted(set(tickers))))
+        return scan.collect().sort("date", "ticker")
+
     # -- writing ----------------------------------------------------------------
 
     def append(self, day: str | date) -> pl.DataFrame:
