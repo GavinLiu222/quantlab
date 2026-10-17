@@ -89,6 +89,13 @@ class RestEndpoint:
         ``date_field`` holds a timestamp, not a day (news' ``published_utc``):
         a pull bounded by ``end`` asks for ``<date_field>.lt`` the day after
         it, so the whole of ``end`` is kept.
+    window_days : int or None, default None
+        For an endpoint that filters on ``date_field`` but will not sort on
+        it (the 10-K sections sort on ``period_end`` only): the pull asks
+        one window of this many days at a time, with no ``sort``, and moves
+        the watermark to a window's last day only once all its pages are in,
+        since its rows come in no date order. An interrupted window is asked
+        again whole.
 
     Examples
     --------
@@ -111,6 +118,7 @@ class RestEndpoint:
     id_field: str = "composite_figi"
     order_param: bool = False
     timestamped: bool = False
+    window_days: int | None = None
 
     def __post_init__(self) -> None:
         if self.ids_from is not None and "{id}" not in self.url:
@@ -118,6 +126,10 @@ class RestEndpoint:
         for option in ("once_a_day", "as_of_param", "ids_from"):
             if getattr(self, option) and self.date_field is not None:
                 raise ValueError(f"Massive REST endpoint {self.name!r}: {option} is for a snapshot endpoint.")
+        if self.window_days is not None and (self.date_field is None or self.timestamped or self.window_days < 1):
+            raise ValueError(
+                f"Massive REST endpoint {self.name!r}: window_days is a positive day count for a day date_field."
+            )
 
     @property
     def sort(self) -> str | None:
@@ -145,7 +157,7 @@ class RestEndpoint:
         >>> ENDPOINTS["ipos"].sort_params
         {'sort': 'listing_date', 'order': 'asc'}
         """
-        if self.date_field is None:
+        if self.date_field is None or self.window_days is not None:
             return {}
         return {"sort": self.sort, "order": "asc"} if self.order_param else {"sort": self.sort}
 
@@ -183,12 +195,14 @@ ENDPOINTS: dict[str, RestEndpoint] = {
         # Raw-only tables (#360): filing text and second sources, on the filing date. Their
         # rows have no id of their own (a 13-F has one row per holding, a Form 4 one per
         # line), so a record is identified by all its fields (key None); the sort is on the
-        # filing date alone, the only sort column the docs name.
+        # filing date alone. The 10-K sections refuse that sort (only period_end), so they
+        # are pulled a month of filing dates at a time, unsorted.
+        RestEndpoint("10k_sections", f"{REST_HOST}/stocks/filings/10-K/vX/sections", "filing_date",
+                     date(1993, 1, 1), limit=100, overlap_days=7, key=None, tiebreak=None, window_days=31),
         *(
             RestEndpoint(name, f"{REST_HOST}{path}", "filing_date", date(1993, 1, 1),
                          limit=limit, overlap_days=7, key=None, tiebreak=None)
             for name, path, limit in (
-                ("10k_sections", "/stocks/filings/10-K/vX/sections", 100),
                 ("8k_text", "/stocks/filings/8-K/vX/text", 100),
                 ("risk_factors", "/stocks/filings/vX/risk-factors", 50000),
                 ("form_3", "/stocks/filings/vX/form-3", 10000),

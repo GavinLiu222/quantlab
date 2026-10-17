@@ -118,7 +118,7 @@ These tables are kept in the raw tier only, with no panel: filing text and the s
 
 | Endpoint | URL | Kind | Layout | Read with | Coverage asked |
 |---|---|---|---|---|---|
-| `10k_sections` | `/stocks/filings/10-K/vX/sections` | `filing_date`, 100 rows a page | pages | `read_rest_records(root, "10k_sections", key=None)` | from 1993-01-01 |
+| `10k_sections` | `/stocks/filings/10-K/vX/sections` | `filing_date`, 100 rows a page, a month of filing dates at a time with no `sort` (the endpoint sorts on `period_end` only), the watermark moving once a month's last page is in | pages | `read_rest_records(root, "10k_sections", key=None)` | from 1993-01-01 |
 | `8k_text` | `/stocks/filings/8-K/vX/text` | `filing_date`, 100 rows a page | pages | `read_rest_records(root, "8k_text", key=None)` | from 1993-01-01 (the vendor's starts in 1999-11) |
 | `risk_factors` | `/stocks/filings/vX/risk-factors` | `filing_date`, 50,000 rows a page | pages | `read_rest_records(root, "risk_factors", key=None)` | from 1993-01-01 (the vendor's starts in 2015-01) |
 | `form_3` | `/stocks/filings/vX/form-3` | `filing_date`, 10,000 rows a page | pages | `read_rest_records(root, "form_3", key=None)` | from 1993-01-01 |

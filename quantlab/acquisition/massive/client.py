@@ -954,6 +954,8 @@ class MassiveClient:
                     bounds[f"{field}.lte"] = end.isoformat()
             params = {**bounds, **params, **endpoint.sort_params}
             logger.info(f"Massive: pulling {endpoint.name} from {field} {start} (watermark {watermark}).")
+            if endpoint.window_days is not None:
+                return self._pull_windows(endpoint, vendor_root, pulled_at, start, cap, watermark)
 
         url: str | None = endpoint.url
         pages = rows = 0
@@ -979,6 +981,46 @@ class MassiveClient:
                         write_rest_watermark(vendor_root, endpoint.name, field, through)
                         watermark = through
             url, params = (self._policy.keyless(following) if following else None), {}
+        logger.info(f"Massive: {endpoint.name}: {rows:,} row(s) in {pages} page(s); watermark {watermark}.")
+        return RestPull(endpoint.name, pages, rows, watermark, tuple(files))
+
+    def _pull_windows(
+        self, endpoint: RestEndpoint, vendor_root: Path, pulled_at: datetime,
+        start: date, cap: date, watermark: date | None,
+    ) -> RestPull:
+        """Pull an endpoint that will not sort on its date field, ``window_days`` at a time.
+
+        Each window ``[first, last]`` is asked with ``.gte``/``.lte`` and no
+        ``sort``, every ``next_url`` followed; its rows come in no date order,
+        so the watermark moves to ``last`` only once the window's last page
+        is in, and an interrupted window is asked again whole.
+        """
+        field = endpoint.date_field
+        pages = rows = 0
+        files: list[Path] = []
+        first = start
+        while first <= cap:
+            last = min(first + timedelta(days=endpoint.window_days - 1), cap)
+            url: str | None = endpoint.url
+            params: dict[str, str] = {
+                **endpoint.params, "limit": str(endpoint.limit),
+                f"{field}.gte": first.isoformat(), f"{field}.lte": last.isoformat(),
+            }
+            while url:
+                page = self._get_json(url, params)
+                pages += 1
+                records = page.get("results") or []
+                following = page.get("next_url")
+                if records:
+                    path = rest_page_file(vendor_root, endpoint.name, pulled_at, len(files) + 1)
+                    write_rest_page(path, records)
+                    files.append(path)
+                    rows += len(records)
+                url, params = (self._policy.keyless(following) if following else None), {}
+            if not holds(watermark, last):  # a REST watermark never moves back
+                write_rest_watermark(vendor_root, endpoint.name, field, last)
+                watermark = last
+            first = last + timedelta(days=1)
         logger.info(f"Massive: {endpoint.name}: {rows:,} row(s) in {pages} page(s); watermark {watermark}.")
         return RestPull(endpoint.name, pages, rows, watermark, tuple(files))
 

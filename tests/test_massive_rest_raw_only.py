@@ -36,14 +36,16 @@ class FakeVendor:
     """Massive's REST API: date-ranged tables, snapshot tables, ``date=`` tables and ticker events.
 
     ``ranged`` maps a path to (date field, records), filtered on ``.gte``/``.lte``
-    and sorted on the date field; ``whole`` maps a path to its records;
+    and sorted on the date field; a path in ``unsortable`` refuses a sort on its
+    date field (400, as the 10-K sections do) and answers newest first; ``whole`` maps a path to its records;
     ``as_of`` maps a path to {day: records}, chosen by ``date=``; ``events``
     maps an id to its ``results`` object (absent: 404). Every table is paged
     by a cursor in ``next_url``.
     """
 
-    def __init__(self, *, ranged=None, whole=None, as_of=None, events=None):
+    def __init__(self, *, ranged=None, whole=None, as_of=None, events=None, unsortable=()):
         self.ranged = ranged or {}
+        self.unsortable = set(unsortable)
         self.whole = whole or {}
         self.as_of = as_of or {}
         self.events = events or {}
@@ -71,8 +73,14 @@ class FakeVendor:
         if path in self.ranged:
             field, records = self.ranged[path]
             rows = [r for r in records if query.get(f"{field}.gte", "") <= r[field] <= query.get(f"{field}.lte", "9")]
-            assert query["sort"].split(",")[0] == f"{field}.asc"
-            rows.sort(key=lambda r: r[field])
+            if path in self.unsortable:
+                if "sort" in query:
+                    message = f"Invalid query parameter: 'sort'. Expected one of [period_end], but found: '{field}'."
+                    return HttpResponse(400, json.dumps({"status": "ERROR", "message": message}).encode())
+                rows.sort(key=lambda r: r[field], reverse=True)
+            else:
+                assert query["sort"].split(",")[0] == f"{field}.asc"
+                rows.sort(key=lambda r: r[field])
         elif path in self.whole:
             rows = list(self.whole[path])
         elif path in self.as_of:
@@ -167,16 +175,24 @@ FILINGS = {  # name -> (path, first record, second record); SYNTHETIC
 }
 
 
+#: The paths Massive will not sort on their filing date (the 10-K sections sort on period_end only).
+UNSORTABLE = {"/stocks/filings/10-K/vX/sections"}
+
+
 @pytest.mark.parametrize("name", list(FILINGS))
 def test_a_filing_table_lands_verbatim_and_a_rerun_asks_only_past_its_watermark(env, tmp_path, name):
     from quantlab.dataset.massive.raw import read_rest_records, read_rest_watermark
 
     path, first, second = FILINGS[name]
-    vendor = FakeVendor(ranged={path: ("filing_date", [first, second])})
+    vendor = FakeVendor(ranged={path: ("filing_date", [first, second])}, unsortable=UNSORTABLE)
     endpoint = _endpoint(name, limit=1)
     pull = _client(vendor).pull(endpoint, tmp_path, today=TODAY)
-    assert pull.rows == 2 and pull.pages == 2
-    assert vendor.calls[0][0] == path and vendor.calls[0][1]["sort"] == "filing_date.asc"
+    assert pull.rows == 2
+    assert vendor.calls[0][0] == path
+    if path in UNSORTABLE:
+        assert not any("sort" in query for _, query in vendor.calls)
+    else:
+        assert pull.pages == 2 and vendor.calls[0][1]["sort"] == "filing_date.asc"
     # Rows with no id of their own (several holdings of one 13-F, several lines of one Form 4)
     # are each kept once, with the vendor's fields.
     assert read_rest_records(tmp_path / "massive", name, key=None) == [first, second]
@@ -186,6 +202,45 @@ def test_a_filing_table_lands_verbatim_and_a_rerun_asks_only_past_its_watermark(
     _client(vendor).pull(endpoint, tmp_path, today=TODAY)
     assert vendor.calls[0][1]["filing_date.gte"] == f"{date(2024, 3, 15 - endpoint.overlap_days)}"
     assert read_rest_records(tmp_path / "massive", name, key=None) == [first, second]
+
+
+def test_a_table_it_cannot_sort_on_its_date_is_pulled_window_by_window(env, tmp_path):
+    from quantlab.dataset.massive.raw import read_rest_records, read_rest_watermark
+
+    path, first, second = FILINGS["10k_sections"]
+    vendor = FakeVendor(ranged={path: ("filing_date", [first, second])}, unsortable=UNSORTABLE)
+    endpoint = _endpoint("10k_sections", limit=1, earliest=date(2024, 1, 1), window_days=31)
+
+    pull = _client(vendor).pull(endpoint, tmp_path, today=TODAY)
+
+    windows = [(query["filing_date.gte"], query["filing_date.lte"]) for _, query in vendor.calls if "cursor" not in query]
+    assert windows == [("2024-01-01", "2024-01-31"), ("2024-02-01", "2024-03-02"), ("2024-03-03", "2024-03-14")]
+    assert pull.rows == 2 and pull.through == date(2024, 3, 14)
+    kept = read_rest_records(tmp_path / "massive", "10k_sections", key=None)
+    assert sorted(kept, key=lambda r: r["filing_date"]) == [first, second]  # a window's rows in no date order
+    assert read_rest_watermark(tmp_path / "massive", "10k_sections") == date(2024, 3, 14)
+
+
+def test_an_interrupted_window_is_asked_again_whole(env, tmp_path):
+    from quantlab.acquisition.massive.client import MassiveTransportError
+    from quantlab.dataset.massive.raw import read_rest_watermark
+
+    path, first, second = FILINGS["10k_sections"]
+    third = {**second, "filing_date": "2024-02-20", "cik": "0000000003", "filing_url": "https://x/5"}  # SYNTHETIC
+    vendor = FakeVendor(ranged={path: ("filing_date", [first, second, third])}, unsortable=UNSORTABLE)
+    endpoint = _endpoint("10k_sections", limit=1, earliest=date(2024, 1, 1), window_days=31)
+    vendor.fail_after = 2  # January's page, then February's first page; its second page breaks
+
+    with pytest.raises(MassiveTransportError):
+        _client(vendor).pull(endpoint, tmp_path, today=TODAY)
+    # Rows of one window come in no date order, so only a whole window moves the watermark.
+    assert read_rest_watermark(tmp_path / "massive", "10k_sections") == date(2024, 1, 31)
+
+    vendor.fail_after = None
+    vendor.calls.clear()
+    _client(vendor).pull(endpoint, tmp_path, today=TODAY)
+    assert vendor.calls[0][1]["filing_date.gte"] == "2024-01-25"  # the watermark less the 7 overlap days
+    assert read_rest_watermark(tmp_path / "massive", "10k_sections") == date(2024, 3, 14)
 
 
 # --- Float: one whole snapshot a day ----------------------------------------------------------
