@@ -50,24 +50,13 @@ from __future__ import annotations
 
 import json
 
-import numpy as np
-import pandas as pd
 import polars as pl
-import xarray as xr
 
-from quantlab.dataset.config import DatasetConfig, MassiveNewsConfig, TickerMapConfig
-from quantlab.dataset.massive.placement import UNPLACED_SUFFIX, TickerPlacement
-from quantlab.dataset.massive.raw import read_rest_watermark, rest_page_files
-from quantlab.dataset.massive.ticker_map import TickerMap
-from quantlab.dataset.sharadar.point_in_time import (
-    ReleasePanelDataset,
-    ReleaseSpec,
-    TradingCalendar,
-    on_grid,
-    to_panel,
-)
-from quantlab.dataset.sharadar.tables import raw_through, trading_days
-from quantlab.dataset.sharadar.universe import normalize_universe, universe
+from quantlab.dataset.config import MassiveNewsConfig
+from quantlab.dataset.massive.placement import TickerPlacement
+from quantlab.dataset.massive.raw import rest_page_files
+from quantlab.dataset.massive.rest_panel import MassiveRestEventPanel
+from quantlab.dataset.sharadar.universe import universe
 from quantlab.utils.timer import Timer
 
 __all__ = ["VARIABLES", "MassiveNewsDataset"]
@@ -136,7 +125,7 @@ def _article_tickers(vendor_root) -> pl.DataFrame:
     ).drop("published_utc")
 
 
-class MassiveNewsDataset(ReleasePanelDataset):
+class MassiveNewsDataset(MassiveRestEventPanel):
     """Daily panel of Massive's news counts and sentiment labels, by permaticker.
 
     See the module docstring for the variables and the placement.
@@ -159,85 +148,12 @@ class MassiveNewsDataset(ReleasePanelDataset):
     #: The config class used to rebuild this dataset from a saved config.
     config_cls = MassiveNewsConfig
 
-    def _normalize_config(self, config: DatasetConfig) -> MassiveNewsConfig:
-        """Normalise as the base class does, then check the table and the universe fields.
-
-        Raises
-        ------
-        TypeError
-            If ``config`` is not a ``MassiveNewsConfig``.
-        ValueError
-            If ``table`` is not ``"sep"`` or a universe field is invalid.
-        """
-        config = super()._normalize_config(config)
-        if not isinstance(config, MassiveNewsConfig):
-            raise TypeError(f"{self.class_name} needs a MassiveNewsConfig, got {type(config).__name__}.")
-        if config.table != "sep":
-            raise ValueError(f"{self.class_name}: table must be 'sep', got {config.table!r}.")
-        return normalize_universe(config, self.class_name)
-
-    def _on_config_installed(self) -> None:
-        """Drop what was cached for the previous config."""
-        super()._on_config_installed()
-        self._ticker_map: TickerMap | None = None
-
-    @property
-    def ticker_map(self) -> TickerMap:
-        """The Ticker map the articles' tickers are placed through.
-
-        Examples
-        --------
-        >>> MassiveNewsDataset(config).ticker_map.path.name
-        'massive_ticker_map'
-        """
-        if self._ticker_map is None:
-            self._ticker_map = TickerMap(TickerMapConfig(
-                path=self.config.ticker_map_path,
-                massive_dir=self.config.massive_dir,
-                sharadar_dir=self.config.raw_data_dir_path,
-            ))
-        return self._ticker_map
-
-    @property
-    def unplaced_path(self) -> str:
-        """The report of the tickers left out (``<store>.unplaced.json``).
-
-        Examples
-        --------
-        >>> MassiveNewsDataset(config).unplaced_path.endswith("massive_news_1d.zarr.unplaced.json")
-        True
-        """
-        return f"{self.config.zarr_file_path}{UNPLACED_SUFFIX}"
-
-    # -- the calendar: the last day every input reaches -----------------------
-
-    def _trading_calendar(self) -> TradingCalendar:
-        """Return SEP's trading days through the last day SEP, the news pull and the Ticker map reach.
-
-        Raises
-        ------
-        ValueError
-            If the news endpoint was never pulled or the Ticker map is empty.
-        """
-        if self._calendar_cache is None:
-            root = self.config.raw_data_dir_path
-            pulled = read_rest_watermark(self.config.massive_dir, ENDPOINT)
-            if pulled is None:
-                raise ValueError(
-                    f"{self.class_name}: Massive's {ENDPOINT!r} endpoint was never pulled into "
-                    f"{self.config.massive_dir}; run scripts/massive/rest_pull.py first."
-                )
-            days = self.ticker_map.days()
-            if not days:
-                raise ValueError(
-                    f"{self.class_name}: the Ticker map at {self.config.ticker_map_path} maps no day; "
-                    f"run scripts/massive/ticker_map.py first."
-                )
-            through = min(raw_through(root, ("sep",)), pulled, days[-1])
-            self._calendar_cache = TradingCalendar(
-                trading_days(root, through), through=through, start=self.config.start_date, end=self.config.end_date
-            )
-        return self._calendar_cache
+    #: The REST endpoints read (``MassiveRestPanel``).
+    REST_ENDPOINTS = (ENDPOINT,)
+    #: The module's ``VARIABLES``.
+    VARIABLES = VARIABLES
+    #: A day without an article counts 0.
+    FILL_VALUE = 0.0
 
     # -- the rows ---------------------------------------------------------------
 
@@ -282,45 +198,6 @@ class MassiveNewsDataset(ReleasePanelDataset):
         keep = [int(s) for s in universe(self.config)]
         return frame.filter(pl.col("symbol").is_in(keep)).sort("symbol", "available")
 
-    # -- the panel: a count on its own day ---------------------------------------
-
-    def _spec(self) -> ReleaseSpec:
-        """Return the four variables and their attributes; no staleness."""
-        return ReleaseSpec(variables=VARIABLES, stamp=None)
-
     def _nothing_shown(self) -> str:
         """Return what an empty window lacks."""
         return "no Massive news article is placed"
-
-    def _raw_data_to_xr_window(self, start_date, end_date, symbols: list[int] | None = None) -> xr.Dataset:
-        """Return one window: each day's counts on that day, 0 elsewhere."""
-        days, symbols = self._window_axes(start_date, end_date, symbols)
-        cells = (
-            on_grid(days, symbols)
-            .join(self._released_rows(), left_on=["timestamp", "symbol"], right_on=["available", "symbol"],
-                  how="left")
-            .sort("_day", "_column")
-            .with_columns(pl.col(name).cast(pl.Float64).fill_null(0.0) for name in VARIABLES)
-        )
-        return to_panel(cells, days, symbols, VARIABLES)
-
-    def _added_symbols_with_raw_history(self, added: list, start, end) -> dict[str, int]:
-        """Count each added permaticker's days with an article between ``start`` and ``end``."""
-        if not added:
-            return {}
-        counts = (
-            self._released_rows()
-            .filter(
-                pl.col("symbol").is_in([int(s) for s in added])
-                & pl.col("available").is_between(
-                    pl.lit(pd.Timestamp(start).to_datetime64()), pl.lit(pd.Timestamp(end).to_datetime64())
-                )
-            )
-            .group_by("symbol")
-            .len()
-        )
-        return {str(symbol): int(rows) for symbol, rows in counts.iter_rows()}
-
-    def _widen_fill_values(self) -> dict:
-        """Fill a new permaticker's stored days with 0: no article counted then."""
-        return {name: np.float64(0.0) for name in VARIABLES}

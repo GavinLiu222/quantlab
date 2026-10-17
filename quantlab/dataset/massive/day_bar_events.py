@@ -40,9 +40,10 @@ import numpy as np
 import pandas as pd
 import polars as pl
 
-from quantlab.dataset.massive.dividends import DIVIDEND_SCHEMA, SPLIT_SCHEMA, rest_frame, usd_dividends
+from quantlab.dataset.massive.dividends import DIVIDEND_SCHEMA, SPLIT_SCHEMA, usd_dividends
 from quantlab.dataset.massive.permaticker_bars import PermatickerDataset
 from quantlab.dataset.massive.placement import TickerPlacement
+from quantlab.dataset.massive.raw import rest_frame
 
 __all__ = ["ANOTHER_TICKER", "EVENT_ENDPOINTS", "day_bar_events"]
 

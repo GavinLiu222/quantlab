@@ -52,24 +52,15 @@ Build the store and read the IPOs of a year::
 from __future__ import annotations
 
 import numpy as np
-import pandas as pd
 import polars as pl
-import xarray as xr
 
 from quantlab.dataset._support.session_calendar import XnysSessionCalendar
-from quantlab.dataset.config import DatasetConfig, MassiveIposConfig, TickerMapConfig
-from quantlab.dataset.massive.placement import UNPLACED_SUFFIX, TickerPlacement
-from quantlab.dataset.massive.raw import read_rest_records, read_rest_watermark
-from quantlab.dataset.massive.ticker_map import TickerMap
-from quantlab.dataset.sharadar.point_in_time import (
-    ReleasePanelDataset,
-    ReleaseSpec,
-    TradingCalendar,
-    on_grid,
-    to_panel,
-)
-from quantlab.dataset.sharadar.tables import raw_through, trading_days
-from quantlab.dataset.sharadar.universe import normalize_universe, universe
+from quantlab.dataset.config import MassiveIposConfig
+from quantlab.dataset.massive.placement import TickerPlacement
+from quantlab.dataset.massive.raw import rest_frame
+from quantlab.dataset.massive.rest_panel import MassiveRestEventPanel
+from quantlab.dataset.sharadar.point_in_time import TradingCalendar
+from quantlab.dataset.sharadar.universe import universe
 from quantlab.utils.timer import Timer
 
 __all__ = ["LISTED", "VARIABLES", "MassiveIpoDataset"]
@@ -115,13 +106,9 @@ def _newest_copies(vendor_root) -> pl.DataFrame:
     An IPO is a ticker and its announcement date; its newest copy has the
     latest ``last_updated``, then comes from the latest pull.
     """
-    rows = [{name: record.get(name) for name in SCHEMA} for record in read_rest_records(vendor_root, ENDPOINT, key=None)]
-    frame = pl.DataFrame(rows, schema=SCHEMA, orient="row") if rows else pl.DataFrame(schema=SCHEMA)
     return (
-        frame.with_columns(
-            *(pl.col(name).str.slice(0, 10).str.to_date(strict=False) for name in SCHEMA if name.endswith("_date")),
-            pl.col("last_updated").str.slice(0, 10).str.to_date(strict=False),
-        )
+        rest_frame(vendor_root, ENDPOINT, SCHEMA, key=None)
+        .with_columns(pl.col("last_updated").str.slice(0, 10).str.to_date(strict=False))
         .with_row_index("_order")
         .sort("last_updated", "_order", nulls_last=False)
         .unique(["ticker", "announced_date"], keep="last", maintain_order=True)
@@ -129,7 +116,7 @@ def _newest_copies(vendor_root) -> pl.DataFrame:
     )
 
 
-class MassiveIpoDataset(ReleasePanelDataset):
+class MassiveIpoDataset(MassiveRestEventPanel):
     """Daily panel of Massive's listed IPOs on their listing day, by permaticker.
 
     See the module docstring for the variables and the placement.
@@ -152,88 +139,10 @@ class MassiveIpoDataset(ReleasePanelDataset):
     #: The config class used to rebuild this dataset from a saved config.
     config_cls = MassiveIposConfig
 
-    def _normalize_config(self, config: DatasetConfig) -> MassiveIposConfig:
-        """Normalise as the base class does, then check the table and the universe fields.
-
-        Raises
-        ------
-        TypeError
-            If ``config`` is not a ``MassiveIposConfig``.
-        ValueError
-            If ``table`` is not ``"sep"`` or a universe field is invalid.
-        """
-        config = super()._normalize_config(config)
-        if not isinstance(config, MassiveIposConfig):
-            raise TypeError(f"{self.class_name} needs a MassiveIposConfig, got {type(config).__name__}.")
-        if config.table != "sep":
-            raise ValueError(f"{self.class_name}: table must be 'sep', got {config.table!r}.")
-        return normalize_universe(config, self.class_name)
-
-    def _on_config_installed(self) -> None:
-        """Drop what was cached for the previous config."""
-        super()._on_config_installed()
-        self._ticker_map: TickerMap | None = None
-
-    @property
-    def ticker_map(self) -> TickerMap:
-        """The Ticker map the IPOs are placed through.
-
-        Examples
-        --------
-        >>> MassiveIpoDataset(config).ticker_map.path.name
-        'massive_ticker_map'
-        """
-        if self._ticker_map is None:
-            self._ticker_map = TickerMap(TickerMapConfig(
-                path=self.config.ticker_map_path,
-                massive_dir=self.config.massive_dir,
-                sharadar_dir=self.config.raw_data_dir_path,
-            ))
-        return self._ticker_map
-
-    @property
-    def unplaced_path(self) -> str:
-        """The report of the IPOs left out (``<store>.unplaced.json``).
-
-        Examples
-        --------
-        >>> MassiveIpoDataset(config).unplaced_path.endswith("massive_ipos_1d.zarr.unplaced.json")
-        True
-        """
-        return f"{self.config.zarr_file_path}{UNPLACED_SUFFIX}"
-
-    # -- the calendar: the last day every input reaches -----------------------
-
-    def _trading_calendar(self) -> TradingCalendar:
-        """Return SEP's trading days through the last day SEP, the pull and the Ticker map reach.
-
-        Raises
-        ------
-        ValueError
-            If the IPOs were never pulled or the Ticker map is empty.
-        """
-        if self._calendar_cache is None:
-            root = self.config.raw_data_dir_path
-            ends = {"SEP": raw_through(root, ("sep",))}
-            through = read_rest_watermark(self.config.massive_dir, ENDPOINT)
-            if through is None:
-                raise ValueError(
-                    f"{self.class_name}: Massive's {ENDPOINT!r} endpoint was never pulled into "
-                    f"{self.config.massive_dir}; run scripts/massive/rest_pull.py first."
-                )
-            ends[ENDPOINT] = through
-            days = self.ticker_map.days()
-            if not days:
-                raise ValueError(
-                    f"{self.class_name}: the Ticker map at {self.config.ticker_map_path} maps no day; "
-                    f"run scripts/massive/ticker_map.py first."
-                )
-            ends["Ticker map"] = days[-1]
-            through = min(ends.values())
-            self._calendar_cache = TradingCalendar(
-                trading_days(root, through), through=through, start=self.config.start_date, end=self.config.end_date
-            )
-        return self._calendar_cache
+    #: The REST endpoints read (``MassiveRestPanel``).
+    REST_ENDPOINTS = (ENDPOINT,)
+    #: The module's ``VARIABLES``.
+    VARIABLES = VARIABLES
 
     # -- the rows ---------------------------------------------------------------
 
@@ -283,48 +192,10 @@ class MassiveIpoDataset(ReleasePanelDataset):
             )
         )
 
-    # -- the panel: a value on its own day ----------------------------------------
-
-    def _spec(self) -> ReleaseSpec:
-        """Return the three variables and their attributes; no staleness."""
-        return ReleaseSpec(variables=VARIABLES, stamp=None)
-
     def _nothing_shown(self) -> str:
         """Return what an empty window lacks."""
         return "no listed Massive IPO is placed"
 
-    def _raw_data_to_xr_window(self, start_date, end_date, symbols: list[int] | None = None) -> xr.Dataset:
-        """Return one window: each listing day's values on that day, NaN elsewhere."""
-        days, symbols = self._window_axes(start_date, end_date, symbols)
-        cells = (
-            on_grid(days, symbols)
-            .join(self._released_rows(), left_on=["timestamp", "symbol"], right_on=["available", "symbol"],
-                  how="left")
-            .sort("_day", "_column")
-            .with_columns(pl.col(name).cast(pl.Float64).fill_null(float("nan")) for name in VARIABLES)
-        )
-        return to_panel(cells, days, symbols, VARIABLES)
-
-    def _added_symbols_with_raw_history(self, added: list, start, end) -> dict[str, int]:
-        """Count each added permaticker's listing days between ``start`` and ``end``."""
-        if not added:
-            return {}
-        counts = (
-            self._released_rows()
-            .filter(
-                pl.col("symbol").is_in([int(s) for s in added])
-                & pl.col("available").is_between(
-                    pl.lit(pd.Timestamp(start).to_datetime64()), pl.lit(pd.Timestamp(end).to_datetime64())
-                )
-            )
-            .group_by("symbol")
-            .len()
-        )
-        return {str(symbol): int(rows) for symbol, rows in counts.iter_rows()}
-
-    def _widen_fill_values(self) -> dict:
-        """Fill a new permaticker's stored days with NaN: it listed no IPO then."""
-        return {name: np.nan for name in VARIABLES}
 
 
 def _sessions_between(announced: pl.Series, listed: pl.Series) -> np.ndarray:

@@ -586,6 +586,47 @@ def read_rest_records(vendor_root: str | Path, endpoint: str, key: str = "id") -
     return list(records.values())
 
 
+def rest_frame(vendor_root: str | Path, endpoint: str, schema: dict, key: str | None = "id") -> pl.DataFrame:
+    """Return one REST endpoint's records as a frame of the fields in ``schema``.
+
+    The records are ``read_rest_records(vendor_root, endpoint, key)``, each
+    record's newest copy once, in the order that function returns them
+    (oldest pull first). A field a record lacks is null; a field whose name
+    ends in ``_date`` becomes a ``pl.Date`` from its first ten characters
+    (an ISO day or timestamp), null when it is not one.
+
+    Parameters
+    ----------
+    vendor_root : str or Path
+        ``<download-dir>/massive``.
+    endpoint : str
+        The endpoint's name (``quantlab.acquisition.massive.rest.ENDPOINTS``).
+    schema : dict
+        Each field read and its polars type as the vendor gives it (dates
+        as ``pl.String``).
+    key : str or None, default "id"
+        As for ``read_rest_records``.
+
+    Examples
+    --------
+    >>> import tempfile
+    >>> from datetime import UTC, datetime
+    >>> root = tempfile.mkdtemp()
+    >>> write_rest_page(rest_page_file(root, "splits", datetime(2024, 3, 12, tzinfo=UTC), 1), [
+    ...     {"id": "S1", "ticker": "AAA", "execution_date": "2024-03-06", "split_from": 1, "split_to": 4}])
+    >>> frame = rest_frame(root, "splits", {"ticker": pl.String, "execution_date": pl.String})
+    >>> frame.rows()
+    [('AAA', datetime.date(2024, 3, 6))]
+    """
+    rows = [{name: record.get(name) for name in schema} for record in read_rest_records(vendor_root, endpoint, key)]
+    frame = pl.DataFrame(rows, schema=schema, orient="row") if rows else pl.DataFrame(schema=schema)
+    return frame.with_columns(
+        pl.col(name).str.slice(0, 10).str.to_date(strict=False)
+        for name in schema
+        if name.endswith("_date")
+    )
+
+
 def read_rest_watermark(vendor_root: str | Path, endpoint: str) -> date | None:
     """Return the day a REST endpoint's rows are pulled through, or ``None``.
 
@@ -594,6 +635,10 @@ def read_rest_watermark(vendor_root: str | Path, endpoint: str) -> date | None:
 
     Examples
     --------
+    >>> import tempfile
+    >>> root = tempfile.mkdtemp()
+    >>> read_rest_watermark(root, "splits") is None
+    True
     >>> write_rest_watermark(root, "splits", "execution_date", date(2024, 3, 14))
     >>> read_rest_watermark(root, "splits")
     datetime.date(2024, 3, 14)

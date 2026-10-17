@@ -59,25 +59,16 @@ from datetime import date
 import numpy as np
 import pandas as pd
 import polars as pl
-import xarray as xr
 
 from quantlab.dataset._support.session_calendar import XnysSessionCalendar
-from quantlab.dataset.config import DatasetConfig, MassiveDividendsConfig, TickerMapConfig
+from quantlab.dataset.config import MassiveDividendsConfig
 from quantlab.dataset.massive.placement import TickerPlacement
-from quantlab.dataset.massive.raw import read_rest_records, read_rest_watermark
-from quantlab.dataset.massive.ticker_map import TickerMap
-from quantlab.dataset.sharadar.point_in_time import (
-    ReleasePanelDataset,
-    ReleaseSpec,
-    TradingCalendar,
-    on_grid,
-    to_panel,
-)
-from quantlab.dataset.sharadar.tables import raw_through, trading_days
-from quantlab.dataset.sharadar.universe import normalize_universe, universe
+from quantlab.dataset.massive.raw import rest_frame
+from quantlab.dataset.massive.rest_panel import MassiveRestEventPanel
+from quantlab.dataset.sharadar.universe import universe
 from quantlab.utils.timer import Timer
 
-__all__ = ["DIVIDEND_SCHEMA", "SPLIT_SCHEMA", "VARIABLES", "MassiveDividendDataset", "rest_frame", "usd_dividends"]
+__all__ = ["DIVIDEND_SCHEMA", "SPLIT_SCHEMA", "VARIABLES", "MassiveDividendDataset", "usd_dividends"]
 
 #: The panel's variables and their attributes, in panel order.
 VARIABLES: dict[str, dict] = {
@@ -120,25 +111,6 @@ SPLIT_SCHEMA = {
 }
 
 
-def rest_frame(vendor_root, endpoint: str, schema: dict) -> pl.DataFrame:
-    """Return one endpoint's records with the fields of ``schema``, dates as ``pl.Date``.
-
-    Shared with the adjusted Day aggregates (``quantlab.dataset.massive.day_bar_events``).
-
-    Examples
-    --------
-    >>> rest_frame("/data/quantlab/downloads/massive", "splits", SPLIT_SCHEMA).columns
-    ['ticker', 'execution_date', 'split_from', 'split_to']
-    """
-    rows = [{name: record.get(name) for name in schema} for record in read_rest_records(vendor_root, endpoint)]
-    frame = pl.DataFrame(rows, schema=schema, orient="row") if rows else pl.DataFrame(schema=schema)
-    return frame.with_columns(
-        pl.col(name).str.slice(0, 10).str.to_date(strict=False)
-        for name in schema
-        if name.endswith("_date")
-    )
-
-
 def usd_dividends(dividends: pl.DataFrame, placement: TickerPlacement) -> pl.DataFrame:
     """Return the dividends with a USD cash amount and an ex-date; count the others as left out.
 
@@ -167,7 +139,7 @@ def usd_dividends(dividends: pl.DataFrame, placement: TickerPlacement) -> pl.Dat
     )
 
 
-class MassiveDividendDataset(ReleasePanelDataset):
+class MassiveDividendDataset(MassiveRestEventPanel):
     """Daily panel of Massive's declared and paid dividends and splits, by permaticker.
 
     See the module docstring for the variables and the placement.
@@ -190,91 +162,10 @@ class MassiveDividendDataset(ReleasePanelDataset):
     #: The config class used to rebuild this dataset from a saved config.
     config_cls = MassiveDividendsConfig
 
-    def _normalize_config(self, config: DatasetConfig) -> MassiveDividendsConfig:
-        """Normalise as the base class does, then check the table and the universe fields.
-
-        Raises
-        ------
-        TypeError
-            If ``config`` is not a ``MassiveDividendsConfig``.
-        ValueError
-            If ``table`` is not ``"sep"`` or a universe field is invalid.
-        """
-        config = super()._normalize_config(config)
-        if not isinstance(config, MassiveDividendsConfig):
-            raise TypeError(f"{self.class_name} needs a MassiveDividendsConfig, got {type(config).__name__}.")
-        if config.table != "sep":
-            raise ValueError(f"{self.class_name}: table must be 'sep', got {config.table!r}.")
-        return normalize_universe(config, self.class_name)
-
-    def _on_config_installed(self) -> None:
-        """Drop what was cached for the previous config."""
-        super()._on_config_installed()
-        self._ticker_map: TickerMap | None = None
-
-    @property
-    def ticker_map(self) -> TickerMap:
-        """The Ticker map the records are placed through.
-
-        Examples
-        --------
-        >>> MassiveDividendDataset(config).ticker_map.path.name
-        'massive_ticker_map'
-        """
-        if self._ticker_map is None:
-            self._ticker_map = TickerMap(TickerMapConfig(
-                path=self.config.ticker_map_path,
-                massive_dir=self.config.massive_dir,
-                sharadar_dir=self.config.raw_data_dir_path,
-            ))
-        return self._ticker_map
-
-    @property
-    def unplaced_path(self) -> str:
-        """The report of the records left out (``<store>.unplaced.json``).
-
-        Examples
-        --------
-        >>> MassiveDividendDataset(config).unplaced_path.endswith("massive_dividends_1d.zarr.unplaced.json")
-        True
-        """
-        from quantlab.dataset.massive.placement import UNPLACED_SUFFIX
-
-        return f"{self.config.zarr_file_path}{UNPLACED_SUFFIX}"
-
-    # -- the calendar: the last day every input reaches -----------------------
-
-    def _trading_calendar(self) -> TradingCalendar:
-        """Return SEP's trading days through the last day SEP, both pulls and the Ticker map reach.
-
-        Raises
-        ------
-        ValueError
-            If a REST endpoint was never pulled or the Ticker map is empty.
-        """
-        if self._calendar_cache is None:
-            root = self.config.raw_data_dir_path
-            ends = {"SEP": raw_through(root, ("sep",))}
-            for endpoint in ENDPOINTS:
-                through = read_rest_watermark(self.config.massive_dir, endpoint)
-                if through is None:
-                    raise ValueError(
-                        f"{self.class_name}: Massive's {endpoint!r} endpoint was never pulled into "
-                        f"{self.config.massive_dir}; run scripts/massive/rest_pull.py first."
-                    )
-                ends[endpoint] = through
-            days = self.ticker_map.days()
-            if not days:
-                raise ValueError(
-                    f"{self.class_name}: the Ticker map at {self.config.ticker_map_path} maps no day; "
-                    f"run scripts/massive/ticker_map.py first."
-                )
-            ends["Ticker map"] = days[-1]
-            through = min(ends.values())
-            self._calendar_cache = TradingCalendar(
-                trading_days(root, through), through=through, start=self.config.start_date, end=self.config.end_date
-            )
-        return self._calendar_cache
+    #: The REST endpoints read (``MassiveRestPanel``).
+    REST_ENDPOINTS = ENDPOINTS
+    #: The module's ``VARIABLES``.
+    VARIABLES = VARIABLES
 
     # -- the rows ---------------------------------------------------------------
 
@@ -312,14 +203,9 @@ class MassiveDividendDataset(ReleasePanelDataset):
         )
         return frame.filter(pl.col("symbol").is_in(keep)).select(list(schema)).sort("symbol", "available")
 
-    @staticmethod
-    def _placed_on_days(rows: pl.DataFrame, calendar: TradingCalendar, on: str, first) -> pl.DataFrame:
-        """Return ``rows`` on the trading day of ``on``, those before the store's first day dropped."""
-        return calendar.place(rows, on=on).filter(pl.col("available") >= first)
-
     def _ex_cash(self, dividends, calendar, first, placement) -> pl.DataFrame:
         """Return ``dividend_cash`` per security and ex-date."""
-        rows = self._placed_on_days(dividends, calendar, "ex_dividend_date", first)
+        rows = self._on_trading_days(dividends, calendar, "ex_dividend_date", first)
         rows = placement.place(rows, source="dividends:ex")
         return rows.group_by(pl.col("permaticker").alias("symbol"), "available").agg(
             pl.col("cash_amount").sum().alias("dividend_cash")
@@ -333,7 +219,7 @@ class MassiveDividendDataset(ReleasePanelDataset):
         valid = (pl.col("split_from") > 0) & (pl.col("split_to") > 0)
         placement.leave_out(splits.filter(~valid.fill_null(False)), source="splits",
                             reason="no positive split_from and split_to", day="execution_date")
-        rows = self._placed_on_days(splits.filter(valid), calendar, "execution_date", first)
+        rows = self._on_trading_days(splits.filter(valid), calendar, "execution_date", first)
         rows = placement.place(rows, source="splits")
         return rows.group_by(pl.col("permaticker").alias("symbol"), "available").agg(
             (pl.col("split_to") / pl.col("split_from")).product().alias("split_ratio")
@@ -390,48 +276,9 @@ class MassiveDividendDataset(ReleasePanelDataset):
             )
         ).select(empty.columns)
 
-    # -- the panel: a value on its own day ----------------------------------------
-
-    def _spec(self) -> ReleaseSpec:
-        """Return the four variables and their attributes; no staleness."""
-        return ReleaseSpec(variables=VARIABLES, stamp=None)
-
     def _nothing_shown(self) -> str:
         """Return what an empty window lacks."""
         return "no Massive dividend or split is placed"
-
-    def _raw_data_to_xr_window(self, start_date, end_date, symbols: list[int] | None = None) -> xr.Dataset:
-        """Return one window: each day's values on that day, NaN elsewhere."""
-        days, symbols = self._window_axes(start_date, end_date, symbols)
-        cells = (
-            on_grid(days, symbols)
-            .join(self._released_rows(), left_on=["timestamp", "symbol"], right_on=["available", "symbol"],
-                  how="left")
-            .sort("_day", "_column")
-            .with_columns(pl.col(name).cast(pl.Float64).fill_null(float("nan")) for name in VARIABLES)
-        )
-        return to_panel(cells, days, symbols, VARIABLES)
-
-    def _added_symbols_with_raw_history(self, added: list, start, end) -> dict[str, int]:
-        """Count each added permaticker's days with a value between ``start`` and ``end``."""
-        if not added:
-            return {}
-        counts = (
-            self._released_rows()
-            .filter(
-                pl.col("symbol").is_in([int(s) for s in added])
-                & pl.col("available").is_between(
-                    pl.lit(pd.Timestamp(start).to_datetime64()), pl.lit(pd.Timestamp(end).to_datetime64())
-                )
-            )
-            .group_by("symbol")
-            .len()
-        )
-        return {str(symbol): int(rows) for symbol, rows in counts.iter_rows()}
-
-    def _widen_fill_values(self) -> dict:
-        """Fill a new permaticker's stored days with NaN: it had no event then."""
-        return {name: np.nan for name in VARIABLES}
 
 
 class _Sessions:

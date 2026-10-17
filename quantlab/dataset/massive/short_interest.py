@@ -49,19 +49,12 @@ import numpy as np
 import polars as pl
 import xarray as xr
 
-from quantlab.dataset.config import DatasetConfig, MassiveShortInterestConfig, TickerMapConfig
-from quantlab.dataset.massive.placement import UNPLACED_SUFFIX, TickerPlacement
-from quantlab.dataset.massive.raw import read_rest_records, read_rest_watermark
-from quantlab.dataset.massive.ticker_map import TickerMap
-from quantlab.dataset.sharadar.point_in_time import (
-    ReleasePanelDataset,
-    ReleaseSpec,
-    TradingCalendar,
-    on_grid,
-    to_panel,
-)
-from quantlab.dataset.sharadar.tables import raw_through, trading_days
-from quantlab.dataset.sharadar.universe import normalize_universe, universe
+from quantlab.dataset.config import DatasetConfig, MassiveShortInterestConfig
+from quantlab.dataset.massive.placement import TickerPlacement
+from quantlab.dataset.massive.raw import rest_frame
+from quantlab.dataset.massive.rest_panel import MassiveRestEventPanel
+from quantlab.dataset.sharadar.point_in_time import TradingCalendar, on_grid, to_panel
+from quantlab.dataset.sharadar.universe import universe
 from quantlab.utils.timer import Timer
 
 __all__ = ["VARIABLES", "MassiveShortInterestDataset"]
@@ -99,7 +92,7 @@ FIELDS = {"short_interest": "short_interest", "short_avg_daily_volume": "avg_dai
           "days_to_cover": "days_to_cover"}
 
 
-class MassiveShortInterestDataset(ReleasePanelDataset):
+class MassiveShortInterestDataset(MassiveRestEventPanel):
     """Daily release panel of Massive's short interest, by permaticker.
 
     See the module docstring for the variables and the release rule.
@@ -122,6 +115,11 @@ class MassiveShortInterestDataset(ReleasePanelDataset):
     #: The config class used to rebuild this dataset from a saved config.
     config_cls = MassiveShortInterestConfig
 
+    #: The REST endpoints read (``MassiveRestPanel``).
+    REST_ENDPOINTS = (ENDPOINT,)
+    #: The module's ``VARIABLES``.
+    VARIABLES = VARIABLES
+
     def _normalize_config(self, config: DatasetConfig) -> MassiveShortInterestConfig:
         """Normalise as the base class does, then check the table, the lag and the universe fields.
 
@@ -134,89 +132,21 @@ class MassiveShortInterestDataset(ReleasePanelDataset):
             a universe field is invalid.
         """
         config = super()._normalize_config(config)
-        if not isinstance(config, MassiveShortInterestConfig):
-            raise TypeError(f"{self.class_name} needs a MassiveShortInterestConfig, got {type(config).__name__}.")
-        if config.table != "sep":
-            raise ValueError(f"{self.class_name}: table must be 'sep', got {config.table!r}.")
         if config.release_lag_bars < 0:
             raise ValueError(f"{self.class_name}: release_lag_bars must be >= 0, got {config.release_lag_bars}.")
-        return normalize_universe(config, self.class_name)
+        return config
 
     def _on_config_installed(self) -> None:
         """Drop what was cached for the previous config."""
         super()._on_config_installed()
-        self._ticker_map: TickerMap | None = None
         self._schedule_cache: pl.DataFrame | None = None
-
-    @property
-    def ticker_map(self) -> TickerMap:
-        """The Ticker map the records are placed through.
-
-        Examples
-        --------
-        >>> MassiveShortInterestDataset(config).ticker_map.path.name
-        'massive_ticker_map'
-        """
-        if self._ticker_map is None:
-            self._ticker_map = TickerMap(TickerMapConfig(
-                path=self.config.ticker_map_path,
-                massive_dir=self.config.massive_dir,
-                sharadar_dir=self.config.raw_data_dir_path,
-            ))
-        return self._ticker_map
-
-    @property
-    def unplaced_path(self) -> str:
-        """The report of the records left out (``<store>.unplaced.json``).
-
-        Examples
-        --------
-        >>> MassiveShortInterestDataset(config).unplaced_path.endswith("massive_short_interest_1d.zarr.unplaced.json")
-        True
-        """
-        return f"{self.config.zarr_file_path}{UNPLACED_SUFFIX}"
-
-    # -- the calendar: the last day every input reaches -----------------------
-
-    def _trading_calendar(self) -> TradingCalendar:
-        """Return SEP's trading days through the last day SEP, the pull and the Ticker map reach.
-
-        Raises
-        ------
-        ValueError
-            If the REST endpoint was never pulled or the Ticker map is empty.
-        """
-        if self._calendar_cache is None:
-            root = self.config.raw_data_dir_path
-            pulled = read_rest_watermark(self.config.massive_dir, ENDPOINT)
-            if pulled is None:
-                raise ValueError(
-                    f"{self.class_name}: Massive's {ENDPOINT!r} endpoint was never pulled into "
-                    f"{self.config.massive_dir}; run scripts/massive/rest_pull.py first."
-                )
-            days = self.ticker_map.days()
-            if not days:
-                raise ValueError(
-                    f"{self.class_name}: the Ticker map at {self.config.ticker_map_path} maps no day; "
-                    f"run scripts/massive/ticker_map.py first."
-                )
-            through = min(raw_through(root, ("sep",)), pulled, days[-1])
-            self._calendar_cache = TradingCalendar(
-                trading_days(root, through), through=through, start=self.config.start_date, end=self.config.end_date
-            )
-        return self._calendar_cache
 
     # -- the rows ---------------------------------------------------------------
 
     def _records(self) -> pl.DataFrame:
         """Return the records, the newest copy of each ticker and settlement date, dates as ``pl.Date``."""
-        rows = [
-            {name: record.get(name) for name in SCHEMA}
-            for record in read_rest_records(self.config.massive_dir, ENDPOINT, key=None)
-        ]
-        frame = pl.DataFrame(rows, schema=SCHEMA, orient="row") if rows else pl.DataFrame(schema=SCHEMA)
         return (
-            frame.with_columns(pl.col("settlement_date").str.slice(0, 10).str.to_date(strict=False))
+            rest_frame(self.config.massive_dir, ENDPOINT, SCHEMA, key=None)
             .filter(pl.col("ticker").is_not_null() & pl.col("settlement_date").is_not_null())
             # Oldest pull first: the last copy is the newest.
             .unique(["ticker", "settlement_date"], keep="last", maintain_order=True)
@@ -287,10 +217,6 @@ class MassiveShortInterestDataset(ReleasePanelDataset):
 
     # -- the panel: the release visible each day ----------------------------------
 
-    def _spec(self) -> ReleaseSpec:
-        """Return the three variables and their attributes; staleness is the next release."""
-        return ReleaseSpec(variables=VARIABLES, stamp=None)
-
     def _nothing_shown(self) -> str:
         """Return what an empty window lacks."""
         return "no Massive short interest release is visible"
@@ -330,8 +256,3 @@ class MassiveShortInterestDataset(ReleasePanelDataset):
             for symbol, count in zip(window["symbol"].values.tolist(), counts.values.tolist())
             if count
         }
-
-    def _widen_fill_values(self) -> dict:
-        """Fill a new permaticker's stored days with NaN: no release showed it then."""
-        return {name: np.nan for name in VARIABLES}
-

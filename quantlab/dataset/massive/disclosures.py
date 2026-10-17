@@ -52,13 +52,11 @@ from datetime import timedelta
 
 import polars as pl
 
-from quantlab.dataset.config import MassiveDisclosuresConfig, TickerMapConfig
-from quantlab.dataset.massive.placement import UNPLACED_SUFFIX, TickerPlacement
-from quantlab.dataset.massive.raw import read_rest_records, read_rest_snapshot, read_rest_watermark
-from quantlab.dataset.massive.ticker_map import TickerMap
+from quantlab.dataset.config import MassiveDisclosuresConfig
+from quantlab.dataset.massive.placement import TickerPlacement
+from quantlab.dataset.massive.raw import read_rest_snapshot, rest_frame
+from quantlab.dataset.massive.rest_panel import MassiveRestPanel
 from quantlab.dataset.sharadar.filings import FilingPanelDataset
-from quantlab.dataset.sharadar.point_in_time import TradingCalendar
-from quantlab.dataset.sharadar.tables import raw_through, trading_days
 from quantlab.dataset.sharadar.universe import universe
 from quantlab.utils.timer import Timer
 
@@ -78,7 +76,7 @@ DISCLOSURE_SCHEMA = {
 }
 
 
-class MassiveDisclosureDataset(FilingPanelDataset):
+class MassiveDisclosureDataset(MassiveRestPanel, FilingPanelDataset):
     """Daily panel of Massive's 8-K disclosure categories, one flag per primary category, by permaticker.
 
     See the module docstring for the variables and the placement.
@@ -104,39 +102,13 @@ class MassiveDisclosureDataset(FilingPanelDataset):
     #: The table of the config: SEP gives the calendar and the universe.
     TABLE = "sep"
 
+    #: The REST endpoints read (``MassiveRestPanel``).
+    REST_ENDPOINTS = (DISCLOSURES,)
+
     def _on_config_installed(self) -> None:
         """Drop what was cached for the previous config."""
         super()._on_config_installed()
-        self._ticker_map: TickerMap | None = None
         self._categories: dict[str, dict] | None = None
-
-    @property
-    def ticker_map(self) -> TickerMap:
-        """The Ticker map the records are placed through.
-
-        Examples
-        --------
-        >>> MassiveDisclosureDataset(config).ticker_map.path.name
-        'massive_ticker_map'
-        """
-        if self._ticker_map is None:
-            self._ticker_map = TickerMap(TickerMapConfig(
-                path=self.config.ticker_map_path,
-                massive_dir=self.config.massive_dir,
-                sharadar_dir=self.config.raw_data_dir_path,
-            ))
-        return self._ticker_map
-
-    @property
-    def unplaced_path(self) -> str:
-        """The report of the records left out (``<store>.unplaced.json``).
-
-        Examples
-        --------
-        >>> MassiveDisclosureDataset(config).unplaced_path.endswith("massive_disclosures_1d.zarr.unplaced.json")
-        True
-        """
-        return f"{self.config.zarr_file_path}{UNPLACED_SUFFIX}"
 
     # -- the taxonomy: the variables ---------------------------------------------
 
@@ -200,37 +172,6 @@ class MassiveDisclosureDataset(FilingPanelDataset):
         """Return SEP, the calendar."""
         return ("sep",)
 
-    def _trading_calendar(self) -> TradingCalendar:
-        """Return SEP's trading days through the last day SEP, the disclosure pull and the Ticker map reach.
-
-        Raises
-        ------
-        ValueError
-            If the disclosures were never pulled or the Ticker map is empty.
-        """
-        if self._calendar_cache is None:
-            root = self.config.raw_data_dir_path
-            ends = {"SEP": raw_through(root, ("sep",))}
-            through = read_rest_watermark(self.config.massive_dir, DISCLOSURES)
-            if through is None:
-                raise ValueError(
-                    f"{self.class_name}: Massive's {DISCLOSURES!r} endpoint was never pulled into "
-                    f"{self.config.massive_dir}; run scripts/massive/rest_pull.py first."
-                )
-            ends[DISCLOSURES] = through
-            days = self.ticker_map.days()
-            if not days:
-                raise ValueError(
-                    f"{self.class_name}: the Ticker map at {self.config.ticker_map_path} maps no day; "
-                    f"run scripts/massive/ticker_map.py first."
-                )
-            ends["Ticker map"] = days[-1]
-            through = min(ends.values())
-            self._calendar_cache = TradingCalendar(
-                trading_days(root, through), through=through, start=self.config.start_date, end=self.config.end_date
-            )
-        return self._calendar_cache
-
     # -- the rows ---------------------------------------------------------------
 
     def _records(self) -> pl.DataFrame:
@@ -241,14 +182,7 @@ class MassiveDisclosureDataset(FilingPanelDataset):
         ValueError
             If a record's primary category is not in the taxonomy.
         """
-        rows = [
-            {name: record.get(name) for name in DISCLOSURE_SCHEMA}
-            for record in read_rest_records(self.config.massive_dir, DISCLOSURES, key=None)
-        ]
-        frame = (
-            pl.DataFrame(rows, schema=DISCLOSURE_SCHEMA, orient="row") if rows
-            else pl.DataFrame(schema=DISCLOSURE_SCHEMA)
-        ).with_columns(pl.col("filing_date").str.slice(0, 10).str.to_date(strict=False))
+        frame = rest_frame(self.config.massive_dir, DISCLOSURES, DISCLOSURE_SCHEMA, key=None)
         known = set(self._taxonomy())
         unknown = sorted(set(frame.get_column("primary_category").drop_nulls().unique()) - known)
         if unknown:
