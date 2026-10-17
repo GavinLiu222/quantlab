@@ -271,19 +271,15 @@ tiingo/month=2024-01/part-b57bb3d00d22bced-00000.pqt
 下载前不做规模估算，也不会因为请求过大而拒绝。
 用标的列表和日期窗口来限定一次请求的范围。
 
-### 补全缺失的覆盖起点
+### 没有覆盖起点的边车
 
-旧版本写出的边车只记录 `last_date`。它们被归为 `legacy`，默认跳过并在每次运行时报告，因为磁盘上没有任何信息说明它们是按哪个窗口抓取的。`stamp_watermarks(start_date)` 会把你给出的起点写进每个缺少起点的边车，且不发任何请求。也可以设置 `kwargs["legacy_watermarks"] = "refetch"` 重新下载它们。
+旧版本写出的边车只记录 `last_date`。它们被归为 `legacy`，默认跳过并在每次运行时报告，因为磁盘上没有任何信息说明它们是按哪个窗口抓取的。设置 `kwargs["legacy_watermarks"] = "refetch"` 会把它们当作未覆盖并重新下载。
 
 ```python
 >>> old = Path(sparse.config.watermark_path) / "AAPL.json"
 >>> _ = old.write_text('{"last_date": "2024-01-05"}')
 >>> counts(sparse)
 {'requested': 2, 'skipped': 2, 'covered': 1, 'legacy': 1, 'no_data': 1}
->>> sparse.stamp_watermarks("2024-01-02")
-1
->>> counts(sparse)
-{'requested': 2, 'skipped': 2, 'covered': 2, 'no_data': 1}
 ```
 
 ### 对接真实厂商

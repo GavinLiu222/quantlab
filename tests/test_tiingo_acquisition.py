@@ -450,13 +450,13 @@ def test_write_watermark_stays_readable_by_the_unchanged_read_watermark(
     acq = TiingoAcquisition(_make_config(tmp_path))
 
     acq._write_watermark("AAPL", "2024-01-31", start_date="2024-01-01")
-    assert acq._read_watermark("AAPL") == "2024-01-31"
+    assert acq._coverage.read_watermark("AAPL") == "2024-01-31"
 
     # Omitting the start writes NO key at all -- an unknown start is
     # represented by absence, never by a null that a reader could mistake for
     # a recorded value.
     acq._write_watermark("MSFT", "2024-01-31")
-    assert acq._read_watermark("MSFT") == "2024-01-31"
+    assert acq._coverage.read_watermark("MSFT") == "2024-01-31"
     assert "start_date" not in _read_sidecar(tmp_path, "MSFT")
 
 
@@ -576,7 +576,7 @@ def test_legacy_watermarks_are_skipped_by_default_and_reported_loudly(
 ):
     """D-04 option (c). What makes the D-03 failure mode dangerous is SILENCE,
     not the skip. A run that skips these while printing their exact count and
-    the one command that resolves it is a REPORTED gap with a named cure.
+    the setting that resolves it is a REPORTED gap with a named cure.
     """
     from quantlab.acquisition.tiingo import TiingoAcquisition
 
@@ -593,7 +593,7 @@ def test_legacy_watermarks_are_skipped_by_default_and_reported_loudly(
 
     text = "\n".join(messages)
     assert str(len(_FIVE)) in text
-    assert "stamp_watermarks" in text
+    assert "legacy_watermarks='refetch'" in text
 
 
 def test_legacy_watermarks_are_re_fetched_under_the_refetch_policy(
@@ -612,57 +612,6 @@ def test_legacy_watermarks_are_re_fetched_under_the_refetch_policy(
     )
     TiingoAcquisition(config).download()
 
-    assert len(mock_tiingo_client.calls) == len(_FIVE)
-
-
-def test_stamp_watermarks_fills_only_absent_starts_and_returns_the_count(
-    mock_tiingo_client, tmp_path
-):
-    """Takes the start from its CALLER and derives it from nothing (D-04), and
-    refuses to overwrite a start that is already recorded (T-26o-04).
-    """
-    from quantlab.acquisition.tiingo import TiingoAcquisition
-
-    acq = TiingoAcquisition(_make_config(tmp_path))
-    _write_legacy_watermark(tmp_path, "AAPL", "2024-01-31")
-    _write_legacy_watermark(tmp_path, "MSFT", "2024-01-31")
-    acq._write_watermark("GOOG", "2024-01-31", start_date="2010-01-01")
-    # The failure manifest lives in the same directory and is not a watermark.
-    (tmp_path / "watermark" / "_failures.json").write_text("{}")
-    (tmp_path / "watermark" / "BROKEN.json").write_text("{not json")
-
-    changed = acq.stamp_watermarks("2016-01-01")
-
-    assert changed == 2
-    assert _read_sidecar(tmp_path, "AAPL")["start_date"] == "2016-01-01"
-    assert _read_sidecar(tmp_path, "MSFT")["start_date"] == "2016-01-01"
-    assert _read_sidecar(tmp_path, "GOOG")["start_date"] == "2010-01-01"
-    assert json.loads((tmp_path / "watermark" / "_failures.json").read_text()) == {}
-
-    # Idempotent: a second stamp changes nothing, because every start is known.
-    assert acq.stamp_watermarks("2016-01-01") == 0
-
-
-def test_stamping_then_widening_re_fetches_the_stamped_symbols(
-    mock_tiingo_client, tmp_path
-):
-    """The end-to-end shape of Task 3's checkpoint, proved offline: stamp, and
-    a same-window run still skips while a widened run now re-fetches.
-    """
-    from quantlab.acquisition.tiingo import TiingoAcquisition
-
-    for symbol in _FIVE:
-        _write_legacy_watermark(tmp_path, symbol, "2024-01-31")
-
-    acq = TiingoAcquisition(_make_concurrent_config(tmp_path))
-    assert acq.stamp_watermarks("2024-01-01") == len(_FIVE)
-
-    TiingoAcquisition(_make_concurrent_config(tmp_path)).download()
-    assert mock_tiingo_client.calls == []
-
-    widened = _make_concurrent_config(tmp_path)
-    widened.start_date = "2010-01-01"
-    TiingoAcquisition(widened).download()
     assert len(mock_tiingo_client.calls) == len(_FIVE)
 
 

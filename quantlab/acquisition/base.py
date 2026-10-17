@@ -49,13 +49,7 @@ from loguru import logger
 
 from quantlab.acquisition.config import AcquisitionConfig
 from quantlab.acquisition.refresh import RawTierRefresh
-from quantlab.acquisition._support.coverage import (
-    DEFAULT_LEGACY_WATERMARK_POLICY as _DEFAULT_LEGACY_WATERMARK_POLICY,
-)
 from quantlab.acquisition._support.coverage import FAILURE_MANIFEST_NAME as _FAILURE_MANIFEST_NAME
-from quantlab.acquisition._support.coverage import (
-    LEGACY_WATERMARK_POLICIES as _LEGACY_WATERMARK_POLICIES,
-)
 from quantlab.acquisition._support.coverage import CoverageLedger, SymbolCoverage
 from quantlab.acquisition._support.page_ledger import PageLedger
 from quantlab.acquisition._support.request_policy import scrub
@@ -196,9 +190,10 @@ class SymbolBatchAcquisition(ABC):
     Each symbol's sidecar lives under ``config.watermark_path`` and holds
     ``last_date``, optionally ``start_date`` and optionally ``no_data``.
     ``start_date`` is where the downloaded range begins. When it is missing
-    the start is unknown and is never guessed; ``stamp_watermarks`` fills it
-    in. ``no_data`` means the vendor was asked about the symbol over that
-    window and returned nothing. That is different from a failed fetch (an
+    the start is unknown and is never guessed;
+    ``config.kwargs["legacy_watermarks"]`` says whether such a symbol is
+    skipped or fetched again. ``no_data`` means the vendor was asked about the
+    symbol over that window and returned nothing. That is different from a failed fetch (an
     entry in the failure manifest and no sidecar) and from a symbol that was
     never fetched (neither). Both optional keys are omitted rather than
     written as false, so sidecars written before these keys existed still
@@ -343,14 +338,11 @@ class SymbolBatchAcquisition(ABC):
         The ledger is rebuilt on every access instead of being cached when
         the config is assigned. A subclass may compute ``_data_type`` from a
         ``config.kwargs`` entry that is only set later, and evaluating it
-        early would raise. The legacy-watermark policies are passed in so a
-        subclass that restricts them also restricts its ledger.
+        early would raise.
         """
         return CoverageLedger(
             self.config,
             data_type=self._data_type,
-            legacy_policies=self.LEGACY_WATERMARK_POLICIES,
-            default_legacy_policy=self.DEFAULT_LEGACY_WATERMARK_POLICY,
             owner_label=self.class_name,
         )
 
@@ -362,14 +354,6 @@ class SymbolBatchAcquisition(ABC):
     def _watermark_path(self, symbol: str) -> Path:
         """Return the sidecar path for ``symbol``."""
         return self._coverage.watermark_path(symbol)
-
-    def _read_sidecar(self, symbol: str) -> dict | None:
-        """Return the parsed sidecar for ``symbol``, or None if absent or corrupt."""
-        return self._coverage.read_sidecar(symbol)
-
-    def _read_watermark(self, symbol: str) -> str | None:
-        """Return the last covered date for ``symbol``, or None."""
-        return self._coverage.read_watermark(symbol)
 
     def _read_coverage(self, symbol: str) -> dict | None:
         """Return ``{"start_date", "last_date", "no_data"}`` for ``symbol``, or None."""
@@ -407,63 +391,6 @@ class SymbolBatchAcquisition(ABC):
             Whether the vendor returned no rows for the covered window.
         """
         SymbolCoverage(last_date, start_date=start_date, no_data=no_data).write(self._watermark_path(symbol))
-
-    def stamp_watermarks(self, start_date: str) -> int:
-        """Fill ``start_date`` into every sidecar that records no start date.
-
-        Older sidecars (called *legacy watermarks*) record only the last
-        covered date. This method is the one-off migration that gives them a
-        start. The value comes from the caller and nothing else, because only
-        the operator knows what window those files were fetched over.
-        Sidecars that already record a start are left untouched, and an
-        existing ``no_data`` marker is kept. No vendor requests are issued.
-
-        Parameters
-        ----------
-        start_date : str
-            The covered start to record, as ``YYYY-MM-DD``.
-
-        Returns
-        -------
-        int
-            How many sidecars were rewritten. A second call with nothing left
-            to stamp returns 0.
-
-        Examples
-        --------
-        ::
-
-            n = acq.stamp_watermarks("2020-01-01")
-            print(f"stamped {n} sidecar(s)")
-        """
-        directory = self._watermark_root
-        if not directory.exists():
-            return 0
-
-        changed = 0
-        for path in sorted(directory.glob("*.json")):
-            symbol = path.stem
-            coverage = self._read_coverage(symbol)
-            # Skips the failure manifest (it has no `last_date`) and any
-            # corrupt file (it reads as None).
-            if coverage is None or coverage["last_date"] is None:
-                continue
-            if coverage["start_date"] is not None:
-                continue
-            self._write_watermark(
-                symbol,
-                coverage["last_date"],
-                start_date=start_date,
-                no_data=coverage["no_data"],
-            )
-            changed += 1
-
-        logger.info(
-            f"Stamped covered start {start_date} onto {changed} watermark(s) "
-            f"under {directory}; sidecars already recording a start were left "
-            f"untouched."
-        )
-        return changed
 
     #: How many symbols one ``_fetch_page`` request carries. A vendor whose
     #: API takes one symbol per call uses 1, which behaves exactly like a
@@ -516,19 +443,6 @@ class SymbolBatchAcquisition(ABC):
     #: How many failed symbols are named in the summary log line. The full
     #: set always lands in the manifest; the log line is a pointer to it.
     _FAILURE_LOG_SAMPLE = 5
-
-    #: Accepted values of ``config.kwargs["legacy_watermarks"]``. ``"warn"``
-    #: skips a sidecar with no recorded covered start but reports it on every
-    #: run; ``"refetch"`` treats unknown coverage as not covered. Imported
-    #: from ``quantlab.acquisition._support.coverage`` so the coverage ledger uses the same
-    #: set. They are class attributes because command-line scripts read them
-    #: for their argument choices and a subclass may restrict them.
-    LEGACY_WATERMARK_POLICIES = _LEGACY_WATERMARK_POLICIES
-    DEFAULT_LEGACY_WATERMARK_POLICY = _DEFAULT_LEGACY_WATERMARK_POLICY
-
-    #: The call that fixes a legacy watermark (one with no recorded start),
-    #: quoted in the warning so the problem comes with its fix.
-    STAMP_COMMAND_HINT = "SymbolBatchAcquisition(config).stamp_watermarks('<START_DATE>')"
 
     #: Whether a run that used up the vendor's request quota (its
     #: "allocation") waits for it to reset and then resumes. Off by default,
@@ -1628,8 +1542,8 @@ class SymbolBatchAcquisition(ABC):
         This runs the same check ``_run`` uses to decide what is pending, so
         the two always agree, but it downloads nothing. Use it to see whether
         a wider date window would re-fetch anything before starting a
-        multi-hour job, or to confirm that ``stamp_watermarks`` fixed every
-        legacy sidecar.
+        multi-hour job, or to count the legacy sidecars (no recorded start)
+        a ``legacy_watermarks="refetch"`` run would fetch again.
 
         Parameters
         ----------
@@ -1664,24 +1578,6 @@ class SymbolBatchAcquisition(ABC):
             "skipped": len(requested) - len(pending),
             **counts,
         }
-
-    def _legacy_policy(self) -> str:
-        """Return the resolved ``legacy_watermarks`` policy."""
-        return self._coverage.legacy_policy()
-
-    def _coverage_status(self, symbol: str, from_watermark: bool = False) -> str:
-        """Return ``symbol``'s coverage state; see ``CoverageLedger``."""
-        return self._coverage.coverage_status(symbol, from_watermark)
-
-    def _classify_coverage(
-        self, coverage: dict | None, from_watermark: bool = False
-    ) -> str:
-        """Classify a parsed sidecar against the config window."""
-        return self._coverage.classify_coverage(coverage, from_watermark)
-
-    def _covers(self, symbol: str, from_watermark: bool = False) -> bool:
-        """Return whether ``symbol``'s sidecar already covers the window."""
-        return self._coverage.covers(symbol, from_watermark)
 
     def _partition_by_coverage(
         self, requested: list[str], from_watermark: bool
@@ -1751,17 +1647,15 @@ class SymbolBatchAcquisition(ABC):
                 f"this run asks for."
             )
         if counts["legacy"]:
-            if self._legacy_policy() == "warn":
+            if self._coverage.legacy_policy() == "warn":
                 logger.warning(
                     f"{counts['legacy']} symbol(s) carry a legacy watermark "
                     f"with no recorded covered start. They were skipped, and "
                     f"whether they actually cover {self.config.start_date} "
                     f"cannot be known from disk: only you know what window "
                     f"they were fetched over, which is why this is not "
-                    f"guessed. Stamp them once with: "
-                    f"{self.STAMP_COMMAND_HINT}  (or set "
-                    f"legacy_watermarks='refetch' to re-download them "
-                    f"instead)."
+                    f"guessed. Set legacy_watermarks='refetch' to "
+                    f"re-download them."
                 )
             else:
                 logger.info(

@@ -98,8 +98,8 @@ def test_a_half_written_watermark_sidecar_reads_back_as_absent(
 ) -> None:
     """The blast-radius bound L-4 relies on, asserted BEFORE the change.
 
-    `SymbolBatchAcquisition._read_sidecar` is the single tolerant read that both
-    `_read_watermark` and `_read_coverage` share, so there is exactly one
+    `CoverageLedger.read_sidecar` is the single tolerant read that both
+    `read_watermark` and `read_coverage` share, so there is exactly one
     failure policy for a corrupt sidecar rather than two that could drift. Its
     policy is: absent or unparseable both mean `None`, i.e. "no watermark",
     i.e. re-fetch from `config.start_date`. The worst case is a
@@ -114,24 +114,24 @@ def test_a_half_written_watermark_sidecar_reads_back_as_absent(
 
     Both corrupt shapes are covered -- truncated JSON (what a crash mid-write
     actually produces) and well-formed JSON that is not an object (which
-    `_read_sidecar` also rejects, since callers index it like a dict).
+    `read_sidecar` also rejects, since callers index it like a dict).
     """
     config = acquisition_config(vendor="tiingo", symbols=("AAPL", "MSFT"))
     acq = TiingoAcquisition(config)
 
-    assert acq._read_sidecar("AAPL") is None, "no sidecar yet -- must be None"
+    assert acq._coverage.read_sidecar("AAPL") is None, "no sidecar yet -- must be None"
 
     truncated_path = acq._watermark_path("AAPL")
     truncated_path.parent.mkdir(parents=True, exist_ok=True)
     truncated_path.write_text('{"last_date": "2024-01-3', encoding="utf-8")
 
-    assert acq._read_sidecar("AAPL") is None
-    assert acq._read_watermark("AAPL") is None
+    assert acq._coverage.read_sidecar("AAPL") is None
+    assert acq._coverage.read_watermark("AAPL") is None
 
     not_an_object_path = acq._watermark_path("MSFT")
     not_an_object_path.write_text('["2024-01-31"]', encoding="utf-8")
 
-    assert acq._read_sidecar("MSFT") is None
+    assert acq._coverage.read_sidecar("MSFT") is None
 
 
 # --------------------------------------------------------------------------
@@ -360,7 +360,7 @@ def test_an_interrupted_watermark_write_leaves_the_previous_value_readable(
     most likely to be interrupted, and the interrupted file is the one the
     RESUMED run reads. Under a plain `open(path, "w")` the destination is
     truncated before `json.dump` writes a byte, so an interruption replaces a
-    good watermark with an empty file -- which `_read_sidecar` then reports as
+    good watermark with an empty file -- which `read_sidecar` then reports as
     "no coverage" and the next run re-fetches from `config.start_date`.
 
     Four assertions, because the interesting failure modes differ:

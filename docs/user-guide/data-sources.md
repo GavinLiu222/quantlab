@@ -344,9 +344,8 @@ Two situations need a deliberate choice. `download()` (the default) fills in
 the requested window, while `--refresh` / `refresh()` starts each symbol from
 its own last date and never widens the start. And sidecars written by older
 versions of quantlab may lack a start date; by default they are skipped with a
-warning on every run. `acquisition.stamp_watermarks("2016-01-01")` records the
-start you know they were fetched from, issuing no requests, and
-`kwargs["legacy_watermarks"] = "refetch"` treats them as not covered instead.
+warning on every run, and `kwargs["legacy_watermarks"] = "refetch"` treats
+them as not covered and downloads them again.
 
 ## Rate limits and quotas
 

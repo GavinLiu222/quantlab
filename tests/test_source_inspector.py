@@ -180,10 +180,8 @@ def test_iter_watermark_symbols_skips_the_manifest_and_the_page_ledgers(
 ) -> None:
     """A blind `*.json` glob would report `_failures` as a symbol.
 
-    `SymbolBatchAcquisition.stamp_watermarks` globs the same directory and gets away with
-    it because a manifest and a page ledger both read back with
-    `last_date is None` and fall out of its loop. `iter_watermark_symbols` has
-    no such filter -- "does this symbol have a watermark" is a question about
+    A manifest and a page ledger both read back with `last_date is None`, but
+    `iter_watermark_symbols` has no such filter -- "does this symbol have a watermark" is a question about
     file PRESENCE -- so the skip has to be explicit, and it has to be asserted
     against a tree that actually contains both artefacts rather than against
     one where the answer is vacuously right.
@@ -289,13 +287,7 @@ def test_every_moved_acquisition_member_is_a_single_delegating_call() -> None:
     moved = {
         "_watermark_root",
         "_watermark_path",
-        "_read_sidecar",
-        "_read_watermark",
         "_read_coverage",
-        "_legacy_policy",
-        "_coverage_status",
-        "_classify_coverage",
-        "_covers",
         "_partition_by_coverage",
         "_validate_symbols",
     }

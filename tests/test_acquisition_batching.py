@@ -722,7 +722,7 @@ def test_a_no_data_sidecar_is_still_read_by_the_unchanged_read_watermark(
 ):
     """Additive direction 2: a NEW file is valid input to an OLD reader.
 
-    `_read_watermark` is deliberately untouched by this task, so it returns the
+    `read_watermark` is deliberately untouched by this task, so it returns the
     same `last_date` for a marked sidecar as for an unmarked one. That is the
     property that makes the marker safe to write onto a volume that older code
     may still read.
@@ -732,8 +732,8 @@ def test_a_no_data_sidecar_is_still_read_by_the_unchanged_read_watermark(
     acq._write_watermark("AAPL", "2024-01-31", start_date="2024-01-01", no_data=True)
     acq._write_watermark("MSFT", "2024-01-31", start_date="2024-01-01")
 
-    assert acq._read_watermark("AAPL") == "2024-01-31"
-    assert acq._read_watermark("MSFT") == acq._read_watermark("AAPL")
+    assert acq._coverage.read_watermark("AAPL") == "2024-01-31"
+    assert acq._coverage.read_watermark("MSFT") == acq._coverage.read_watermark("AAPL")
 
 
 def test_the_four_no_data_states_are_distinguishable_on_disk(acquisition_config):
@@ -777,7 +777,7 @@ def test_a_covered_no_data_symbol_is_skipped_and_issues_no_data_request(
 ):
     """The re-fetch storm D-04 exists to prevent, asserted end to end.
 
-    `_coverage_status` gets NO new branch: a marked symbol whose recorded
+    `coverage_status` gets NO new branch: a marked symbol whose recorded
     window still covers the request already classifies `covered` through the
     existing rule. This test is what keeps someone from adding one -- and what
     proves the skip actually reaches `download()`, where the helper's
@@ -788,7 +788,7 @@ def test_a_covered_no_data_symbol_is_skipped_and_issues_no_data_request(
         "AAPL", acq.config.end_date, start_date=acq.config.start_date, no_data=True
     )
 
-    assert acq._coverage_status("AAPL") == "covered"
+    assert acq._coverage.coverage_status("AAPL") == "covered"
 
     pending, counts = acq._partition_by_coverage(["AAPL"], from_watermark=False)
     assert pending == []
@@ -815,7 +815,7 @@ def test_a_no_data_symbol_with_narrower_coverage_is_still_re_fetched(
         "AAPL", acq.config.end_date, start_date="2024-01-15", no_data=True
     )
 
-    assert acq._coverage_status("AAPL") == "widened"
+    assert acq._coverage.coverage_status("AAPL") == "widened"
 
     pending, counts = acq._partition_by_coverage(["AAPL"], from_watermark=False)
     assert pending == ["AAPL"]
@@ -827,8 +827,8 @@ def test_a_corrupt_no_data_sidecar_takes_the_same_tolerant_path(
 ):
     """ONE corrupt-sidecar policy, not two.
 
-    `_read_sidecar` is the single tolerant read both `_read_watermark` and
-    `_read_coverage` share. A second read path added for the marker could
+    `CoverageLedger.read_sidecar` is the single tolerant read both
+    `read_watermark` and `read_coverage` share. A second read path added for the marker could
     drift from it, and the drift would show up as a crash in a 15k-symbol run
     rather than as a wider-than-necessary re-fetch.
     """
@@ -840,48 +840,12 @@ def test_a_corrupt_no_data_sidecar_takes_the_same_tolerant_path(
     # reader would "find" it.
     (directory / "AAPL.json").write_text('{"last_date": "2024-01-31", "no_data": tr')
     assert acq._read_coverage("AAPL") is None
-    assert acq._read_watermark("AAPL") is None
+    assert acq._coverage.read_watermark("AAPL") is None
 
     # ...identical to a corrupt sidecar that never mentions the marker.
     (directory / "MSFT.json").write_text("{not json at all")
     assert acq._read_coverage("MSFT") is None
-    assert acq._read_watermark("MSFT") is None
-
-
-def test_stamping_a_legacy_sidecar_carries_its_no_data_marker_through(
-    acquisition_config,
-):
-    """`stamp_watermarks` fills the covered START and touches nothing else.
-
-    Stamping rewrites the whole sidecar, so the marker has to be carried
-    through explicitly -- and dropping it is invisible: the file still parses,
-    the start is now recorded, and a confirmed absence has silently become
-    "fetched, data landed". Only the user knows what window these files cover;
-    nobody knows whether the vendor had rows in it, which is precisely why
-    stamping may not have an opinion.
-    """
-    acq = _acquisition(acquisition_config, symbols=("MARKED", "PLAIN"))
-
-    # Both are LEGACY in the stamping sense -- no recorded start -- but one
-    # carries the marker.
-    acq._write_watermark("MARKED", "2024-01-31", no_data=True)
-    acq._write_watermark("PLAIN", "2024-01-31")
-    assert "start_date" not in _sidecar_json(acq, "MARKED")
-
-    assert acq.stamp_watermarks("2020-01-01") == 2
-
-    marked = _sidecar_json(acq, "MARKED")
-    assert marked["start_date"] == "2020-01-01"
-    assert marked["no_data"] is True, (
-        f"stamping dropped the no_data marker: {marked}"
-    )
-    plain = _sidecar_json(acq, "PLAIN")
-    assert plain["start_date"] == "2020-01-01"
-    assert "no_data" not in plain, plain
-
-    # Re-stamping leaves both alone -- a recorded start is never overwritten.
-    assert acq.stamp_watermarks("2015-01-01") == 0
-    assert _sidecar_json(acq, "MARKED")["start_date"] == "2020-01-01"
+    assert acq._coverage.read_watermark("MSFT") is None
 
 
 # ---------------------------------------------------------------------------
@@ -1341,14 +1305,16 @@ def test_a_traversal_symbol_raises_before_any_watermark_path_is_opened(
     )
     acq = AlpacaAcquisition(cfg)
 
+    from quantlab.acquisition._support.coverage import CoverageLedger
+
     opened: list[str] = []
-    original = AlpacaAcquisition._read_sidecar
+    original = CoverageLedger.read_sidecar
 
     def _spy(self, symbol):
         opened.append(symbol)
         return original(self, symbol)
 
-    monkeypatch.setattr(AlpacaAcquisition, "_read_sidecar", _spy)
+    monkeypatch.setattr(CoverageLedger, "read_sidecar", _spy)
 
     for bad in ("../../../../etc/hosts", "AA/PL", "AAPL,MSFT"):
         opened.clear()

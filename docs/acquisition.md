@@ -271,19 +271,15 @@ Running the same call again later continues from CCC. Setting `kwargs["wait_for_
 No size estimate runs before a download and nothing refuses a request for being large.
 Scope a request with the symbol list and the date window.
 
-### Fill in missing covered starts
+### Sidecars with no covered start
 
-Sidecars written by an older version record only `last_date`. They are classified `legacy`, skipped by default, and reported on every run, because nothing on disk says which window they were fetched over. `stamp_watermarks(start_date)` records a start you supply in every sidecar that lacks one and issues no request. Alternatively `kwargs["legacy_watermarks"] = "refetch"` re-downloads them.
+Sidecars written by an older version record only `last_date`. They are classified `legacy`, skipped by default, and reported on every run, because nothing on disk says which window they were fetched over. `kwargs["legacy_watermarks"] = "refetch"` treats them as not covered and re-downloads them.
 
 ```python
 >>> old = Path(sparse.config.watermark_path) / "AAPL.json"
 >>> _ = old.write_text('{"last_date": "2024-01-05"}')
 >>> counts(sparse)
 {'requested': 2, 'skipped': 2, 'covered': 1, 'legacy': 1, 'no_data': 1}
->>> sparse.stamp_watermarks("2024-01-02")
-1
->>> counts(sparse)
-{'requested': 2, 'skipped': 2, 'covered': 2, 'no_data': 1}
 ```
 
 ### Run against a real vendor

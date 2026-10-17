@@ -43,8 +43,7 @@ PAGE_LEDGER_DIR_NAME = "_pages"
 #: *legacy* sidecar (one written by older code that records no start date).
 #: ``"warn"`` skips such a symbol but reports it on every run; ``"refetch"``
 #: downloads it again. See ``CoverageLedger.classify_coverage`` for why
-#: ``"warn"`` is the default. Defined here, not on the acquisition engine, so
-#: ``CoverageLedger.for_config`` can use them without importing that engine.
+#: ``"warn"`` is the default.
 LEGACY_WATERMARK_POLICIES = ("warn", "refetch")
 DEFAULT_LEGACY_WATERMARK_POLICY = "warn"
 
@@ -181,10 +180,6 @@ class CoverageLedger:
         Kind of raw data, for example ``"quotes"`` or ``"trades"``. Needed
         only for tick-data frequencies, whose raw files are partitioned into
         directories by data type; ``None`` otherwise.
-    legacy_policies : Sequence[str], default ``LEGACY_WATERMARK_POLICIES``
-        Accepted values of the ``legacy_watermarks`` setting.
-    default_legacy_policy : str, default ``"warn"``
-        Policy used when ``legacy_watermarks`` is not set.
     owner_label : str, default "CoverageLedger"
         Name shown at the start of ``validate_symbols`` error messages.
 
@@ -211,8 +206,6 @@ class CoverageLedger:
         config: AcquisitionConfig,
         *,
         data_type: str | None = None,
-        legacy_policies: Sequence[str] = LEGACY_WATERMARK_POLICIES,
-        default_legacy_policy: str = DEFAULT_LEGACY_WATERMARK_POLICY,
         owner_label: str = "CoverageLedger",
     ) -> None:
         """Initialize the ledger; see the class docstring for parameters.
@@ -221,8 +214,6 @@ class CoverageLedger:
         """
         self.config = config
         self.data_type = data_type
-        self.legacy_policies = tuple(legacy_policies)
-        self.default_legacy_policy = default_legacy_policy
         self.owner_label = owner_label
 
     def __repr__(self) -> str:
@@ -488,18 +479,18 @@ class CoverageLedger:
         Raises
         ------
         ValueError
-            If the setting is not one of ``legacy_policies``.
+            If the setting is not one of ``LEGACY_WATERMARK_POLICIES``.
 
         Examples
         --------
         >>> ledger.legacy_policy()
         'warn'
         """
-        policy = self._knob("legacy_watermarks", self.default_legacy_policy)
-        if policy not in self.legacy_policies:
+        policy = self._knob("legacy_watermarks", DEFAULT_LEGACY_WATERMARK_POLICY)
+        if policy not in LEGACY_WATERMARK_POLICIES:
             raise ValueError(
                 f"legacy_watermarks={policy!r} is not one of "
-                f"{list(self.legacy_policies)}."
+                f"{list(LEGACY_WATERMARK_POLICIES)}."
             )
         return policy
 

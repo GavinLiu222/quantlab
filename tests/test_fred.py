@@ -154,7 +154,7 @@ def test_a_server_error_fails_the_series_and_leaves_no_watermark(tmp_path, fred)
     acquisition = _acquisition(tmp_path).download()
 
     assert list(acquisition.last_result.failures) == ["DTB3"]
-    assert acquisition._read_watermark("DTB3") is None
+    assert acquisition._coverage.read_watermark("DTB3") is None
 
 
 def test_a_rate_limit_is_waited_out(tmp_path, fred):
@@ -325,7 +325,7 @@ def test_a_day_not_yet_published_is_fetched_by_the_next_refresh(tmp_path, fred):
     # Run on 2024-01-09 before that day's rate is out: FRED has through 01-08.
     fake = fred({d: v for d, v in SERIES.items() if d <= "2024-01-08"})
     acquisition = _acquisition(tmp_path, end="2024-01-09").download()
-    assert acquisition._read_watermark("DTB3") == "2024-01-08"
+    assert acquisition._coverage.read_watermark("DTB3") == "2024-01-08"
 
     fake.rows = dict(SERIES)
     _acquisition(tmp_path, end="2024-01-10").refresh()

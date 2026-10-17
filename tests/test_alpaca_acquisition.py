@@ -1962,7 +1962,7 @@ def test_an_intraday_window_is_sent_as_instants_that_cover_the_session(
     session -- the US regular session is 14:30-21:00 UTC. And the bookkeeping is
     unconditional: `_attempt_batch` stamps `last_date = config.end_date` on any
     successful batch whether or not a row for that date arrived, and
-    `_classify_coverage` then reads the symbol as `covered`, so the missing
+    `CoverageLedger.classify_coverage` then reads the symbol as `covered`, so the missing
     session is never re-fetched and reads as sparse data rather than as a gap.
 
     The wire value is asserted, at the PREPARED URL as well as in the dict, so
