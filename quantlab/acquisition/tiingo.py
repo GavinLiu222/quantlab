@@ -14,11 +14,11 @@ the module registers the vendor with ``quantlab.acquisition.registry``.
 """
 
 import functools
-import os
 
 import polars as pl
 from tiingo import TiingoClient
 
+from quantlab.acquisition._support.request_policy import require_env
 from quantlab.acquisition.base import Capability, SourceDescriptor, register_source
 from quantlab.acquisition.base import Acquisition
 from quantlab.acquisition.config import AcquisitionConfig
@@ -154,15 +154,14 @@ class TiingoAcquisition(Acquisition):
         """
         super().__init__(config)
 
-        if not os.environ.get(KEY_ENV):
-            raise RuntimeError(
-                f"{KEY_ENV} environment variable is not set. Export it "
-                f"before running acquisition (see Tiingo dashboard for your "
-                f"key)."
-            )
-        self._client = TiingoClient(
-            {"session": True, "api_key": os.environ[KEY_ENV]}
+        (key,) = require_env(
+            [KEY_ENV],
+            hint=(
+                "export it before running acquisition (see Tiingo dashboard "
+                "for your key)."
+            ),
         )
+        self._client = TiingoClient({"session": True, "api_key": key})
 
     def _classify_error(self, exc: BaseException) -> str:
         """Return ``"quota"`` for a used-up quota and ``"failed"`` otherwise.
