@@ -318,6 +318,65 @@ def _days(values: np.ndarray) -> np.ndarray:
     return days
 
 
+def value_on_dates(values: np.ndarray, dates: np.ndarray, timestamps: np.ndarray) -> np.ndarray:
+    """Return, per cell, ``values`` of its symbol on the last bar on or before the cell's date.
+
+    Parameters
+    ----------
+    values : numpy.ndarray
+        A ``[time, symbol]`` panel on the bars ``timestamps``.
+    dates : numpy.ndarray
+        A ``[time, symbol]`` datetime64 panel (NaT where none).
+    timestamps : numpy.ndarray
+        The bars, sorted.
+
+    Returns
+    -------
+    numpy.ndarray
+        float32, NaN where the date is NaT or before the first bar.
+
+    Examples
+    --------
+    >>> bars = np.array(["2024-01-02", "2024-01-03"], dtype="datetime64[ns]")
+    >>> dates = np.array([["NaT"], ["2024-01-02"]], dtype="datetime64[ns]")
+    >>> value_on_dates(np.array([[1.0], [2.0]]), dates, bars).ravel().tolist()
+    [nan, 1.0]
+    """
+    day = _days(dates)
+    index = np.searchsorted(_days(timestamps), np.nan_to_num(day, nan=-1e9), side="right") - 1
+    ok = np.isfinite(day) & (index >= 0)
+    out = np.full(day.shape, np.nan, np.float32)
+    columns = np.broadcast_to(np.arange(day.shape[1]), day.shape)
+    out[ok] = values[index[ok], columns[ok]]
+    return out
+
+
+def fill_flows(arrays: dict[str, np.ndarray], columns, priced: np.ndarray) -> None:
+    """Make event or trade flows 0 where NaN on a priced bar, in place.
+
+    A flow is NaN on a bar without a price (``priced`` False: a delisted or
+    not yet listed stock) and on every bar before the first one on which any
+    symbol has a non-zero value of any of ``columns``, the source's start.
+
+    Examples
+    --------
+    >>> arrays = {"buy": np.array([[0.0, np.nan], [np.nan, 2.0], [np.nan, np.nan]])}
+    >>> fill_flows(arrays, ["buy"], np.array([[True, True], [True, True], [True, False]]))
+    >>> arrays["buy"].tolist()
+    [[nan, nan], [0.0, 2.0], [0.0, nan]]
+    """
+    columns = [column for column in columns if column in arrays]
+    if not columns:
+        return
+    active = np.any([np.nansum(np.abs(arrays[column]), axis=1) > 0 for column in columns], axis=0)
+    started = np.flatnonzero(active)
+    first = started[0] if len(started) else priced.shape[0]
+    for column in columns:
+        filled = np.where(priced, np.nan_to_num(arrays[column], nan=0.0), np.nan).astype(np.float32)
+        filled[:first] = np.nan
+        arrays[column] = np.ascontiguousarray(filled)
+
+
 def _nan() -> OpBase:
     return ConstantOp("nan")
 
@@ -543,25 +602,10 @@ class FundamentalAlpha(FactorKunQuant):
             for column in self.config.data_columns if column in keys
         }
         if QUARTER_KEY in key_days and "marketcap" in arrays:
-            quarter_end = key_days[QUARTER_KEY]
-            bar_days = _days(timestamps)
-            index = np.searchsorted(bar_days, np.nan_to_num(quarter_end, nan=-1e9), side="right") - 1
-            ok = np.isfinite(quarter_end) & (index >= 0)
-            cap = np.full(quarter_end.shape, np.nan, np.float32)
-            columns = np.broadcast_to(np.arange(quarter_end.shape[1]), quarter_end.shape)
-            cap[ok] = arrays["marketcap"][index[ok], columns[ok]]
-            arrays[QUARTER_END_CAP] = cap
-        flows = [column for column in INSIDER_COLUMNS if column in arrays]
-        if flows:
-            # One start for every flow: the first bar on which any symbol has any of them.
-            active = np.any([np.nansum(np.abs(arrays[column]), axis=1) > 0 for column in flows], axis=0)
-            started = np.flatnonzero(active)
-            first = started[0] if len(started) else len(timestamps)
-            priced = np.isfinite(arrays["adjClose"])
-            for column in flows:
-                filled = np.where(priced, np.nan_to_num(arrays[column], nan=0.0), np.nan)
-                filled[:first] = np.nan
-                arrays[column] = np.ascontiguousarray(filled)
+            arrays[QUARTER_END_CAP] = value_on_dates(
+                arrays["marketcap"], panel[QUARTER_KEY].transpose("timestamp", "symbol").to_numpy(), timestamps)
+        if any(column in arrays for column in INSIDER_COLUMNS):
+            fill_flows(arrays, INSIDER_COLUMNS, np.isfinite(arrays["adjClose"]))
         lags = params.lags(outputs)
         by_key = {
             REPORT_KEY: {c: k for c, k in lags.items() if c not in HOLDINGS_COLUMNS and c != QUARTER_END_CAP},
@@ -592,4 +636,4 @@ class FundamentalAlpha(FactorKunQuant):
         )
 
 
-__all__ = ["FundamentalAlpha", "FundamentalAlphaParameters", "report_lags"]
+__all__ = ["FundamentalAlpha", "FundamentalAlphaParameters", "fill_flows", "report_lags", "value_on_dates"]
