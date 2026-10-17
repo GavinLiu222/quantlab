@@ -54,6 +54,57 @@ Concurrency is set on the client: one file is fetched at a time in `streams` byt
 
 `download_days` starts a day only once its caller has moved past the day `files` before it, so however slow the conversion, the day being converted and at most `files - 1` after it are on disk. `registry.run()` refuses Massive, as it refuses Sharadar: the download is the conversion script's (below).
 
+## REST pulls
+
+Massive's REST endpoints are kept in the same raw tier, one directory per endpoint, by `MassiveClient.pull`. An endpoint is a `RestEndpoint` of `quantlab.acquisition.massive.rest.ENDPOINTS`:
+
+| Endpoint | URL | Date field | Earliest asked | Overlap |
+|---|---|---|---|---|
+| `splits` | `/stocks/v1/splits` | `execution_date` | 1978-01-01 | 7 days |
+| `dividends` | `/stocks/v1/dividends` | `ex_dividend_date` | 2000-01-01 | 7 days |
+
+These are the current `/stocks/v1` endpoints, not the deprecated `/v3/reference/splits` and `/v3/reference/dividends`.
+
+```python
+from quantlab.acquisition.massive.client import MassiveClient
+from quantlab.dataset.massive.raw import read_rest_records, read_rest_watermark
+
+client = MassiveClient()
+done = client.pull("dividends", "/data/quantlab/downloads")
+print(done.pages, done.rows, done.through)
+
+dividends = read_rest_records("/data/quantlab/downloads/massive", "dividends")
+read_rest_watermark("/data/quantlab/downloads/massive", "dividends")
+```
+
+Each page is kept as the vendor returned it, one JSON object per line with the vendor's field names, named by the pull's UTC stamp and the page's number, and the endpoint's watermark sits beside the pages:
+
+```text
+massive/rest/splits/2026/20261016T120000000000_000001.jsonl
+massive/rest/splits/2026/20261016T120000000000_000002.jsonl
+massive/rest/splits/_watermark.json
+massive/rest/dividends/...
+```
+
+A pull works like this:
+
+- The first page asks for `<date field>.gte` the day after the watermark, less the endpoint's overlap (days asked for again on every pull, for rows the vendor adds or revises late), or for the endpoint's earliest day without a watermark. Pages are sorted by the date field, then the ticker, ascending, at 5,000 rows a page. `end=` (`--end`) bounds a pull with `.lte`, so a long backfill can go in steps.
+- Every `next_url` is followed with no other parameter, since its cursor carries the filters. An `apiKey` in it is dropped first.
+- The watermark moves after every page. While more pages follow, it goes to the day before the page's last row, because that day may continue on the next page. Once the last page is in, it goes to the last day asked for. It never passes yesterday in New York, so today's rows and future ones (a split announced ahead, a declared dividend's ex-date) are asked for again by the next pull. It never moves back. A rerun therefore asks only for what is new, and a backfill that fails part way resumes from the last page it wrote.
+- A row may be in several page files. `read_rest_records` reads the pages oldest pull first and keeps each record's newest copy by its `id`.
+- HTTP 429 and 5xx, and a broken connection, are retried after the client's back-off (`backoff`, doubled each time, `retries` times), and then raise `MassiveTransportError`. HTTP 401 raises `MassiveEntitlementError` saying the key was refused. HTTP 403 raises `MassiveEntitlementError` naming the endpoint the plan is not entitled to. Either way, the pages and the watermark written before stay.
+- The API key goes in an `Authorization: Bearer` header only. It is never in a URL, a query, a log line (which prints the URL without its query) or a raw file.
+
+`scripts/massive/rest_pull.py` pulls every endpoint, or those of `--endpoints`. It tries each one even when another fails, and exits 1 if any failed. The daily update runs it in its raw stage, allowed to fail (see the [data update guide](data_update.md)):
+
+```bash
+.venv/bin/python scripts/massive/rest_pull.py --download-dir /data/quantlab/downloads
+.venv/bin/python scripts/massive/rest_pull.py --download-dir /data/quantlab/downloads \
+    --endpoints dividends --end 2010-12-31
+```
+
+A new endpoint is one more `RestEndpoint` in `ENDPOINTS`, with its name, URL and date field, its earliest day, its own fixed filters in `params`, and `key` and `tiebreak` when they are not `id` and `ticker`. A snapshot endpoint (`date_field=None`) is pulled whole on every run and keeps no watermark.
+
 ## The conversion script
 
 `scripts/massive/convert.py` builds the whole-market one-minute store, `<data-dir>/market/massive/massive_trade_bars_1m/massive_trade_bars_1m.zarr` (beside a `README.md`), oldest day first. Days are converted in worker processes (`convert_day`, about 40-90 s and 20-25 GB at peak for a whole-market day) and appended in date order by the main process:
