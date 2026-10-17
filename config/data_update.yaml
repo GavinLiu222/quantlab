@@ -109,6 +109,10 @@ stages:
       # map rows changed, then appends every day both stores above now hold (about 10 s a day; a store
       # far behind is caught up by scripts/massive/permaticker_bars.py --workers N).
       - update: {store: market/massive/massive_permaticker_bars_1m, allow_failure: true}
+      # Massive's Day aggregates mapped onto permatickers (MappedDayBarDataset), the same way: maps
+      # again any stored day whose map rows changed, then appends every day the Day aggregate store
+      # and the Ticker map both hold (first build: scripts/massive/permaticker_day_bars.py).
+      - update: {store: market/massive/massive_permaticker_day_bars_1d, allow_failure: true}
       # The daily factors of the one-minute bars, on the whole market (common stocks), in dependency
       # order: the per-session statistics, their 20-session means and the neutralized means, then the
       # rank composites of the statistics. They hold the day only for their readers, so they wait

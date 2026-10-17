@@ -36,7 +36,8 @@ from quantlab.enums.data import (
 if TYPE_CHECKING:
     from quantlab.dataset.base import BaseDataset, MarketDataset
     from quantlab.dataset.massive.ticker_map import TickerMap
-    from quantlab.dataset.massive.permaticker_bars import PermatickerTradeBarDataset
+    from quantlab.dataset.massive.day_bars import MassiveDayBarDataset
+    from quantlab.dataset.massive.permaticker_bars import PermatickerDayBarDataset, PermatickerTradeBarDataset
     from quantlab.dataset.massive.trade_bars import MassiveTradeBarDataset
 
 
@@ -422,6 +423,63 @@ class MappedTradeBarsConfig(FrozenConfig):
     #: The coarser bars the panel is resampled to; ``None`` for the store's bars.
     resample_freq: str | None = None
     #: ``{variable: method}`` of the resample; ``None`` for the Trade bars' defaults.
+    resample_how: dict | None = None
+    #: Dotted import path of the dataset class; filled by the config setter.
+    name: str | None = None
+
+
+@dataclass(kw_only=True, frozen=True)
+class PermatickerDayBarsConfig(FrozenConfig):
+    """Config of the Day aggregates read on the permaticker axis through the Ticker map (#353).
+
+    The view holds no store of its own; ``day_bars`` and ``ticker_map``
+    keep their own configs, both component fields.
+
+    Examples
+    --------
+    With ``day_bars`` a ``MassiveDayBarDataset`` and ``ticker_map`` a
+    ``TickerMap``:
+
+    >>> cfg = PermatickerDayBarsConfig(day_bars=day_bars, ticker_map=ticker_map)
+    >>> sorted(cfg.to_dict())
+    ['day_bars', 'name', 'resample_freq', 'resample_how', 'ticker_map']
+    """
+
+    #: The Day aggregate store on the Massive ticker axis.
+    day_bars: "MassiveDayBarDataset" = component()
+    #: The map from each day's Massive ticker to its permaticker.
+    ticker_map: "TickerMap" = component()
+    #: The coarser bars the panel is resampled to; ``None`` for the store's bars.
+    resample_freq: str | None = None
+    #: ``{variable: method}`` of the resample; ``None`` for the Day aggregates' defaults.
+    resample_how: dict | None = None
+    #: Dotted import path of the dataset class; filled by the config setter.
+    name: str | None = None
+
+
+@dataclass(kw_only=True, frozen=True)
+class MappedDayBarsConfig(FrozenConfig):
+    """Config of the Day aggregates mapped onto permatickers and kept in a store (#353).
+
+    ``source`` is the permaticker view the store is written from (its own
+    bars, not resampled); ``zarr_file_path`` is the store.
+
+    Examples
+    --------
+    With ``bars`` a ``PermatickerDayBarDataset``:
+
+    >>> cfg = MappedDayBarsConfig(source=bars, zarr_file_path="/data/massive_permaticker_day_bars_1d.zarr")
+    >>> sorted(cfg.to_dict())
+    ['name', 'resample_freq', 'resample_how', 'source', 'zarr_file_path']
+    """
+
+    #: The permaticker view the store is written from.
+    source: "PermatickerDayBarDataset" = component()
+    #: The store of the mapped bars.
+    zarr_file_path: str
+    #: The coarser bars the panel is resampled to; ``None`` for the store's bars.
+    resample_freq: str | None = None
+    #: ``{variable: method}`` of the resample; ``None`` for the Day aggregates' defaults.
     resample_how: dict | None = None
     #: Dotted import path of the dataset class; filled by the config setter.
     name: str | None = None

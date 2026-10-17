@@ -68,7 +68,9 @@ Massive's intraday trades up (see the [Massive guide](massive.md)):
 aggregates to Massive's own daily bars `market/massive/massive_day_bars_1d`, then
 `scripts/massive/ticker_map.py` appends those days'
 rows to the Ticker map `market/massive/massive_ticker_map`, up to the last bar of Sharadar's SEP
-store, which the raw stage has brought up. All three are `run` steps with `allow_failure: true`; the
+store, which the raw stage has brought up; two `update` steps then map the new days onto
+permatickers, `market/massive/massive_permaticker_bars_1m` (the Trade bars) and
+`market/massive/massive_permaticker_day_bars_1d` (the day aggregates). The three scripts are `run` steps with `allow_failure: true`; the
 conversion and the map do at most five days each (`--max-days 5`; a store far behind is caught up by a
 run of its own), the day bars every new day on disk, and none of the stores is
 in `ready`: Massive publishes a day's files at about 00:30 ET the next day, and a late file
