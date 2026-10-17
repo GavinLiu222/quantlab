@@ -211,8 +211,9 @@ def read_watermark(vendor_root: str | Path, data_type: str) -> date | None:
     its conversion: the watermark, not the files present, says what was
     downloaded.
 
-    The watermark (``watermark_file``, the ``"daily_file"`` granularity of
-    ``quantlab.utils.watermark``) is written by
+    The watermark (``watermark_file``, a dated watermark of
+    ``quantlab.utils.watermark`` holding ``data_type`` and ``through``) is
+    written by
     ``quantlab.acquisition.massive.raw_tier.write_day_file_watermark``.
 
     Examples
@@ -226,8 +227,7 @@ def read_watermark(vendor_root: str | Path, data_type: str) -> date | None:
         read_watermark(root, "trades")
         # datetime.date(2024, 11, 29)
     """
-    watermark = _read_watermark(watermark_file(vendor_root, data_type), "daily_file")
-    return None if watermark is None else watermark.day
+    return _read_watermark(watermark_file(vendor_root, data_type))
 
 
 def watermark_file(vendor_root: str | Path, data_type: str) -> Path:
@@ -617,8 +617,9 @@ def read_rest_watermark(vendor_root: str | Path, endpoint: str) -> date | None:
     Every row whose date field is on or before the watermark was pulled; a
     later pull asks only for rows after it (less the endpoint's overlap). A
     snapshot endpoint's watermark is the day of its last snapshot. The
-    watermark (``rest_watermark_file``, the ``"endpoint"`` granularity of
-    ``quantlab.utils.watermark``) is written by
+    watermark (``rest_watermark_file``, a dated watermark of
+    ``quantlab.utils.watermark`` holding ``endpoint``, ``field`` and
+    ``through``) is written by
     ``quantlab.acquisition.massive.raw_tier.write_rest_watermark``.
 
     Examples
@@ -632,8 +633,7 @@ def read_rest_watermark(vendor_root: str | Path, endpoint: str) -> date | None:
     >>> read_rest_watermark(root, "splits")
     datetime.date(2024, 3, 14)
     """
-    watermark = _read_watermark(rest_watermark_file(vendor_root, endpoint), "endpoint")
-    return None if watermark is None else watermark.day
+    return _read_watermark(rest_watermark_file(vendor_root, endpoint))
 
 
 def rest_watermark_file(vendor_root: str | Path, endpoint: str) -> Path:

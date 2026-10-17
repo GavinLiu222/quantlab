@@ -21,12 +21,13 @@ no API key can still inspect what it has on disk.
 """
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Sequence
 
 from quantlab.acquisition.config import AcquisitionConfig
 from quantlab.enums.data import TRADEABLE_TICKER_PATTERN
-from quantlab.utils.watermark import read_watermark as _read_record
+from quantlab.utils.atomic import write_json_atomically
 
 #: Filename of the failure manifest, written under ``watermark_root`` next to
 #: the per-symbol sidecars. Defined here and reused by the acquisition engine,
@@ -52,6 +53,109 @@ DEFAULT_LEGACY_WATERMARK_POLICY = "warn"
 #: that assembles the list of symbols to download) filters on, reused rather
 #: than copied so the two cannot diverge.
 _TICKER_PATTERN = TRADEABLE_TICKER_PATTERN
+
+
+@dataclass(frozen=True)
+class SymbolCoverage:
+    """One symbol's watermark sidecar: the date range of its data on disk.
+
+    The sidecar is compact JSON holding ``last_date`` (the watermark),
+    ``start_date`` when recorded and ``no_data`` when true. An unknown start
+    is left out rather than written as null, so it cannot be mistaken for a
+    recorded one, and ``no_data`` is left out when false, so a sidecar
+    without the key reads as "had data" (a sidecar is only written after a
+    successful fetch).
+
+    Parameters
+    ----------
+    last_date : str or None
+        The last covered date, ``YYYY-MM-DD``, as recorded.
+    start_date : str or None, default None
+        The first covered date, or ``None`` if unknown.
+    no_data : bool, default False
+        Whether the vendor returned no rows for the covered window.
+
+    Examples
+    --------
+    >>> import tempfile
+    >>> from pathlib import Path
+    >>> path = Path(tempfile.mkdtemp()) / "AAPL.json"
+    >>> SymbolCoverage("2024-01-31", start_date="2024-01-01").write(path)
+    >>> path.read_text()
+    '{"last_date": "2024-01-31", "start_date": "2024-01-01"}'
+    >>> SymbolCoverage.read(path)
+    SymbolCoverage(last_date='2024-01-31', start_date='2024-01-01', no_data=False)
+    """
+
+    last_date: str | None
+    start_date: str | None = None
+    no_data: bool = False
+
+    def payload(self) -> dict:
+        """Return the sidecar's JSON object.
+
+        Examples
+        --------
+        >>> SymbolCoverage("2024-01-31", no_data=True).payload()
+        {'last_date': '2024-01-31', 'no_data': True}
+        """
+        payload: dict[str, str | bool] = {}
+        if self.last_date is not None:
+            payload["last_date"] = self.last_date
+        if self.start_date is not None:
+            payload["start_date"] = self.start_date
+        if self.no_data:
+            payload["no_data"] = True
+        return payload
+
+    @classmethod
+    def read(cls, path: str | Path) -> "SymbolCoverage | None":
+        """Return the sidecar in ``path``, or ``None`` when absent, corrupt or not an object.
+
+        A corrupt or half-written sidecar must never crash a refresh; reading
+        it as absent costs at most a wider re-fetch.
+
+        Examples
+        --------
+        >>> import tempfile
+        >>> from pathlib import Path
+        >>> path = Path(tempfile.mkdtemp()) / "TSLA.json"
+        >>> _ = path.write_text('{"last_date": "2024-')
+        >>> SymbolCoverage.read(path) is None
+        True
+        """
+        path = Path(path)
+        if not path.exists():
+            return None
+        try:
+            with open(path) as handle:
+                payload = json.load(handle)
+        except (json.JSONDecodeError, OSError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        return cls(
+            payload.get("last_date"),
+            start_date=payload.get("start_date"),
+            no_data=bool(payload.get("no_data", False)),
+        )
+
+    def write(self, path: str | Path) -> None:
+        """Write the sidecar to ``path`` atomically, as compact JSON.
+
+        The file is written to a temporary file and renamed into place, so
+        an interrupted write leaves the previous sidecar.
+
+        Examples
+        --------
+        >>> import tempfile
+        >>> from pathlib import Path
+        >>> path = Path(tempfile.mkdtemp()) / "AAPL.json"
+        >>> SymbolCoverage("2024-01-31").write(path)
+        >>> path.read_text()
+        '{"last_date": "2024-01-31"}'
+        """
+        write_json_atomically(path, self.payload())
 
 
 class CoverageLedger:
@@ -302,8 +406,7 @@ class CoverageLedger:
 
         ``read_watermark`` and ``read_coverage`` both read through this
         method, so there is exactly one way a corrupt sidecar is handled. It
-        reads with ``quantlab.utils.watermark.read_watermark`` (the
-        ``"symbol"`` granularity) and returns the record's ``payload()``:
+        reads with ``SymbolCoverage.read`` and returns its ``payload()``:
         ``last_date``, and ``start_date`` and ``no_data`` when recorded.
 
         Parameters
@@ -318,11 +421,8 @@ class CoverageLedger:
         >>> ledger.read_sidecar("TSLA") is None
         True
         """
-        # The one watermark record at the "symbol" granularity: a corrupt,
-        # half-written or non-object sidecar reads as absent, which costs at
-        # most a wider re-fetch and never crashes a refresh.
-        watermark = _read_record(self.watermark_path(symbol), "symbol")
-        return None if watermark is None else watermark.payload()
+        coverage = SymbolCoverage.read(self.watermark_path(symbol))
+        return None if coverage is None else coverage.payload()
 
     def read_watermark(self, symbol: str) -> str | None:
         """Return the last covered date for ``symbol``, or None.

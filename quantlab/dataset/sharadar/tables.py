@@ -765,8 +765,9 @@ def vendor_today() -> date:
 def read_watermark(vendor_root: str | Path, code: str) -> date | None:
     """Return the day a table's raw tier is complete through, or ``None``.
 
-    The watermark (``<table>/_watermark.json``, the ``"table"`` granularity
-    of ``quantlab.utils.watermark``) is written by
+    The watermark (``<table>/_watermark.json``, a dated watermark of
+    ``quantlab.utils.watermark`` holding ``table`` and ``through``) is
+    written by
     ``quantlab.acquisition.sharadar.raw_tier.write_table_watermark`` after a
     bulk pull (the day of the pull) and after each date-window pull (the
     window's last day), once its rows are on disk; an interrupted pull
@@ -783,8 +784,7 @@ def read_watermark(vendor_root: str | Path, code: str) -> date | None:
         read_watermark(root, "sep")
         # datetime.date(2024, 1, 11)
     """
-    watermark = _read_watermark(raw_table_dir(vendor_root, code) / WATERMARK_FILE, "table")
-    return None if watermark is None else watermark.day
+    return _read_watermark(raw_table_dir(vendor_root, code) / WATERMARK_FILE)
 
 
 def raw_through(vendor_root: str | Path, codes: tuple[str, ...]) -> date:

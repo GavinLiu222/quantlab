@@ -8,12 +8,11 @@ them with these writers. The layout (``raw_file``, ``rest_page_file``,
 ``quantlab.dataset.massive.raw``: the dataset layer reads the raw tier, only
 the acquisition layer writes it.
 
-Both watermarks are the one watermark record (``quantlab.utils.watermark``):
-a day-file type's at the ``"daily_file"`` granularity
-(``<massive>/<type>/_watermark.json``, ``data_type`` and ``through``), a
-REST endpoint's at the ``"endpoint"`` granularity
-(``<massive>/rest/<endpoint>/_watermark.json``, ``endpoint``, ``field`` and
-``through``; ``field`` is ``"snapshot"`` for a snapshot endpoint). The client
+Both watermarks are dated watermarks (``quantlab.utils.watermark``) labelled
+here: a day-file type's (``<massive>/<type>/_watermark.json``) holds
+``data_type`` and ``through``, a REST endpoint's
+(``<massive>/rest/<endpoint>/_watermark.json``) ``endpoint``, ``field`` and
+``through``; ``field`` is ``"snapshot"`` for a snapshot endpoint. The client
 resumes either the day after it (``quantlab.utils.watermark.resume_from``)
 and never moves a REST watermark back.
 
@@ -35,7 +34,7 @@ from datetime import date
 from pathlib import Path
 
 from quantlab.dataset.massive.raw import rest_watermark_file, watermark_file
-from quantlab.utils.watermark import Watermark, write_watermark
+from quantlab.utils.watermark import write_watermark
 
 
 def write_day_file_watermark(vendor_root: str | Path, data_type: str, through: date) -> None:
@@ -49,10 +48,7 @@ def write_day_file_watermark(vendor_root: str | Path, data_type: str, through: d
 
         write_day_file_watermark("/data/quantlab/downloads/massive", "trades", date(2024, 11, 29))
     """
-    write_watermark(
-        watermark_file(vendor_root, data_type),
-        Watermark("daily_file", through.isoformat(), name=data_type),
-    )
+    write_watermark(watermark_file(vendor_root, data_type), through, {"data_type": data_type})
 
 
 def write_rest_page(path: str | Path, records: list[dict]) -> None:
@@ -84,7 +80,4 @@ def write_rest_watermark(vendor_root: str | Path, endpoint: str, field: str, thr
 
         write_rest_watermark("/data/quantlab/downloads/massive", "splits", "execution_date", date(2024, 3, 14))
     """
-    write_watermark(
-        rest_watermark_file(vendor_root, endpoint),
-        Watermark("endpoint", through.isoformat(), name=endpoint, field=field),
-    )
+    write_watermark(rest_watermark_file(vendor_root, endpoint), through, {"endpoint": endpoint, "field": field})

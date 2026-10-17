@@ -7,9 +7,9 @@ these writers. The layout, and every reader of it (``raw_through``,
 stay in ``quantlab.dataset.sharadar.tables``: the dataset layer reads the
 raw tier, only the acquisition layer writes it.
 
-A table's watermark is the one watermark record
-(``quantlab.utils.watermark``) at the ``"table"`` granularity:
-``<sharadar>/<table>/_watermark.json`` holding ``table`` and ``through``.
+A table's watermark is a dated watermark (``quantlab.utils.watermark``)
+labelled here: ``<sharadar>/<table>/_watermark.json`` holding ``table`` and
+``through``.
 Unlike Massive's watermarks it may move back: a date-window pull records the
 window's last day, whatever the watermark was.
 
@@ -43,7 +43,7 @@ from quantlab.dataset.sharadar.tables import (
     tickers_snapshots,
 )
 from quantlab.utils.atomic import write_json_atomically, write_parquet_atomically
-from quantlab.utils.watermark import WATERMARK_FILE, Watermark, write_watermark
+from quantlab.utils.watermark import WATERMARK_FILE, write_watermark
 
 #: What one row of the TICKERS history is: a security under one ticker in one table.
 _HISTORY_KEY = ["table", "permaticker", "ticker"]
@@ -63,10 +63,7 @@ def write_table_watermark(vendor_root: str | Path, code: str, through: date) -> 
 
         write_table_watermark("/data/downloads/sharadar", "sep", date(2024, 1, 11))
     """
-    write_watermark(
-        raw_table_dir(vendor_root, code) / WATERMARK_FILE,
-        Watermark("table", through.isoformat(), name=table(code).code),
-    )
+    write_watermark(raw_table_dir(vendor_root, code) / WATERMARK_FILE, through, {"table": table(code).code})
 
 
 def write_bulk_pull(vendor_root: str | Path, code: str, pulled_at: datetime) -> None:
