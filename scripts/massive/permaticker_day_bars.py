@@ -5,7 +5,8 @@ in a store folder holding its ``README.md`` and ``component.json``
 (``MappedDayBarDataset.get_config()``), written when missing. It is the permaticker view of the
 Day aggregate store (``market/massive/massive_day_bars_1d``) through the Ticker map
 (``market/massive/massive_ticker_map``), both rebuilt from their own folders' ``component.json``,
-mapped once and kept (docs/massive.md, "Day aggregates on permatickers").
+mapped once, adjusted by Massive's own splits and dividends and checked against SEP
+(``market/sharadar/sharadar_sep_1d``), and kept (docs/massive.md, "Day aggregates on permatickers").
 
 ``MappedDayBarDataset.update`` first maps again every stored day whose map rows changed (a
 rebuilt map), then appends the days both the Day aggregate store and the map hold after the
@@ -36,6 +37,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 FOLDER = Path("market") / "massive" / "massive_permaticker_day_bars_1d"
 DAY_BARS = Path("market") / "massive" / "massive_day_bars_1d"
 TICKER_MAP = Path("market") / "massive" / "massive_ticker_map"
+SEP = Path("market") / "sharadar" / "sharadar_sep_1d"
 
 README = """# massive_permaticker_day_bars_1d
 
@@ -43,15 +45,22 @@ Massive's own daily bars of the whole US market on the permaticker axis: the Day
 (`market/massive/massive_day_bars_1d`, Massive tickers) read through the Ticker map
 (`market/massive/massive_ticker_map`) by `PermatickerDayBarDataset`, mapped once and kept by
 `quantlab.dataset.massive.mapped_bars.MappedDayBarDataset` (docs/massive.md, "Day aggregates on
-permatickers"). Variables `open`, `high`, `low`, `close`, `volume`, `n_trades`, raw (not adjusted
-for splits or dividends); one bar per trading day labelled with its date; `symbol` is the int64
-Sharadar permaticker. A security that changed ticker is one column; a permaticker first met on a
+permatickers"). Variables `open`, `high`, `low`, `close`, `volume`, `n_trades`, raw, and SEP's
+adjusted variables (`divCash`, `splitFactor`, `adjOpen`, `adjHigh`, `adjLow`, `adjClose`,
+`adjVolume`, `cumfacshr`) chained append-only from Massive's own splits and dividends (ADR 0048,
+the REST pulls of `scripts/massive/rest_pull.py`), never from its `historical_adjustment_factor`;
+one bar per trading day labelled with its date; `symbol` is the int64 Sharadar permaticker. A security that changed ticker is one column; a permaticker first met on a
 later day is appended at the end of the axis and reads as a column without a bar before (NaN
 prices, zero volume and `n_trades`).
 
 `massive_permaticker_day_bars_1d.zarr.permaticker_map.json` holds a digest of each stored day's map
 rows (a day whose map rows change is refused on read and mapped again by `update()`) and, per day,
 the number of Massive tickers the map could not place (`unplaced`): their bars are in no column.
+`.adjustment.json` records the last day chained; `.unplaced.json` the split and dividend records
+left out (not placed by the Ticker map, not USD, another ticker's bar). `.sep_check.json` is the
+check file: each permaticker and day whose adjusted return differs from SEP's
+(`market/sharadar/sharadar_sep_1d`) by more than 1e-4, with both vendors' `divCash` and
+`splitFactor`; a disagreement never stops the build, and the daily update reports the count.
 Built by `scripts/massive/permaticker_day_bars.py`; brought up to date every day by the data update
 (`update` step after the Ticker map). From 2016-10-10, the plan's rolling ten years. SEP stays the
 daily price of research and trading. Licensed data: personal use.
@@ -65,7 +74,7 @@ def mapped_dataset(data_dir: Path) -> MappedDayBarDataset:
         ticker_map=load_component(data_dir / TICKER_MAP),
     ))
     return MappedDayBarDataset(MappedDayBarsConfig(
-        source=view, zarr_file_path=str(data_dir / FOLDER / f"{FOLDER.name}.zarr"),
+        source=view, sep=load_component(data_dir / SEP), zarr_file_path=str(data_dir / FOLDER / f"{FOLDER.name}.zarr"),
     ))
 
 
@@ -93,7 +102,8 @@ def main() -> int:
     print(f"{mapped.store_path}: {len(after) - len(before)} day(s) appended, "
           f"{after[0] if after else '-'}..{after[-1] if after else '-'}, "
           f"{len(mapped.stored_symbols()):,} permatickers, "
-          f"{sum(unplaced.values()):,} unplaced ticker-days; {time.monotonic() - started:.0f}s.", flush=True)
+          f"{sum(unplaced.values()):,} unplaced ticker-days; {mapped.update_summary()}; "
+          f"{time.monotonic() - started:.0f}s.", flush=True)
     return 0
 
 

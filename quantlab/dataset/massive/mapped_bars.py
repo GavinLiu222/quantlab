@@ -51,6 +51,7 @@ With ``bars`` the permaticker view of the whole-market Trade bar store and
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 from datetime import date
@@ -66,14 +67,18 @@ from loguru import logger
 
 from quantlab.backend.zarr import XrBackend
 from quantlab.core.component import rebuild
+from quantlab.dataset._support.adjustment import ADJUSTED_VARIABLES, CARRY_SCHEMA, carry_state, chain_adjusted
 from quantlab.dataset.base import MarketDataset
 from quantlab.dataset.config import MappedDayBarsConfig, MappedTradeBarsConfig
+from quantlab.dataset.massive.day_bar_events import EVENT_ENDPOINTS, day_bar_events, session_days
 from quantlab.dataset.massive.day_bars import DAY_BAR_RESAMPLE_HOW
 from quantlab.dataset.massive.permaticker_bars import (
     PermatickerDataset,
     PermatickerDayBarDataset,
     PermatickerTradeBarDataset,
 )
+from quantlab.dataset.massive.placement import UNPLACED_SUFFIX
+from quantlab.dataset.massive.raw import read_rest_watermark
 from quantlab.dataset.massive.ticker_map import RULES_VERSION
 from quantlab.dataset.massive.trade_bars import TRADE_BAR_RESAMPLE_HOW
 from quantlab.utils.atomic import write_json_atomically
@@ -81,6 +86,18 @@ from quantlab.utils.date_range import last_moment
 
 #: Suffix of the sidecar holding each stored day's map digest.
 MAP_SIDECAR = ".permaticker_map.json"
+
+#: Suffix of the record of the last day the Day aggregate store's adjusted variables are chained through.
+ADJUSTMENT_SIDECAR = ".adjustment.json"
+
+#: Suffix of the Day aggregate store's check file against SEP.
+SEP_CHECK_SUFFIX = ".sep_check.json"
+
+#: Bars the Day aggregate store chains, or checks against SEP, per read.
+CHAIN_BLOCK_BARS = 250
+
+#: The raw variables the adjusted ones are chained from.
+_RAW_PRICES = ("open", "high", "low", "close", "volume")
 
 
 def day_digests(rows: pl.DataFrame) -> dict[str, str]:
@@ -171,10 +188,9 @@ class MappedPermatickerDataset(MarketDataset):
             raise ValueError(
                 f"{self.class_name}: source must read its store's own bars; resample this dataset instead."
             )
-        return self.config_cls(
-            source=config.source,
+        return dataclasses.replace(
+            config,
             zarr_file_path=str(config.zarr_file_path),
-            resample_freq=config.resample_freq,
             resample_how=None if config.resample_how is None else dict(config.resample_how),
             name=self.import_path,
         )
@@ -340,9 +356,7 @@ class MappedPermatickerDataset(MarketDataset):
         >>> mapped.resample("1h").panel("2024-11-27", "2024-11-30").sizes["timestamp"]
         11
         """
-        return type(self)(
-            self.config_cls(source=self.source, zarr_file_path=self.store_path, resample_freq=freq, resample_how=how)
-        )
+        return type(self)(dataclasses.replace(self.config, resample_freq=freq, resample_how=how))
 
     def copy(self) -> Self:
         """Return a dataset over a copy of the view and the same store.
@@ -353,14 +367,7 @@ class MappedPermatickerDataset(MarketDataset):
         >>> other == mapped, other.source is mapped.source
         (True, False)
         """
-        return type(self)(
-            self.config_cls(
-                source=self.source.copy(),
-                zarr_file_path=self.store_path,
-                resample_freq=self.config.resample_freq,
-                resample_how=self.config.resample_how,
-            )
-        )
+        return type(self)(dataclasses.replace(self.config, source=self.source.copy()))
 
     # -- the source store's market rules ------------------------------------------
 
@@ -436,13 +443,14 @@ class MappedPermatickerDataset(MarketDataset):
         if not days:
             return self
         batches = [days[i : i + self.BATCH_DAYS] for i in range(0, len(days), self.BATCH_DAYS)]
-        fills = self.source.no_bar_fills()
+        fills = self._fill_values()
         digests = dict(recorded)
         unplaced = self._recorded_unplaced()
 
         def write(batch: list[date], mapped: tuple[xr.Dataset, dict[str, str], dict[str, int]]) -> None:
             panel, now, missed = mapped
             if panel.sizes["timestamp"]:
+                panel = self._before_write(panel)
                 XrBackend().to_internal(panel).widen_and_append(self.store_path, fill_values=fills)
             for day in batch:
                 digests[day.isoformat()] = now.get(day.isoformat(), "")
@@ -463,15 +471,23 @@ class MappedPermatickerDataset(MarketDataset):
             write(batch, panel)
         return self
 
-    def _remap_changed(self, recorded: dict[str, str]) -> None:
-        """Map again and overwrite every stored day whose map rows changed."""
+    def _fill_values(self) -> dict[str, float]:
+        """Return the values of a column without a bar, as the store is widened."""
+        return self.source.no_bar_fills()
+
+    def _before_write(self, panel: xr.Dataset) -> xr.Dataset:
+        """Return the view's ``panel`` of new days as it is appended; a subclass adds variables."""
+        return panel
+
+    def _remap_changed(self, recorded: dict[str, str]) -> list[str]:
+        """Map again and overwrite every stored day whose map rows changed; return those days."""
         days = sorted(recorded)
         now = day_digests(self.source.ticker_map.read(days[0], days[-1]))
         changed = [d for d in days if now.get(d, "") != recorded[d]]
         if not changed:
-            return
+            return []
         logger.warning(f"{self.class_name}: the Ticker map changed on {len(changed)} stored day(s); mapping them again.")
-        fills = self.source.no_bar_fills()
+        fills = self._fill_values()
         digests = dict(recorded)
         unplaced = self._recorded_unplaced()
         for day in changed:
@@ -492,6 +508,7 @@ class MappedPermatickerDataset(MarketDataset):
             digests[day] = mapped_with.get(day, "")
             unplaced[day] = missed.get(day, 0)
             self._record(digests, unplaced)
+        return changed
 
 
 class MappedTradeBarDataset(MappedPermatickerDataset):
@@ -525,23 +542,63 @@ class MappedTradeBarDataset(MappedPermatickerDataset):
     BATCH_DAYS = 2
 
 
+def _prefer(state: pl.DataFrame, older: pl.DataFrame) -> pl.DataFrame:
+    """Return ``state`` with the fields it lacks taken from ``older`` (``CARRY_SCHEMA`` rows)."""
+    if not older.height:
+        return state
+    if not state.height:
+        return older
+    fields = list(CARRY_SCHEMA)[1:]
+    return (
+        state.join(older, on="symbol", how="full", coalesce=True, suffix="_older")
+        .select("symbol", *(pl.coalesce(name, f"{name}_older").alias(name) for name in fields))
+        .sort("symbol")
+    )
+
+
 class MappedDayBarDataset(MappedPermatickerDataset):
-    """Massive's Day aggregates on permatickers, read from a store the view writes (#353).
+    """Massive's Day aggregates on permatickers, adjusted by Massive's own events (#353, #354).
 
     The store ``massive_permaticker_day_bars_1d`` holds the raw ``open``,
     ``high``, ``low``, ``close``, ``volume`` and ``n_trades`` of every
-    security the Ticker map places, unadjusted.
+    security the Ticker map places, and SEP's adjusted variables chained
+    from Massive's own split and dividend events (ADR 0048):
+
+    - ``divCash`` and ``splitFactor``, the events of each permaticker's bar
+      (``quantlab.dataset.massive.day_bar_events``: Massive's ``/stocks/v1``
+      dividends and splits placed by the Ticker map of their day; never
+      ``historical_adjustment_factor``);
+    - ``adjOpen``, ``adjHigh``, ``adjLow``, ``adjClose``, ``adjVolume`` and
+      ``cumfacshr``, by SEP's rule (``quantlab.dataset._support.adjustment``),
+      chained append-only: a day appended continues each permaticker from
+      its stored chain and never rewrites a stored bar. A day mapped again
+      because its map rows changed is chained again with every day after it.
+
+    A day is appended only once both REST pulls hold it (their watermarks),
+    so its events are known when it is chained. Events left out are counted
+    in ``<store>.unplaced.json`` (``unplaced_path``).
+
+    With ``sep`` set, ``update()`` checks each new day's adjusted returns
+    against SEP's store: a permaticker and day whose two returns differ by
+    more than ``check_tolerance`` is written, with both vendors' events, to
+    the check file ``<store>.sep_check.json`` (``check_path``,
+    ``disagreements()``). A disagreement points at one vendor's events; it
+    never stops the build. Days after SEP's last bar are checked by a later
+    update.
 
     Parameters
     ----------
     config : MappedDayBarsConfig
-        The view (``source``, a ``PermatickerDayBarDataset``) and the store.
+        The view (``source``, a ``PermatickerDayBarDataset``), the store and SEP.
 
     Examples
     --------
-    >>> mapped = MappedDayBarDataset(MappedDayBarsConfig(source=days, zarr_file_path="mapped.zarr"))
-    >>> mapped.update().panel("2024-11-27", "2024-11-30")["close"].sel(symbol=303).values.tolist()   # RRR, then RRS
-    [30.0, 31.0]
+    >>> mapped = MappedDayBarDataset(MappedDayBarsConfig(source=days, sep=sep, zarr_file_path="mapped.zarr"))
+    >>> panel = mapped.update().panel("2024-03-04", "2024-03-11")
+    >>> panel["adjClose"].sel(symbol=101).values.tolist()   # a 2-for-1 split on 2024-03-06
+    [100.0, 102.0, 102.0, 104.0, 106.0, 108.0]
+    >>> [(d["symbol"], d["date"]) for d in mapped.disagreements()]
+    [(303, '2024-03-07')]
     """
 
     # Narrower type annotation for readers and type checkers only.
@@ -558,3 +615,352 @@ class MappedDayBarDataset(MappedPermatickerDataset):
     #: Session days mapped and appended per write: a whole-market day is
     #: about 0.6 MB, so a year goes in one write.
     BATCH_DAYS = 250
+
+    # -- the files beside the store ----------------------------------------------
+
+    @property
+    def adjustment_path(self) -> Path:
+        """``<store>.adjustment.json``: the last day whose adjusted variables are chained.
+
+        Examples
+        --------
+        >>> mapped.adjustment_path.name
+        'mapped.zarr.adjustment.json'
+        """
+        return Path(f"{self.store_path}{ADJUSTMENT_SIDECAR}")
+
+    @property
+    def check_path(self) -> Path:
+        """``<store>.sep_check.json``: the days where the adjusted return disagrees with SEP's.
+
+        Examples
+        --------
+        >>> mapped.check_path.name
+        'mapped.zarr.sep_check.json'
+        """
+        return Path(f"{self.store_path}{SEP_CHECK_SUFFIX}")
+
+    @property
+    def unplaced_path(self) -> str:
+        """``<store>.unplaced.json``: the split and dividend records left out of the store.
+
+        Examples
+        --------
+        >>> Path(mapped.unplaced_path).name
+        'mapped.zarr.unplaced.json'
+        """
+        return f"{self.store_path}{UNPLACED_SUFFIX}"
+
+    def disagreements(self) -> list[dict]:
+        """Return the check file's disagreements with SEP, by date and permaticker.
+
+        Each is ``{"symbol", "date", "massive_return", "sep_return",
+        "massive_divCash", "sep_divCash", "massive_splitFactor",
+        "sep_splitFactor"}``; empty without a check file.
+
+        Examples
+        --------
+        >>> mapped.disagreements()[0]["sep_return"]
+        -0.025
+        """
+        return list(self._check_state().get("disagreements", []))
+
+    def update_summary(self) -> str:
+        """Return what the daily update reports: the disagreements with SEP and the events left out.
+
+        Examples
+        --------
+        >>> mapped.update_summary()
+        '1 disagreement(s) with SEP, checked through 2024-03-11; 1 event record(s) left out'
+        """
+        state = self._check_state()
+        path = Path(self.unplaced_path)
+        left_out = json.loads(path.read_text())["rows"] if path.exists() else 0
+        return (
+            f"{len(state.get('disagreements', []))} disagreement(s) with SEP, checked through "
+            f"{state.get('checked_through') or '-'}; {left_out} event record(s) left out"
+        )
+
+    def _adjusted_through(self) -> date | None:
+        """Return the last day whose adjusted variables are chained, ``None`` before any."""
+        if not self.adjustment_path.exists():
+            return None
+        through = json.loads(self.adjustment_path.read_text()).get("through")
+        return None if through is None else date.fromisoformat(through)
+
+    def _write_adjusted_through(self, day: date | None) -> None:
+        """Record the last day chained."""
+        write_json_atomically(self.adjustment_path, {"through": None if day is None else day.isoformat()})
+
+    def _check_state(self) -> dict:
+        """Return the check file's content, empty without one."""
+        if not self.check_path.exists():
+            return {}
+        return json.loads(self.check_path.read_text())
+
+    # -- writing ------------------------------------------------------------------
+
+    def _fill_values(self) -> dict[str, float]:
+        """Return the values of a column without a bar: zero volumes, counts and dividends, a split of 1."""
+        return {**self.source.no_bar_fills(), "divCash": 0.0, "splitFactor": 1.0}
+
+    def _before_write(self, panel: xr.Dataset) -> xr.Dataset:
+        """Return ``panel`` with the adjusted variables still to chain: NaN, no dividend, a split of 1."""
+        empty = xr.full_like(panel["close"], np.nan, dtype=np.float64)
+        return panel.assign(
+            **{name: empty for name in ADJUSTED_VARIABLES},
+            divCash=xr.full_like(empty, 0.0),
+            splitFactor=xr.full_like(empty, 1.0),
+        )
+
+    def _available_days(self, end) -> list[date]:
+        """Return the days both stores hold, up to ``end``, through the last day both REST pulls hold.
+
+        Raises
+        ------
+        ValueError
+            If the splits or the dividends were never pulled.
+        """
+        days = super()._available_days(end)
+        vendor_root = self.source.ticker_bars.config.raw_data_dir_path
+        for endpoint in EVENT_ENDPOINTS:
+            through = read_rest_watermark(vendor_root, endpoint)
+            if through is None:
+                raise ValueError(
+                    f"{self.class_name}: Massive's {endpoint!r} endpoint was never pulled into {vendor_root}, "
+                    f"so no day's events are known; run scripts/massive/rest_pull.py first."
+                )
+            days = [day for day in days if day <= through]
+        return days
+
+    def update(self, end=None, workers: int = 1) -> Self:
+        """Bring the store up to date, chain its adjusted variables and check them against SEP.
+
+        After the mapping (``MappedPermatickerDataset.update``), every day
+        after the last one chained is chained from the stored state each
+        permaticker ended in, and the days after the check file's last are
+        checked against SEP. A disagreement is recorded, never raised.
+
+        Parameters
+        ----------
+        end : str, datetime.date or pd.Timestamp, optional
+            The last day to append; ``None`` for the last day every input holds.
+        workers : int, default 1
+            Processes mapping batches of days ahead of the writes.
+
+        Returns
+        -------
+        Self
+            ``self``, for chaining.
+
+        Examples
+        --------
+        >>> mapped.update().stored_days()[-1]
+        datetime.date(2024, 3, 11)
+        """
+        super().update(end, workers)
+        if not Path(self.store_path).exists():
+            return self
+        self._chain_pending()
+        self._check_sep()
+        return self
+
+    def _remap_changed(self, recorded: dict[str, str]) -> list[str]:
+        """Map the changed days again, then mark them and every later day to be chained and checked again."""
+        changed = super()._remap_changed(recorded)
+        if changed:
+            first = date.fromisoformat(min(changed))
+            prior = [day for day in self.stored_days() if day < first]
+            before = prior[-1] if prior else None
+            through = self._adjusted_through()
+            if through is not None and through >= first:
+                self._write_adjusted_through(before)
+            state = self._check_state()
+            checked = state.get("checked_through")
+            if checked is not None and date.fromisoformat(checked) >= first:
+                state["checked_through"] = None if before is None else before.isoformat()
+                state["disagreements"] = [d for d in state["disagreements"] if d["date"] < first.isoformat()]
+                write_json_atomically(self.check_path, state, indent=1, sort_keys=True)
+        return changed
+
+    def _chain_pending(self) -> None:
+        """Chain the adjusted variables of every stored day after the last one chained, in place."""
+        stored = self._open()
+        try:
+            if "adjClose" not in stored.data_vars:
+                raise ValueError(
+                    f"{self.class_name}: the store at {self.store_path} has no adjusted variables (written "
+                    f"before #354); delete it and its sidecars and update() again."
+                )
+            stamps = pd.DatetimeIndex(stored["timestamp"].values)
+            sessions = session_days(stamps)
+            events = day_bar_events(self.source, sessions, owner=self.class_name, report_path=self.store_path)
+            through = self._adjusted_through()
+            first = 0 if through is None else int(stamps.searchsorted(pd.Timestamp(through), side="right"))
+            if first >= len(stamps):
+                return
+            carry = self._stored_carry(stored, first)
+            width = stored.sizes["symbol"]
+            for a in range(first, len(stamps), CHAIN_BLOCK_BARS):
+                b = min(a + CHAIN_BLOCK_BARS, len(stamps))
+                raw = stored[list(_RAW_PRICES)].isel(timestamp=slice(a, b)).load()
+                block = self._chain_block(raw, events, carry)
+                block.drop_vars(["timestamp", "symbol"]).to_zarr(
+                    self.store_path, region={"timestamp": slice(a, b), "symbol": slice(0, width)}
+                )
+                carry = carry_state(block.assign(close=raw["close"], volume=raw["volume"]), earlier=carry)
+                self._write_adjusted_through(sessions[b - 1])
+            logger.info(f"{self.class_name}: chained {sessions[first]}..{sessions[-1]}")
+        finally:
+            stored.close()
+
+    def _stored_carry(self, stored: xr.Dataset, first: int) -> pl.DataFrame:
+        """Return the state each stored chain ended in before bar ``first``.
+
+        Read back from the store a block of bars at a time, newest first,
+        until every permaticker priced from ``first`` on has its last
+        positive close.
+        """
+        empty = pl.DataFrame(schema=CARRY_SCHEMA)
+        if first == 0:
+            return empty
+        symbols = np.asarray(stored["symbol"].values, dtype=np.int64)
+        later = stored["close"].isel(timestamp=slice(first, None)).values
+        needed = set(symbols[np.isfinite(later).any(axis=0)].tolist())
+        state = empty
+        end = first
+        while end > 0:
+            a = max(0, end - CHAIN_BLOCK_BARS)
+            block = stored[["close", "volume", *ADJUSTED_VARIABLES]].isel(timestamp=slice(a, end)).load()
+            state = _prefer(state, carry_state(block))
+            if needed <= set(state.filter(pl.col("close").is_not_null())["symbol"].to_list()):
+                break
+            end = a
+        return state
+
+    def _chain_block(self, raw: xr.Dataset, events: pl.DataFrame, carry: pl.DataFrame) -> xr.Dataset:
+        """Return a block's chained variables on its ``(timestamp, symbol)`` grid.
+
+        A permaticker without a stored chain starts one at its first bar:
+        the rows before it are no part of it (NaN, no dividend, a split of 1),
+        as a column widened onto earlier days reads.
+        """
+        stamps = raw["timestamp"].values
+        symbols = np.asarray(raw["symbol"].values, dtype=np.int64)
+        frame = pl.from_pandas(raw.to_dataframe().reset_index(), nan_to_null=True).with_columns(
+            pl.col("timestamp").cast(pl.Datetime("ns")), pl.col("symbol").cast(pl.Int64)
+        ).sort("symbol", "timestamp")
+        started = pl.col("symbol").is_in(carry["symbol"].to_list()) | (
+            pl.col("close").is_not_null().cast(pl.Int8).cum_max().over("symbol") > 0
+        )
+        frame = (
+            frame.filter(started)
+            .join(events, on=["timestamp", "symbol"], how="left")
+            .with_columns(pl.col("divCash").fill_null(0.0), pl.col("splitFactor").fill_null(1.0))
+        )
+        chained = chain_adjusted(frame, owner=self.class_name, carry=carry)
+        at_time = pl.DataFrame({"timestamp": stamps, "_t": np.arange(len(stamps))}).with_columns(
+            pl.col("timestamp").cast(pl.Datetime("ns"))
+        )
+        at_symbol = pl.DataFrame({"symbol": symbols, "_s": np.arange(len(symbols))})
+        chained = chained.join(at_time, on="timestamp").join(at_symbol, on="symbol")
+        rows, cols = chained["_t"].to_numpy(), chained["_s"].to_numpy()
+        fills = {**{name: np.nan for name in ADJUSTED_VARIABLES}, "divCash": 0.0, "splitFactor": 1.0}
+        out = {}
+        for name, fill in fills.items():
+            grid = np.full((len(stamps), len(symbols)), fill, dtype=np.float64)
+            grid[rows, cols] = chained[name].cast(pl.Float64).fill_null(np.nan).to_numpy()
+            out[name] = (("timestamp", "symbol"), grid)
+        return xr.Dataset(out, coords={"timestamp": stamps, "symbol": symbols})
+
+    def _check_sep(self) -> None:
+        """Check every chained day after the check file's last against SEP's adjusted returns."""
+        sep = self.config.sep
+        through = self._adjusted_through()
+        if sep is None or through is None:
+            return
+        tolerance = float(self.config.check_tolerance)
+        state = self._check_state()
+        if state.get("tolerance") != tolerance:
+            state = {"tolerance": tolerance, "checked_through": None, "disagreements": []}
+        stored = self._open()
+        try:
+            stamps = pd.DatetimeIndex(stored["timestamp"].values)
+            checked = state["checked_through"]
+            first = 0 if checked is None else int(stamps.searchsorted(pd.Timestamp(checked), side="right"))
+            last = int(stamps.searchsorted(pd.Timestamp(through), side="right"))
+            found = list(state["disagreements"])
+            for a in range(first, last, CHAIN_BLOCK_BARS):
+                b = min(a + CHAIN_BLOCK_BARS, last)
+                compared_through, entries = self._compare(stored, sep, a, b, tolerance)
+                found.extend(entries)
+                if compared_through is None:
+                    break
+                state["checked_through"] = compared_through.isoformat()
+                if compared_through < stamps[b - 1].date():
+                    break
+        finally:
+            stored.close()
+        state["disagreements"] = sorted(found, key=lambda d: (d["date"], d["symbol"]))
+        write_json_atomically(self.check_path, state, indent=1, sort_keys=True)
+        if state["disagreements"]:
+            logger.warning(
+                f"{self.class_name}: {len(state['disagreements'])} permaticker-day(s) whose adjusted return "
+                f"differs from SEP's by more than {tolerance:g}, listed in {self.check_path}."
+            )
+
+    def _compare(self, stored: xr.Dataset, sep, a: int, b: int, tolerance: float) -> tuple[date | None, list[dict]]:
+        """Compare the returns of bars ``a``..``b - 1`` with SEP's; return the last day compared and the disagreements.
+
+        A bar's return is its ``adjClose`` over the store's bar before it;
+        SEP's is taken on the same two days. Only a pair both vendors price
+        on both days is compared, and only up to SEP's last bar.
+        """
+        names = ["adjClose", "divCash", "splitFactor"]
+        lo = max(a - 1, 0)
+        mine = stored[names].isel(timestamp=slice(lo, b)).load()
+        stamps = pd.DatetimeIndex(mine["timestamp"].values)
+        theirs = sep.panel(stamps[0], stamps[-1], variables=names).load()
+        if not theirs.sizes["timestamp"]:
+            return None, []
+        sep_last = pd.Timestamp(theirs["timestamp"].values[-1])
+        rows = np.arange(lo, b)
+        compared = (rows >= a) & (stamps <= sep_last)
+        if not compared.any():
+            return None, []
+        common = sorted(
+            set(np.asarray(mine["symbol"].values, dtype=np.int64).tolist())
+            & set(np.asarray(theirs["symbol"].values, dtype=np.int64).tolist())
+        )
+        mine = mine.sel(symbol=common)
+        theirs = theirs.reindex(timestamp=mine["timestamp"].values, symbol=common)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            massive = mine["adjClose"].values[1:] / mine["adjClose"].values[:-1] - 1.0
+            sep_returns = theirs["adjClose"].values[1:] / theirs["adjClose"].values[:-1] - 1.0
+        both = np.isfinite(massive) & np.isfinite(sep_returns) & compared[1:, None]
+        apart = both & (np.abs(massive - sep_returns) > tolerance)
+        entries = [
+            {
+                "symbol": int(common[s]),
+                "date": stamps[t + 1].date().isoformat(),
+                "massive_return": float(massive[t, s]),
+                "sep_return": float(sep_returns[t, s]),
+                **{f"massive_{n}": float(mine[n].values[t + 1, s]) for n in ("divCash", "splitFactor")},
+                **{f"sep_{n}": float(theirs[n].values[t + 1, s]) for n in ("divCash", "splitFactor")},
+            }
+            for t, s in zip(*np.nonzero(apart))
+        ]
+        return stamps[compared][-1].date(), entries
+
+    # -- reading -----------------------------------------------------------------
+
+    def _open_bars(self, start, end) -> xr.Dataset:
+        """Return the store's bars, refusing a stored day whose adjusted variables are not chained yet."""
+        first, last = pd.Timestamp(start).date(), last_moment(end).date()
+        days = [day for day in self.stored_days() if first <= day <= last]
+        through = self._adjusted_through()
+        if days and (through is None or days[-1] > through):
+            raise ValueError(
+                f"{self.class_name}: the store's days after {through} are not adjusted yet; run update()."
+            )
+        return super()._open_bars(start, end)

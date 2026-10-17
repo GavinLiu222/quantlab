@@ -229,6 +229,39 @@ class PermatickerDataset(MarketDataset):
         counts = rows.group_by("date").len().sort("date")
         return {day: int(n) for day, n in counts.iter_rows()}
 
+    def columns(self, start, end) -> pl.DataFrame:
+        """Return the ticker each permaticker's column holds on each mapped day of ``start``..``end``.
+
+        Where two stored tickers map to one permaticker on a day, the busier
+        one holds the column (the rule ``panel`` applies), so an event of
+        the other ticker is not the column's.
+
+        Parameters
+        ----------
+        start, end : str, datetime.date or pd.Timestamp
+            The days, both inclusive.
+
+        Returns
+        -------
+        pl.DataFrame
+            ``date``, ``ticker`` and ``permaticker``, by date and permaticker.
+
+        Examples
+        --------
+        >>> bars.columns("2024-11-29", "2024-11-29").filter(pl.col("permaticker") == 101)["ticker"].to_list()
+        ['AAA']
+        """
+        first, last = check_range(start, end, f"{self.class_name}.columns()")
+        rows = self._map_rows(first, last).filter(pl.col("date").is_between(first.date(), last.date()))
+        volumes = self._day_volumes(rows)
+        chosen = [
+            (day, ticker, permaticker)
+            for (day,), frame in rows.partition_by("date", as_dict=True).items()
+            for ticker, permaticker in self._choose(frame, volumes.get(day, {}))
+        ]
+        schema = {"date": pl.Date, "ticker": pl.String, "permaticker": pl.Int64}
+        return pl.DataFrame(chosen, schema=schema, orient="row").sort("date", "permaticker")
+
     def _mapped_panel(self, start, end, symbols, variables) -> xr.Dataset:
         """Return the store's bars of ``start``..``end`` on permatickers, at the store's own bars."""
         first, last = check_range(start, end, f"{self.class_name}.panel()")

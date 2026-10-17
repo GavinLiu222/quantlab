@@ -416,15 +416,44 @@ from quantlab.dataset.massive.permaticker_bars import PermatickerDayBarDataset
 view = PermatickerDayBarDataset(days, ticker_map)   # the MassiveDayBarDataset above
 mapped = MappedDayBarDataset(MappedDayBarsConfig(
     source=view,
+    sep=load_component("/data/quantlab/market/sharadar/sharadar_sep_1d"),   # checked against; optional
     zarr_file_path="/data/quantlab/market/massive/massive_permaticker_day_bars_1d/massive_permaticker_day_bars_1d.zarr",
 ))
 mapped.update()                                     # build, or append the new days
 panel = mapped.panel("2024-11-26", "2024-11-29")    # symbol: int64 permatickers
 mapped.unplaced()                                   # {day: tickers the map could not place}
+mapped.disagreements()                              # the check file: days whose adjusted return is not SEP's
 
 mapped = load_component("/data/quantlab/market/massive/massive_permaticker_day_bars_1d")   # the shared one
 ```
 
-The variables are the Day aggregates' (`open`, `high`, `low`, `close`, `volume`, `n_trades`), raw: not adjusted for splits or dividends. One bar per trading day labelled with its date, as SEP's bars. The mapping rules are the view's: a security that changed ticker is one column, a reused ticker goes each day to the permaticker that held it that day, two tickers of one permaticker keep the busier, and a permaticker without a ticker on a day reads as a column without a bar (NaN prices, zero `volume` and `n_trades`). A ticker the map cannot place on a day is counted in the sidecar, not guessed. `update(end=None)` appends `BATCH_DAYS` (250) days per write. A store built a day at a time equals one built at once.
+The raw variables are the Day aggregates' (`open`, `high`, `low`, `close`, `volume`, `n_trades`). One bar per trading day labelled with its date, as SEP's bars. The mapping rules are the view's: a security that changed ticker is one column, a reused ticker goes each day to the permaticker that held it that day, two tickers of one permaticker keep the busier, and a permaticker without a ticker on a day reads as a column without a bar (NaN prices, zero `volume` and `n_trades`). A ticker the map cannot place on a day is counted in the sidecar, not guessed. `update(end=None)` appends `BATCH_DAYS` (250) days per write. A store built a day at a time equals one built at once (the adjusted variables to 1e-12, rounding).
 
-The shared store is `<data-dir>/market/massive/massive_permaticker_day_bars_1d/`, beside its `README.md` and `component.json`. `scripts/massive/permaticker_day_bars.py --data-dir ...` writes the folder when it is missing (the view over the `massive_day_bars_1d` and `massive_ticker_map` folders) and builds or catches up the store, printing the unplaced ticker-days; the daily data update brings it up to date after the Ticker map (an `update` step, [data_update.md](data_update.md)). SEP stays the daily price of research, backtests and trading.
+### Adjusted by Massive's own events
+
+The store also carries SEP's adjusted variables, so a reader can swap SEP for Massive's daily bars by changing one dataset: `divCash`, `splitFactor`, `adjOpen`, `adjHigh`, `adjLow`, `adjClose`, `adjVolume` and `cumfacshr`, with SEP's meaning ([sharadar.md](sharadar.md), the adjusted prices). They are chained from Massive's own `/stocks/v1` splits and dividends in the REST raw tier ([REST pulls](#rest-pulls)), not from Sharadar's ACTIONS and never from Massive's `historical_adjustment_factor`, which the vendor rewrites over the whole history at every event (ADR 0048):
+
+| Variable | Value |
+|---|---|
+| `divCash` | `cash_amount` of every USD dividend going ex on the day, summed; 0.0 otherwise |
+| `splitFactor` | `split_to / split_from` of every split executed on the day, multiplied; 1.0 otherwise |
+| `adjClose` | the first positive close grown by `(close + divCash) * splitFactor / close_prev` each day since |
+| `adjOpen`, `adjHigh`, `adjLow` | scaled by `adjClose / close` |
+| `adjVolume` | the raw volume in the first bar's shares |
+| `cumfacshr` | 1.0 on the first bar, divided by `splitFactor` on every bar since |
+
+The chain is SEP's (`quantlab.dataset._support.adjustment.chain_adjusted`, which `SharadarStockDataset` calls with ACTIONS' events), and it is append-only: each update continues every permaticker from the state its stored chain ended in, so a new event never rewrites a stored bar. Each event is placed on the permaticker the Ticker map gives its ticker on its own day (a vendor date that is not a session rolls onto the next one), through the same `TickerPlacement` as the dividend panel, so a reused ticker never chains two securities: each starts a chain of its own at its first bar. Where two tickers share a permaticker on a day, only the events of the ticker whose bar the column holds count. A record left out (not placed, not USD, no positive split ratio, another ticker's bar) is counted in `<store>.unplaced.json`. A day is appended only once both REST pulls' watermarks reach it, so its events are known when it is chained; `<store>.adjustment.json` records the last day chained, and a day mapped again because the map changed is chained again with every day after it.
+
+**The check file.** With `sep` set, every update compares each newly chained day's adjusted return, `adjClose[t] / adjClose[t-1] - 1`, with SEP's on the same two days, for every permaticker both stores price on both days. A difference above `check_tolerance` (1e-4 by default) is written to `<store>.sep_check.json`:
+
+```json
+{"tolerance": 0.0001, "checked_through": "2024-03-11",
+ "disagreements": [{"symbol": 303, "date": "2024-03-07",
+                    "massive_return": 0.0, "sep_return": -0.025,
+                    "massive_divCash": 0.5, "sep_divCash": 0.0,
+                    "massive_splitFactor": 1.0, "sep_splitFactor": 1.0}]}
+```
+
+Both vendors' events are recorded beside the returns, so a disagreement points at the vendor whose event is wrong (a split basis like #335, a missing dividend). A disagreement never stops the build. Days after SEP's last bar are checked by a later update. The daily update's step result reports the count (`MappedDayBarDataset.update_summary()`).
+
+The shared store is `<data-dir>/market/massive/massive_permaticker_day_bars_1d/`, beside its `README.md` and `component.json`. `scripts/massive/permaticker_day_bars.py --data-dir ...` writes the folder when it is missing (the view over the `massive_day_bars_1d` and `massive_ticker_map` folders) and builds or catches up the store, printing the unplaced ticker-days and the check's disagreements with SEP (`market/sharadar/sharadar_sep_1d`); the daily data update brings it up to date after the Ticker map (an `update` step, [data_update.md](data_update.md)). SEP stays the daily price of research, backtests and trading.

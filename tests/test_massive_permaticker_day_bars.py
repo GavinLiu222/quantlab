@@ -35,7 +35,12 @@ def view(built, tmp_path):
     from quantlab.dataset.massive.day_bars import MassiveDayBarDataset
     from quantlab.dataset.massive.permaticker_bars import PermatickerDayBarDataset
 
+    from quantlab.dataset.massive.raw import write_rest_watermark
+
     trade_bars, ticker_map, _ = built
+    # Both REST pulls ran and found no split or dividend: the store's adjusted prices are its raw ones.
+    for endpoint, field in (("dividends", "ex_dividend_date"), ("splits", "execution_date")):
+        write_rest_watermark(trade_bars.config.raw_data_dir_path, endpoint, field, HALF_DAY)
     day_bars = MassiveDayBarDataset(MassiveDayBarsDatasetConfig(
         zarr_file_path=str(tmp_path / "market" / "massive_day_bars_1d.zarr"),
         raw_data_dir_path=trade_bars.config.raw_data_dir_path,
@@ -54,7 +59,8 @@ def _mapped(view, path):
 def _assert_same(stored: xr.Dataset, view: xr.Dataset) -> None:
     view = view.reindex(symbol=stored["symbol"].values)
     assert stored["timestamp"].values.tolist() == view["timestamp"].values.tolist()
-    assert list(stored.data_vars) == list(view.data_vars)
+    # The store adds the adjusted variables (#354, tests/test_massive_adjusted_day_bars.py).
+    assert set(view.data_vars) <= set(stored.data_vars)
     for name in view.data_vars:
         np.testing.assert_array_equal(stored[name].values, view[name].values, err_msg=name)
 
