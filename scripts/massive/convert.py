@@ -61,7 +61,7 @@ from loguru import logger
 
 from quantlab.core.store_folder import COMPONENT_FILE, save_component
 from quantlab.dataset.config import MassiveTradeBarsDatasetConfig
-from quantlab.dataset.massive.raw import VENDOR_DIR, raw_days, raw_file, read_watermark, s3_key
+from quantlab.dataset.massive.raw import VENDOR_DIR, raw_days, raw_file, read_watermark
 from quantlab.dataset.massive.trade_bars import (
     ConvertedTradeDay,
     MassiveTradeBarDataset,
@@ -170,7 +170,7 @@ def oldest_served_day(client, today: date) -> date:
     candidates = sessions(today - PLAN_WINDOW, today)[:OLDEST_DAY_PROBES]
     for day in candidates:
         try:
-            client.store.size(s3_key("trades", day))
+            client.published_size("trades", day)
             return day
         except MassiveEntitlementError:
             continue

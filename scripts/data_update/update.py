@@ -6,9 +6,10 @@ holding ``<stem>.zarr``, its README.md and a ``component.json``: the component's
 ``get_config()``, from which the step rebuilds the dataset, factor or factor risk model
 (``quantlab.core.component.rebuild``). Actions (``ACTIONS``):
 
-- ``sharadar``: ``scripts/sharadar/update.py`` (every Sharadar table);
-- ``fred``: download the FRED series from ``start``, then ``update()`` the store in the
-  named folder;
+- ``refresh``: keep a vendor's raw tier current from its watermarks
+  (``quantlab.acquisition.registry.refresh_raw_tier``: Sharadar's table plan, Massive's REST
+  endpoints, FRED's series), the step's other keys passed to the vendor's refresh; it
+  raises when a part failed;
 - ``benchmarks``: ``scripts/sharadar/price_return_benchmark.py --refresh``;
 - ``update``: ``update()`` the dataset of a store folder;
 - ``mirror``: append a source dataset's new bars to a store copying its variables
@@ -20,8 +21,8 @@ holding ``<stem>.zarr``, its README.md and a ``component.json``: the component's
   ``{download_dir}`` are filled in.
 
 A step may list ``writes``: the store folders or folder prefixes (``market/wrds/``) it
-writes; ``sharadar``, ``benchmarks`` and ``run`` steps say so there, the others write
-their ``store``. A ``run`` step may also list ``reads``. ``--check`` orders every step's
+writes; ``benchmarks`` and ``run`` steps say so there, ``refresh`` writes raw files only,
+the others write their ``store``. A ``run`` step may also list ``reads``. ``--check`` orders every step's
 reads against the later steps' writes. A step with ``allow_failure: true`` that raises is
 recorded as failed and the run goes on; whether the day is ready is still decided by the
 ``ready`` stores. A stage with ``after_done: true`` runs only once ``done`` is written (its
@@ -68,8 +69,8 @@ import xarray as xr
 import yaml
 from loguru import logger
 
-from quantlab.acquisition.config import AcquisitionConfig
-from quantlab.acquisition.fred import FredAcquisition
+from quantlab.acquisition.base import DataSourceRegistry
+from quantlab.acquisition.registry import refresh_raw_tier
 from quantlab.backtest.live import mirror_new_bars
 from quantlab.core.store_uses import OWNS, StoreUse, walk_store_uses
 from quantlab.core.store_folder import COMPONENT_FILE, load_component
@@ -81,9 +82,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 NEW_YORK = ZoneInfo("America/New_York")
 STATUS_FILE = "update_status.json"
 #: The actions a step may name; each is a method of ``Update``.
-ACTIONS = ("sharadar", "fred", "benchmarks", "update", "mirror", "extend", "run")
+ACTIONS = ("refresh", "benchmarks", "update", "mirror", "extend", "run")
 #: The actions whose step writes the folder named by its ``store``.
-STORE_ACTIONS = ("update", "extend", "mirror", "fred")
+STORE_ACTIONS = ("update", "extend", "mirror")
 #: The exit status of each final state.
 EXIT_CODES = {"done": 0, "failed": 1, "no_new_bar": 3}
 
@@ -204,22 +205,14 @@ class Update:
 
     # -- actions ------------------------------------------------------------------
 
-    def sharadar(self, args: list | None = None, writes: list | None = None) -> str:
-        """Run ``scripts/sharadar/update.py`` over both roots."""
-        self._script("scripts/sharadar/update.py", "--download-dir", str(self.download_dir),
-                     "--data-dir", str(self.data_dir), *(args or []))
-        return "updated"
-
-    def fred(self, series: list, store: str, start: str) -> str:
-        """Download the FRED ``series`` from ``start``, then update the store."""
-        if not self.dry_run:
-            FredAcquisition(AcquisitionConfig(
-                market="us_equity", frequency="1d", vendor="fred",
-                raw_data_dir_path=str(self.download_dir / "fred"),
-                watermark_path=str(self.download_dir / "_watermarks" / "fred"),
-                symbols=tuple(series), start_date=start,
-            )).download()
-        return self.update(store)
+    def refresh(self, vendor: str, writes: list | None = None, **options) -> str:
+        """Refresh ``vendor``'s raw tier under the download root; raise when a part failed."""
+        if self.dry_run:
+            return "would refresh"
+        result = refresh_raw_tier(DataSourceRegistry.get(vendor), self.download_dir, **options)
+        if result.failed:
+            raise RuntimeError(f"{vendor}: {len(result.failed)} part(s) not refreshed: {result.summary()}")
+        return result.summary()
 
     def benchmarks(self, tickers: list, writes: list | None = None) -> str:
         """Rebuild the price-return benchmarks of ``tickers`` from the SFP store."""
@@ -327,7 +320,7 @@ class Update:
         problems = []
         if action == "extend":
             problems += [f"{where}: {problem}" for problem in extend_problems(item)]
-        if action in ("update", "fred") and not isinstance(item, BaseDataset):
+        if action == "update" and not isinstance(item, BaseDataset):
             problems.append(f"{where}: {action} takes a dataset")
         if action == "mirror" and not isinstance(item, BaseDataset):
             problems.append(f"{where}: the mirror source must be a dataset")
@@ -342,12 +335,13 @@ class Update:
         for stage in self.plan["stages"]:
             for step in stage["steps"]:
                 action, kwargs, _ = parse_step(step)
-                where = f"{stage['name']}: {action} {kwargs.get('store', kwargs.get('script', ''))}".strip()
+                named = kwargs.get("store", kwargs.get("script", kwargs.get("vendor", "")))
+                where = f"{stage['name']}: {action} {named}".strip()
                 if action not in ACTIONS:
                     problems.append(f"{where}: unknown action; one of {ACTIONS}")
                     continue
                 reads: set[Path] = set()
-                keys = {"update": ("store",), "extend": ("store",), "fred": ("store",), "mirror": ("source",)}
+                keys = {"update": ("store",), "extend": ("store",), "mirror": ("source",)}
                 for key in keys.get(action, ()):
                     if key not in kwargs:
                         problems.append(f"{where}: no {key}")

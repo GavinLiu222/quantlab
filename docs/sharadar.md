@@ -444,6 +444,21 @@ uv run python scripts/sharadar/update.py --download-dir /data/quantlab/downloads
 
 `download.py` pulls `tickers`, `indicators`, `sep`, `sfp`, `actions`, `sp500`, `sf1`, `daily`, `events`, `sf2`, `sf3`, `sf3a` and `sf3b` (never METRICS) and builds `sharadar_sep_1d.zarr`, `sharadar_sfp_1d.zarr`, `sharadar_sp500_1d.zarr` (the `roster_universe="sp500"` store: every permaticker ever a member, with all its bars), `sharadar_spy_1d.zarr` (SPY alone, `SPY_PERMATICKER`), `sharadar_sp500_membership.zarr`, and the fundamentals stores `sharadar_sf1_arq.zarr` and `sharadar_sf1_art.zarr`, and the valuation store `sharadar_daily_1d.zarr`, and the filing and ownership stores `sharadar_events_1d.zarr`, `sharadar_insiders_1d.zarr` and `sharadar_holdings_1d.zarr`, the corporate-actions store `sharadar_actions_1d.zarr`, the industry store `sharadar_industry_1d.zarr`, the fiscal-year history store `sharadar_sf1_fiscal_years.zarr`, the share-class store `sharadar_share_class_1d.zarr` and the listing store `sharadar_listing_1d.zarr`, all with `update()`, so each keeps the chunk ledger the daily update reads. Each store sits in its own folder beside its sidecars and a short `README.md` (written when the folder has none): `<data-dir>/market/sharadar/<stem>/<stem>.zarr`, and the membership at `<data-dir>/universe/sharadar/sharadar_sp500_membership/sharadar_sp500_membership.zarr`; `--start` narrows the stores, `--years` picks the history tier. Each panel store's folder also gets a `component.json`. `update.py` extends each store from the first day it holds and prints where vendor corrections were reported; a panel store not built yet (one added after `download.py` ran) is built from the SEP store's first day, with its `README.md` and `component.json`. Sharadar is registered as a source (`DataSourceRegistry.get("sharadar")`, one capability per table), but its raw tier is whole tables rather than a symbol-batched download, so `registry.run()` refuses it and points here; `registry.convert()` builds every store except the membership, industry, fiscal-year, share-class and listing panels.
 
+Both scripts are thin shells over the library. The daily table plan is the Sharadar raw-tier refresh, `quantlab.acquisition.sharadar.refresh.refresh_raw_tier`, registered on the source and called through `quantlab.acquisition.registry.refresh_raw_tier`: `WHOLE_TABLES` (`tickers`, `indicators`, `sp500`, `sf3a`, `actions`) in bulk, `WINDOW_TABLES` (`sep`, `sfp`, `events`, `sf2`) as trailing windows, `UPDATED_TABLES` (`sf1`, `daily`) by `lastupdated`, each retried in bulk when that query fails. A failure stops it at that table. The stores are listed once in `quantlab.dataset.sharadar.stores` (`STORES`, one `SharadarStore` per store: its name, folder, README line and how its dataset is built). `build_stores` builds them after the first download, `update_stores` brings them up to date and returns what it did (`StoreUpdate`: updated, built, rebuilt, failed), and `write_ticker_sidecars` writes the price stores' sidecars:
+
+```python
+from quantlab.acquisition.base import DataSourceRegistry
+from quantlab.acquisition.registry import refresh_raw_tier
+from quantlab.dataset.sharadar.stores import update_stores
+
+refresh_raw_tier(DataSourceRegistry.get("sharadar"), "/data/quantlab/downloads", trading_days=10)
+outcome = update_stores("/data/quantlab/downloads", "/data/quantlab",
+                        rebuild_dropped=True, keep_dropped=["sharadar_insiders_1d"])
+outcome.failed  # () when every store is up to date
+```
+
+A store refusing to resume raises `ResumeRefused` (`quantlab.dataset._support.ledger`, a `ValueError`) from its chunk ledger. That happens when its stored symbol axis is no longer the raw tier's, or when the store and its ledger disagree. `update_stores(rebuild_dropped=True)` rebuilds such a store, keeping the old one as `<store>.pre<YYYYMMDD>`; a store named in `keep_dropped` is not rebuilt. `update.py --no-pull` runs only the store update; the daily update runs it that way after its own `refresh` step.
+
 ## Daily update
 
 A bulk pull is the first download; every morning after it, refresh the raw tier with trailing date windows and append the new bars to the store:

@@ -242,6 +242,24 @@ class TimeChunkPlanner:
         return self._group_by_period(index)
 
 
+class ResumeRefused(ValueError):
+    """A store's chunk ledger refuses to resume: appending would misalign the store.
+
+    Raised by ``ChunkLedger.assert_consistent`` when the pinned symbol axis is
+    not the one the stored windows were written on (a stored symbol left the
+    raw tier's axis, or one joined it with history), or when the store's last
+    timestamp is not the end of the ledger's last window. Nothing has been
+    written; rebuilding the store from the raw tier is the remedy
+    (``quantlab.dataset.sharadar.stores.update_stores(rebuild_dropped=True)``
+    does so). A ``ValueError``, so a caller catching that still catches it.
+
+    Examples
+    --------
+    >>> issubclass(ResumeRefused, ValueError)
+    True
+    """
+
+
 class ChunkLedger(_Sidecar):
     """JSON sidecar recording which time windows have been appended to a store.
 
@@ -496,7 +514,9 @@ class ChunkLedger(_Sidecar):
             store's last timestamp differs from the end of the last recorded
             window (a crash happened between writing the store and updating
             the ledger). A missing store with an empty ledger is a normal
-            first run and passes.
+            first run and passes. The first and the last case raise
+            ``ResumeRefused``, a ``ValueError`` subclass: the store is whole,
+            and a rebuild from the raw tier is the remedy.
 
         Examples
         --------
@@ -504,7 +524,7 @@ class ChunkLedger(_Sidecar):
         >>> ledger.assert_consistent([*symbols, "NVDA"], "panel.zarr")
         Traceback (most recent call last):
             ...
-        ValueError: ChunkLedger: refusing to resume panel.zarr -- the pinned ...
+        ResumeRefused: ChunkLedger: refusing to resume panel.zarr -- the pinned ...
         """
         store_exists = Path(store_path).exists()
         recorded = self._payload["windows"]
@@ -512,7 +532,7 @@ class ChunkLedger(_Sidecar):
         if self.symbol_fingerprint is not None:
             current = self.axis_fingerprint(symbols)
             if current != self.symbol_fingerprint:
-                raise ValueError(
+                raise ResumeRefused(
                     f"ChunkLedger: refusing to resume {store_path} -- the "
                     f"pinned symbol axis has {len(symbols)} symbol(s) but the "
                     f"ledger at {self.path} was written against "
@@ -543,7 +563,7 @@ class ChunkLedger(_Sidecar):
             tail = self._store_tail(store_path)
             expected = recorded[-1]["end"]
             if tail is not None and self._key(tail) != expected:
-                raise ValueError(
+                raise ResumeRefused(
                     f"ChunkLedger: refusing to resume {store_path} -- the "
                     f"store's last {self.append_dim} is "
                     f"{pd.Timestamp(tail).date()} but the ledger's last "

@@ -12,15 +12,17 @@ dataset class that converts each table that becomes a panel.
 Sharadar's raw tier is whole tables, pulled as bulk zips and trailing date
 windows by ``SharadarClient``, not the symbol-batched hive tree an
 ``Acquisition`` writes. The descriptor therefore names no acquisition class
-and no config factory: ``registry.run()`` refuses it, and the download and the
-daily update are ``scripts/sharadar/download.py`` and
-``scripts/sharadar/update.py``. ``registry.convert()`` builds the SEP and SFP
+and no config factory: ``registry.run()`` refuses it. Its raw-tier refresh is
+``quantlab.acquisition.sharadar.refresh.refresh_raw_tier`` (the daily table
+plan), which ``registry.refresh_raw_tier`` calls; the first download and the
+store builds are ``scripts/sharadar/download.py`` and
+``quantlab.dataset.sharadar.stores``. ``registry.convert()`` builds the SEP and SFP
 stores, the SF1 fundamentals stores, and the DAILY, EVENTS, insider (SF2),
 13F ownership (SF3A) and corporate-actions (ACTIONS) stores; the S&P 500
 membership panel (a constituent dataset), the industry panel and the listing
 panel (the latter registered under TICKERS, both built from TICKERS and
 ACTIONS together) and the fiscal-year history panel (SF1's ARY rows, which
-the fundamentals stores refuse) are built by the scripts.
+the fundamentals stores refuse) are built by ``quantlab.dataset.sharadar.stores``.
 
 Examples
 --------
@@ -34,6 +36,7 @@ Examples
 """
 
 from quantlab.acquisition.base import Capability, SourceDescriptor, register_source
+from quantlab.acquisition.sharadar.refresh import refresh_raw_tier
 from quantlab.dataset.sharadar.actions import SharadarActionsDataset
 from quantlab.dataset.sharadar.daily import SharadarDailyDataset
 from quantlab.dataset.sharadar.events import SharadarEventsDataset
@@ -158,5 +161,6 @@ SHARADAR_SOURCE = register_source(
         # the two against each other.
         required_env=("SHARADAR_API_KEY",),
         universe_categories=("sp500_constituent",),
+        raw_tier_refresh=refresh_raw_tier,
     )
 )

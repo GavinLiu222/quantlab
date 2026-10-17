@@ -281,6 +281,39 @@ def test_registry_run_and_convert_build_the_store(tmp_path, fred):
     assert panel.sizes["timestamp"] == len(PUBLISHED)
 
 
+def _refresh(tmp_path, **options):
+    import quantlab.acquisition.registry  # noqa: F401
+    from quantlab.acquisition.base import DataSourceRegistry
+    from quantlab.acquisition.registry import refresh_raw_tier
+
+    return refresh_raw_tier(DataSourceRegistry.get("fred"), tmp_path / "downloads", **options)
+
+
+def test_the_raw_tier_refresh_downloads_each_series_under_the_download_root(tmp_path, fred):
+    from datetime import date
+
+    fake = fred()
+
+    result = _refresh(tmp_path, series=["DTB3"], start="2024-01-02", end=date(2024, 1, 9))
+
+    assert [(part.name, part.ok) for part in result.parts] == [("DTB3", True)]
+    (call,) = fake.calls
+    assert (call["cosd"], call["coed"]) == ("2024-01-02", "2024-01-09")
+    # downloads/fred and downloads/_watermarks/fred, where the FRED stores read it.
+    assert (tmp_path / "downloads" / "_watermarks" / "fred").is_dir()
+    assert _rates(_panel(tmp_path)) == pytest.approx(PUBLISHED)
+
+
+def test_a_series_the_refresh_could_not_fetch_is_listed_as_failed(tmp_path, fred):
+    from datetime import date
+
+    fred(status=500)
+
+    result = _refresh(tmp_path, series=["DTB3"], start="2024-01-02", end=date(2024, 1, 9))
+
+    assert result.failed == ("DTB3",)
+
+
 def test_no_test_can_reach_fred_through_the_real_transport():
     from quantlab.acquisition.fred import CSV_URL, _http_get
 

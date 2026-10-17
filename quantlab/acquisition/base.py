@@ -40,6 +40,7 @@ from joblib import Parallel, delayed
 from loguru import logger
 
 from quantlab.acquisition.config import AcquisitionConfig
+from quantlab.acquisition.refresh import RawTierRefresh
 from quantlab.acquisition._support.coverage import (
     DEFAULT_LEGACY_WATERMARK_POLICY as _DEFAULT_LEGACY_WATERMARK_POLICY,
 )
@@ -2120,6 +2121,11 @@ class SourceDescriptor:
         might offer beside this source. Informational only: the actual symbol
         list comes from ``UniverseCatalog``, and ``run()`` never reads this
         field.
+    raw_tier_refresh : RawTierRefresh or None, default None
+        The function that keeps the vendor's raw tier current from its
+        watermarks (``quantlab.acquisition.refresh``), which
+        ``registry.refresh_raw_tier`` calls; ``None`` for a vendor the daily
+        update does not keep current.
 
     Notes
     -----
@@ -2148,6 +2154,7 @@ class SourceDescriptor:
     capabilities: tuple[Capability, ...]
     required_env: tuple[str, ...]
     universe_categories: tuple[UniverseCategory, ...] = ()
+    raw_tier_refresh: RawTierRefresh | None = None
 
     def supports(
         self,
