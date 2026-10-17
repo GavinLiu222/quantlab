@@ -38,7 +38,7 @@ def _tickers(root, rows, day):
 
 
 def _fold(root):
-    from quantlab.dataset.sharadar.tables import fold_tickers_history
+    from quantlab.acquisition.sharadar.raw_tier import fold_tickers_history
 
     return fold_tickers_history(root)
 

@@ -97,7 +97,7 @@ IPOS = [
 
 
 def _sharadar(root: Path, through: date) -> None:
-    from quantlab.dataset.sharadar.tables import write_watermark
+    from quantlab.acquisition.sharadar.raw_tier import write_table_watermark
 
     _write_table(root, "tickers", [
         tickers_row("SEP", 101, "AAA", firstpricedate="2015-01-02"),  # SYNTHETIC
@@ -115,7 +115,7 @@ def _sharadar(root: Path, through: date) -> None:
         if day <= through
     ])
     _write_table(root, "sfp", [])
-    write_watermark(root, "sep", through)
+    write_table_watermark(root, "sep", through)
 
 
 def _day_aggs(massive: Path, day: date) -> None:
@@ -128,11 +128,8 @@ def _day_aggs(massive: Path, day: date) -> None:
 
 
 def _massive(massive: Path, through: date) -> None:
-    from quantlab.dataset.massive.raw import (
-        rest_page_file,
-        write_rest_page,
-        write_rest_watermark,
-    )
+    from quantlab.acquisition.massive.raw_tier import write_rest_page, write_rest_watermark
+    from quantlab.dataset.massive.raw import rest_page_file
 
     write_rest_page(rest_page_file(massive, "ipos", datetime(2024, 3, 2, 1, tzinfo=UTC), 1), EARLIER)
     write_rest_page(rest_page_file(massive, "ipos", datetime(2024, 3, 12, 1, tzinfo=UTC), 1), IPOS)

@@ -85,6 +85,11 @@ from quantlab.acquisition._support.request_policy import (
     require_env,
 )
 from quantlab.acquisition.massive.rest import ENDPOINTS, RestEndpoint
+from quantlab.acquisition.massive.raw_tier import (
+    write_day_file_watermark,
+    write_rest_page,
+    write_rest_watermark,
+)
 from quantlab.dataset.massive.raw import (
     BUCKET,
     VENDOR_DIR,
@@ -99,11 +104,9 @@ from quantlab.dataset.massive.raw import (
     rest_page_file,
     rest_pending_dir,
     s3_key,
-    write_rest_page,
-    write_rest_watermark,
-    write_watermark,
 )
 from quantlab.utils.atomic import write_json_atomically
+from quantlab.utils.watermark import holds, resume_from
 
 #: The environment variable holding the API key (REST, and the S3 secret by default).
 API_KEY_ENV = "MASSIVE_API_KEY"
@@ -711,9 +714,9 @@ class MassiveClient:
         """
         vendor_root = Path(download_root) / VENDOR_DIR
         watermark = read_watermark(vendor_root, data_type)
-        if watermark is not None and watermark >= start:
+        if holds(watermark, start):
             logger.info(f"Massive: {data_type} downloaded through {watermark}; resuming after it.")
-            start = watermark + timedelta(days=1)
+        start = resume_from(watermark, start)
         days = _sessions(start, end)
         # One file is fetched at a time, with every stream; verifying is not
         # serialized, so the network stays busy while earlier files decode.
@@ -762,7 +765,7 @@ class MassiveClient:
                     continue
                 path, fetched, seconds = outcome
                 if complete:
-                    write_watermark(vendor_root, data_type, day)
+                    write_day_file_watermark(vendor_root, data_type, day)
                 yield DayDownload(day, path, fetched, seconds)
                 moved_past()
         finally:
@@ -995,9 +998,7 @@ class MassiveClient:
         watermark = cap = None
         if field is not None:
             watermark = read_rest_watermark(vendor_root, endpoint.name)
-            start = endpoint.earliest
-            if watermark is not None:
-                start = max(start, watermark + timedelta(days=1 - endpoint.overlap_days))
+            start = resume_from(watermark, endpoint.earliest, endpoint.overlap_days)
             cap = (today if today is not None else _new_york_today()) - timedelta(days=1)
             bounds = {f"{field}.gte": start.isoformat()}
             if end is not None:
@@ -1029,7 +1030,7 @@ class MassiveClient:
                     through = _day_of(records[-1], field, endpoint.name) - timedelta(days=1) if records else None
                 if through is not None:
                     through = min(through, cap)
-                    if watermark is None or through > watermark:
+                    if not holds(watermark, through):  # a REST watermark never moves back
                         write_rest_watermark(vendor_root, endpoint.name, field, through)
                         watermark = through
             url, params = (self._policy.keyless(following) if following else None), {}
@@ -1042,7 +1043,7 @@ class MassiveClient:
         """Pull a snapshot endpoint whole; its pages appear only once the last one is in."""
         today = today if today is not None else _new_york_today()
         watermark = read_rest_watermark(vendor_root, endpoint.name) if endpoint.once_a_day else None
-        if watermark is not None and watermark >= today:
+        if holds(watermark, today):
             logger.info(f"Massive: {endpoint.name}: today's snapshot ({today}) is already kept.")
             return RestPull(endpoint.name, 0, 0, watermark)
         pending = rest_pending_dir(vendor_root, endpoint.name)
@@ -1071,7 +1072,7 @@ class MassiveClient:
     ) -> RestPull:
         """Pull a table whole as of every session after the watermark; a session appears once it is whole."""
         watermark = read_rest_watermark(vendor_root, endpoint.name)
-        start = endpoint.earliest if watermark is None else max(endpoint.earliest, watermark + timedelta(days=1))
+        start = resume_from(watermark, endpoint.earliest)
         cap = (today if today is not None else _new_york_today()) - timedelta(days=1)
         if end is not None:
             cap = min(cap, end)
@@ -1112,7 +1113,7 @@ class MassiveClient:
         source = ENDPOINTS[endpoint.ids_from]
         watermark = read_rest_watermark(vendor_root, endpoint.name)
         days = [day for day in rest_as_of_days(vendor_root, source.name)
-                if (watermark is None or day > watermark) and (end is None or day <= end)]
+                if not holds(watermark, day) and (end is None or day <= end)]
         if not days:
             logger.info(f"Massive: {endpoint.name}: no new session of {source.name} after {watermark}.")
             return RestPull(endpoint.name, 0, 0, watermark)

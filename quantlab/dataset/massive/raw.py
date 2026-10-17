@@ -33,9 +33,11 @@ session (the reference tickers) has one directory a session::
 
 read by ``rest_as_of_days`` and ``read_rest_as_of``. Pages of a snapshot
 wait in ``rest/<endpoint>/_pending/`` until it is whole; nothing reads it.
-The client (``quantlab.acquisition.massive.client``) writes this tree, and
+The client (``quantlab.acquisition.massive.client``) writes this tree,
+with the page and watermark writers of
+``quantlab.acquisition.massive.raw_tier``, and
 ``quantlab.dataset.massive.trade_bars`` reads it; both take every path from
-here.
+here. This module only reads.
 
 A trade file holds one row per SIP trade, sorted by ticker; its columns are
 ``TRADE_COLUMNS``. Times are nanoseconds since the Unix epoch, UTC.
@@ -60,7 +62,8 @@ from pathlib import Path
 
 import polars as pl
 
-from quantlab.utils.atomic import write_json_atomically
+from quantlab.utils.watermark import WATERMARK_FILE
+from quantlab.utils.watermark import read_watermark as _read_watermark
 
 #: The vendor directory under the download root.
 VENDOR_DIR = "massive"
@@ -75,9 +78,6 @@ DATA_TYPES: dict[str, str] = {
     "minute_aggs": "us_stocks_sip/minute_aggs_v1",
     "day_aggs": "us_stocks_sip/day_aggs_v1",
 }
-
-#: Name of a data type's watermark file, in its directory.
-WATERMARK_FILE = "_watermark.json"
 
 #: The directory of the trade-condition table snapshots.
 CONDITIONS_DIR = "conditions"
@@ -211,33 +211,34 @@ def read_watermark(vendor_root: str | Path, data_type: str) -> date | None:
     its conversion: the watermark, not the files present, says what was
     downloaded.
 
-    Examples
-    --------
-    >>> write_watermark(root, "trades", date(2024, 11, 29))
-    >>> read_watermark(root, "trades")
-    datetime.date(2024, 11, 29)
-    """
-    path = Path(vendor_root) / _data_type(data_type) / WATERMARK_FILE
-    if not path.exists():
-        return None
-    return date.fromisoformat(json.loads(path.read_text(encoding="utf-8"))["through"])
-
-
-def write_watermark(vendor_root: str | Path, data_type: str, through: date) -> None:
-    """Record that a data type's downloads are complete through ``through``.
+    The watermark (``watermark_file``, the ``"daily_file"`` granularity of
+    ``quantlab.utils.watermark``) is written by
+    ``quantlab.acquisition.massive.raw_tier.write_day_file_watermark``.
 
     Examples
     --------
-    Writes ``/data/quantlab/downloads/massive/trades/_watermark.json``::
+    >>> import tempfile
+    >>> read_watermark(tempfile.mkdtemp(), "trades") is None
+    True
 
-        write_watermark("/data/quantlab/downloads/massive", "trades", date(2024, 11, 29))
+    With ``write_day_file_watermark(root, "trades", date(2024, 11, 29))`` done::
+
+        read_watermark(root, "trades")
+        # datetime.date(2024, 11, 29)
     """
-    write_json_atomically(
-        Path(vendor_root) / _data_type(data_type) / WATERMARK_FILE,
-        {"data_type": data_type, "through": through.isoformat()},
-        indent=2,
-        sort_keys=True,
-    )
+    watermark = _read_watermark(watermark_file(vendor_root, data_type), "daily_file")
+    return None if watermark is None else watermark.day
+
+
+def watermark_file(vendor_root: str | Path, data_type: str) -> Path:
+    """Return the path of a data type's watermark, in its directory.
+
+    Examples
+    --------
+    >>> watermark_file("/d/massive", "trades")
+    PosixPath('/d/massive/trades/_watermark.json')
+    """
+    return Path(vendor_root) / _data_type(data_type) / WATERMARK_FILE
 
 
 def conditions_file(vendor_root: str | Path, pulled_at: datetime) -> Path:
@@ -384,24 +385,6 @@ def rest_page_file(vendor_root: str | Path, endpoint: str, pulled_at: datetime, 
     stamp = pulled_at.astimezone(UTC)
     name = f"{stamp.strftime(_STAMP_FORMAT)}_{page:06d}{REST_PAGE_SUFFIX}"
     return rest_dir(vendor_root, endpoint) / f"{stamp:%Y}" / name
-
-
-def write_rest_page(path: str | Path, records: list[dict]) -> None:
-    """Write one page's records, one JSON object per line, atomically.
-
-    Examples
-    --------
-    Writes one line per record::
-
-        write_rest_page(rest_page_file(root, "splits", pulled_at, 1), page["results"])
-    """
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    partial = path.with_name(path.name + ".part")
-    with partial.open("w", encoding="utf-8") as handle:
-        for record in records:
-            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
-    partial.replace(path)
 
 
 def rest_page_files(vendor_root: str | Path, endpoint: str) -> list[Path]:
@@ -611,6 +594,7 @@ def rest_frame(vendor_root: str | Path, endpoint: str, schema: dict, key: str | 
     --------
     >>> import tempfile
     >>> from datetime import UTC, datetime
+    >>> from quantlab.acquisition.massive.raw_tier import write_rest_page
     >>> root = tempfile.mkdtemp()
     >>> write_rest_page(rest_page_file(root, "splits", datetime(2024, 3, 12, tzinfo=UTC), 1), [
     ...     {"id": "S1", "ticker": "AAA", "execution_date": "2024-03-06", "split_from": 1, "split_to": 4}])
@@ -631,11 +615,16 @@ def read_rest_watermark(vendor_root: str | Path, endpoint: str) -> date | None:
     """Return the day a REST endpoint's rows are pulled through, or ``None``.
 
     Every row whose date field is on or before the watermark was pulled; a
-    later pull asks only for rows after it (less the endpoint's overlap).
+    later pull asks only for rows after it (less the endpoint's overlap). A
+    snapshot endpoint's watermark is the day of its last snapshot. The
+    watermark (``rest_watermark_file``, the ``"endpoint"`` granularity of
+    ``quantlab.utils.watermark``) is written by
+    ``quantlab.acquisition.massive.raw_tier.write_rest_watermark``.
 
     Examples
     --------
     >>> import tempfile
+    >>> from quantlab.acquisition.massive.raw_tier import write_rest_watermark
     >>> root = tempfile.mkdtemp()
     >>> read_rest_watermark(root, "splits") is None
     True
@@ -643,24 +632,18 @@ def read_rest_watermark(vendor_root: str | Path, endpoint: str) -> date | None:
     >>> read_rest_watermark(root, "splits")
     datetime.date(2024, 3, 14)
     """
-    path = rest_dir(vendor_root, endpoint) / WATERMARK_FILE
-    if not path.exists():
-        return None
-    return date.fromisoformat(json.loads(path.read_text(encoding="utf-8"))["through"])
+    watermark = _read_watermark(rest_watermark_file(vendor_root, endpoint), "endpoint")
+    return None if watermark is None else watermark.day
 
 
-def write_rest_watermark(vendor_root: str | Path, endpoint: str, field: str, through: date) -> None:
-    """Record that a REST endpoint's rows are pulled through ``through`` on ``field``.
+def rest_watermark_file(vendor_root: str | Path, endpoint: str) -> Path:
+    """Return the path of a REST endpoint's watermark, beside its pages.
 
     Examples
     --------
-    Writes ``/data/quantlab/downloads/massive/rest/splits/_watermark.json``::
-
-        write_rest_watermark("/data/quantlab/downloads/massive", "splits", "execution_date", date(2024, 3, 14))
+    >>> rest_watermark_file("/d/massive", "splits")
+    PosixPath('/d/massive/rest/splits/_watermark.json')
     """
-    write_json_atomically(
-        rest_dir(vendor_root, endpoint) / WATERMARK_FILE,
-        {"endpoint": endpoint, "field": field, "through": through.isoformat()},
-        indent=2,
-        sort_keys=True,
-    )
+    return rest_dir(vendor_root, endpoint) / WATERMARK_FILE
+
+

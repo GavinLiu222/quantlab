@@ -23,7 +23,7 @@ from the next page instead of starting over.
 This layer writes raw files only. Converting them into the project's
 canonical panel, an ``xarray.Dataset`` indexed by ``timestamp`` and
 ``symbol``, is the matching dataset class's job. Coverage bookkeeping lives
-in ``quantlab.acquisition._support.coverage``, the page ledger in ``quantlab.dataset._support.ledger``
+in ``quantlab.acquisition._support.coverage``, the page ledger in ``quantlab.acquisition._support.page_ledger``
 and progress events in ``quantlab.utils.progress``.
 """
 
@@ -49,8 +49,8 @@ from quantlab.acquisition._support.coverage import (
     LEGACY_WATERMARK_POLICIES as _LEGACY_WATERMARK_POLICIES,
 )
 from quantlab.acquisition._support.coverage import CoverageLedger
+from quantlab.acquisition._support.page_ledger import PageLedger
 from quantlab.acquisition._support.request_policy import scrub
-from quantlab.dataset._support.ledger import PageLedger
 from quantlab.dataset.base import MarketDataset
 from quantlab.utils.progress import (
     QUOTA_EXHAUSTED_DESCRIPTION,
@@ -70,6 +70,7 @@ from quantlab.enums.data import (
     Vendor,
 )
 from quantlab.utils.atomic import write_json_atomically
+from quantlab.utils.watermark import Watermark, write_watermark
 
 #: The rule a symbol must satisfy before it is used as a directory name or a
 #: query-string value. It is imported rather than compiled here so that this
@@ -398,15 +399,13 @@ class Acquisition(ABC):
         no_data : bool, default False
             Whether the vendor returned no rows for the covered window.
         """
-        path = self._watermark_path(symbol)
-        payload: dict[str, str | bool] = {"last_date": last_date}
-        if start_date is not None:
-            payload["start_date"] = start_date
-        if no_data:
-            payload["no_data"] = True
-        # Compact JSON, so sidecars already on disk stay byte-comparable with
-        # new ones. A corrupt file still reads back as "not covered".
-        write_json_atomically(path, payload)
+        # The one watermark record at the "symbol" granularity: compact JSON,
+        # so sidecars already on disk stay byte-comparable with new ones. A
+        # corrupt file still reads back as "not covered".
+        write_watermark(
+            self._watermark_path(symbol),
+            Watermark("symbol", last_date, start=start_date, no_data=no_data),
+        )
 
     def stamp_watermarks(self, start_date: str) -> int:
         """Fill ``start_date`` into every sidecar that records no start date.

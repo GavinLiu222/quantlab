@@ -68,12 +68,8 @@ def _frame(code: str, rows: list[dict]) -> pl.DataFrame:
 
 def _write(root: Path, code: str, rows: list[dict], pulled: datetime, *, window=None, updated=None):
     """Write a bulk file (or a window / updated pull) of ``code`` pulled at ``pulled``."""
-    from quantlab.dataset.sharadar.tables import (
-        bulk_file,
-        updated_file,
-        window_file,
-        write_bulk_pull,
-    )
+    from quantlab.acquisition.sharadar.raw_tier import write_bulk_pull
+    from quantlab.dataset.sharadar.tables import bulk_file, updated_file, window_file
 
     if window is not None:
         path = window_file(root, code, pulled, *window)

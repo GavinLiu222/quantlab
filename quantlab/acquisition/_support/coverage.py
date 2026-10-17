@@ -26,6 +26,7 @@ from typing import Iterator, Sequence
 
 from quantlab.acquisition.config import AcquisitionConfig
 from quantlab.enums.data import TRADEABLE_TICKER_PATTERN
+from quantlab.utils.watermark import read_watermark as _read_record
 
 #: Filename of the failure manifest, written under ``watermark_root`` next to
 #: the per-symbol sidecars. Defined here and reused by the acquisition engine,
@@ -33,7 +34,7 @@ from quantlab.enums.data import TRADEABLE_TICKER_PATTERN
 FAILURE_MANIFEST_NAME = "_failures.json"
 
 #: Subdirectory under ``watermark_root`` that holds the per-batch page ledgers
-#: (see ``quantlab.dataset._support.ledger``). Named here so that
+#: (see ``quantlab.acquisition._support.page_ledger``). Named here so that
 #: ``iter_watermark_symbols`` skips it instead of reporting it as a symbol.
 PAGE_LEDGER_DIR_NAME = "_pages"
 
@@ -297,10 +298,13 @@ class CoverageLedger:
     # -- sidecar reads ------------------------------------------------------
 
     def read_sidecar(self, symbol: str) -> dict | None:
-        """Return a sidecar's raw JSON, or None if it is absent or unreadable.
+        """Return a sidecar's JSON, or None if it is absent or unreadable.
 
         ``read_watermark`` and ``read_coverage`` both read through this
-        method, so there is exactly one way a corrupt sidecar is handled.
+        method, so there is exactly one way a corrupt sidecar is handled. It
+        reads with ``quantlab.utils.watermark.read_watermark`` (the
+        ``"symbol"`` granularity) and returns the record's ``payload()``:
+        ``last_date``, and ``start_date`` and ``no_data`` when recorded.
 
         Parameters
         ----------
@@ -314,18 +318,11 @@ class CoverageLedger:
         >>> ledger.read_sidecar("TSLA") is None
         True
         """
-        path = self.watermark_path(symbol)
-        if not path.exists():
-            return None
-        try:
-            with open(path) as f:
-                payload = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            # A corrupt or half-written sidecar must never crash a refresh;
-            # treating it as absent costs at most a wider re-fetch. Old
-            # non-atomic writes may have left such files, so do not raise.
-            return None
-        return payload if isinstance(payload, dict) else None
+        # The one watermark record at the "symbol" granularity: a corrupt,
+        # half-written or non-object sidecar reads as absent, which costs at
+        # most a wider re-fetch and never crashes a refresh.
+        watermark = _read_record(self.watermark_path(symbol), "symbol")
+        return None if watermark is None else watermark.payload()
 
     def read_watermark(self, symbol: str) -> str | None:
         """Return the last covered date for ``symbol``, or None.

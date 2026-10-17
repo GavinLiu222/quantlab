@@ -32,7 +32,7 @@ file pulled before a change is not in it.
    does. A change dated on the pull's own day counts from the next day, as
    the vendor applies it in its evening update.
 
-   The TICKERS history (``tables.fold_tickers_history``) adds holders too:
+   The TICKERS history (``quantlab.acquisition.sharadar.raw_tier.fold_tickers_history``) adds holders too:
    each security a folded snapshot showed under the ticker, until the day
    before the history first shows it renamed or the ticker reused (a rename
    TICKERS made before ACTIONS has a row of it). A holder the history shows
@@ -270,7 +270,7 @@ class HolderSpan:
 
 @dataclass(frozen=True)
 class SeenSpan:
-    """One security under one ticker in the TICKERS history (``tables.fold_tickers_history``).
+    """One security under one ticker in the TICKERS history (``raw_tier.fold_tickers_history``).
 
     ``first`` and ``last`` are the pull times (UTC) of the first and last
     snapshots holding the pair; ``end`` is the day before a snapshot after
@@ -427,7 +427,7 @@ class PermatickerResolver:
         """Return ``{permaticker: {ticker: SeenSpan}}`` of the TICKERS history, read once.
 
         Over this table's TICKERS rows of every snapshot folded
-        (``tables.fold_tickers_history``). A span ends only on a pair seen
+        (``quantlab.acquisition.sharadar.raw_tier.fold_tickers_history``). A span ends only on a pair seen
         after its last sighting: a pair merely first seen late (the vendor
         dropped its row from earlier snapshots) overlaps it and ends nothing.
         """
