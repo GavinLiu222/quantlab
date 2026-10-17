@@ -94,7 +94,9 @@ from quantlab.dataset.sharadar.universe import normalize_universe, universe
 from quantlab.dataset.sharadar.tables import (
     raw_through,
     scan_raw_table,
+    split_basis_change,
     table,
+    with_pull_day,
 )
 from quantlab.enums.data import TiingoColumns
 from quantlab.utils.atomic import write_json_atomically
@@ -227,7 +229,7 @@ class SharadarStockDataset(RawMarketDataset):
         )
         with Timer(f"{self.class_name}: derive"):
             prices = (
-                scan_raw_table(root, self.config.table, annotate=self._resolver().annotate)
+                scan_raw_table(root, self.config.table, annotate=with_pull_day(self._resolver().annotate))
                 .filter(pl.col("date").is_between(pl.lit(start), pl.lit(end)))
                 .collect()
             )
@@ -248,9 +250,10 @@ class SharadarStockDataset(RawMarketDataset):
                 pl.col("closeunadj").alias("close"),
                 (pl.col("volume") / ratio).alias("volume"),
                 ratio.alias("_ratio"),
+                pl.col("_pulled").alias("_price_pulled"),
             )
-            events = self._events(start, end)
-            frame = self._adjust(frame, events).select(
+            events, splits = self._events(start, end)
+            frame = self._adjust(frame, events, splits).select(
                 "timestamp",
                 "symbol",
                 *(pl.col(name).cast(pl.Float64) for name in PANEL_VARIABLES),
@@ -258,8 +261,8 @@ class SharadarStockDataset(RawMarketDataset):
         self._derivation_cache = frame
         return frame
 
-    def _events(self, start, end) -> pl.DataFrame:
-        """Return the window's cash distributions and splits per permaticker and date.
+    def _events(self, start, end) -> tuple[pl.DataFrame, pl.DataFrame]:
+        """Return the window's cash distributions and splits per permaticker and date, and every split.
 
         ACTIONS is keyed by ticker like the price table, so each of its raw
         files is mapped through the price table's TICKERS rows as of its own
@@ -274,48 +277,68 @@ class SharadarStockDataset(RawMarketDataset):
 
         Returns
         -------
-        pl.DataFrame
+        events : pl.DataFrame
             Columns ``timestamp``, ``symbol``, ``_dividend`` (Sharadar's
-            split-adjusted value, null when none) and ``_split`` (new shares
-            per old share, null when none).
+            split-adjusted value, null when none), ``_dividend_pulled`` (the
+            ``pull_day`` of its ACTIONS file, whose splits it is adjusted
+            for) and ``_split`` (new shares per old share, null when none).
+        splits : pl.DataFrame
+            Every split of ACTIONS, the window's and later ones:
+            ``permaticker``, ``date`` and ``value``.
         """
         resolver = PermatickerResolver(
             self.config.raw_data_dir_path, self.config.table, sidecar_path=self._sidecar_source()
         )
         actions = (
-            scan_raw_table(self.config.raw_data_dir_path, "actions", annotate=resolver.annotate)
+            scan_raw_table(
+                self.config.raw_data_dir_path, "actions", annotate=with_pull_day(resolver.annotate)
+            )
             .filter(
-                pl.col("date").is_between(pl.lit(start), pl.lit(end))
-                & pl.col("action").is_in([*DISTRIBUTIONS, "split"])
+                pl.col("action").is_in([*DISTRIBUTIONS, "split"])
                 & pl.col("permaticker").is_not_null()
             )
             .collect()
         )
-        return actions.group_by(
-            pl.col("date").cast(pl.Datetime("ns")).alias("timestamp"),
-            pl.col("permaticker").alias("symbol"),
-        ).agg(
-            pl.col("value").filter(pl.col("action").is_in(DISTRIBUTIONS)).sum().alias("_dividend"),
-            pl.col("value").filter(pl.col("action") == "split").product().alias("_split"),
-            pl.col("action").is_in(DISTRIBUTIONS).any().alias("_has_dividend"),
-            (pl.col("action") == "split").any().alias("_has_split"),
-        ).select(
-            "timestamp",
-            "symbol",
-            pl.when("_has_dividend").then("_dividend").alias("_dividend"),
-            pl.when("_has_split").then("_split").alias("_split"),
+        splits = actions.filter(pl.col("action") == "split").select("permaticker", "date", "value")
+        events = (
+            actions.filter(pl.col("date").is_between(pl.lit(start), pl.lit(end)))
+            .group_by(
+                pl.col("date").cast(pl.Datetime("ns")).alias("timestamp"),
+                pl.col("permaticker").alias("symbol"),
+            )
+            .agg(
+                pl.col("value").filter(pl.col("action").is_in(DISTRIBUTIONS)).sum().alias("_dividend"),
+                # One date's rows come from one file (a window replaces whole dates and
+                # ACTIONS takes no updated pulls), so its distributions share a pull day.
+                pl.col("_pulled").filter(pl.col("action").is_in(DISTRIBUTIONS)).max().alias("_dividend_pulled"),
+                pl.col("value").filter(pl.col("action") == "split").product().alias("_split"),
+                pl.col("action").is_in(DISTRIBUTIONS).any().alias("_has_dividend"),
+                (pl.col("action") == "split").any().alias("_has_split"),
+            )
+            .select(
+                "timestamp",
+                "symbol",
+                pl.when("_has_dividend").then("_dividend").alias("_dividend"),
+                "_dividend_pulled",
+                pl.when("_has_split").then("_split").alias("_split"),
+            )
         )
+        return events, splits
 
-    def _adjust(self, frame: pl.DataFrame, events: pl.DataFrame) -> pl.DataFrame:
+    def _adjust(self, frame: pl.DataFrame, events: pl.DataFrame, splits: pl.DataFrame) -> pl.DataFrame:
         """Add the events and the adjusted prices to the raw rows.
 
         Follows the CRSP path's convention (``quantlab.dataset.crsp``):
 
         - ``divCash`` is the cash paid per share held on the ex-date, 0.0
-          on other rows. ACTIONS gives a dividend adjusted for every later
-          split, so it is multiplied back by the row's
-          ``closeunadj / close`` (SEP's own later-split factor; ACTIONS and
-          SEP are adjusted for the same splits when pulled together).
+          on other rows. ACTIONS gives a dividend adjusted for the later
+          splits its pull had applied, so it is multiplied back by the row's
+          ``closeunadj / close`` (SEP's own later-split factor), and by the
+          splits after the ex-date that one of the two pulls had applied and
+          the other had not (``split_basis_change``, from the ACTIONS file's
+          ``pull_day`` to the SEP row's): a stored row pulled before a
+          later split keeps the old basis, where ACTIONS, pulled whole every
+          day, already has the new one.
         - ``splitFactor`` is the split's new shares per old share on its
           effective date, 1.0 on other rows.
         - The day's total return is
@@ -369,8 +392,23 @@ class SharadarStockDataset(RawMarketDataset):
                 f"fall on a date without a positive close and are left out "
                 f"of the adjusted price, first {sample}."
             )
-        frame = frame.with_columns(
-            (pl.col("_dividend") * pl.col("_ratio")).fill_null(0.0).alias("divCash"),
+        basis = split_basis_change(
+            frame.filter(pl.col("_dividend").is_not_null()).select(
+                pl.col("symbol").alias("permaticker"),
+                pl.col("timestamp").dt.date().alias("date"),
+                "_price_pulled",
+                "_dividend_pulled",
+            ),
+            splits,
+            source="_dividend_pulled",
+            target="_price_pulled",
+        ).select(
+            pl.col("permaticker").alias("symbol"),
+            pl.col("date").cast(pl.Datetime("ns")).alias("timestamp"),
+            "_basis",
+        )
+        frame = frame.join(basis, on=["timestamp", "symbol"], how="left").with_columns(
+            (pl.col("_dividend") * pl.col("_basis") * pl.col("_ratio")).fill_null(0.0).alias("divCash"),
             pl.col("_split").fill_null(1.0).alias("splitFactor"),
         )
         return chain_adjusted(frame, owner=self.class_name)

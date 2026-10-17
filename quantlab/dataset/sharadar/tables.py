@@ -661,6 +661,105 @@ def pull_time(path: str | Path) -> datetime:
     return datetime.fromtimestamp(path.stat().st_mtime, UTC)
 
 
+def pull_day(path: str | Path) -> date:
+    """Return the Eastern date of a raw file's pull (``pull_time``, in ``VENDOR_TZ``), the day its split basis stands on.
+
+    The vendor applies a split in its evening update of the split's
+    effective day, so a pull has every split effective before its Eastern
+    date and none on it or later (the 2026-10-16 pull at 04:00 Eastern had
+    the 10-15 splits, not the 10-16 or 10-19 ones).
+
+    Examples
+    --------
+    >>> pull_day("/d/sharadar/actions/window_20261016T080000000000_2026-10-01_2026-10-16.parquet")
+    datetime.date(2026, 10, 16)
+    """
+    return pull_time(path).astimezone(VENDOR_TZ).date()
+
+
+def with_pull_day(annotate: Annotate) -> Annotate:
+    """Return ``annotate`` adding ``_pulled``, the ``pull_day`` of each raw file, to its scan.
+
+    Examples
+    --------
+    With ``resolver`` a ``PermatickerResolver`` of the raw tier ``root``::
+
+        scan_raw_table(root, "actions", annotate=with_pull_day(resolver.annotate))
+    """
+
+    def annotated(path: Path, frame: pl.LazyFrame) -> pl.LazyFrame:
+        return annotate(path, frame).with_columns(pl.lit(pull_day(path)).alias("_pulled"))
+
+    return annotated
+
+
+def split_basis_change(
+    rows: pl.DataFrame, splits: pl.DataFrame, *, source: str, target: str
+) -> pl.DataFrame:
+    """Return ``rows`` with ``_basis``: the factor taking a split-adjusted value from one pull's basis to another's.
+
+    A value of a row dated ``date``, adjusted for the splits a pull on day
+    ``source`` had applied, times ``_basis`` is the same value adjusted for
+    those a pull on day ``target`` had applied. A pull has every split
+    effective before its day and none on it or later (``pull_day``), so
+    ``_basis`` is the product of the security's splits after the row's date
+    that the source pull had and the target pull had not (effective on or
+    after ``target`` and before ``source``), over that of the ones the target
+    had and the source had not; 1.0 for a row no split falls between. A
+    ``target`` of the row's own date gives the value as paid on that day.
+
+    Parameters
+    ----------
+    rows : pl.DataFrame
+        Rows with ``permaticker``, ``date`` and the two day columns named by
+        ``source`` and ``target``.
+    splits : pl.DataFrame
+        The splits, ``permaticker``, ``date`` and ``value`` (new shares per
+        old share).
+    source, target : str
+        The columns holding the two pulls' days.
+
+    Returns
+    -------
+    pl.DataFrame
+        ``rows`` with a ``_basis`` column.
+
+    Examples
+    --------
+    A dividend on 2026-09-30 of a security that split 1:10 on 10-06, given
+    by ACTIONS pulled on 10-16 (on the new basis), to the basis of SEP's row
+    of the day, pulled on 10-05::
+
+        split_basis_change(rows, splits, source="_dividend_pulled", target="_price_pulled")  # _basis 0.1
+    """
+    indexed = rows.with_row_index("_row")
+    later = (
+        indexed.select(*dict.fromkeys(["_row", "permaticker", "date", source, target]))
+        .join(
+            splits.select(
+                "permaticker", pl.col("date").alias("_split_date"), pl.col("value").alias("_split_ratio")
+            ),
+            on="permaticker",
+        )
+        .filter(pl.col("_split_date") > pl.col("date"))
+        .with_columns(
+            pl.when((pl.col("_split_date") >= pl.col(target)) & (pl.col("_split_date") < pl.col(source)))
+            .then(pl.col("_split_ratio"))
+            .when((pl.col("_split_date") >= pl.col(source)) & (pl.col("_split_date") < pl.col(target)))
+            .then(1.0 / pl.col("_split_ratio"))
+            .otherwise(1.0)
+            .alias("_step")
+        )
+        .group_by("_row")
+        .agg(pl.col("_step").product().alias("_basis"))
+    )
+    return (
+        indexed.join(later, on="_row", how="left")
+        .with_columns(pl.col("_basis").fill_null(1.0))
+        .drop("_row")
+    )
+
+
 #: Name of the TICKERS history, beside ``tickers.parquet``
 #: (``quantlab.acquisition.sharadar.raw_tier.fold_tickers_history``).
 TICKERS_HISTORY_FILE = "_history.parquet"

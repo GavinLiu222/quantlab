@@ -15,10 +15,12 @@ value means as Sharadar's ``descriptions`` table (``actiontypes`` rows,
 2026-10-16) states it:
 
 - ``dividend`` (``dividend``): cash per share paid on the ex-date, USD.
-  The vendor adjusts the value for every later split; the panel multiplies
-  it back by the ratios of the security's ACTIONS ``split`` rows dated
-  after the ex-date, so it is the cash per share held on the day. Several
-  on one day are summed.
+  The vendor adjusts the value for every split it had applied when the
+  file was pulled; the panel multiplies it back by the ratios of the
+  security's ACTIONS ``split`` rows dated after the ex-date and before the
+  file's pull day (``quantlab.dataset.sharadar.tables.split_basis_change``),
+  so it is the cash per share held on the day. Several on one day are
+  summed.
 - ``split`` (``split``): shares held after the split per share held
   before, on its effective date. Several on one day are multiplied.
 - ``spinoff`` (``spinoff``, ``spunofffrom``): spun-off shares issued per
@@ -99,7 +101,11 @@ from loguru import logger
 from quantlab.dataset.config import SharadarActionsConfig
 from quantlab.dataset.sharadar.filings import FilingPanelDataset
 from quantlab.dataset.sharadar.permatickers import PermatickerResolver
-from quantlab.dataset.sharadar.tables import scan_raw_table
+from quantlab.dataset.sharadar.tables import (
+    scan_raw_table,
+    split_basis_change,
+    with_pull_day,
+)
 from quantlab.dataset.sharadar.universe import universe
 from quantlab.utils.atomic import write_json_atomically
 from quantlab.utils.timer import Timer
@@ -345,11 +351,7 @@ class SharadarActionsDataset(FilingPanelDataset):
             )
 
         with Timer(f"{self.class_name}: place actions"):
-            frame = (
-                scan_raw_table(root, self.TABLE, annotate=annotate)
-                .filter(pl.col("date") <= pl.lit(calendar.through))
-                .collect()
-            )
+            frame = scan_raw_table(root, self.TABLE, annotate=with_pull_day(annotate)).collect()
             unknown = sorted(set(frame.get_column("action").unique().drop_nulls()) - set(FAMILIES))
             if unknown:
                 raise ValueError(
@@ -365,7 +367,8 @@ class SharadarActionsDataset(FilingPanelDataset):
                 quiet=True,
                 report_unmapped=False,
             )
-            frame = self._restore_splits(frame)
+            # Restored before the calendar's end cuts the splits it does not reach.
+            frame = self._restore_splits(frame).filter(pl.col("date") <= pl.lit(calendar.through))
             frame = frame.filter(pl.col("permaticker").is_in(universe(self.config)))
             self._report_counterparties(frame, several)
             return (
@@ -421,28 +424,20 @@ class SharadarActionsDataset(FilingPanelDataset):
 
     @staticmethod
     def _restore_splits(frame: pl.DataFrame) -> pl.DataFrame:
-        """Multiply each split-adjusted cash value back by the security's later split ratios."""
-        rows = frame.with_row_index("_row")
-        splits = rows.filter(pl.col("action") == "split").select(
-            "permaticker", pl.col("date").alias("_split_date"), pl.col("value").alias("_ratio")
-        )
-        later = (
-            rows.filter(pl.col("action").is_in(_SPLIT_ADJUSTED))
-            .select("_row", "permaticker", "date")
-            .join(splits, on="permaticker")
-            .filter(pl.col("_split_date") > pl.col("date"))
-            .group_by("_row")
-            .agg(pl.col("_ratio").product().alias("_later"))
+        """Multiply each split-adjusted cash value back by the later splits its file's pull had applied."""
+        splits = frame.filter(pl.col("action") == "split").select("permaticker", "date", "value")
+        adjusted = split_basis_change(
+            frame.with_row_index("_position"), splits, source="_pulled", target="date"
         )
         return (
-            rows.join(later, on="_row", how="left")
-            .with_columns(
-                pl.when(pl.col("_later").is_not_null())
-                .then(pl.col("value") * pl.col("_later"))
+            adjusted.with_columns(
+                pl.when(pl.col("action").is_in(_SPLIT_ADJUSTED))
+                .then(pl.col("value") * pl.col("_basis"))
                 .otherwise(pl.col("value"))
                 .alias("value")
             )
-            .drop("_row", "_later")
+            .sort("_position")
+            .drop("_position", "_basis")
         )
 
     def _filings(self, raw: pl.DataFrame) -> pl.DataFrame:
