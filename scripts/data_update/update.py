@@ -244,8 +244,12 @@ class Update:
         """``update()`` the dataset of a store folder."""
         if self.dry_run:
             return "would update"
-        load_component(self.folder(store)).update()
-        return f"last bar {last_bar(store_path(self.folder(store)))}"
+        dataset = load_component(self.folder(store))
+        dataset.update()
+        result = f"last bar {last_bar(store_path(self.folder(store)))}"
+        # A dataset that checks itself (the Massive Day aggregates against SEP) says what it found.
+        summary = getattr(dataset, "update_summary", None)
+        return f"{result}; {summary()}" if callable(summary) else result
 
     def mirror(self, store: str, source: str) -> str:
         """Append the source dataset's new bars to ``store``."""

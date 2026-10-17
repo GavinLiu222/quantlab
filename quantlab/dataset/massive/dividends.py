@@ -77,7 +77,7 @@ from quantlab.dataset.sharadar.tables import raw_through, trading_days
 from quantlab.dataset.sharadar.universe import normalize_universe, universe
 from quantlab.utils.timer import Timer
 
-__all__ = ["VARIABLES", "MassiveDividendDataset"]
+__all__ = ["DIVIDEND_SCHEMA", "SPLIT_SCHEMA", "VARIABLES", "MassiveDividendDataset", "rest_frame", "usd_dividends"]
 
 #: The panel's variables and their attributes, in panel order.
 VARIABLES: dict[str, dict] = {
@@ -120,14 +120,50 @@ SPLIT_SCHEMA = {
 }
 
 
-def _records(vendor_root, endpoint: str, schema: dict) -> pl.DataFrame:
-    """Return one endpoint's records with the fields of ``schema``, dates as ``pl.Date``."""
+def rest_frame(vendor_root, endpoint: str, schema: dict) -> pl.DataFrame:
+    """Return one endpoint's records with the fields of ``schema``, dates as ``pl.Date``.
+
+    Shared with the adjusted Day aggregates (``quantlab.dataset.massive.day_bar_events``).
+
+    Examples
+    --------
+    >>> rest_frame("/data/quantlab/downloads/massive", "splits", SPLIT_SCHEMA).columns
+    ['ticker', 'execution_date', 'split_from', 'split_to']
+    """
     rows = [{name: record.get(name) for name in schema} for record in read_rest_records(vendor_root, endpoint)]
     frame = pl.DataFrame(rows, schema=schema, orient="row") if rows else pl.DataFrame(schema=schema)
     return frame.with_columns(
         pl.col(name).str.slice(0, 10).str.to_date(strict=False)
         for name in schema
         if name.endswith("_date")
+    )
+
+
+def usd_dividends(dividends: pl.DataFrame, placement: TickerPlacement) -> pl.DataFrame:
+    """Return the dividends with a USD cash amount and an ex-date; count the others as left out.
+
+    Shared with the adjusted Day aggregates (``quantlab.dataset.massive.day_bar_events``).
+
+    Examples
+    --------
+    With ``dividends`` read by ``rest_frame(..., DIVIDEND_SCHEMA)``::
+
+        usd_dividends(dividends, placement)["currency"].unique().to_list()   # ['USD']
+    """
+    unusable = dividends.filter(
+        pl.col("cash_amount").is_null() | (pl.col("currency").fill_null("") != "USD")
+        | pl.col("ex_dividend_date").is_null()
+    )
+    for (currency,), rows in unusable.group_by(["currency"]):
+        reason = (
+            "no cash amount" if currency == "USD"
+            else "no currency" if currency is None
+            else f"currency {currency}, not USD"
+        )
+        placement.leave_out(rows.filter(pl.col("ex_dividend_date").is_not_null()), source="dividends",
+                            reason=reason, day="ex_dividend_date")
+    return dividends.filter(
+        pl.col("cash_amount").is_not_null() & (pl.col("currency") == "USD") & pl.col("ex_dividend_date").is_not_null()
     )
 
 
@@ -258,8 +294,8 @@ class MassiveDividendDataset(ReleasePanelDataset):
             parts = []
             if window.len():
                 first = window.min()
-                dividends = _records(self.config.massive_dir, "dividends", DIVIDEND_SCHEMA)
-                dividends = self._usd_cash(dividends, placement)
+                dividends = rest_frame(self.config.massive_dir, "dividends", DIVIDEND_SCHEMA)
+                dividends = usd_dividends(dividends, placement)
                 parts = [
                     self._declared(dividends, calendar, window, placement),
                     self._ex_cash(dividends, calendar, first, placement),
@@ -276,24 +312,6 @@ class MassiveDividendDataset(ReleasePanelDataset):
         )
         return frame.filter(pl.col("symbol").is_in(keep)).select(list(schema)).sort("symbol", "available")
 
-    def _usd_cash(self, dividends: pl.DataFrame, placement: TickerPlacement) -> pl.DataFrame:
-        """Return the dividends with a USD cash amount; count the others as left out."""
-        unusable = dividends.filter(
-            pl.col("cash_amount").is_null() | (pl.col("currency").fill_null("") != "USD")
-            | pl.col("ex_dividend_date").is_null()
-        )
-        for (currency,), rows in unusable.group_by(["currency"]):
-            reason = (
-                "no cash amount" if currency == "USD"
-                else "no currency" if currency is None
-                else f"currency {currency}, not USD"
-            )
-            placement.leave_out(rows.filter(pl.col("ex_dividend_date").is_not_null()), source="dividends",
-                                reason=reason, day="ex_dividend_date")
-        return dividends.filter(
-            pl.col("cash_amount").is_not_null() & (pl.col("currency") == "USD") & pl.col("ex_dividend_date").is_not_null()
-        )
-
     @staticmethod
     def _placed_on_days(rows: pl.DataFrame, calendar: TradingCalendar, on: str, first) -> pl.DataFrame:
         """Return ``rows`` on the trading day of ``on``, those before the store's first day dropped."""
@@ -309,7 +327,7 @@ class MassiveDividendDataset(ReleasePanelDataset):
 
     def _splits(self, calendar, first, placement) -> pl.DataFrame:
         """Return ``split_ratio`` per security and execution date."""
-        splits = _records(self.config.massive_dir, "splits", SPLIT_SCHEMA).filter(
+        splits = rest_frame(self.config.massive_dir, "splits", SPLIT_SCHEMA).filter(
             pl.col("execution_date").is_not_null()
         )
         valid = (pl.col("split_from") > 0) & (pl.col("split_to") > 0)

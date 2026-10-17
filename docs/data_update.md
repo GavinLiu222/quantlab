@@ -71,7 +71,10 @@ aggregates to Massive's own daily bars `market/massive/massive_day_bars_1d`, the
 rows to the Ticker map `market/massive/massive_ticker_map`, up to the last bar of Sharadar's SEP
 store, which the raw stage has brought up; two `update` steps then map the new days onto
 permatickers, `market/massive/massive_permaticker_bars_1m` (the Trade bars) and
-`market/massive/massive_permaticker_day_bars_1d` (the day aggregates), and
+`market/massive/massive_permaticker_day_bars_1d` (the day aggregates, adjusted by Massive's own
+splits and dividends and checked against SEP: the step's result reports how many permaticker-days
+disagree, and a disagreement never fails the step; docs/massive.md, "Adjusted by Massive's own
+events"), and
 `scripts/massive/dividends.py` appends the days SEP, the REST pull and the map all reach to the
 dividend panel `market/massive/massive_dividends_1d` (Massive's dividends and splits placed on
 permatickers through the map), `scripts/massive/short_interest.py` does the same for the short

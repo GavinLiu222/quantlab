@@ -81,6 +81,7 @@ import xarray as xr
 from loguru import logger
 
 from quantlab.dataset.base import InsufficientHistoryError
+from quantlab.dataset._support.adjustment import chain_adjusted
 from quantlab.dataset.raw import RawMarketDataset
 from quantlab.dataset.config import DatasetConfig, SharadarDatasetConfig
 from quantlab.dataset.sharadar.tickers import (
@@ -342,7 +343,9 @@ class SharadarStockDataset(RawMarketDataset):
           value is cash in ``divCash``), which is what an executor books.
 
         An event on a date without a positive close cannot enter the chain;
-        it is logged and dropped. No delisting return is imputed.
+        it is logged and dropped. No delisting return is imputed. The chain
+        itself is ``quantlab.dataset._support.adjustment.chain_adjusted``,
+        which Massive's Day aggregates share with their own events.
         """
         frame = frame.join(events, on=["timestamp", "symbol"], how="left").sort(
             "symbol", "timestamp"
@@ -370,46 +373,7 @@ class SharadarStockDataset(RawMarketDataset):
             (pl.col("_dividend") * pl.col("_ratio")).fill_null(0.0).alias("divCash"),
             pl.col("_split").fill_null(1.0).alias("splitFactor"),
         )
-        positive = pl.when(pl.col("close") > 0).then(pl.col("close"))
-        close_prev = positive.shift(1).forward_fill().over("symbol")
-        ret = (
-            (pl.col("close") + pl.col("divCash")) * pl.col("splitFactor")
-        ) / close_prev - 1.0
-        frame = frame.with_columns(
-            (1.0 + ret.fill_null(0.0)).cum_prod().over("symbol").alias("_G"),
-            pl.col("splitFactor").cum_prod().over("symbol").alias("_S"),
-        )
-        frame = frame.with_columns(
-            (pl.col("_S").first().over("symbol") / pl.col("_S")).alias("cumfacshr")
-        )
-        anchor = (
-            frame.filter(pl.col("close") > 0)
-            .group_by("symbol")
-            .agg(
-                pl.col("close").first().alias("_close_anchor"),
-                pl.col("_G").first().alias("_G_anchor"),
-                pl.col("_S").first().alias("_S_anchor"),
-            )
-        )
-        unanchored = frame.select("symbol").unique().join(anchor, on="symbol", how="anti")
-        if unanchored.height:
-            logger.warning(
-                f"{self.class_name}: {unanchored.height} permaticker(s) have no "
-                f"positive close in the window, so no adjusted price, first "
-                f"{unanchored.sort('symbol').head(_ERROR_SAMPLE)['symbol'].to_list()}."
-            )
-        frame = frame.join(anchor, on="symbol", how="left").with_columns(
-            pl.when(pl.col("close") > 0)
-            .then(pl.col("_close_anchor") * pl.col("_G") / pl.col("_G_anchor"))
-            .alias("adjClose")
-        )
-        factor = pl.col("adjClose") / pl.col("close")
-        return frame.with_columns(
-            (pl.col("open") * factor).alias("adjOpen"),
-            (pl.col("high") * factor).alias("adjHigh"),
-            (pl.col("low") * factor).alias("adjLow"),
-            (pl.col("volume") * pl.col("_S_anchor") / pl.col("_S")).alias("adjVolume"),
-        )
+        return chain_adjusted(frame, owner=self.class_name)
 
     def tradable_bars(self, prices: xr.Dataset, fill_column: str) -> xr.DataArray:
         """Mark which symbols can be traded at each bar: a real fill price and a real trade.

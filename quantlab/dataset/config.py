@@ -459,24 +459,32 @@ class PermatickerDayBarsConfig(FrozenConfig):
 
 @dataclass(kw_only=True, frozen=True)
 class MappedDayBarsConfig(FrozenConfig):
-    """Config of the Day aggregates mapped onto permatickers and kept in a store (#353).
+    """Config of the Day aggregates mapped onto permatickers, adjusted and kept in a store (#353, #354).
 
     ``source`` is the permaticker view the store is written from (its own
-    bars, not resampled); ``zarr_file_path`` is the store.
+    bars, not resampled); ``zarr_file_path`` is the store. The adjusted
+    prices are chained from Massive's split and dividend pulls in the raw
+    tier of ``source``'s Day aggregates (ADR 0048). ``sep``, when given, is
+    SEP's store the adjusted returns are checked against, within
+    ``check_tolerance``.
 
     Examples
     --------
-    With ``bars`` a ``PermatickerDayBarDataset``:
+    With ``bars`` a ``PermatickerDayBarDataset`` and ``sep`` a ``SharadarStockDataset``:
 
-    >>> cfg = MappedDayBarsConfig(source=bars, zarr_file_path="/data/massive_permaticker_day_bars_1d.zarr")
+    >>> cfg = MappedDayBarsConfig(source=bars, sep=sep, zarr_file_path="/data/massive_permaticker_day_bars_1d.zarr")
     >>> sorted(cfg.to_dict())
-    ['name', 'resample_freq', 'resample_how', 'source', 'zarr_file_path']
+    ['check_tolerance', 'name', 'resample_freq', 'resample_how', 'sep', 'source', 'zarr_file_path']
     """
 
     #: The permaticker view the store is written from.
     source: "PermatickerDayBarDataset" = component()
     #: The store of the mapped bars.
     zarr_file_path: str
+    #: SEP's store, whose adjusted returns the store's are checked against; ``None`` checks nothing.
+    sep: "MarketDataset | None" = component(default=None)
+    #: The largest difference of two daily adjusted returns that is not a disagreement.
+    check_tolerance: float = 1e-4
     #: The coarser bars the panel is resampled to; ``None`` for the store's bars.
     resample_freq: str | None = None
     #: ``{variable: method}`` of the resample; ``None`` for the Day aggregates' defaults.
