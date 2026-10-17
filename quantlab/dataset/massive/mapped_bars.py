@@ -93,6 +93,13 @@ ADJUSTMENT_SIDECAR = ".adjustment.json"
 #: Suffix of the Day aggregate store's check file against SEP.
 SEP_CHECK_SUFFIX = ".sep_check.json"
 
+#: The tick SEP rounds its prices to: each SEP close is off the traded one by up to half of it.
+SEP_TICK = 0.001
+
+#: Relative and absolute tolerance of two vendors' ``divCash`` or ``splitFactor`` being one
+#: event: a ratio written as 1/35 at Massive and 0.028571 in ACTIONS is the same split.
+EVENT_RTOL, EVENT_ATOL = 1e-4, 1e-6
+
 #: Bars the Day aggregate store chains, or checks against SEP, per read.
 CHAIN_BLOCK_BARS = 250
 
@@ -599,8 +606,11 @@ class MappedDayBarDataset(MappedPermatickerDataset):
     in ``<store>.unplaced.json`` (``unplaced_path``).
 
     With ``sep`` set, ``update()`` checks each new day's adjusted returns
-    against SEP's store: a permaticker and day whose two returns differ by
-    more than ``check_tolerance`` is written, with both vendors' events, to
+    against SEP's store: a permaticker and day whose split or dividend
+    differs from SEP's, or whose two returns differ by more than
+    ``check_tolerance`` plus SEP's rounding of its closes to 0.001
+    (``SEP_TICK``) on a day both vendors have a bar on and the bar before,
+    is written, with both vendors' events, to
     the check file ``<store>.sep_check.json`` (``check_path``,
     ``disagreements()``). A disagreement points at one vendor's events; it
     never stops the build. Days after SEP's last bar are checked by a later
@@ -915,8 +925,8 @@ class MappedDayBarDataset(MappedPermatickerDataset):
             return
         tolerance = float(self.config.check_tolerance)
         state = self._check_state()
-        if state.get("tolerance") != tolerance:
-            state = {"tolerance": tolerance, "checked_through": None, "disagreements": []}
+        if state.get("tolerance") != tolerance or state.get("sep_tick") != SEP_TICK:
+            state = {"tolerance": tolerance, "sep_tick": SEP_TICK, "checked_through": None, "disagreements": []}
         stored = self._open()
         try:
             stamps = pd.DatetimeIndex(stored["timestamp"].values)
@@ -939,18 +949,24 @@ class MappedDayBarDataset(MappedPermatickerDataset):
         write_json_atomically(self.check_path, state, indent=1, sort_keys=True)
         if state["disagreements"]:
             logger.warning(
-                f"{self.class_name}: {len(state['disagreements'])} permaticker-day(s) whose adjusted return "
-                f"differs from SEP's by more than {tolerance:g}, listed in {self.check_path}."
+                f"{self.class_name}: {len(state['disagreements'])} permaticker-day(s) whose events differ from "
+                f"SEP's or whose adjusted return differs by more than {tolerance:g} and SEP's rounding, "
+                f"listed in {self.check_path}."
             )
 
     def _compare(self, stored: xr.Dataset, sep, a: int, b: int, tolerance: float) -> tuple[date | None, list[dict]]:
-        """Compare the returns of bars ``a``..``b - 1`` with SEP's; return the last day compared and the disagreements.
+        """Compare bars ``a``..``b - 1`` with SEP's; return the last day compared and the disagreements.
 
-        A bar's return is its ``adjClose`` over the store's bar before it;
-        SEP's is taken on the same two days. Only a pair both vendors price
-        on both days is compared, and only up to SEP's last bar.
+        A permaticker-day both vendors price disagrees when its ``divCash``
+        or ``splitFactor`` differ (``EVENT_RTOL``, ``EVENT_ATOL``). Its return,
+        its ``adjClose`` over the store's bar before it, disagrees with SEP's
+        on the same two days by more than ``tolerance`` plus SEP's rounding,
+        ``(1 + r_sep) * SEP_TICK / 2 * (1 / C[t] + 1 / C[t-1])`` with ``C``
+        SEP's raw closes; it is compared only when both vendors have a bar
+        (a positive close on positive volume) on both days. Only days up to
+        SEP's last bar are compared.
         """
-        names = ["adjClose", "divCash", "splitFactor"]
+        names = ["adjClose", "close", "volume", "divCash", "splitFactor"]
         lo = max(a - 1, 0)
         mine = stored[names].isel(timestamp=slice(lo, b)).load()
         stamps = pd.DatetimeIndex(mine["timestamp"].values)
@@ -971,16 +987,35 @@ class MappedDayBarDataset(MappedPermatickerDataset):
         with np.errstate(divide="ignore", invalid="ignore"):
             massive = mine["adjClose"].values[1:] / mine["adjClose"].values[:-1] - 1.0
             sep_returns = theirs["adjClose"].values[1:] / theirs["adjClose"].values[:-1] - 1.0
-        both = np.isfinite(massive) & np.isfinite(sep_returns) & compared[1:, None]
-        apart = both & (np.abs(massive - sep_returns) > tolerance)
+        days = compared[1:, None]
+        priced = np.isfinite(mine["adjClose"].values[1:]) & np.isfinite(theirs["adjClose"].values[1:]) & days
+        events = {
+            (vendor, n): np.nan_to_num(panel[n].values[1:], nan=fill)
+            for vendor, panel in (("massive", mine), ("sep", theirs))
+            for n, fill in (("divCash", 0.0), ("splitFactor", 1.0))
+        }
+        events_differ = priced & ~(
+            np.isclose(events["massive", "divCash"], events["sep", "divCash"], rtol=EVENT_RTOL, atol=EVENT_ATOL)
+            & np.isclose(events["massive", "splitFactor"], events["sep", "splitFactor"],
+                         rtol=EVENT_RTOL, atol=EVENT_ATOL)
+        )
+        with np.errstate(invalid="ignore"):
+            bars = [(panel["close"].values > 0) & (panel["volume"].values > 0) for panel in (mine, theirs)]
+        bars = bars[0] & bars[1]
+        closes = theirs["close"].values
+        with np.errstate(divide="ignore", invalid="ignore"):
+            rounding = (1.0 + sep_returns) * (SEP_TICK / 2.0) * (1.0 / closes[1:] + 1.0 / closes[:-1])
+            gap = np.abs(massive - sep_returns) > tolerance + rounding
+        both = np.isfinite(massive) & np.isfinite(sep_returns) & bars[1:] & bars[:-1] & days
+        apart = events_differ | (both & gap)
         entries = [
             {
                 "symbol": int(common[s]),
                 "date": stamps[t + 1].date().isoformat(),
                 "massive_return": float(massive[t, s]),
                 "sep_return": float(sep_returns[t, s]),
-                **{f"massive_{n}": float(mine[n].values[t + 1, s]) for n in ("divCash", "splitFactor")},
-                **{f"sep_{n}": float(theirs[n].values[t + 1, s]) for n in ("divCash", "splitFactor")},
+                "events_differ": bool(events_differ[t, s]),
+                **{f"{vendor}_{n}": float(values[t, s]) for (vendor, n), values in events.items()},
             }
             for t, s in zip(*np.nonzero(apart))
         ]

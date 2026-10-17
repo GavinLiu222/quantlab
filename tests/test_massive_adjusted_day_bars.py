@@ -10,7 +10,10 @@ events left out. What is locked here:
   the adjusted prices are SEP's;
 - a ticker reused by two securities never chains them: each event lands on the security that
   held the ticker that day, and each starts a chain of its own;
-- a seeded disagreement with SEP lands in the check file and the build completes;
+- a seeded disagreement with SEP lands in the check file and the build completes; an event
+  difference is one however small its return gap, a 2% return gap is one, while SEP's rounding
+  of a sub-dollar close to 0.001, a day either vendor has no bar on and one split ratio written
+  two ways are not;
 - an event the Ticker map cannot place is counted, never guessed;
 - day-by-day ``update()`` equals a whole build, and the config rebuilds.
 
@@ -48,15 +51,34 @@ MASSIVE = {
     "TWO": dict(zip(DAYS, (25.0, 25.0, 25.0, 30.0, 10.0, 10.0))),  # SYNTHETIC
     # ZZZ: a test symbol no security ever held.
     "ZZZ": {day: 7.0 for day in DAYS},  # SYNTHETIC
+    # PNY (606): a sub-dollar stock; SEP's closes are these rounded to 3 decimals.
+    "PNY": dict(zip(DAYS, (0.8, 0.8177, 0.6928, 0.7011, 0.7004, 0.7004))),  # SYNTHETIC
+    # GAP (707): no Massive bar on D3, where SEP carries D2's close on no volume.
+    "GAP": dict(zip((D1, D2, D4, D5, D6), (10.0, 10.0, 10.5, 10.5, 10.5))),  # SYNTHETIC
+    # STL (711): a Massive bar on D3, where SEP has none and carries D2's close on no volume.
+    "STL": dict(zip(DAYS, (10.0, 10.0, 10.08, 10.5, 10.5, 10.5))),  # SYNTHETIC
+    # JMP (808): Massive's close is 1% below SEP's on D4 and 1% above on D5 (within the
+    # Ticker map's 1%), a 2% return gap on D5.
+    "JMP": dict(zip(DAYS, (40.0, 40.0, 40.0, 39.6, 40.4, 40.4))),  # SYNTHETIC
+    # LIL (909): ACTIONS has a 0.001 dividend on D4 that Massive lacks, a return gap of 1e-5.
+    "LIL": {day: 100.0 for day in DAYS},  # SYNTHETIC
+    # REV (910): a 1-for-35 reverse split on D3, 1/35 at Massive, 0.028571 in ACTIONS.
+    "REV": dict(zip(DAYS, (1.0, 1.0, 35.0, 35.0, 35.0, 35.0))),  # SYNTHETIC
 }
 
-#: SEP's rows: ticker -> {day: (raw close, split-adjusted close)}.
+#: SEP's rows: ticker -> {day: (raw close, split-adjusted close[, volume])}; 1000 raw shares by default.
 SEP = {
     "SPL": {d: (c, c / 2.0 if d < D3 else c) for d, c in MASSIVE["SPL"].items()},
     "DIV": {d: (c, c) for d, c in MASSIVE["DIV"].items()},
     "ODD": {d: (c, c) for d, c in MASSIVE["ODD"].items()},
     "TWX": {d: (25.0 if d < D4 else 50.0,) * 2 for d in DAYS},  # 404's history, under its new ticker
     "TWO": {d: (c, c / 3.0 if d < D5 else c) for d, c in MASSIVE["TWO"].items() if d >= D4},  # 405's
+    "PNY": {d: (round(c, 3),) * 2 for d, c in MASSIVE["PNY"].items()},
+    "GAP": {**{d: (c, c) for d, c in MASSIVE["GAP"].items()}, D3: (10.0, 10.0, 0.0)},
+    "STL": {**{d: (c, c) for d, c in MASSIVE["STL"].items()}, D3: (10.0, 10.0, 0.0)},
+    "JMP": {d: (40.0, 40.0) for d in DAYS},
+    "LIL": {d: (100.0, 100.0) for d in DAYS},
+    "REV": {d: (c, c * 35.0 if d < D3 else c) for d, c in MASSIVE["REV"].items()},
 }
 
 DIVIDENDS = [  # SYNTHETIC
@@ -72,6 +94,8 @@ SPLITS = [  # SYNTHETIC
      "adjustment_type": "forward_split", "historical_adjustment_factor": 0.5},
     {"id": "S2", "ticker": "TWO", "execution_date": D5.isoformat(), "split_from": 1, "split_to": 3,
      "adjustment_type": "forward_split", "historical_adjustment_factor": 0.33},
+    {"id": "S3", "ticker": "REV", "execution_date": D3.isoformat(), "split_from": 35, "split_to": 1,
+     "adjustment_type": "reverse_split", "historical_adjustment_factor": 35.0},
 ]
 
 
@@ -101,6 +125,12 @@ def _sharadar(root: Path, through: date) -> None:
         tickers_row("SEP", 303, "ODD", firstpricedate="2015-01-02"),  # SYNTHETIC
         tickers_row("SEP", 404, "TWX", firstpricedate="2010-01-04"),  # SYNTHETIC
         tickers_row("SEP", 405, "TWO", firstpricedate="2024-03-07"),  # SYNTHETIC
+        tickers_row("SEP", 606, "PNY", firstpricedate="2015-01-02"),  # SYNTHETIC
+        tickers_row("SEP", 707, "GAP", firstpricedate="2015-01-02"),  # SYNTHETIC
+        tickers_row("SEP", 711, "STL", firstpricedate="2015-01-02"),  # SYNTHETIC
+        tickers_row("SEP", 808, "JMP", firstpricedate="2015-01-02"),  # SYNTHETIC
+        tickers_row("SEP", 909, "LIL", firstpricedate="2015-01-02"),  # SYNTHETIC
+        tickers_row("SEP", 910, "REV", firstpricedate="2015-01-02"),  # SYNTHETIC
     ])
     change = action_row(D3.isoformat(), "tickerchangefrom", "TWX", None)
     change.update(contraticker="TWO", contraname="TWO CORP")  # SYNTHETIC
@@ -109,13 +139,15 @@ def _sharadar(root: Path, through: date) -> None:
         action_row(D3.isoformat(), "split", "SPL", 2.0),  # SYNTHETIC
         action_row(D3.isoformat(), "dividend", "DIV", 1.0),  # SYNTHETIC
         action_row(D5.isoformat(), "split", "TWO", 3.0),  # SYNTHETIC
+        action_row(D4.isoformat(), "dividend", "LIL", 0.001),  # SYNTHETIC
+        action_row(D3.isoformat(), "split", "REV", 0.028571),  # SYNTHETIC: 1/35 as ACTIONS rounds it
     ]
     _write_table(root, "actions", actions)  # as #351's fixture: the ticker change is known on every day
     _write_table(root, "sep", [
-        sep_row(ticker, day.isoformat(), adjusted, closeunadj=raw, open=adjusted, high=adjusted, low=adjusted,
-                volume=1000.0 * raw / adjusted)  # SYNTHETIC: 1000 raw shares a day, as Massive
+        sep_row(ticker, day.isoformat(), row[1], closeunadj=row[0], open=row[1], high=row[1], low=row[1],
+                volume=row[2] if len(row) > 2 else 1000.0 * row[0] / row[1])  # SYNTHETIC: 1000 raw shares
         for ticker, rows in SEP.items()
-        for day, (raw, adjusted) in rows.items()
+        for day, row in rows.items()
         if day <= through
     ])
     _write_table(root, "sfp", [])
@@ -276,13 +308,74 @@ def test_a_disagreement_with_sep_lands_in_the_check_file_and_the_build_completes
     payload = json.loads(store.check_path.read_text())
     assert payload["checked_through"] == D6.isoformat()
     # ODD's 0.50 dividend on D4 is Massive's alone: a zero return against SEP's -2.5%.
-    assert [(d["symbol"], d["date"]) for d in payload["disagreements"]] == [(303, D4.isoformat())]
-    entry = payload["disagreements"][0]
+    entry = next(d for d in payload["disagreements"] if d["symbol"] == 303)
+    assert entry["date"] == D4.isoformat()
     assert entry["massive_return"] == pytest.approx(0.0)
     assert entry["sep_return"] == pytest.approx(-0.025)
     assert entry["massive_divCash"] == 0.5 and entry["sep_divCash"] == 0.0
+    assert entry["events_differ"] is True
     assert store.disagreements() == payload["disagreements"]
     assert _series(panel, "divCash", 303)[3] == 0.5  # the store keeps Massive's event
+
+
+def _disagreeing(store) -> list[tuple[int, str]]:
+    return [(d["symbol"], d["date"]) for d in store.disagreements()]
+
+
+def test_only_events_and_real_price_gaps_are_disagreements(built):
+    store, _ = built
+
+    assert _disagreeing(store) == [
+        (303, D4.isoformat()), (808, D4.isoformat()), (909, D4.isoformat()), (808, D5.isoformat()),
+    ]
+
+
+def test_sep_rounding_a_sub_dollar_close_to_three_decimals_is_not_a_disagreement(built):
+    store, _ = built
+
+    # PNY's SEP closes are Massive's rounded to 0.001: 0.818 against 0.8177 is a 0.04% return gap.
+    assert all(symbol != 606 for symbol, _ in _disagreeing(store))
+
+
+def test_a_day_without_a_massive_bar_is_not_a_disagreement(built):
+    store, _ = built
+
+    # GAP has no Massive bar on D3, where SEP carries D2's close on no volume.
+    assert all(symbol != 707 for symbol, _ in _disagreeing(store))
+
+
+def test_a_day_without_a_sep_bar_is_not_a_disagreement(built):
+    store, _ = built
+
+    # STL trades at Massive on D3, where SEP carries D2's close on no volume: neither D3's return
+    # nor D4's, which spans the missing bar, is compared.
+    assert all(symbol != 711 for symbol, _ in _disagreeing(store))
+
+
+def test_a_dividend_massive_lacks_is_a_disagreement_however_small_its_return_gap(built):
+    store, _ = built
+
+    entry = next(d for d in store.disagreements() if d["symbol"] == 909)
+    assert entry["date"] == D4.isoformat()
+    assert abs(entry["massive_return"] - entry["sep_return"]) < 1e-4
+    assert (entry["massive_divCash"], entry["sep_divCash"]) == (0.0, pytest.approx(0.001))
+    assert entry["events_differ"] is True
+
+
+def test_one_split_ratio_written_as_1_35_and_0_028571_is_the_same_event(built):
+    store, _ = built
+
+    assert all(symbol != 910 for symbol, _ in _disagreeing(store))
+
+
+def test_a_two_percent_price_gap_is_a_disagreement(built):
+    store, _ = built
+
+    entry = next(d for d in store.disagreements() if d["symbol"] == 808 and d["date"] == D5.isoformat())
+    assert entry["massive_return"] == pytest.approx(40.4 / 39.6 - 1.0)
+    assert entry["sep_return"] == pytest.approx(0.0)
+    assert entry["events_differ"] is False
+    assert json.loads(store.check_path.read_text())["sep_tick"] == 0.001
 
 
 def test_an_event_the_map_cannot_place_is_counted_not_guessed(built):
