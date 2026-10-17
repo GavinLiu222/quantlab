@@ -404,8 +404,15 @@ def test_the_solver_defaults_to_clarabel_and_is_the_one_used(monkeypatch):
     assert MeanVarianceConfig.__dataclass_fields__["solver"].default == "CLARABEL"
     _optimizer().construct(_context(seed=0))
     _optimizer(solver="OSQP").construct(_context(seed=0))
-    _optimizer(solver=None).construct(_context(seed=0))
-    assert used == ["CLARABEL", "OSQP", None]
+    assert used == ["CLARABEL", "OSQP"]
+
+
+def test_no_solver_is_refused():
+    # cvxpy's own choice depends on which solvers happen to be installed (with
+    # mosek installed and no licence it picks MOSEK and fails), so the same
+    # config would solve differently, or not at all, on another machine.
+    with pytest.raises(ValueError, match="solver=None"):
+        _optimizer(solver=None)
 
 
 def test_another_solver_reaches_the_same_weights():

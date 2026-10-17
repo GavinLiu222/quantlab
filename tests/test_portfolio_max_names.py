@@ -193,10 +193,9 @@ def test_a_long_only_budget_the_cap_cannot_hold_with_that_few_names_is_refused()
     MeanVarianceOptimizer(MeanVarianceConfig(**_params(weight_cap=0.25, max_names=4)))
 
 
-@pytest.mark.parametrize("solver", ["CLARABEL", None])
-def test_a_solver_that_cannot_solve_mixed_integer_programs_is_refused_naming_the_installed_ones(solver):
+def test_a_solver_that_cannot_solve_mixed_integer_programs_is_refused_naming_the_installed_ones():
     with pytest.raises(ValueError, match="mixed-integer") as error:
-        MeanVarianceOptimizer(MeanVarianceConfig(**_params(solver=solver)))
+        MeanVarianceOptimizer(MeanVarianceConfig(**_params(solver="CLARABEL")))
     if "MOSEK" in cp.installed_solvers():
         assert "MOSEK" in str(error.value)
 

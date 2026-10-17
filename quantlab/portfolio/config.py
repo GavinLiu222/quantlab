@@ -251,13 +251,14 @@ class MeanVarianceConfig(FrozenConfig):
     #: gets no weight. Empty: no exposure is bounded.
     exposure_bounds: dict[str, tuple[float, float]] = field(default_factory=dict)
     #: The cvxpy solver each bar's problem is solved with, by its cvxpy name
-    #: (``cvxpy.installed_solvers()``), or ``None`` for cvxpy's own choice,
-    #: which may change with the cvxpy version. Our choice: ``"CLARABEL"``
+    #: (``cvxpy.installed_solvers()``). ``None`` is refused: cvxpy's own
+    #: choice depends on which solvers are installed (it picks an unlicensed
+    #: MOSEK and fails) and on the cvxpy version. Our choice: ``"CLARABEL"``
     #: (interior point), whose constraints hold to about 1e-9, against about
     #: 1e-5 for ``"OSQP"`` (first order, the one cvxpy 1.9 picks); it leaves
     #: residues of 1e-10 to 1e-6 on the symbols it does not hold, which
     #: ``min_trade`` keeps from being traded.
-    solver: str | None = "CLARABEL"
+    solver: str = "CLARABEL"
 
     def __post_init__(self):
         """Store the exposure factors as a tuple and each bound as a tuple of two floats.
