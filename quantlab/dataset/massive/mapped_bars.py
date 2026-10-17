@@ -569,6 +569,12 @@ class MappedTradeBarDataset(MappedPermatickerDataset):
     BATCH_DAYS = 2
 
 
+def _finite_or_none(value) -> float | None:
+    """Return ``value`` as a float, ``None`` when it is NaN or infinite (JSON's null)."""
+    value = float(value)
+    return value if np.isfinite(value) else None
+
+
 def _prefer(state: pl.DataFrame, older: pl.DataFrame) -> pl.DataFrame:
     """Return ``state`` with the fields it lacks taken from ``older`` (``CARRY_SCHEMA`` rows)."""
     if not older.height:
@@ -693,8 +699,11 @@ class MappedDayBarDataset(MappedPermatickerDataset):
         """Return the check file's disagreements with SEP, by date and permaticker.
 
         Each is ``{"symbol", "date", "massive_return", "sep_return",
-        "massive_divCash", "sep_divCash", "massive_splitFactor",
-        "sep_splitFactor"}``; empty without a check file.
+        "events_differ", "massive_divCash", "sep_divCash",
+        "massive_splitFactor", "sep_splitFactor"}``: the two adjusted returns
+        and each vendor's events as recorded, ``None`` for a value that does
+        not exist (a return on a vendor's first bar, an event the vendor does
+        not record that day); empty without a check file.
 
         Examples
         --------
@@ -989,10 +998,15 @@ class MappedDayBarDataset(MappedPermatickerDataset):
             sep_returns = theirs["adjClose"].values[1:] / theirs["adjClose"].values[:-1] - 1.0
         days = compared[1:, None]
         priced = np.isfinite(mine["adjClose"].values[1:]) & np.isfinite(theirs["adjClose"].values[1:]) & days
-        events = {
-            (vendor, n): np.nan_to_num(panel[n].values[1:], nan=fill)
+        raw_events = {
+            (vendor, n): panel[n].values[1:]
             for vendor, panel in (("massive", mine), ("sep", theirs))
-            for n, fill in (("divCash", 0.0), ("splitFactor", 1.0))
+            for n in ("divCash", "splitFactor")
+        }
+        # A missing event is none: no dividend, a split of 1.
+        events = {
+            (vendor, n): np.nan_to_num(values, nan=0.0 if n == "divCash" else 1.0)
+            for (vendor, n), values in raw_events.items()
         }
         events_differ = priced & ~(
             np.isclose(events["massive", "divCash"], events["sep", "divCash"], rtol=EVENT_RTOL, atol=EVENT_ATOL)
@@ -1012,10 +1026,10 @@ class MappedDayBarDataset(MappedPermatickerDataset):
             {
                 "symbol": int(common[s]),
                 "date": stamps[t + 1].date().isoformat(),
-                "massive_return": float(massive[t, s]),
-                "sep_return": float(sep_returns[t, s]),
+                "massive_return": _finite_or_none(massive[t, s]),
+                "sep_return": _finite_or_none(sep_returns[t, s]),
                 "events_differ": bool(events_differ[t, s]),
-                **{f"{vendor}_{n}": float(values[t, s]) for (vendor, n), values in events.items()},
+                **{f"{vendor}_{n}": _finite_or_none(values[t, s]) for (vendor, n), values in raw_events.items()},
             }
             for t, s in zip(*np.nonzero(apart))
         ]

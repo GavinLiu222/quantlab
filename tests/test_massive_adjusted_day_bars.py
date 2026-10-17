@@ -451,3 +451,33 @@ def test_the_config_rebuilds_and_its_store_folder_reads_the_same(built, tmp_path
     folder = tmp_path / "folder"
     save_component(store, folder, readme="# massive_permaticker_day_bars_1d\n")
     xr.testing.assert_identical(load_component(folder).panel(*RANGE).load(), panel)
+
+
+def _strict(text: str):
+    """Parse JSON refusing NaN and infinity, which are not JSON."""
+    def refuse(constant):
+        raise ValueError(f"not JSON: {constant}")
+
+    return json.loads(text, parse_constant=refuse)
+
+
+def test_a_disagreement_without_returns_is_written_as_json_null(tmp_path, monkeypatch):
+    import sys
+
+    # Massive gives 405 (TWO) a dividend on its first day, D4, which SEP lacks: the events differ,
+    # but neither vendor has a bar the day before, so neither return exists.
+    extra = {"id": "D4", "ticker": "TWO", "cash_amount": 0.25, "currency": "USD",  # SYNTHETIC
+             "ex_dividend_date": D4.isoformat(), "historical_adjustment_factor": 0.99,
+             "split_adjusted_cash_amount": 0.25}
+    monkeypatch.setattr(sys.modules[__name__], "DIVIDENDS", [*DIVIDENDS, extra])
+    _raw(tmp_path)
+    store = _bring_up_to_date(tmp_path, _store(tmp_path))
+
+    payload = _strict(store.check_path.read_text())
+    entry = next(d for d in payload["disagreements"] if d["symbol"] == 405)
+    assert entry["date"] == D4.isoformat() and entry["events_differ"] is True
+    assert entry["massive_return"] is None and entry["sep_return"] is None
+    assert (entry["massive_divCash"], entry["sep_divCash"]) == (0.25, 0.0)
+    assert store.disagreements() == payload["disagreements"]
+    assert store.update_summary().startswith(f"{len(payload['disagreements'])} disagreement(s) with SEP")
+
