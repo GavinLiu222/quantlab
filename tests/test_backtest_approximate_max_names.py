@@ -93,13 +93,13 @@ def test_every_decided_book_holds_at_most_max_names(mvo_store, predictions, name
     capped = _approximate(mvo_store, 1, cost=0.0).run(predictions, _capped(**overrides))
     uncapped = _approximate(mvo_store, 1, cost=0.0).run(predictions, _uncapped(**overrides))
 
-    weights = capped.weights.values
-    assert len(weights) == len(uncapped.weights)
-    assert (_names(capped.weights) <= NAMES).all()
+    weights = capped.decided_weights.values
+    assert len(weights) == len(uncapped.decided_weights)
+    assert (_names(capped.decided_weights) <= NAMES).all()
     np.testing.assert_allclose(weights.sum(axis=1), 1.0, atol=1e-9)
     assert (weights >= 0).all() and (weights <= CAP + 1e-12).all()
     # The cap binds: the uncapped rule holds more names on every bar.
-    assert (_names(uncapped.weights) > NAMES).all()
+    assert (_names(uncapped.decided_weights) > NAMES).all()
     assert capped.metrics["converged"] is True
 
 
@@ -111,7 +111,7 @@ def test_a_cap_at_least_the_candidate_count_gives_the_uncapped_weights(mvo_store
     )
     uncapped = _approximate(mvo_store, 1, cost=0.0).run(predictions, _uncapped())
 
-    assert np.abs(capped.weights.values - uncapped.weights.values).sum(axis=1).max() <= 1e-4
+    assert np.abs(capped.decided_weights.values - uncapped.decided_weights.values).sum(axis=1).max() <= 1e-4
 
 
 def test_active_risk_books_hold_at_most_max_names(mvo_store, predictions):  # noqa: F811
@@ -123,9 +123,9 @@ def test_active_risk_books_hold_at_most_max_names(mvo_store, predictions):  # no
         predictions, _active(bars, weight_cap=CAP, risk_aversion=RISK_AVERSION)
     )
 
-    assert (_names(capped.weights) <= NAMES).all()
-    np.testing.assert_allclose(capped.weights.values.sum(axis=1), 1.0, atol=1e-9)
-    assert (_names(uncapped.weights) > NAMES).mean() > 0.5
+    assert (_names(capped.decided_weights) <= NAMES).all()
+    np.testing.assert_allclose(capped.decided_weights.values.sum(axis=1), 1.0, atol=1e-9)
+    assert (_names(uncapped.decided_weights) > NAMES).mean() > 0.5
     assert capped.metrics["converged"] is True
 
 
@@ -140,15 +140,15 @@ def test_every_decided_long_short_book_holds_at_most_max_names(mvo_store, predic
     capped = _approximate(mvo_store, 1, cost=0.0).run(predictions, _long_short(LONG_SHORT_NAMES, **overrides))
     uncapped = _approximate(mvo_store, 1, cost=0.0).run(predictions, _long_short(**overrides))
 
-    weights = capped.weights.values
-    assert (_names(capped.weights) <= LONG_SHORT_NAMES).all()
+    weights = capped.decided_weights.values
+    assert (_names(capped.decided_weights) <= LONG_SHORT_NAMES).all()
     np.testing.assert_allclose(weights.sum(axis=1), 0.0, atol=1e-9)
     assert (np.abs(weights).sum(axis=1) <= 1.0 + 1e-9).all()
     assert (np.abs(weights) <= CAP + 1e-12).all()
     # Both sides are held, and the cap binds: the uncapped rule holds more names on all but the
     # first bars (under the penalty its book builds up from cash: 3 names, then 6).
     assert ((weights > 0).any(axis=1) & (weights < 0).any(axis=1)).all()
-    assert (_names(uncapped.weights) > LONG_SHORT_NAMES).mean() > 0.9
+    assert (_names(uncapped.decided_weights) > LONG_SHORT_NAMES).mean() > 0.9
     assert capped.metrics["converged"] is True
 
 
@@ -168,7 +168,7 @@ def _overlap(result, account, names) -> np.ndarray:
     held = np.abs(exact) > 1e-9
     assert result.metrics["portfolio_construction"]["failed_bar_count"] == 0
     assert (held.sum(axis=1) <= names).all()
-    shared = (held & (np.sign(exact) == np.sign(account.weights.values))).sum(axis=1)
+    shared = (held & (np.sign(exact) == np.sign(account.decided_weights.values))).sum(axis=1)
     return shared / np.maximum(held.sum(axis=1), 1)
 
 
@@ -222,10 +222,10 @@ def test_the_objective_is_within_the_bound_of_the_exact_books(exact_case, reques
     exact = result.weights.transpose("timestamp", "symbol")["weight"]
     cash = xr.DataArray(np.zeros(0), dims="symbol", coords={"symbol": predictions.symbol.values[:0]})
     gaps = []
-    for t in account.weights.timestamp.values:
+    for t in account.decided_weights.timestamp.values:
         context = inputs.context(t, predictions.sel(timestamp=t), cash)
         best = _objective(inputs.constructor, context, exact.sel(timestamp=t))
-        found = _objective(inputs.constructor, context, account.weights.sel(timestamp=t))
+        found = _objective(inputs.constructor, context, account.decided_weights.sel(timestamp=t))
         gaps.append((best - found) / abs(best))
 
     assert np.median(gaps) <= OBJECTIVE_BOUND
@@ -251,8 +251,8 @@ def test_zero_risk_books_under_a_name_cap_are_on_their_budget(mvo_store, predict
     )
     uncapped = _approximate(mvo_store, 1, cost=0.0).run(predictions, _mvo(**rule))
 
-    weights = capped.weights.values
-    assert (_names(capped.weights) <= NAMES).all()
+    weights = capped.decided_weights.values
+    assert (_names(capped.decided_weights) <= NAMES).all()
     budget = 1.0 if direction == "long_only" else 0.0
     np.testing.assert_allclose(weights.sum(axis=1), budget, atol=1e-9)
     assert (np.abs(weights).sum(axis=1) <= 1.0 + 1e-9).all()
@@ -260,7 +260,7 @@ def test_zero_risk_books_under_a_name_cap_are_on_their_budget(mvo_store, predict
     assert capped.metrics["converged"] is True
     if penalty == 0.0:
         # The vertex holds fewer names than the cap: the capped books are the uncapped ones.
-        assert (_names(uncapped.weights) < NAMES).all()
-        np.testing.assert_allclose(weights, uncapped.weights.values, atol=1e-12)
+        assert (_names(uncapped.decided_weights) < NAMES).all()
+        np.testing.assert_allclose(weights, uncapped.decided_weights.values, atol=1e-12)
     else:
-        assert (_names(uncapped.weights) > NAMES).any()
+        assert (_names(uncapped.decided_weights) > NAMES).any()

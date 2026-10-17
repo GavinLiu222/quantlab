@@ -40,15 +40,16 @@ drift are the execution layer's (``quantlab.execution.approximate``),
 compiled; this module only reads the prices and the schedule, calls the
 implementations and the simulation, and computes the statistics.
 
-The statistics are the backtest run's own functions
-(``quantlab.runs.backtest_stats``), so the numbers mean what a run's
-``metrics.json`` rows mean. The account is compared with the
-equal-weighted universe of a run's attribution
-(``quantlab.runs.backtest_attribution``) and, given a ``benchmark_dataset``,
-with the benchmark bought and held.
+The account is an account record (``quantlab.runs.run_metrics.AccountRecord``),
+as a backtest run's is: its fills, rebalance record and value. Its metric
+blocks are ``run_metrics`` of it and its ``attribution`` block
+``quantlab.runs.backtest_attribution.attribution_metrics`` of it, the
+functions a backtest run assembles its own blocks with, so the numbers mean
+what a run's ``metrics.json`` rows mean (ADR 0034). Given a
+``benchmark_dataset``, the account is measured against the benchmark bought
+and held.
 """
 
-import dataclasses
 from dataclasses import dataclass
 
 import numpy as np
@@ -56,19 +57,20 @@ import pandas as pd
 import xarray as xr
 from loguru import logger
 
-from quantlab.backtest.base import MarketSpec
+from quantlab.backtest.base import (
+    MarketSpec,
+    attribution_score_label,
+    benchmark_display_name,
+)
 from quantlab.backtest.config import ApproximateBacktestConfig
 from quantlab.core.component import Component
 from quantlab.portfolio.approximate import PanelPrices, Stopping, implementation
 from quantlab.portfolio.base import PortfolioConstructor
 from quantlab.portfolio.decision_inputs import DecisionInputs
 from quantlab.runs import backtest_stats
-from quantlab.runs.backtest_attribution import (
-    annualized_log_growth,
-    excess_decomposition,
-    rebalanced_group_values,
-)
+from quantlab.runs.backtest_attribution import attribution_metrics
 from quantlab.runs.prediction_panel import PredictionPanel
+from quantlab.runs.run_metrics import AccountRecord, BenchmarkRecord, run_metrics
 from quantlab.utils.date_range import bar_label
 
 _DIMS = ("timestamp", "symbol")
@@ -80,51 +82,50 @@ class ApproximateAccount:
 
     Attributes
     ----------
-    value : xr.DataArray
-        The account's value after each bar of the window, on
-        ``timestamp``, 1.0 at the first bar.
-    returns : xr.DataArray
-        Per-bar returns of ``value``, 0.0 at the first bar.
+    record : AccountRecord
+        The account record, as a backtest run's (``BaseBacktester.account``):
+        the value after each bar (1.0 at the first bar, ``init_cash`` 1.0)
+        and its returns, one fill per symbol traded at each fill bar (its
+        notional at the fill price, its share of the costs as ``fees``) and
+        the rebalance record. The approximate backtest settles, rejects and
+        caps nothing, so ``settlements`` and ``rejected_orders`` are empty;
+        it keeps no round trips, per-bar holdings or target deviation
+        (``trades``, ``holdings`` and ``max_target_deviation`` are ``None``).
     value_without_costs : xr.DataArray
         The value of the same weights traded without costs.
-    weights : xr.DataArray
-        The target weights at the decided bars, on ``(timestamp, symbol)``.
+    weights : xr.Dataset
+        ``weight`` on ``(timestamp, symbol)`` over the window, NaN on every
+        bar but the decided ones, and the rebalance record ``scheduled`` and
+        ``decided`` on ``timestamp``: what ``DecisionInputs.weights`` returns,
+        so a backtest run takes it as it is (``BaseBacktester.run_weights``).
     turnover : xr.DataArray
-        The traded weight of each decided rebalance (L1, against the
-        holdings drifted to its fill bar's open; 1.0 for a buy-in from
-        cash), on the decided bars.
+        The traded weight of each decided rebalance against the holdings
+        drifted to its fill bar's open (1.0 for a buy-in from cash), on the
+        decided bars; the metrics' turnover rows are a run's, notional over
+        the previous bar's value.
+    metrics : dict
+        ``run_metrics`` of ``record``: ``whole`` (opened by the return
+        statistics of the window and ``Total Fees Paid``) and ``execution``,
+        with a benchmark ``benchmark`` and ``relative``; ``attribution``
+        (``attribution_metrics`` of ``record``, the universe ranked by the
+        rule's score label); ``iterations`` (the ``mean`` and ``max``
+        iterations of the solver per decision bar, 0 for a rule that does not
+        iterate) and ``converged`` (whether every bar met the solver's
+        stopping rule). The approximate backtest has no training window, so
+        no slice.
     universe_value : xr.DataArray or None
-        The equal-weighted universe held between the decided rebalances
-        without costs, on ``timestamp``, 1.0 at the first bar: on each
-        rebalance every symbol with a finite score of the rule's score
-        label and a fill price on the next bar, as a backtest run's
-        attribution builds it (``rebalanced_group_values`` with one group),
-        except that a delisted symbol is not settled, as the approximate
-        simulation settles none.
-        ``None`` only in an account before its curves are added.
+        The equal-weighted universe of the attribution, on ``timestamp``,
+        1.0 at the first bar (a delisted symbol is not settled, as the
+        approximate simulation settles none).
     benchmark_value : xr.DataArray or None
         The benchmark bought at the second bar's fill price with all of 1.0
         at the same cost and held, on ``timestamp``; ``None`` without a
         ``benchmark_dataset``.
-    metrics : dict
-        ``backtest_stats.return_stats`` of ``returns`` over the window (the
-        rows of a run's ``in_sample`` and ``out_of_sample`` blocks),
-        ``backtest_stats.turnover_stats`` of ``turnover``, ``iterations``
-        (the ``mean`` and ``max`` iterations of the solver per decision bar,
-        0 for a rule that does not iterate) and ``converged`` (whether every
-        bar met the solver's stopping rule); ``selection``, the
-        ``backtest_stats.relative_stats`` of the account over the universe
-        (the excess the scores and the rule add, with its annualised return
-        and information ratio); ``attribution``, the ``score_label`` and the
-        ``decomposition`` and ``annualized_log_return`` of a run's
-        ``attribution`` block; with a benchmark, ``benchmark`` (its
-        ``return_stats``) and ``relative`` (``relative_stats`` over it, a
-        run's ``relative`` rows without the win rates).
 
     Examples
     --------
     >>> account = backtest.run(predictions, rule)
-    >>> float(account.value[0]), account.weights.dims
+    >>> float(account.value[0]), account.decided_weights.dims
     (1.0, ('timestamp', 'symbol'))
     >>> account.metrics["converged"], account.metrics["iterations"]
     (True, {'mean': 0.0, 'max': 0})
@@ -132,29 +133,39 @@ class ApproximateAccount:
     ['costs', 'selection', 'total']
     """
 
-    value: xr.DataArray
-    returns: xr.DataArray
+    record: AccountRecord
     value_without_costs: xr.DataArray
-    weights: xr.DataArray
+    weights: xr.Dataset
     turnover: xr.DataArray
     metrics: dict
     universe_value: xr.DataArray | None = None
     benchmark_value: xr.DataArray | None = None
 
+    @property
+    def value(self) -> xr.DataArray:
+        """The account's value after each bar, on ``timestamp``, 1.0 at the first bar."""
+        return self.record.value
+
+    @property
+    def returns(self) -> xr.DataArray:
+        """Per-bar returns of ``value``, 0.0 at the first bar."""
+        return self.record.returns
+
+    @property
+    def decided_weights(self) -> xr.DataArray:
+        """The target weights at the decided bars, on ``(timestamp, symbol)``."""
+        return self.weights["weight"].isel(timestamp=self.weights["decided"].values)
+
 
 @dataclass(frozen=True)
 class _Simulation:
-    """What ``_simulate`` gives: the value curve, the holdings at each decision bar, the turnover per fill and which decisions filled."""
+    """What ``_simulate`` gives: the value curve, each fill's signed traded weights and the value they traded against, the turnover per fill and which decisions filled."""
 
     value: np.ndarray
-    holdings: np.ndarray
+    traded: np.ndarray
+    fill_value: np.ndarray
     turnover: np.ndarray
     filled: np.ndarray
-
-
-def _score_label(constructor: PortfolioConstructor, predictions: xr.Dataset) -> str:
-    """The label the universe is ranked by: the rule's ``ranking_label``, as a run's attribution reads it."""
-    return constructor.ranking_label([str(name) for name in predictions.data_vars])
 
 
 def _returns(value: np.ndarray, timestamps: np.ndarray) -> xr.DataArray:
@@ -191,21 +202,47 @@ def _simulate(
     row. Between fills the book is marked at the valuation price, a price
     missing on either side counting as no change; each fill costs ``cost``
     times its traded weight, against the previous book marked at the fill's
-    prices. Returns the value (1.0 before the first fill), the holdings at
-    each decision bar's close (cash excluded, zero before the first fill),
-    and the turnover of each fill, with ``filled`` marking which decisions
-    filled.
+    prices. Returns the value (1.0 before the first fill), each fill's
+    signed traded weights and the value it traded against, the turnover of
+    each fill, and ``filled`` marking which decisions filled.
     """
     from quantlab.execution.approximate import simulate
 
-    value, holdings, turnover, filled = simulate(
-        np.ascontiguousarray(targets, dtype=np.float64),
-        np.ascontiguousarray(decisions, dtype=np.int64),
-        _entry_prices(fill, close),
-        np.ascontiguousarray(close, dtype=np.float64),
-        float(cost),
+    return _Simulation(
+        *simulate(
+            np.ascontiguousarray(targets, dtype=np.float64),
+            np.ascontiguousarray(decisions, dtype=np.int64),
+            _entry_prices(fill, close),
+            np.ascontiguousarray(close, dtype=np.float64),
+            float(cost),
+        )
     )
-    return _Simulation(value, holdings, turnover, filled)
+
+
+def _orders(
+    simulation: _Simulation, fill_rows: np.ndarray, entry: np.ndarray, timestamps, symbols, cost: float
+) -> xr.Dataset:
+    """Return the fills of a simulation, one per symbol traded at each fill bar, as an account record's ``orders``.
+
+    A fill's notional is its traded weight times the value it traded
+    against; its price is the fill price it filled at (1.0 where there is
+    none, so ``size * price`` stays the notional), and its fees its share of
+    the costs.
+    """
+    rows, columns = np.nonzero(simulation.traded)
+    bars = fill_rows[rows]
+    notional = simulation.traded[rows, columns] * simulation.fill_value[rows]
+    price = entry[bars, columns]
+    price = np.where(np.isfinite(price) & (price > 0), price, 1.0)
+    return xr.Dataset(
+        {
+            "timestamp": ("order", timestamps[bars]),
+            "symbol": ("order", symbols[columns]),
+            "size": ("order", notional / price),
+            "price": ("order", price),
+            "fees": ("order", cost * np.abs(notional)),
+        }
+    )
 
 
 class ApproximateBacktest(Component):
@@ -241,7 +278,7 @@ class ApproximateBacktest(Component):
     ... )
     >>> predictions = BacktestRun.open(run_dir).predictions()
     >>> account = backtest.run(predictions, TopNConstructor(TopNConfig(direction="long_only", top_n=4)))
-    >>> round(account.metrics["Total Return [%]"], 2)  # the backtest run's: 9.51
+    >>> round(account.metrics["whole"]["Total Return [%]"], 2)  # the backtest run's: 9.51
     9.49
     """
 
@@ -259,7 +296,8 @@ class ApproximateBacktest(Component):
             raise TypeError(f"{type(self).__name__} sets no MARKET; use a concrete class")
         self.config = config
         self._prices: xr.Dataset | None = None
-        self._benchmark: np.ndarray | None = None
+        # The benchmark's axis symbol and its value bought and held over the window, read once.
+        self._benchmark: tuple[str, np.ndarray] | None = None
         # The prices with a warm-up before the window, and the warm-up's history_bars.
         self._history: tuple[int, xr.Dataset] | None = None
 
@@ -327,9 +365,9 @@ class ApproximateBacktest(Component):
             valuation_column=market.valuation_price_column,
             rebalance_periods=config.rebalance_periods,
             anchor=timestamps[0],
-            end=timestamps[-1],
         )
-        decisions = np.flatnonzero(inputs.scheduled(timestamps))
+        scheduled = inputs.panel_scheduled(timestamps)
+        decisions = np.flatnonzero(scheduled)
         fill = np.asarray(prices[market.fill_price_column].values, dtype=np.float64)
         close = _ffill(np.asarray(prices[market.valuation_price_column].values, dtype=np.float64))
 
@@ -375,8 +413,54 @@ class ApproximateBacktest(Component):
 
         simulation = _simulate(targets, decisions, fill, close, config.cost)
         without_costs = _simulate(targets, decisions, fill, close, 0.0)
-        account = self._account(timestamps, symbols, decisions, targets, simulation, without_costs, iterations, converged)
-        return self._compared(account, panel[_score_label(constructor, panel)])
+        decided = np.zeros(len(timestamps), dtype=bool)
+        decided[decisions[simulation.filled]] = True
+        weights = np.full((len(timestamps), len(symbols)), np.nan)
+        weights[decided] = targets[simulation.filled]
+        bar_interval = pd.Series(np.diff(timestamps)).mode().iloc[0].to_timedelta64()
+        record = AccountRecord(
+            value=xr.DataArray(simulation.value, dims="timestamp", coords={"timestamp": timestamps}),
+            returns=_returns(simulation.value, timestamps),
+            orders=_orders(simulation, decisions[simulation.filled] + 1, entry, timestamps, symbols, config.cost),
+            rebalances=xr.Dataset(
+                {"scheduled": ("timestamp", scheduled), "decided": ("timestamp", decided)},
+                coords={"timestamp": timestamps},
+            ),
+            init_cash=1.0,
+            bar_interval=bar_interval,
+            year_freq=market.year_freq(bar_interval),
+        )
+        benchmark = self._benchmark_record(timestamps)
+        metrics = run_metrics(record, engine_rows=self._engine_rows(record), benchmark=benchmark)
+        metrics["attribution"], curves = attribution_metrics(
+            record,
+            fill=prices[market.fill_price_column],
+            valuation=prices[market.valuation_price_column],
+            scores=panel[attribution_score_label(constructor, panel)],
+            gross_value=xr.DataArray(without_costs.value, dims="timestamp", coords={"timestamp": timestamps}),
+            benchmark=benchmark,
+        )
+        metrics["iterations"] = {
+            "mean": float(iterations.mean()) if len(iterations) else 0.0,
+            "max": int(iterations.max(initial=0)),
+        }
+        metrics["converged"] = bool(converged.all())
+        return ApproximateAccount(
+            record=record,
+            value_without_costs=curves["gross_value"],
+            weights=xr.Dataset(
+                {
+                    "weight": (_DIMS, weights),
+                    "scheduled": ("timestamp", scheduled),
+                    "decided": ("timestamp", decided),
+                },
+                coords={"timestamp": timestamps, "symbol": symbols},
+            ),
+            turnover=xr.DataArray(simulation.turnover, dims="timestamp", coords={"timestamp": timestamps[decided]}),
+            metrics=metrics,
+            universe_value=curves["universe_value"],
+            benchmark_value=None if benchmark is None else benchmark.value,
+        )
 
     @staticmethod
     def _check_rows(constructor: PortfolioConstructor, weights: np.ndarray) -> None:
@@ -434,118 +518,25 @@ class ApproximateBacktest(Component):
             self._history = (needed, inputs.history_prices(window[0], window[-1]))
         return self._history[1]
 
-    def _account(
-        self, timestamps, symbols, decisions, targets, simulation, without_costs, iterations, converged
-    ) -> ApproximateAccount:
-        """Wrap a simulation in an account with its statistics."""
-        on_bars = {"timestamp": timestamps}
-        value = xr.DataArray(simulation.value, dims="timestamp", coords=on_bars)
-        returns = _returns(simulation.value, timestamps)
-        decided = timestamps[decisions[simulation.filled]]
-        flows = xr.DataArray(
-            simulation.turnover,
-            dims="timestamp",
-            coords={"timestamp": timestamps[decisions[simulation.filled] + 1]},
-        )
-        bar_interval = pd.Series(np.diff(timestamps)).mode().iloc[0].to_timedelta64()
-        year_freq = self.MARKET.year_freq(bar_interval)
-        window = [(bar_label(timestamps[0]), bar_label(timestamps[-1]))]
-        metrics = {
-            **backtest_stats.return_stats(returns, bar_interval=bar_interval, year_freq=year_freq),
-            **backtest_stats.turnover_stats(
-                flows, decided, timestamps, ranges=window, bar_interval=bar_interval, year_freq=year_freq
+    @staticmethod
+    def _engine_rows(record: AccountRecord) -> dict:
+        """The approximate backtest's own rows opening ``whole``: the window's return statistics and its fees."""
+        return {
+            **backtest_stats.return_stats(
+                record.returns, bar_interval=record.bar_interval, year_freq=record.year_freq
             ),
-            "iterations": {
-                "mean": float(iterations.mean()) if len(iterations) else 0.0,
-                "max": int(iterations.max(initial=0)),
-            },
-            "converged": bool(converged.all()),
+            "Total Fees Paid": float(record.orders["fees"].values.sum()),
         }
-        return ApproximateAccount(
-            value=value,
-            returns=returns,
-            value_without_costs=xr.DataArray(without_costs.value, dims="timestamp", coords=on_bars),
-            weights=xr.DataArray(
-                targets[simulation.filled],
-                dims=_DIMS,
-                coords={"timestamp": decided, "symbol": symbols},
-            ),
-            turnover=xr.DataArray(simulation.turnover, dims="timestamp", coords={"timestamp": decided}),
-            metrics=metrics,
-        )
 
-    def _compared(self, account: ApproximateAccount, scores: xr.DataArray) -> ApproximateAccount:
-        """Add the universe and benchmark curves and the excess blocks to ``account``.
-
-        ``scores`` is the rule's score label on the window's
-        ``(timestamp, symbol)``. The statistics are a backtest run's own
-        (``relative_stats``, ``excess_decomposition``), on the same year.
-        """
-        market, prices = self.MARKET, self._window_prices()
-        timestamps = account.value.timestamp.values
-        rebalance = np.isin(timestamps, account.weights.timestamp.values)
-        (universe,) = rebalanced_group_values(
-            prices[market.fill_price_column].values,
-            prices[market.valuation_price_column].values,
-            scores.transpose(*_DIMS).values,
-            rebalance,
-            groups=1,
-        )
-        benchmark = self._benchmark_value(timestamps)
-        bar_interval = pd.Series(np.diff(timestamps)).mode().iloc[0].to_timedelta64()
-        year_freq = market.year_freq(bar_interval)
-        years = len(timestamps) * bar_interval / year_freq
-        window = [(bar_label(timestamps[0]), bar_label(timestamps[-1]))]
-
-        def relative(curve: np.ndarray) -> dict:
-            return backtest_stats.relative_stats(
-                account.returns,
-                _returns(curve, timestamps),
-                bar_interval=bar_interval,
-                year_freq=year_freq,
-                ranges=window,
-            )
-
-        def growth(curve) -> float | None:
-            return None if curve is None else annualized_log_growth(curve, years)
-
-        strategy, gross = account.value.values, account.value_without_costs.values
-        metrics = {
-            **account.metrics,
-            "selection": relative(universe),
-            "attribution": {
-                "score_label": str(scores.name),
-                "decomposition": excess_decomposition(strategy, gross, universe, benchmark, years),
-                "annualized_log_return": {
-                    "strategy": growth(strategy),
-                    "gross": growth(gross),
-                    "universe": growth(universe),
-                    "benchmark": growth(benchmark),
-                },
-            },
-        }
-        if benchmark is not None:
-            metrics["benchmark"] = backtest_stats.return_stats(
-                _returns(benchmark, timestamps), bar_interval=bar_interval, year_freq=year_freq
-            )
-            metrics["relative"] = relative(benchmark)
-        on_bars = {"timestamp": timestamps}
-        return dataclasses.replace(
-            account,
-            metrics=metrics,
-            universe_value=xr.DataArray(universe, dims="timestamp", coords=on_bars),
-            benchmark_value=None
-            if benchmark is None
-            else xr.DataArray(benchmark, dims="timestamp", coords=on_bars),
-        )
-
-    def _benchmark_value(self, timestamps: np.ndarray) -> np.ndarray | None:
+    def _benchmark_record(self, timestamps: np.ndarray) -> BenchmarkRecord | None:
         """Return the benchmark bought and held on ``timestamps``, or ``None`` without one.
 
         Its fill and valuation prices are read once over the window,
         reindexed onto the strategy's bars and carried forward, as a
         backtest run aligns them; it is bought with all of 1.0 at the
-        second bar's fill price, paying ``cost``, and held.
+        second bar's fill price, paying ``cost``, and held. It is named as a
+        backtest run names it (``benchmark_display_name``), as of the
+        window's last bar.
 
         Raises
         ------
@@ -572,5 +563,14 @@ class ApproximateBacktest(Component):
                     f"{type(self).__name__}: the benchmark has no price on some bar of the "
                     f"window from {config.start_date} to {config.end_date}"
                 )
-            self._benchmark = _simulate(np.ones((1, 1)), np.array([0]), prices[0], prices[1], config.cost).value
-        return self._benchmark
+            self._benchmark = (
+                str(read.symbol.values[0]),
+                _simulate(np.ones((1, 1)), np.array([0]), prices[0], prices[1], config.cost).value,
+            )
+        axis_symbol, value = self._benchmark
+        return BenchmarkRecord(
+            returns=_returns(value, timestamps),
+            symbol=benchmark_display_name(dataset, axis_symbol, timestamps[-1]),
+            axis_symbol=axis_symbol,
+            value=xr.DataArray(value, dims="timestamp", coords={"timestamp": timestamps}),
+        )

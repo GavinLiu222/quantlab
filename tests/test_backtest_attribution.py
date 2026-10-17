@@ -3,6 +3,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 
 from quantlab.backtest.config import CrossSectionBacktestConfig
 from quantlab.backtest.predefined.us_equity import USEquityCrossectionSelectStockVectorBt
@@ -10,10 +11,12 @@ from quantlab.portfolio.config import TopNConfig
 from quantlab.portfolio.predefined.top_n import TopNConstructor
 from quantlab.runs.backtest_attribution import (
     annualized_log_growth,
+    attribution_metrics,
     excess_decomposition,
     rebalanced_group_values,
 )
 from quantlab.runs.backtest_run import BacktestRun
+from quantlab.runs.run_metrics import AccountRecord, BenchmarkRecord
 from tests.backtest_fixtures import make_model, make_stock_dataset, write_price_store
 from tests.test_backtest_benchmark import _config as benchmark_config
 
@@ -102,6 +105,122 @@ def test_without_a_benchmark_the_excess_is_measured_over_the_universe():
     )
     assert "universe" not in parts
     assert parts["total"] == pytest.approx(np.log(1.1) / 2)
+
+
+# --------------------------------------------------------------------------
+# The attribution block of an account record (#315)
+# --------------------------------------------------------------------------
+
+#: The six bars of FILL, one per business day; a year is 252 of them.
+BARS = pd.bdate_range("2024-01-01", periods=6)
+YEARS = 6 / 252
+#: The worked universe curve of the first test above.
+UNIVERSE = [1.0, 1.1, 1.05, 1.0, 1.1041666666666667, 1.0520833333333333]
+
+
+def _on_bars(values) -> xr.DataArray:
+    return xr.DataArray(np.asarray(values, dtype=np.float64), dims="timestamp", coords={"timestamp": BARS})
+
+
+def _panel(values, name=None) -> xr.DataArray:
+    return xr.DataArray(
+        values, dims=("timestamp", "symbol"), coords={"timestamp": BARS, "symbol": ["A", "B"]}, name=name
+    )
+
+
+def _record(value) -> AccountRecord:
+    """An account of ``value`` that rebalanced on bars 0 and 3, with no fills recorded."""
+    value = np.asarray(value, dtype=np.float64)
+    returns = np.zeros_like(value)
+    returns[1:] = value[1:] / value[:-1] - 1
+    return AccountRecord(
+        value=_on_bars(value),
+        returns=_on_bars(returns),
+        orders=xr.Dataset(),
+        rebalances=xr.Dataset(
+            {"scheduled": ("timestamp", REBALANCE), "decided": ("timestamp", REBALANCE)},
+            coords={"timestamp": BARS},
+        ),
+        init_cash=100.0,
+        bar_interval="1D",
+        year_freq=pd.Timedelta(days=252),
+    )
+
+
+STRATEGY = [100.0, 105.0, 110.0, 108.0, 115.0, 120.0]
+GROSS = [100.0, 106.0, 111.0, 109.0, 116.5, 121.6]
+BENCHMARK = [100.0, 101.0, 102.0, 103.0, 104.0, 105.0]
+
+
+def _block(benchmark=True, gross=True):
+    benchmark_returns = np.zeros(6)
+    benchmark_returns[1:] = np.diff(BENCHMARK) / BENCHMARK[:-1]
+    return attribution_metrics(
+        _record(STRATEGY),
+        fill=_panel(FILL),
+        valuation=_panel(VALUATION),
+        scores=_panel(SCORES, name="fwd_ret_1"),
+        groups=2,
+        gross_value=_on_bars(GROSS) if gross else None,
+        benchmark=BenchmarkRecord(returns=_on_bars(benchmark_returns), value=_on_bars(BENCHMARK))
+        if benchmark
+        else None,
+    )
+
+
+def test_the_block_of_an_account_record_splits_its_excess_by_the_worked_curves():
+    block, _ = _block()
+
+    def growth(last, first=1.0):
+        return np.log(last / first) / YEARS
+
+    assert block["score_label"] == "fwd_ret_1"
+    assert block["groups"] == 2
+    parts = block["decomposition"]
+    assert parts["universe"] == pytest.approx(growth(UNIVERSE[-1]) - growth(105.0, 100.0))
+    assert parts["selection"] == pytest.approx(growth(121.6, 100.0) - growth(UNIVERSE[-1]))
+    assert parts["costs"] == pytest.approx(growth(120.0, 100.0) - growth(121.6, 100.0))
+    assert parts["total"] == pytest.approx(growth(120.0, 100.0) - growth(105.0, 100.0))
+    assert block["annualized_log_return"] == pytest.approx(
+        {
+            "strategy": growth(120.0, 100.0),
+            "gross": growth(121.6, 100.0),
+            "universe": growth(UNIVERSE[-1]),
+            "benchmark": growth(105.0, 100.0),
+        }
+    )
+    # Lowest scores first: the bottom group of the worked group test, then the top.
+    assert block["group_annualized_log_return"] == pytest.approx(
+        [growth(1.2 * 15 / 16), growth(0.8 * 14 / 12)]
+    )
+
+
+def test_the_block_measures_the_account_against_the_universe():
+    block, _ = _block()
+    over = block["relative_to_universe"]
+
+    assert over["Excess Return [%]"] == pytest.approx((1.2 / UNIVERSE[-1] - 1) * 100)
+    assert np.isfinite(over["Information Ratio"])
+
+
+def test_the_curves_are_on_the_accounts_bars_and_scale():
+    _, curves = _block()
+
+    np.testing.assert_allclose(curves["universe_value"].values, np.array(UNIVERSE) * 100.0)
+    np.testing.assert_allclose(
+        curves["group_value"].sel(group=2).values, np.array([1.0, 1.1, 0.9, 0.8, 0.8 * 13 / 12, 0.8 * 14 / 12]) * 100.0
+    )
+    np.testing.assert_allclose(curves["gross_value"].values, GROSS)
+    np.testing.assert_array_equal(curves.timestamp.values, BARS.values)
+
+
+def test_without_a_benchmark_or_a_curve_before_costs_their_parts_are_left_out():
+    block, curves = _block(benchmark=False, gross=False)
+
+    assert set(block["decomposition"]) == {"selection", "total"}
+    assert block["annualized_log_return"]["benchmark"] is None
+    assert block["annualized_log_return"]["gross"] is None
+    assert "gross_value" not in curves
 
 
 # --------------------------------------------------------------------------

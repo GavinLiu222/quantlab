@@ -74,16 +74,18 @@ def entry_prices(fill, close):
 
 @njit(cache=True)
 def simulate(targets, decisions, entry, close, cost):
-    """Simulate the targets decided at ``decisions`` in one pass over the bars; ``(value, holdings, turnover, filled)``.
+    """Simulate the targets decided at ``decisions`` in one pass over the bars; ``(value, traded, fill_value, turnover, filled)``.
 
     ``targets[k]`` (``[K, S]``; an all-NaN row holds) is decided at row
     ``decisions[k]`` (in time order, each before the last row) and fills at
     the next row's ``entry`` price; ``close`` is the forward-filled valuation
     price. A fill costs ``cost`` times its traded weight against the previous
     book marked at the fill's prices. Returns the value per bar (1.0 before
-    the first fill), the holdings at each decision bar's close (cash
-    excluded, zero before the first fill), the turnover of each fill and
-    which decisions filled.
+    the first fill); for each fill, in order, the signed weight traded in
+    each symbol (``[F, S]``, the target less the previous book marked at the
+    fill's prices) and the value it was traded against (the book before the
+    fill's costs); the turnover of each fill (its traded weights' absolute
+    sum); and which decisions filled.
     """
     T, S = close.shape
     K = targets.shape[0]
@@ -93,9 +95,11 @@ def simulate(targets, decisions, entry, close, cost):
             if not np.isfinite(targets[k, i]):
                 filled[k] = False
                 break
+    F = filled.sum()
     value = np.ones(T)
-    holdings = np.zeros((K, S))
-    turnover = np.empty(filled.sum())
+    traded = np.zeros((F, S))
+    fill_value = np.empty(F)
+    turnover = np.empty(F)
     weights = np.zeros(S)
     book_entry = np.zeros(S)
     marked = np.zeros(S)
@@ -106,17 +110,20 @@ def simulate(targets, decisions, entry, close, cost):
     decision = 0
     for t in range(T):
         if due >= 0:
-            traded = 0.0
+            total = 0.0
             if live:
                 grown = mark_book(weights, book_entry, entry[t], marked)
                 for i in range(S):
-                    traded += abs(targets[due, i] - marked[i] / grown)
+                    traded[fills, i] = targets[due, i] - marked[i] / grown
+                    total += abs(traded[fills, i])
                 at_fill *= grown
             else:
                 for i in range(S):
-                    traded += abs(targets[due, i])
-            turnover[fills] = traded
-            at_fill *= 1.0 - cost * traded
+                    traded[fills, i] = targets[due, i]
+                    total += abs(targets[due, i])
+            fill_value[fills] = at_fill
+            turnover[fills] = total
+            at_fill *= 1.0 - cost * total
             weights[:] = targets[due]
             book_entry[:] = entry[t]
             live = True
@@ -125,11 +132,7 @@ def simulate(targets, decisions, entry, close, cost):
         if live:
             value[t] = at_fill * mark_book(weights, book_entry, close[t], marked)
         while decision < K and decisions[decision] == t:
-            if live:
-                worth = mark_book(weights, book_entry, close[t], marked)
-                for i in range(S):
-                    holdings[decision, i] = marked[i] / worth
             if filled[decision]:
                 due = decision
             decision += 1
-    return value, holdings, turnover, filled
+    return value, traded, fill_value, turnover, filled

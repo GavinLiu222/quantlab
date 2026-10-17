@@ -75,6 +75,7 @@ Everything is synthetic, CPU-only and offline.
 """
 
 import dataclasses
+import json
 
 import numpy as np
 import pandas as pd
@@ -119,8 +120,11 @@ from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
 from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
 from quantlab.portfolio.predefined.top_n import TopNConstructor
 from quantlab.portfolio.predefined.topk_dropout import TopkDropoutConstructor
+from quantlab.runs.backtest_attribution import attribution_metrics
 from quantlab.runs.backtest_run import BacktestRun
 from quantlab.runs.prediction_panel import LabelSpec, PredictionPanel
+from quantlab.runs.run_metrics import BenchmarkRecord, run_metrics
+from quantlab.utils.jsonable import to_jsonable
 from tests.backtest_fixtures import (
     ForwardReturnLabel,
     PastReturnFactor,
@@ -218,10 +222,19 @@ def test_top_n_weights_at_the_decided_bars_equal_the_runs(case):
     decided = weights["decided"].values
 
     np.testing.assert_array_equal(
-        account.weights.timestamp.values, weights.timestamp.values[decided]
+        account.decided_weights.timestamp.values, weights.timestamp.values[decided]
     )
-    np.testing.assert_array_equal(account.weights.symbol.values, weights.symbol.values)
-    np.testing.assert_array_equal(account.weights.values, weights["weight"].values[decided])
+    np.testing.assert_array_equal(account.decided_weights.symbol.values, weights.symbol.values)
+    np.testing.assert_array_equal(account.decided_weights.values, weights["weight"].values[decided])
+
+
+def test_the_weights_carry_the_runs_rebalance_record(case):
+    result, _, account, _, _ = case
+    weights = result.weights.transpose("timestamp", "symbol")
+
+    np.testing.assert_array_equal(account.weights["scheduled"].values, weights["scheduled"].values)
+    np.testing.assert_array_equal(account.weights["decided"].values, weights["decided"].values)
+    np.testing.assert_array_equal(account.weights["weight"].values, weights["weight"].values)
 
 
 def test_the_value_is_within_the_tolerance_of_the_runs(case):
@@ -249,26 +262,29 @@ def test_the_value_without_costs_equals_a_zero_cost_run(case, store):
     assert account.value_without_costs.values[-1] > account.value.values[-1]
 
 
-def test_the_return_stats_agree_with_the_runs_metrics(case):
+def test_the_whole_block_agrees_with_the_runs(case):
     result, _, account, _, _ = case
-    # The model trained before the window, so the whole window is out of sample.
-    run_stats = BacktestRun.open(result.run_dir).metrics()["out_of_sample"]
+    run_whole = BacktestRun.open(result.run_dir).metrics()["whole"]
+    whole = account.metrics["whole"]
 
     # A value gap of 1e-3 is 0.1 percentage points of total return; annualising
     # the 68-bar window multiplies it by about four.
-    assert account.metrics["Total Return [%]"] == pytest.approx(
-        run_stats["Total Return [%]"], abs=VALUE_TOLERANCE * 100
+    assert whole["Total Return [%]"] == pytest.approx(run_whole["Total Return [%]"], abs=VALUE_TOLERANCE * 100)
+    assert whole["Annualized Return [%]"] == pytest.approx(
+        BacktestRun.open(result.run_dir).metrics()["out_of_sample"]["Annualized Return [%]"],
+        abs=VALUE_TOLERANCE * 100 * 4,
     )
-    assert account.metrics["Annualized Return [%]"] == pytest.approx(
-        run_stats["Annualized Return [%]"], abs=VALUE_TOLERANCE * 100 * 4
+    assert whole["Max Drawdown [%]"] == pytest.approx(run_whole["Max Drawdown [%]"], abs=VALUE_TOLERANCE * 100)
+    assert whole["Sharpe Ratio"] == pytest.approx(run_whole["Sharpe Ratio"], abs=0.02)
+    assert whole["Total Fees Paid"] / account.value.values[0] == pytest.approx(
+        run_whole["Total Fees Paid"] / result.simulation.value.values[0], rel=0.01
     )
-    for key in ("Annualized Volatility [%]", "Max Drawdown [%]"):
-        assert account.metrics[key] == pytest.approx(run_stats[key], abs=VALUE_TOLERANCE * 100)
-    assert account.metrics["Sharpe Ratio"] == pytest.approx(run_stats["Sharpe Ratio"], abs=0.02)
-    # The run's turnover is notional over the previous close's value, this one weight at the open.
-    assert account.metrics["Turnover per Rebalance [%]"] == pytest.approx(
-        run_stats["Turnover per Rebalance [%]"], rel=0.01
-    )
+    # Both are notional over the previous close's value now; the run's cash cap is the gap.
+    for key in ("Turnover per Rebalance [%]", "Total Turnover [%]", "Annualized Turnover [%]"):
+        assert whole[key] == pytest.approx(run_whole[key], rel=VALUE_TOLERANCE * 5), key
+    assert whole["Total Orders"] == run_whole["Total Orders"]
+    for key in ("Rebalance Win Rate [%]", "Monthly Win Rate [%]"):
+        assert whole[key] == pytest.approx(run_whole[key], abs=5.0), key
 
 
 def test_the_turnover_is_recorded_per_rebalance(case):
@@ -280,8 +296,8 @@ def test_the_turnover_is_recorded_per_rebalance(case):
     )
     # The first rebalance buys in from cash.
     assert account.turnover.values[0] == pytest.approx(1.0)
-    assert account.metrics["Turnover per Rebalance [%]"] == pytest.approx(
-        account.turnover.values.mean() * 100
+    assert account.metrics["whole"]["Turnover per Rebalance [%]"] == pytest.approx(
+        account.turnover.values.mean() * 100, rel=0.01
     )
 
 
@@ -298,7 +314,7 @@ def test_a_smaller_chunk_gives_the_same_account(case, store):
         predictions, TopNConstructor(top_n_config)
     )
 
-    np.testing.assert_array_equal(chunked.weights.values, account.weights.values)
+    np.testing.assert_array_equal(chunked.decided_weights.values, account.decided_weights.values)
     np.testing.assert_allclose(chunked.value.values, account.value.values, rtol=1e-12)
 
 
@@ -311,7 +327,7 @@ def test_the_approximate_backtest_is_built_once_and_run_many_times(case, store):
 
     np.testing.assert_array_equal(first.value.values, account.value.values)
     np.testing.assert_array_equal(again.value.values, account.value.values)
-    assert not np.array_equal(other.weights.values, account.weights.values)
+    assert not np.array_equal(other.decided_weights.values, account.decided_weights.values)
 
 
 def test_the_config_is_frozen_and_rebuildable(store):
@@ -375,7 +391,7 @@ def test_a_config_field_the_approximate_backtest_does_not_know_runs_at_its_defau
 
     extended = _approximate(store, rebalance_periods).run(predictions, rule)
 
-    np.testing.assert_array_equal(extended.weights.values, account.weights.values)
+    np.testing.assert_array_equal(extended.decided_weights.values, account.decided_weights.values)
 
 
 # --------------------------------------------------------------------------
@@ -440,6 +456,107 @@ def benchmark_case(request, store):
     return result, predictions, account, top_n_config, rebalance_periods
 
 
+def test_an_approximate_accounts_blocks_are_run_metrics_of_its_record(benchmark_case):
+    """The approximate backtest assembles no block itself: they are `run_metrics` of its record.
+
+    Only its own rows (those of `whole` before the turnover rows) and the
+    benchmark's name come from the approximate backtest.
+    """
+    _, _, account, _, _ = benchmark_case
+    metrics = account.metrics
+    whole = list(metrics["whole"])
+    engine_rows = {key: metrics["whole"][key] for key in whole[: whole.index("Turnover per Rebalance [%]")]}
+    benchmark = account.benchmark_value
+
+    expected = run_metrics(
+        account.record,
+        engine_rows=engine_rows,
+        benchmark=BenchmarkRecord(
+            benchmark / benchmark.shift(timestamp=1, fill_value=benchmark.values[0]) - 1,
+            symbol=metrics["benchmark"]["symbol"],
+            axis_symbol=metrics["benchmark"]["axis_symbol"],
+        ),
+    )
+
+    assert set(expected) == {"whole", "execution", "benchmark", "relative"}
+    for block, value in expected.items():
+        assert json.dumps(to_jsonable(metrics[block])) == json.dumps(to_jsonable(value)), block
+
+
+def test_trading_the_same_weights_the_blocks_equal_the_runs(store):
+    """Without costs or events the two backtests hold the same account, so the shared blocks are equal.
+
+    The run takes the approximate weights as they are (`run_weights`); its
+    `whole` rows that the approximate `whole` has too, its `relative` block
+    and the attribution block of its record equal the approximate ones.
+    """
+    root, dataset_config, bars = store
+    top_n_config, rebalance_periods = CASES["long_only_r5"]
+    predictions = BacktestRun.open(_run(store, top_n_config, rebalance_periods, "same_weights").run_dir).predictions()
+    account = _approximate(
+        store, rebalance_periods, cost=0.0, benchmark_dataset=_benchmark_dataset(store)
+    ).run(predictions, TopNConstructor(top_n_config))
+    backtester = USEquityCrossectionSelectStockVectorBt(
+        CrossSectionBacktestConfig(
+            price_dataset=make_stock_dataset(dataset_config),
+            start_date=_day(bars[WINDOW[0]]),
+            end_date=_day(bars[WINDOW[1]]),
+            output_dir=None,
+            rebalance_periods=rebalance_periods,
+            constructor=TopNConstructor(top_n_config),
+            fees=0.0,
+            slippage=0.0,
+            benchmark_dataset=_benchmark_dataset(store),
+        )
+    )
+    result = backtester.run_weights(account.weights)
+
+    def numbers(block: dict) -> dict:
+        return {key: value for key, value in block.items() if isinstance(value, (int, float))}
+
+    whole, run_whole = numbers(account.metrics["whole"]), numbers(result.metrics["whole"])
+    shared = set(whole) & set(run_whole)
+    assert {"Total Return [%]", "Sharpe Ratio", "Total Turnover [%]", "Total Orders", "Rebalance Win Rate [%]"} <= shared
+    for key in shared:
+        assert whole[key] == pytest.approx(run_whole[key], rel=1e-9, abs=1e-9), key
+    relative, run_relative = (numbers(block["relative"]["whole"]) for block in (account.metrics, result.metrics))
+    assert relative.keys() == run_relative.keys()
+    for key in relative:
+        assert relative[key] == pytest.approx(run_relative[key], rel=1e-9, abs=1e-9), key
+
+    market = backtester.MARKET
+    prices = make_stock_dataset(dataset_config).panel(
+        _day(bars[WINDOW[0]]),
+        _day(bars[WINDOW[1]]),
+        variables=[market.fill_price_column, market.valuation_price_column],
+    )
+    run_block, _ = attribution_metrics(
+        backtester.account(result.simulation),
+        fill=prices[market.fill_price_column],
+        valuation=prices[market.valuation_price_column],
+        scores=predictions.predictions["fwd_ret_1"],
+        gross_value=result.simulation.value,
+        benchmark=BenchmarkRecord(result.benchmark.returns, value=result.benchmark.value),
+    )
+    _assert_blocks_close(account.metrics["attribution"], run_block)
+
+
+def _assert_blocks_close(actual, expected) -> None:
+    """Every number of ``actual`` within 1e-9 of ``expected``'s, everything else equal, recursively."""
+    if isinstance(expected, dict):
+        assert actual.keys() == expected.keys()
+        for key in expected:
+            _assert_blocks_close(actual[key], expected[key])
+    elif isinstance(expected, list):
+        assert len(actual) == len(expected)
+        for a, e in zip(actual, expected):
+            _assert_blocks_close(a, e)
+    elif isinstance(expected, float):
+        assert actual == pytest.approx(expected, rel=1e-9, abs=1e-9)
+    else:
+        assert actual == expected
+
+
 def test_the_universe_and_benchmark_curves_agree_with_the_runs(benchmark_case):
     result, _, account, _, _ = benchmark_case
     init_cash = result.simulation.value.values[0]
@@ -465,16 +582,17 @@ def test_the_excess_blocks_agree_with_the_runs_metrics(benchmark_case):
     metrics = BacktestRun.open(result.run_dir).metrics()
     relative = metrics["relative"]["whole"]
 
+    assert account.metrics["benchmark"]["symbol"] == metrics["benchmark"]["symbol"]
     for key in ("Excess Return [%]", "Total Return Difference [%]", "Benchmark Total Return [%]"):
-        assert account.metrics["relative"][key] == pytest.approx(relative[key], abs=VALUE_TOLERANCE * 100)
+        assert account.metrics["relative"]["whole"][key] == pytest.approx(relative[key], abs=VALUE_TOLERANCE * 100)
     # Annualising the 68-bar window multiplies a value gap by about four.
-    assert account.metrics["relative"]["Annualized Excess Return [%]"] == pytest.approx(
+    assert account.metrics["relative"]["whole"]["Annualized Excess Return [%]"] == pytest.approx(
         relative["Annualized Excess Return [%]"], abs=VALUE_TOLERANCE * 100 * 4
     )
-    assert account.metrics["relative"]["Information Ratio"] == pytest.approx(
+    assert account.metrics["relative"]["whole"]["Information Ratio"] == pytest.approx(
         relative["Information Ratio"], abs=0.02
     )
-    assert account.metrics["benchmark"]["Total Return [%]"] == pytest.approx(
+    assert account.metrics["benchmark"]["whole"]["Total Return [%]"] == pytest.approx(
         metrics["benchmark"]["whole"]["Total Return [%]"], abs=VALUE_TOLERANCE * 100
     )
     run_parts = metrics["attribution"]["decomposition"]
@@ -484,16 +602,22 @@ def test_the_excess_blocks_agree_with_the_runs_metrics(benchmark_case):
     for key in run_parts:
         assert parts[key] == pytest.approx(run_parts[key], abs=VALUE_TOLERANCE * 4)
     assert parts["universe"] + parts["selection"] + parts["costs"] == pytest.approx(parts["total"])
+    groups = account.metrics["attribution"]["group_annualized_log_return"]
+    assert groups == pytest.approx(metrics["attribution"]["group_annualized_log_return"], abs=VALUE_TOLERANCE * 4)
+    over = account.metrics["attribution"]["relative_to_universe"]
+    run_over = metrics["attribution"]["relative_to_universe"]
+    assert over["Excess Return [%]"] == pytest.approx(run_over["Excess Return [%]"], abs=VALUE_TOLERANCE * 100)
+    assert over["Information Ratio"] == pytest.approx(run_over["Information Ratio"], abs=0.02)
 
 
-def test_the_selection_block_is_the_excess_over_the_universe(benchmark_case):
+def test_the_excess_over_the_universe_is_measured_on_the_universe_curve(benchmark_case):
     _, _, account, _, _ = benchmark_case
-    selection = account.metrics["selection"]
+    over = account.metrics["attribution"]["relative_to_universe"]
 
     expected = account.value.values[-1] / account.universe_value.values[-1] - 1
-    assert selection["Excess Return [%]"] == pytest.approx(expected * 100)
-    assert np.isfinite(selection["Annualized Excess Return [%]"])
-    assert np.isfinite(selection["Information Ratio"])
+    assert over["Excess Return [%]"] == pytest.approx(expected * 100)
+    assert np.isfinite(over["Annualized Excess Return [%]"])
+    assert np.isfinite(over["Information Ratio"])
 
 
 def test_without_a_benchmark_the_benchmark_blocks_are_absent(case):
@@ -502,7 +626,7 @@ def test_without_a_benchmark_the_benchmark_blocks_are_absent(case):
 
     assert account.benchmark_value is None
     assert "relative" not in account.metrics and "benchmark" not in account.metrics
-    assert "Information Ratio" in account.metrics["selection"]
+    assert "Information Ratio" in account.metrics["attribution"]["relative_to_universe"]
     parts = account.metrics["attribution"]["decomposition"]
     assert set(parts) == set(run_parts) == {"selection", "costs", "total"}
     for key in run_parts:
@@ -635,12 +759,12 @@ def test_mean_variance_weights_are_within_the_bound_of_the_runs(mvo_case):
     decided = weights["decided"].values
 
     assert result.metrics["portfolio_construction"]["failed_bar_count"] == 0
-    np.testing.assert_array_equal(account.weights.timestamp.values, weights.timestamp.values[decided])
-    gap = np.abs(account.weights.values - weights["weight"].values[decided]).sum(axis=1)
+    np.testing.assert_array_equal(account.decided_weights.timestamp.values, weights.timestamp.values[decided])
+    gap = np.abs(account.decided_weights.values - weights["weight"].values[decided]).sum(axis=1)
     assert gap.max() <= WEIGHTS_L1
     # The long halt keeps S03 out of the first bar's estimate, in both backtests.
-    assert float(account.weights.isel(timestamp=0).sel(symbol="S03")) == 0.0
-    assert float(account.weights.isel(timestamp=0).sel(symbol="S07")) != 0.0
+    assert float(account.decided_weights.isel(timestamp=0).sel(symbol="S03")) == 0.0
+    assert float(account.decided_weights.isel(timestamp=0).sel(symbol="S07")) != 0.0
 
 
 def test_mean_variance_value_is_within_the_tolerance_of_the_runs(mvo_case):
@@ -769,8 +893,8 @@ def test_active_risk_weights_are_within_the_bound_of_the_runs(active_case):
     decided = weights["decided"].values
 
     assert result.metrics["portfolio_construction"]["failed_bar_count"] == 0
-    np.testing.assert_array_equal(account.weights.timestamp.values, weights.timestamp.values[decided])
-    gap = np.abs(account.weights.values - weights["weight"].values[decided]).sum(axis=1)
+    np.testing.assert_array_equal(account.decided_weights.timestamp.values, weights.timestamp.values[decided])
+    gap = np.abs(account.decided_weights.values - weights["weight"].values[decided]).sum(axis=1)
     assert gap.max() <= bound
 
 
@@ -789,12 +913,12 @@ def test_the_benchmark_pulls_the_active_risk_weights_toward_it(mvo_store):
     backtest = _approximate(mvo_store, 1)
     total = backtest.run(predictions, _mvo(risk_aversion=50.0))
     active = backtest.run(predictions, _active(bars, risk_aversion=50.0))
-    benchmark = _benchmark_weights(bars).sel(timestamp=active.weights.timestamp)
+    benchmark = _benchmark_weights(bars).sel(timestamp=active.decided_weights.timestamp)
 
     def distance(weights):
         return float(np.abs(weights.values - benchmark.values).sum(axis=1).mean())
 
-    assert distance(active.weights) < distance(total.weights)
+    assert distance(active.decided_weights) < distance(total.decided_weights)
 
 
 class _CappedRisk(MeanVarianceOptimizer):
@@ -875,8 +999,8 @@ def test_factor_risk_mean_variance_weights_and_value_are_within_the_bounds(facto
     decided = weights["decided"].values
 
     assert result.metrics["portfolio_construction"]["failed_bar_count"] == 0
-    np.testing.assert_array_equal(account.weights.timestamp.values, weights.timestamp.values[decided])
-    gap = np.abs(account.weights.values - weights["weight"].values[decided]).sum(axis=1)
+    np.testing.assert_array_equal(account.decided_weights.timestamp.values, weights.timestamp.values[decided])
+    gap = np.abs(account.decided_weights.values - weights["weight"].values[decided]).sum(axis=1)
     assert gap.max() <= WEIGHTS_L1
     run_value = result.simulation.value.values / result.simulation.value.values[0]
     np.testing.assert_allclose(account.value.values, run_value, rtol=VALUE_TOLERANCE, atol=0)
@@ -884,7 +1008,7 @@ def test_factor_risk_mean_variance_weights_and_value_are_within_the_bounds(facto
 
 def test_the_risk_stores_are_read_once_over_the_window(factor_risk_case):
     _, account, records, reads = factor_risk_case
-    decided = account.weights.timestamp.values
+    decided = account.decided_weights.timestamp.values
     window = (pd.Timestamp(decided[0]).isoformat(), pd.Timestamp(decided[-1]).isoformat())
 
     assert len(reads) == 1
@@ -944,8 +1068,8 @@ def _weights_gap(result, account) -> np.ndarray:
     weights = result.weights.transpose("timestamp", "symbol")
     decided = weights["decided"].values
     assert result.metrics["portfolio_construction"]["failed_bar_count"] == 0
-    np.testing.assert_array_equal(account.weights.timestamp.values, weights.timestamp.values[decided])
-    return np.abs(account.weights.values - weights["weight"].values[decided]).sum(axis=1)
+    np.testing.assert_array_equal(account.decided_weights.timestamp.values, weights.timestamp.values[decided])
+    return np.abs(account.decided_weights.values - weights["weight"].values[decided]).sum(axis=1)
 
 
 def test_penalised_weights_are_within_the_bound_of_the_runs(penalty_case):
@@ -983,7 +1107,7 @@ def test_a_smaller_chunk_gives_the_penalised_weights_of_one_chunk(penalty_case, 
     )
 
     assert whole.metrics["converged"] is True and chunked.metrics["converged"] is True
-    gap = np.abs(chunked.weights.values - whole.weights.values).sum(axis=1)
+    gap = np.abs(chunked.decided_weights.values - whole.decided_weights.values).sum(axis=1)
     assert gap.max() <= 1e-5
 
 
@@ -1053,12 +1177,12 @@ def test_the_chunks_carry_the_book_across_a_held_bar_and_a_delisting(held_store)
     whole = accounts[N_BARS]
     held = np.datetime64(bars[WINDOW[0] + HELD_ROW])
 
-    assert held not in whole.weights.timestamp.values
+    assert held not in whole.decided_weights.timestamp.values
     s05 = list(SYMBOLS).index("S05")
-    assert whole.weights.values[HELD_ROW - 1, s05] > 0
+    assert whole.decided_weights.values[HELD_ROW - 1, s05] > 0
     for chunk in (HELD_ROW, HELD_ROW + 1):
-        np.testing.assert_array_equal(accounts[chunk].weights.timestamp.values, whole.weights.timestamp.values)
-        np.testing.assert_allclose(accounts[chunk].weights.values, whole.weights.values, rtol=0, atol=1e-9)
+        np.testing.assert_array_equal(accounts[chunk].decided_weights.timestamp.values, whole.decided_weights.timestamp.values)
+        np.testing.assert_allclose(accounts[chunk].decided_weights.values, whole.decided_weights.values, rtol=0, atol=1e-9)
 
 
 def test_with_fees_the_penalised_gap_is_the_runs_cash_cap(mvo_store):
@@ -1237,9 +1361,9 @@ def test_a_long_short_book_is_dollar_neutral_within_a_gross_of_one(configuration
     if not name.startswith("long_short"):
         pytest.skip("long-short only")
 
-    np.testing.assert_allclose(account.weights.sum("symbol").values, 0.0, atol=1e-9)
-    assert (np.abs(account.weights).sum("symbol").values <= 1.0 + 1e-9).all()
-    assert (np.abs(account.weights).values <= 0.15 + 1e-12).all()
+    np.testing.assert_allclose(account.decided_weights.sum("symbol").values, 0.0, atol=1e-9)
+    assert (np.abs(account.decided_weights).sum("symbol").values <= 1.0 + 1e-9).all()
+    assert (np.abs(account.decided_weights).values <= 0.15 + 1e-12).all()
 
 
 # --------------------------------------------------------------------------
@@ -1339,8 +1463,8 @@ def test_before_the_first_event_the_gap_is_the_usual_one(event_case):
     early = weights.timestamp.values[decided] < weights.timestamp.values[FIRST_EVENT_ROW]
 
     assert _value_gap(result, account)[:FIRST_EVENT_ROW].max() <= VALUE_TOLERANCE
-    np.testing.assert_array_equal(account.weights.timestamp.values, weights.timestamp.values[decided])
-    l1 = np.abs(account.weights.values - weights["weight"].values[decided]).sum(axis=1)
+    np.testing.assert_array_equal(account.decided_weights.timestamp.values, weights.timestamp.values[decided])
+    l1 = np.abs(account.decided_weights.values - weights["weight"].values[decided]).sum(axis=1)
     assert l1[early].max() <= WEIGHTS_L1
 
 
@@ -1415,7 +1539,7 @@ def zero_risk_case(request, mvo_store):
 
 def test_a_zero_risk_book_is_on_its_budget(zero_risk_case):
     name, _, account = zero_risk_case
-    books = account.weights.values
+    books = account.decided_weights.values
 
     if name.endswith("long_short"):
         np.testing.assert_allclose(books.sum(axis=1), 0.0, atol=1e-9)

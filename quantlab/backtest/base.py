@@ -57,11 +57,7 @@ from quantlab.runs.backtest_run import (
 from quantlab.runs.trained_run import TrainedRun
 from quantlab.utils import date_range
 from quantlab.runs import backtest_stats
-from quantlab.runs.backtest_attribution import (
-    annualized_log_growth,
-    excess_decomposition,
-    rebalanced_group_values,
-)
+from quantlab.runs.backtest_attribution import ATTRIBUTION_GROUPS, attribution_metrics
 from quantlab.runs.backtest_report import (
     ReportExtras,
     backtest_report_figure,
@@ -75,6 +71,7 @@ from quantlab.runs.run_metrics import (
     slice_ranges,
 )
 from quantlab.model.split import in_sample_window, split_ranges
+from quantlab.portfolio.base import PortfolioConstructor
 from quantlab.risk.attribution import attribution_summary, factor_attribution
 from quantlab.utils.returns import one_bar_returns
 from quantlab.utils.timer import Timer
@@ -220,6 +217,40 @@ def label_specs(predictor: Predictor) -> tuple[LabelSpec, ...]:
                 LabelSpec(name=str(name), scale=scales[name], delay=int(delay), span=span)
             )
     return tuple(specs)
+
+
+def benchmark_display_name(dataset: MarketDataset | None, axis_symbol: str, as_of) -> str:
+    """Return a benchmark's readable name: its ticker as of ``as_of`` when ``dataset`` names a lookup.
+
+    A CRSP benchmark store is keyed by PERMNO, a bare number, so the lookup
+    the benchmark dataset names gives its ticker; without a lookup, or when
+    it does not know the symbol, the axis label is returned unchanged.
+
+    Examples
+    --------
+    >>> benchmark_display_name(None, "84398", "2024-06-28")
+    '84398'
+    """
+    lookup = None if dataset is None else dataset.ticker_lookup()
+    if lookup is None or not axis_symbol:
+        return axis_symbol
+    return str(lookup.label([axis_symbol], pd.Timestamp(as_of).date())[0])
+
+
+def attribution_score_label(constructor: PortfolioConstructor | None, predictions: xr.Dataset) -> str:
+    """Return the label a backtest's attribution ranks its universe by.
+
+    The portfolio rule's ``ranking_label`` of the predicted labels, or the
+    first predicted label without a rule. Both backtests (``run()`` and
+    ``quantlab.backtest.approximate``) rank by it.
+
+    Examples
+    --------
+    >>> attribution_score_label(None, predictions)
+    'fwd_ret_1'
+    """
+    names = [str(name) for name in predictions.data_vars]
+    return names[0] if constructor is None else constructor.ranking_label(names)
 
 
 @dataclass(frozen=True)
@@ -2261,8 +2292,8 @@ class BaseBacktester(Component, ABC):
         (``DecisionInputs.weights`` returns both).
         """
 
-    #: Score groups of the attribution; a rebalance with fewer symbols holds them in cash.
-    ATTRIBUTION_GROUPS: ClassVar[int] = 10
+    #: Score groups of the attribution (``quantlab.runs.backtest_attribution.ATTRIBUTION_GROUPS``).
+    ATTRIBUTION_GROUPS: ClassVar[int] = ATTRIBUTION_GROUPS
 
     def _attribution(
         self,
@@ -2275,81 +2306,26 @@ class BaseBacktester(Component, ABC):
     ) -> dict:
         """Return the ``attribution`` metrics and set ``simulation.attribution`` to their curves.
 
-        The universe of a rebalance bar is every symbol with a finite score
-        and a fill price on the next bar, the score being the prediction the
-        portfolio rule ranks by (the constructor's ``ranking_label``; the
-        first predicted label without a constructor). The rebalance bars are
-        the decided bars of ``simulation.rebalances``, so a bar the rule held after a failure is
-        held here too. ``quantlab.runs.backtest_attribution`` gives the
-        equal-weighted universe curve and the curves of ``ATTRIBUTION_GROUPS`` score groups,
-        delisted holdings settled at their last valuation as the engine
-        settles them, and splits the annualised log growth over the benchmark
-        (over the universe without one): ``universe`` (universe over
-        benchmark), ``selection`` (the weights simulated without costs, over
-        the universe) and ``costs`` (after costs over before; left out when
-        the engine cannot simulate without costs). A year is the market's
-        year over the bar interval, and the window counts one bar per
-        return, as ``backtest_stats.return_stats`` annualises. The block also
-        holds each curve's and each group's annualised log growth, lowest
-        scores first.
+        ``quantlab.runs.backtest_attribution.attribution_metrics`` of the
+        simulation's account record (``account``), ranked by the score the
+        portfolio rule ranks by (``attribution_score_label``), with the
+        weights simulated without costs (left out when the engine cannot),
+        the benchmark and the delisting marks the engine settles with, in
+        ``ATTRIBUTION_GROUPS`` score groups.
         """
-        fill_column = self.MARKET.fill_price_column  # type: ignore[union-attr]
-        valuation_column = self.MARKET.valuation_price_column  # type: ignore[union-attr]
-        constructor = getattr(self.config, "constructor", None)
-        names = [str(name) for name in predictions.data_vars]
-        label = names[0] if constructor is None else constructor.ranking_label(names)
-        fill = prices[fill_column].transpose("timestamp", "symbol").values
-        valuation = prices[valuation_column].transpose("timestamp", "symbol").values
-        scores = predictions[label].transpose("timestamp", "symbol").values
-        rebalance = (
-            simulation.rebalances["decided"]
-            .reindex(timestamp=prices.timestamp.values, fill_value=False)
-            .values
-        )
-        marks = (
-            delisted.transpose("timestamp", "symbol")
-            .reindex(timestamp=prices.timestamp.values, symbol=prices.symbol.values, fill_value=False)
-            .values
-        )
-        groups = self.ATTRIBUTION_GROUPS
-        (universe,) = rebalanced_group_values(fill, valuation, scores, rebalance, groups=1, delisted=marks)
-        group_values = rebalanced_group_values(fill, valuation, scores, rebalance, groups=groups, delisted=marks)
-
+        label = attribution_score_label(getattr(self.config, "constructor", None), predictions)
         gross = self._simulate_without_costs(weights, prices, delisted)
-        years = simulation.value.sizes["timestamp"] * simulation.bar_interval / self.MARKET.year_freq(  # type: ignore[union-attr]
-            simulation.bar_interval
+        block, simulation.attribution = attribution_metrics(
+            self.account(simulation),
+            fill=prices[self.MARKET.fill_price_column],  # type: ignore[union-attr]
+            valuation=prices[self.MARKET.valuation_price_column],  # type: ignore[union-attr]
+            scores=predictions[label],
+            groups=self.ATTRIBUTION_GROUPS,
+            gross_value=None if gross is None else gross.value,
+            benchmark=self._benchmark_record(benchmark, simulation),
+            delisted=delisted,
         )
-        strategy = simulation.value.values
-        gross_values = None if gross is None else gross.value.values
-        benchmark_values = None if benchmark is None else benchmark.value.values
-
-        init_cash = float(strategy[0])
-        curves = {
-            "universe_value": ("timestamp", universe * init_cash),
-            "group_value": (("group", "timestamp"), group_values * init_cash),
-        }
-        if gross_values is not None:
-            curves["gross_value"] = ("timestamp", gross_values)
-        simulation.attribution = xr.Dataset(
-            curves,
-            coords={"timestamp": simulation.value.timestamp.values, "group": np.arange(1, groups + 1)},
-        )
-
-        def growth(curve) -> float | None:
-            return None if curve is None else annualized_log_growth(curve, years)
-
-        return {
-            "score_label": label,
-            "groups": groups,
-            "decomposition": excess_decomposition(strategy, gross_values, universe, benchmark_values, years),
-            "annualized_log_return": {
-                "strategy": growth(strategy),
-                "gross": growth(gross_values),
-                "universe": growth(universe),
-                "benchmark": growth(benchmark_values),
-            },
-            "group_annualized_log_return": [growth(curve) for curve in group_values],
-        }
+        return block
 
     def _check_risk_model(self, timestamps: np.ndarray) -> None:
         """Refuse a ``risk_model`` that cannot attribute the bars ``timestamps``, before simulating.
@@ -2679,11 +2655,7 @@ class BaseBacktester(Component, ABC):
         ``FrameDataset``), or the lookup does not know the symbol, the axis
         label is returned unchanged.
         """
-        dataset = self.config.benchmark_dataset
-        lookup = None if dataset is None else dataset.ticker_lookup()
-        if lookup is None or not axis_symbol:
-            return axis_symbol
-        return str(lookup.label([axis_symbol], pd.Timestamp(as_of).date())[0])
+        return benchmark_display_name(self.config.benchmark_dataset, axis_symbol, as_of)
 
     def _report_notes(self) -> list[str]:
         """Return the notes attached to the report and to ``metrics.json``.

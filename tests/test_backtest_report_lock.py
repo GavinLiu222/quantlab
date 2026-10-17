@@ -307,20 +307,21 @@ def scenarios(tmp_path: Path, cv_project) -> dict[str, tuple[Path, list[Path]]]:
 #: 8911.8%) and stopped splitting a holding period (rebalance win rate 44.4% for
 #: 50%); the run_cv metrics did not change (12 rebalances every 4 bars filled
 #: inside 48 bars, so both formulas agree), and the reports' hover texts state the
-#: new definitions.
+#: new definitions. #315 added the attribution block's `relative_to_universe` to
+#: the four model runs' metrics.json; without it their bytes are the ones before.
 EXPECTED: dict[str, str] = {
     "run_long_only_benchmark/report.html": "07b54704ddf93aff3e5fa07147cfc0ac961cf2545118811584a501898d005f4f",
-    "run_long_only_benchmark/metrics.json": "3cd2d405846f44ae7b3260989603f880e0b132e38138f159e44b3a5a2b33e2c4",
+    "run_long_only_benchmark/metrics.json": "7a47c7e6b252b22784792d033878219752397b6b1bc9530325f5f18ce44d1850",
     "run_long_short_delisting/report.html": "a1421e7fc44684bcad16c8fc6d7ab8bd607ecacf9966466371bd87b22fefad2a",
-    "run_long_short_delisting/metrics.json": "1fae26dd7c6691bd9725161988eabeb3856a9bf8889609bd04447ac48ab33d58",
+    "run_long_short_delisting/metrics.json": "f323ff04cb16ebd0316b8298b86e39d14a1d447fbc94151ec33babdd3212a75b",
     "run_weights_benchmark/report.html": "40c755f3d477d5de738a12ed498aaaf68db1a96285556ac752116de4d2ecb784",
     "run_weights_benchmark/metrics.json": "3f305680e5fdb3306df41c15e048c71094872eada67a1368bbd963ba31366dbd",
     "run_weights/report.html": "816972d0dcf921cee3d869d7e30e390a7a0dc0b5879f4f2e537a80e88aeb1f48",
     "run_weights/metrics.json": "b263a751733a6c054d03b557a86d6a9f69200a7d1cdcc8b13f598cc3f79874b4",
     "run_cv_benchmark/report.html": "c273e52dff3a4ff3ac8c99f3c22fab7136b6b0482c5bb2210a21d056393a566a",
-    "run_cv_benchmark/metrics.json": "5eb6071ba06b6922deb7bf73aaf73915ce3d2c5400d1e0a5126136172eb5b538",
+    "run_cv_benchmark/metrics.json": "e4647a2efeded8bbd9d080a6084f67a91ac686ed36f179c75c42a077dd700b4b",
     "run_cv/report.html": "a2c27db8c8c8c9b20232909e1ae5a983ee994cd1450e990314d4b31930c60ac1",
-    "run_cv/metrics.json": "c689af22c94db84dfcfbc21acf48c039ebfc734e79d5a132e9cfecac86a5bbf8",
+    "run_cv/metrics.json": "d6358f0aacd579f909a63dc67065973809927fbe5386d3763cbdf816c69eab1c",
 }
 
 

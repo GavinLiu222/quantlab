@@ -494,19 +494,21 @@ ValueError: USEquityCrossectionSelectStockVectorBt: the weight bars must be exac
 ... ))
 >>> predictions = run.predictions()
 >>> account = approximate.run(predictions, TopNConstructor(TopNConfig(direction="long_only", top_n=2)))
->>> round(account.metrics["Total Return [%]"], 2), round(run.metrics()["out_of_sample"]["Total Return [%]"], 2)
-(-5.92, -5.61)
->>> (account.weights.values == result.weights["weight"].values[result.weights["decided"].values]).all()
-np.True_
+>>> round(account.metrics["whole"]["Total Return [%]"], 2), round(run.metrics()["whole"]["Total Return [%]"], 2)
+(-5.92, -5.87)
+>>> account.weights["weight"].fillna(9).equals(result.weights["weight"].fillna(9))
+True
 >>> for top_n in (1, 2, 3):
 ...     swept = approximate.run(predictions, TopNConstructor(TopNConfig(direction="long_only", top_n=top_n)))
-...     print(top_n, round(swept.metrics["Sharpe Ratio"], 2), round(swept.metrics["Turnover per Rebalance [%]"], 1))
+...     print(top_n, round(swept.metrics["whole"]["Sharpe Ratio"], 2), round(swept.metrics["whole"]["Turnover per Rebalance [%]"], 1))
 1 -6.22 150.0
-2 -2.36 133.8
-3 -1.42 84.3
+2 -2.36 134.1
+3 -1.42 84.4
+>>> round(backtester.run_weights(account.weights).metrics["whole"]["Total Return [%]"], 2)
+-5.87
 ```
 
-权重与运行相同；总收益相差 0.3 个百分点来自 FFF：它在窗口内停止交易，运行把它清算成现金（见下文）。
+权重与运行相同，并带着运行的调仓记录，所以 `run_weights` 可以原样接收，结果就是那次运行；总收益相差 0.05 个百分点来自 FFF：它在窗口内停止交易，运行把它清算成现金（见下文）。
 
 #### 保留什么、放弃什么
 
@@ -571,26 +573,27 @@ ValueError: USEquityApproximateBacktest cannot run TopkDropoutConstructor: TopkD
 ...         expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)), risk_aversion=5.0, weight_cap=0.5, turnover_penalty=penalty,
 ...     ))
 ...     solved = approximate.run(predictions, rule)
-...     print(penalty, round(solved.metrics["Turnover per Rebalance [%]"], 1), solved.metrics["iterations"]["max"])
-0.0 117.9 6
-0.002 34.7 5
+...     print(penalty, round(solved.metrics["whole"]["Turnover per Rebalance [%]"], 1), solved.metrics["iterations"]["max"])
+0.0 118.2 6
+0.002 34.6 5
 ```
 
 #### 账户
 
 `run` 返回一个 `ApproximateAccount`：
 
-- `value`（窗口第一个 bar 为 1.0）、`returns`（该 bar 为 0.0）和 `value_without_costs`，都在窗口的 bar 上；
-- `weights`：各决策 bar 的目标权重；`turnover`：每次调仓的成交权重（从现金建仓时为 1.0）；
-- `universe_value`：运行归因所用的等权全体；`benchmark_value`（没有基准时为 `None`）；
-- `metrics`：窗口上 `backtest_stats.return_stats` 和 `backtest_stats.turnover_stats` 的各行，`selection`（账户相对等权全体的 `relative_stats`，也就是分数和规则带来的超额，含年化超额收益和信息比率），`attribution`（运行的 `decomposition` 和 `annualized_log_return`），`iterations`（求解器每个决策 bar 迭代次数的 `mean` 和 `max`，不迭代的规则为 0）和 `converged`。
+- `record`：回测运行的指标所依据的账户记录（`quantlab.runs.run_metrics.AccountRecord`）：净值（窗口第一个 bar 为 1.0）及其收益、每个成交 bar 上每只交易的标的一笔成交（按成交价计的名义金额，`cost` 分摊为手续费），以及调仓记录。近似回测不清算、不拒单、不限现金，所以结算和被拒订单为空；它也不记录往返交易、逐 bar 持仓和目标偏离。`value` 和 `returns` 读它；
+- `value_without_costs`，在窗口的 bar 上；
+- `weights`：运行的权重格式（`weight` 铺满窗口每根 bar，决策 bar 之外为 NaN，加上调仓记录 `scheduled` 和 `decided`），`run_weights` 可原样接收；`decided_weights`：各决策 bar 的目标权重；`turnover`：每次调仓相对漂移到成交 bar 开盘的账户的成交权重（从现金建仓时为 1.0）；
+- `universe_value`：归因所用的等权全体；`benchmark_value`（没有基准时为 `None`）；
+- `metrics`：与运行的 `metrics.json` 相同的各块，由同样的函数从 `record` 组装（ADR 0034）：`whole`（以窗口的收益统计和 `Total Fees Paid` 开头，运行在这里是 vectorbt 的各行；之后的换手行、`Total Orders` 和胜率与运行相同）和 `execution`；`attribution`，运行的归因块（`quantlab.runs.backtest_attribution.attribution_metrics`），股票池按规则的排序标签排名；`iterations`（求解器每个决策 bar 迭代次数的 `mean` 和 `max`，不迭代的规则为 0）和 `converged`。近似回测没有训练窗口，所以没有 `in_sample` 和 `out_of_sample` 切片。
 
-设置 `benchmark_dataset`（只含一个标的，与运行的要求相同）后，基准在第二个 bar 开盘以同样的 `cost` 买入并持有，`metrics` 多出 `benchmark`（它的收益统计）和 `relative`（运行的 `relative` 各行，不含胜率），分解中也多出 `universe` 部分：
+设置 `benchmark_dataset`（只含一个标的，与运行的要求相同）后，基准在第二个 bar 开盘以同样的 `cost` 买入并持有，`metrics` 多出运行的 `benchmark` 和 `relative` 两块，分解中也多出 `universe` 部分：
 
 ```python
 approximate = USEquityApproximateBacktest(dataclasses.replace(approximate.config, benchmark_dataset=qqq))
 account = approximate.run(predictions, rule)
-account.metrics["relative"]["Information Ratio"]
+account.metrics["relative"]["whole"]["Information Ratio"]
 ```
 
 在合成数据上，这些数与运行的 `metrics.json` 在第三位小数上一致（信息比率 3.4689 对 3.4712）。
@@ -671,7 +674,7 @@ sorted(parts)
 - `selection`：同一组目标权重在不计手续费和滑点时的模拟，相对等权股票池：分数和组合规则带来的部分；
 - `costs`：策略相对不计成本的同一组权重。
 
-一年按市场的年长度除以 bar 间隔计，窗口按每个收益一根 bar 计数，与其他年化统计一致。没有基准时不给 `universe`，`total` 相对股票池计算；引擎无法做不计成本的模拟时不给 `costs`，成本计入 `selection`。该块还包括四条曲线的 `annualized_log_return`，以及 `group_annualized_log_return`：每次调仓把股票池按分数切成 `groups`（10）组，各组同样持有，分数最低的组在前；某次调仓的标的少于 10 个时，各组持有现金直到下一次调仓。模型的信息如果集中在分数最低的几组，即使只做多的 Top N 用不上，也会在这里显示出来。`equity()` 保存这些曲线（`universe_value`、`gross_value`，以及维度为 `(group, timestamp)` 的 `group_value`），报告在 Attribution 分区里画出它们。纯函数在 `quantlab.runs.backtest_attribution` 中：`rebalanced_group_values`、`excess_decomposition` 和 `annualized_log_growth`。
+一年按市场的年长度除以 bar 间隔计，窗口按每个收益一根 bar 计数，与其他年化统计一致。没有基准时不给 `universe`，`total` 相对股票池计算；引擎无法做不计成本的模拟时不给 `costs`，成本计入 `selection`。该块还包括四条曲线的 `annualized_log_return`，以及 `group_annualized_log_return`：每次调仓把股票池按分数切成 `groups`（10）组，各组同样持有，分数最低的组在前，以及 `relative_to_universe`：策略相对等权股票池的相对统计（分数和规则带来的部分，含年化超额收益和信息比率）；某次调仓的标的少于 10 个时，各组持有现金直到下一次调仓。模型的信息如果集中在分数最低的几组，即使只做多的 Top N 用不上，也会在这里显示出来。`equity()` 保存这些曲线（`universe_value`、`gross_value`，以及维度为 `(group, timestamp)` 的 `group_value`），报告在 Attribution 分区里画出它们。该块是运行账户记录的 `attribution_metrics`（在 `quantlab.runs.backtest_attribution` 中），近似回测也调用它；旁边的纯函数是 `rebalanced_group_values`、`excess_decomposition` 和 `annualized_log_growth`。
 
 ### 把收益和风险归因到因子
 

@@ -494,19 +494,21 @@ Continuing the first session, the run's recorded predictions go to an approximat
 ... ))
 >>> predictions = run.predictions()
 >>> account = approximate.run(predictions, TopNConstructor(TopNConfig(direction="long_only", top_n=2)))
->>> round(account.metrics["Total Return [%]"], 2), round(run.metrics()["out_of_sample"]["Total Return [%]"], 2)
-(-5.92, -5.61)
->>> (account.weights.values == result.weights["weight"].values[result.weights["decided"].values]).all()
-np.True_
+>>> round(account.metrics["whole"]["Total Return [%]"], 2), round(run.metrics()["whole"]["Total Return [%]"], 2)
+(-5.92, -5.87)
+>>> account.weights["weight"].fillna(9).equals(result.weights["weight"].fillna(9))
+True
 >>> for top_n in (1, 2, 3):
 ...     swept = approximate.run(predictions, TopNConstructor(TopNConfig(direction="long_only", top_n=top_n)))
-...     print(top_n, round(swept.metrics["Sharpe Ratio"], 2), round(swept.metrics["Turnover per Rebalance [%]"], 1))
+...     print(top_n, round(swept.metrics["whole"]["Sharpe Ratio"], 2), round(swept.metrics["whole"]["Turnover per Rebalance [%]"], 1))
 1 -6.22 150.0
-2 -2.36 133.8
-3 -1.42 84.3
+2 -2.36 134.1
+3 -1.42 84.4
+>>> round(backtester.run_weights(account.weights).metrics["whole"]["Total Return [%]"], 2)
+-5.87
 ```
 
-The weights are the run's; the 0.3-point gap in total return is FFF, which stops trading inside the window and which the run settles into cash (see below).
+The weights are the run's, with its rebalance record, so `run_weights` takes them as they are and gives the run back; the 0.05-point gap in total return is FFF, which stops trading inside the window and which the run settles into cash (see below).
 
 #### What it keeps and what it gives up
 
@@ -571,26 +573,27 @@ The window is cut into chunks of `chunk_bars` bars (default 63), each decided on
 ...         expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)), risk_aversion=5.0, weight_cap=0.5, turnover_penalty=penalty,
 ...     ))
 ...     solved = approximate.run(predictions, rule)
-...     print(penalty, round(solved.metrics["Turnover per Rebalance [%]"], 1), solved.metrics["iterations"]["max"])
-0.0 117.9 6
-0.002 34.7 5
+...     print(penalty, round(solved.metrics["whole"]["Turnover per Rebalance [%]"], 1), solved.metrics["iterations"]["max"])
+0.0 118.2 6
+0.002 34.6 5
 ```
 
 #### The account
 
 `run` returns an `ApproximateAccount`:
 
-- `value` (1.0 at the window's first bar), `returns` (0.0 there) and `value_without_costs`, on the window's bars;
-- `weights`, the target weights at the decided bars, and `turnover`, the traded weight of each rebalance (1.0 for the buy-in from cash);
-- `universe_value`, the equal-weighted universe of a run's attribution, and `benchmark_value` (`None` without a benchmark);
-- `metrics`: the rows of `backtest_stats.return_stats` and `backtest_stats.turnover_stats` over the window, `selection` (the `relative_stats` of the account over the universe: what the scores and the rule add, with its annualised excess return and information ratio), `attribution` (a run's `decomposition` and `annualized_log_return`), `iterations` (the solver's `mean` and `max` iterations per decision bar, 0 for a rule that does not iterate) and `converged`.
+- `record`, the account record a backtest run's metrics are built from (`quantlab.runs.run_metrics.AccountRecord`): the value (1.0 at the window's first bar) and its returns, one fill per symbol traded at each fill bar (its notional at the fill price, its share of `cost` as fees) and the rebalance record. Nothing is settled, rejected or capped, so its settlements and rejected orders are empty, and it keeps no round trips, per-bar holdings or target deviation; `value` and `returns` read it;
+- `value_without_costs`, on the window's bars;
+- `weights`, in a run's format (`weight` on every bar of the window, NaN but on the decided bars, and the rebalance record `scheduled` and `decided`), so `run_weights` takes them as they are; `decided_weights`, the target weights at the decided bars; and `turnover`, the traded weight of each rebalance against the book drifted to its fill bar's open (1.0 for the buy-in from cash);
+- `universe_value`, the equal-weighted universe of the attribution, and `benchmark_value` (`None` without a benchmark);
+- `metrics`: the blocks of a run's `metrics.json`, assembled by the same functions from `record` (ADR 0034): `whole` (opened by the window's return statistics and `Total Fees Paid`, where a run has vectorbt's rows; then the turnover rows, `Total Orders` and the win rates, as a run's) and `execution`; `attribution`, a run's block (`quantlab.runs.backtest_attribution.attribution_metrics`), the universe ranked by the rule's ranking label; `iterations` (the solver's `mean` and `max` iterations per decision bar, 0 for a rule that does not iterate) and `converged`. There is no training window, so no `in_sample` or `out_of_sample` slice.
 
-With `benchmark_dataset` (one symbol, as for a run) the benchmark is bought at the second bar's open at the same `cost` and held, and `metrics` gains `benchmark` (its return statistics) and `relative` (a run's `relative` rows without the win rates), the decomposition its `universe` part:
+With `benchmark_dataset` (one symbol, as for a run) the benchmark is bought at the second bar's open at the same `cost` and held, and `metrics` gains a run's `benchmark` and `relative` blocks, the decomposition its `universe` part:
 
 ```python
 approximate = USEquityApproximateBacktest(dataclasses.replace(approximate.config, benchmark_dataset=qqq))
 account = approximate.run(predictions, rule)
-account.metrics["relative"]["Information Ratio"]
+account.metrics["relative"]["whole"]["Information Ratio"]
 ```
 
 On a synthetic store these agree with the run's `metrics.json` to the third digit (an information ratio of 3.4689 against 3.4712).
@@ -671,7 +674,7 @@ The rebalance bars are the weight rows with a finite target, so a bar the portfo
 - `selection`: the same target weights simulated without fees or slippage, over the equal-weighted universe: what the scores and the portfolio rule add;
 - `costs`: the strategy over those weights without costs.
 
-A year is the market's year over the bar interval and the window counts one bar per return, as the other annualised statistics do. Without a benchmark, `universe` is left out and `total` is measured over the universe; an engine that cannot simulate without costs leaves `costs` out, and `selection` carries them. The block also holds `annualized_log_return` of the four curves and `group_annualized_log_return`: the universe cut into `groups` (10) score groups at every rebalance, each held the same way, lowest scores first; a rebalance with fewer than 10 symbols leaves every group in cash until the next one. A model whose information sits in the bottom groups shows it there even when a long-only top-N cannot use it. `equity()` holds the curves (`universe_value`, `gross_value`, `group_value` on `(group, timestamp)`), and the report draws them in its Attribution section. The pure functions are in `quantlab.runs.backtest_attribution`: `rebalanced_group_values`, `excess_decomposition` and `annualized_log_growth`.
+A year is the market's year over the bar interval and the window counts one bar per return, as the other annualised statistics do. Without a benchmark, `universe` is left out and `total` is measured over the universe; an engine that cannot simulate without costs leaves `costs` out, and `selection` carries them. The block also holds `annualized_log_return` of the four curves and `group_annualized_log_return`: the universe cut into `groups` (10) score groups at every rebalance, each held the same way, lowest scores first, and `relative_to_universe`, the relative statistics of the strategy over the equal-weighted universe (what the scores and the rule add, with its annualised excess return and information ratio); a rebalance with fewer than 10 symbols leaves every group in cash until the next one. A model whose information sits in the bottom groups shows it there even when a long-only top-N cannot use it. `equity()` holds the curves (`universe_value`, `gross_value`, `group_value` on `(group, timestamp)`), and the report draws them in its Attribution section. The block is `attribution_metrics` of the run's account record, in `quantlab.runs.backtest_attribution`, which the approximate backtest calls too; the pure functions beside it are `rebalanced_group_values`, `excess_decomposition` and `annualized_log_growth`.
 
 ### Attribute returns and risk to factors
 

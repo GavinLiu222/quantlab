@@ -487,6 +487,33 @@ class DecisionInputs:
         """
         return self._scheduled(pd.DatetimeIndex(timestamps))
 
+    def panel_scheduled(self, timestamps) -> np.ndarray:
+        """Return which bars of a panel are scheduled rebalance bars: ``scheduled``, the panel's last bar excepted.
+
+        A weight decided at a bar fills on the next one, so the panel's last
+        bar, with no bar after it, is never decided. Both backtests take
+        their schedule from here (``weights`` and the approximate backtest).
+
+        Parameters
+        ----------
+        timestamps : array_like of datetime-like
+            The panel's bars, in order.
+
+        Returns
+        -------
+        np.ndarray
+            One boolean per bar, the last one ``False``.
+
+        Examples
+        --------
+        >>> inputs.panel_scheduled(ts)
+        array([ True, False,  True, False])
+        """
+        scheduled = self.scheduled(timestamps)
+        if len(scheduled):
+            scheduled[-1] = False
+        return scheduled
+
     def panel(
         self,
         predictions: xr.Dataset,
@@ -780,9 +807,7 @@ class DecisionInputs:
         risk_exposures = self._risk_exposures(first, last, symbols)
         if risk_exposures is not None:
             risk_exposures = risk_exposures.reindex(timestamp=timestamps).load()
-        scheduled = self._scheduled(pd.DatetimeIndex(timestamps))
-        # The panel's last bar has no bar after it to fill on.
-        scheduled[-1] = False
+        scheduled = self.panel_scheduled(timestamps)
         rebalancing = timestamps[scheduled]
         risk_estimates = (
             self._risk_estimates(pd.Timestamp(rebalancing[0]), pd.Timestamp(rebalancing[-1]), symbols)

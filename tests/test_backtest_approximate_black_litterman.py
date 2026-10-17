@@ -142,8 +142,8 @@ def test_black_litterman_weights_and_value_are_within_the_bounds_of_the_runs(cas
     decided = weights["decided"].values
 
     assert result.metrics["portfolio_construction"]["failed_bar_count"] == 0
-    np.testing.assert_array_equal(account.weights.timestamp.values, weights.timestamp.values[decided])
-    gap = np.abs(account.weights.values - weights["weight"].values[decided]).sum(axis=1)
+    np.testing.assert_array_equal(account.decided_weights.timestamp.values, weights.timestamp.values[decided])
+    gap = np.abs(account.decided_weights.values - weights["weight"].values[decided]).sum(axis=1)
     assert gap.max() <= WEIGHTS_L1
     run_value = result.simulation.value.values / result.simulation.value.values[0]
     np.testing.assert_allclose(account.value.values, run_value, rtol=VALUE_TOLERANCE, atol=0)
@@ -175,8 +175,8 @@ def test_a_bar_whose_market_has_no_weight_is_held(store, setup):  # noqa: F811
 
     weights = result.weights.transpose("timestamp", "symbol")
     assert not weights["decided"].sel(timestamp=middle)
-    assert middle not in account.weights.timestamp.values
+    assert middle not in account.decided_weights.timestamp.values
     decided = weights["decided"].values
-    np.testing.assert_array_equal(account.weights.timestamp.values, weights.timestamp.values[decided])
-    gap = np.abs(account.weights.values - weights["weight"].values[decided]).sum(axis=1)
+    np.testing.assert_array_equal(account.decided_weights.timestamp.values, weights.timestamp.values[decided])
+    gap = np.abs(account.decided_weights.values - weights["weight"].values[decided]).sum(axis=1)
     assert gap.max() <= WEIGHTS_L1
