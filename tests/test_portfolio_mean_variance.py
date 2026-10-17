@@ -425,3 +425,31 @@ def test_the_solver_round_trips_through_the_config():
     config = json.loads(json.dumps(_optimizer(solver="OSQP").get_config()))
     assert config["solver"] == "OSQP"
     assert MeanVarianceOptimizer.from_config(config).config.solver == "OSQP"
+
+
+def test_a_solver_residue_is_not_held_by_candidate_top_k():
+    # A 1.9e-9 weight is the solver's round-off, not a holding: whether a name
+    # ends a bar at it or at an exact 0 depends on the platform's last digits,
+    # so counting it as held changed the next bar's pool on Linux only.
+    prediction = np.array([3.0, 2.0, 1.0, 0.0, -1.0, -2.0])
+    rule = _optimizer(candidate_top_k=2)
+    residue = rule.problem_inputs(_context(prediction=prediction, current=[0, 0, 0, 0, 0, 1.9e-9]))
+    assert residue.symbols.tolist() == ["AAA", "BBB"]
+    held = rule.problem_inputs(_context(prediction=prediction, current=[0, 0, 0, 0, 0, 1e-4]))
+    assert held.symbols.tolist() == ["AAA", "BBB", "FFF"]
+
+
+def test_the_approximate_kernel_does_not_hold_a_solver_residue_either():
+    from quantlab.portfolio.predefined.approximate._support.mean_variance_kernels import _caps
+
+    def capped(holding):
+        cap = np.zeros(4)
+        _caps(
+            np.array([True, True, False, False]), np.ones(4, bool),
+            np.array([0.0, 0.0, 0.0, holding]), np.array([3.0, 2.0, 1.0, 0.0]),
+            2, 0.5, True, cap,
+        )
+        return cap.tolist()
+
+    assert capped(1.9e-9) == [0.5, 0.5, 0.0, 0.0]
+    assert capped(1e-4) == [0.5, 0.5, 0.0, 0.5]

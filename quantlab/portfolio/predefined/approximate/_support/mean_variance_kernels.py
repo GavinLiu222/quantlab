@@ -41,6 +41,7 @@ import numpy as np
 from numba import njit, prange
 
 from quantlab.execution.approximate import mark_book
+from quantlab.portfolio.config import HELD_WEIGHT_TOLERANCE
 
 #: Below this relative excess a long-only shift or a long-short sum is exact.
 _SUM_TOLERANCE = 4 * np.finfo(np.float64).eps
@@ -482,7 +483,7 @@ def _caps(pool, selectable, holdings, strength, top_k, weight_cap, long_only, ca
     """
     m = pool.shape[0]
     for i in range(m):
-        held = selectable[i] and holdings[i] != 0.0
+        held = selectable[i] and abs(holdings[i]) > HELD_WEIGHT_TOLERANCE
         cap[i] = weight_cap if (pool[i] or held) else 0.0
     if top_k > 0:
         index = np.flatnonzero(cap > 0)
@@ -492,7 +493,7 @@ def _caps(pool, selectable, holdings, strength, top_k, weight_cap, long_only, ca
         order = np.argsort(keys, kind="mergesort")
         for n in range(top_k, index.shape[0]):
             i = index[order[n]]
-            if not (selectable[i] and holdings[i] != 0.0):
+            if not (selectable[i] and abs(holdings[i]) > HELD_WEIGHT_TOLERANCE):
                 cap[i] = 0.0
     count = 0
     for i in range(m):

@@ -32,7 +32,7 @@ except ImportError as exc:
         "with `uv sync --extra optimize` or `pip install 'quantlab[optimize]'`."
     ) from exc
 
-from quantlab.portfolio.config import MeanVarianceConfig
+from quantlab.portfolio.config import HELD_WEIGHT_TOLERANCE, MeanVarianceConfig
 from quantlab.portfolio.base import (
     ExpectedReturnModel,
     InputDeclaration,
@@ -843,7 +843,7 @@ class MeanVarianceOptimizer(PortfolioConstructor):
             top = np.argsort(-strength, kind="stable")[: config.candidate_top_k]
             pool = np.zeros(len(index), dtype=bool)
             pool[top] = True
-            pool |= current != 0
+            pool |= np.abs(current) > HELD_WEIGHT_TOLERANCE
             index, expected, current = index[pool], expected[pool], current[pool]
         locked_index = np.flatnonzero(locked)
         risk_locked = locked_index[position[locked_index] >= 0]

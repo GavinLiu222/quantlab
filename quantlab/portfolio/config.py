@@ -17,6 +17,13 @@ if TYPE_CHECKING:
     from quantlab.risk.base import FactorRiskModel
 
 
+#: The smallest weight ``candidate_top_k`` counts as held. A solver leaves
+#: residues up to about 1e-9 on names it does not hold, an exact 0 on one
+#: platform and a residue on another, so a residue counted as held changed the
+#: next bar's candidates by platform; both the optimizer and the approximate
+#: backtest read this one threshold.
+HELD_WEIGHT_TOLERANCE = 1e-8
+
 @dataclass(frozen=True)
 class TopNConfig(FrozenConfig):
     """Config of ``TopNConstructor``: equal-weight top-n selection.
@@ -208,7 +215,8 @@ class MeanVarianceConfig(FrozenConfig):
     direction: Literal["long_only", "long_short"] = "long_only"
     #: Optimise only over the ``candidate_top_k`` symbols with the largest
     #: expected return (largest absolute one for ``"long_short"``) plus
-    #: every symbol currently held; the rest get 0.0. ``None`` optimises
+    #: every symbol currently held (``|w| > HELD_WEIGHT_TOLERANCE``); the rest
+    #: get 0.0. ``None`` optimises
     #: over every tradable symbol.
     candidate_top_k: int | None = None
     #: The largest name count of the book decided at each bar: the symbols
