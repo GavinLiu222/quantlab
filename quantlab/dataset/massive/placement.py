@@ -188,8 +188,10 @@ class TickerPlacement:
 
         Examples
         --------
-        >>> placement.left_out().columns
-        ['source', 'ticker', 'date', 'reason']
+        With ``placement`` a ``TickerPlacement`` that has left rows out::
+
+            placement.left_out().columns
+            # ['source', 'ticker', 'date', 'reason']
         """
         if not self._left_out:
             return pl.DataFrame(schema=_LEFT_OUT_SCHEMA)
@@ -211,8 +213,10 @@ class TickerPlacement:
 
         Examples
         --------
-        >>> placement.write_report("/data/market/massive/massive_dividends_1d/massive_dividends_1d.zarr").name
-        'massive_dividends_1d.zarr.unplaced.json'
+        With ``placement`` a ``TickerPlacement`` that has left rows out::
+
+            placement.write_report("/data/market/massive/massive_dividends_1d/massive_dividends_1d.zarr").name
+            # 'massive_dividends_1d.zarr.unplaced.json'
         """
         path = Path(f"{store_path}{UNPLACED_SUFFIX}")
         rows = self.left_out()

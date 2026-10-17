@@ -127,8 +127,10 @@ def day_bar_events(
 
     Examples
     --------
-    >>> day_bar_events(view, [date(2024, 3, 6)], owner="demo").row(0)
-    (datetime.datetime(2024, 3, 6, 0, 0), 101, 0.0, 2.0)
+    With ``view`` a ``PermatickerDayBarDataset`` over a raw tier on disk::
+
+        day_bar_events(view, [date(2024, 3, 6)], owner="demo").row(0)
+        # (datetime.datetime(2024, 3, 6, 0, 0), 101, 0.0, 2.0)
     """
     placement = TickerPlacement(view.ticker_map, owner=owner)
     vendor_root = view.ticker_bars.config.raw_data_dir_path

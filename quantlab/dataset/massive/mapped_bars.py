@@ -166,9 +166,11 @@ class MappedPermatickerDataset(MarketDataset):
 
     Examples
     --------
-    >>> mapped = MappedTradeBarDataset(MappedTradeBarsConfig(source=bars, zarr_file_path="mapped.zarr"))
-    >>> mapped.update().panel("2024-11-27", "2024-11-30")["symbol"].values.tolist()
-    [101, 202, 303, 404, 505]
+    With ``bars`` a permaticker view built beforehand (``PermatickerTradeBarDataset``)::
+
+        mapped = MappedTradeBarDataset(MappedTradeBarsConfig(source=bars, zarr_file_path="mapped.zarr"))
+        mapped.update().panel("2024-11-27", "2024-11-30")["symbol"].values.tolist()
+        # [101, 202, 303, 404, 505]
     """
 
     #: The permaticker view the store is written from.
@@ -204,8 +206,10 @@ class MappedPermatickerDataset(MarketDataset):
 
         Examples
         --------
-        >>> mapped.source is bars
-        True
+        With ``mapped`` the mapped store of the class example::
+
+            mapped.source is bars
+            # True
         """
         return self.config.source
 
@@ -215,8 +219,10 @@ class MappedPermatickerDataset(MarketDataset):
 
         Examples
         --------
-        >>> mapped.store_path
-        'mapped.zarr'
+        With ``mapped`` the mapped store of the class example::
+
+            mapped.store_path
+            # 'mapped.zarr'
         """
         return self.config.zarr_file_path
 
@@ -226,8 +232,10 @@ class MappedPermatickerDataset(MarketDataset):
 
         Examples
         --------
-        >>> mapped.sidecar_path.name
-        'mapped.zarr.permaticker_map.json'
+        With ``mapped`` the mapped store of the class example::
+
+            mapped.sidecar_path.name
+            # 'mapped.zarr.permaticker_map.json'
         """
         return Path(f"{self.store_path}{MAP_SIDECAR}")
 
@@ -284,8 +292,10 @@ class MappedPermatickerDataset(MarketDataset):
 
         Examples
         --------
-        >>> mapped.unplaced()   # ZZZ, a test symbol no security ever held
-        {datetime.date(2024, 11, 27): 1, datetime.date(2024, 11, 29): 1}
+        With ``mapped`` the mapped store of the class example::
+
+            mapped.unplaced()   # ZZZ, a test symbol no security ever held
+            # {datetime.date(2024, 11, 27): 1, datetime.date(2024, 11, 29): 1}
         """
         return {date.fromisoformat(day): int(n) for day, n in sorted(self._recorded_unplaced().items())}
 
@@ -294,8 +304,10 @@ class MappedPermatickerDataset(MarketDataset):
 
         Examples
         --------
-        >>> mapped.stored_days()[-1]
-        datetime.date(2024, 11, 29)
+        With ``mapped`` the mapped store of the class example::
+
+            mapped.stored_days()[-1]
+            # datetime.date(2024, 11, 29)
         """
         return [date.fromisoformat(day) for day in sorted(self._recorded())]
 
@@ -304,8 +316,10 @@ class MappedPermatickerDataset(MarketDataset):
 
         Examples
         --------
-        >>> mapped.stored_symbols()
-        [101, 202, 303, 404, 505]
+        With ``mapped`` the mapped store of the class example::
+
+            mapped.stored_symbols()
+            # [101, 202, 303, 404, 505]
         """
         if not Path(self.store_path).exists():
             return []
@@ -353,8 +367,10 @@ class MappedPermatickerDataset(MarketDataset):
 
         Examples
         --------
-        >>> mapped.resample("1h").panel("2024-11-27", "2024-11-30").sizes["timestamp"]
-        11
+        With ``mapped`` the mapped store of the class example::
+
+            mapped.resample("1h").panel("2024-11-27", "2024-11-30").sizes["timestamp"]
+            # 11
         """
         return type(self)(dataclasses.replace(self.config, resample_freq=freq, resample_how=how))
 
@@ -363,9 +379,11 @@ class MappedPermatickerDataset(MarketDataset):
 
         Examples
         --------
-        >>> other = mapped.copy()
-        >>> other == mapped, other.source is mapped.source
-        (True, False)
+        With ``mapped`` the mapped store of the class example::
+
+            other = mapped.copy()
+            other == mapped, other.source is mapped.source
+            # (True, False)
         """
         return type(self)(dataclasses.replace(self.config, source=self.source.copy()))
 
@@ -422,10 +440,12 @@ class MappedPermatickerDataset(MarketDataset):
 
         Examples
         --------
-        >>> mapped.update("2024-11-27").stored_days()[-1]
-        datetime.date(2024, 11, 27)
-        >>> mapped.update().stored_days()[-1]          # the last day both hold
-        datetime.date(2024, 11, 29)
+        With ``mapped`` the mapped store of the class example::
+
+            mapped.update("2024-11-27").stored_days()[-1]
+            # datetime.date(2024, 11, 27)
+            mapped.update().stored_days()[-1]          # the last day both hold
+            # datetime.date(2024, 11, 29)
         """
         if self.config.resample_freq is not None:
             raise ValueError(f"{self.class_name}.update(): update the unresampled dataset.")
@@ -593,12 +613,14 @@ class MappedDayBarDataset(MappedPermatickerDataset):
 
     Examples
     --------
-    >>> mapped = MappedDayBarDataset(MappedDayBarsConfig(source=days, sep=sep, zarr_file_path="mapped.zarr"))
-    >>> panel = mapped.update().panel("2024-03-04", "2024-03-11")
-    >>> panel["adjClose"].sel(symbol=101).values.tolist()   # a 2-for-1 split on 2024-03-06
-    [100.0, 102.0, 102.0, 104.0, 106.0, 108.0]
-    >>> [(d["symbol"], d["date"]) for d in mapped.disagreements()]
-    [(303, '2024-03-07')]
+    With ``days`` a ``PermatickerDayBarDataset`` and ``sep`` SEP's dataset built beforehand::
+
+        mapped = MappedDayBarDataset(MappedDayBarsConfig(source=days, sep=sep, zarr_file_path="mapped.zarr"))
+        panel = mapped.update().panel("2024-03-04", "2024-03-11")
+        panel["adjClose"].sel(symbol=101).values.tolist()   # a 2-for-1 split on 2024-03-06
+        # [100.0, 102.0, 102.0, 104.0, 106.0, 108.0]
+        [(d["symbol"], d["date"]) for d in mapped.disagreements()]
+        # [(303, '2024-03-07')]
     """
 
     # Narrower type annotation for readers and type checkers only.
@@ -624,8 +646,10 @@ class MappedDayBarDataset(MappedPermatickerDataset):
 
         Examples
         --------
-        >>> mapped.adjustment_path.name
-        'mapped.zarr.adjustment.json'
+        With ``mapped`` the ``MappedDayBarDataset`` of the class example::
+
+            mapped.adjustment_path.name
+            # 'mapped.zarr.adjustment.json'
         """
         return Path(f"{self.store_path}{ADJUSTMENT_SIDECAR}")
 
@@ -635,8 +659,10 @@ class MappedDayBarDataset(MappedPermatickerDataset):
 
         Examples
         --------
-        >>> mapped.check_path.name
-        'mapped.zarr.sep_check.json'
+        With ``mapped`` the ``MappedDayBarDataset`` of the class example::
+
+            mapped.check_path.name
+            # 'mapped.zarr.sep_check.json'
         """
         return Path(f"{self.store_path}{SEP_CHECK_SUFFIX}")
 
@@ -646,8 +672,10 @@ class MappedDayBarDataset(MappedPermatickerDataset):
 
         Examples
         --------
-        >>> Path(mapped.unplaced_path).name
-        'mapped.zarr.unplaced.json'
+        With ``mapped`` the ``MappedDayBarDataset`` of the class example::
+
+            Path(mapped.unplaced_path).name
+            # 'mapped.zarr.unplaced.json'
         """
         return f"{self.store_path}{UNPLACED_SUFFIX}"
 
@@ -660,8 +688,10 @@ class MappedDayBarDataset(MappedPermatickerDataset):
 
         Examples
         --------
-        >>> mapped.disagreements()[0]["sep_return"]
-        -0.025
+        With ``mapped`` the ``MappedDayBarDataset`` of the class example::
+
+            mapped.disagreements()[0]["sep_return"]
+            # -0.025
         """
         return list(self._check_state().get("disagreements", []))
 
@@ -670,8 +700,10 @@ class MappedDayBarDataset(MappedPermatickerDataset):
 
         Examples
         --------
-        >>> mapped.update_summary()
-        '1 disagreement(s) with SEP, checked through 2024-03-11; 1 event record(s) left out'
+        With ``mapped`` the ``MappedDayBarDataset`` of the class example::
+
+            mapped.update_summary()
+            # '1 disagreement(s) with SEP, checked through 2024-03-11; 1 event record(s) left out'
         """
         state = self._check_state()
         path = Path(self.unplaced_path)
@@ -755,8 +787,10 @@ class MappedDayBarDataset(MappedPermatickerDataset):
 
         Examples
         --------
-        >>> mapped.update().stored_days()[-1]
-        datetime.date(2024, 3, 11)
+        With ``mapped`` the ``MappedDayBarDataset`` of the class example::
+
+            mapped.update().stored_days()[-1]
+            # datetime.date(2024, 3, 11)
         """
         super().update(end, workers)
         if not Path(self.store_path).exists():

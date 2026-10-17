@@ -86,9 +86,11 @@ class PermatickerDataset(MarketDataset):
 
     Examples
     --------
-    >>> bars = PermatickerTradeBarDataset(trade_bars, ticker_map)
-    >>> bars.ticker_bars is trade_bars
-    True
+    With ``trade_bars`` the Trade bar store and ``ticker_map`` the Ticker map::
+
+        bars = PermatickerTradeBarDataset(trade_bars, ticker_map)
+        bars.ticker_bars is trade_bars
+        # True
     """
 
     #: The config field holding the dataset on the Massive ticker axis.
@@ -110,8 +112,10 @@ class PermatickerDataset(MarketDataset):
 
         Examples
         --------
-        >>> PermatickerDayBarDataset(day_bars, ticker_map).ticker_bars is day_bars
-        True
+        With ``day_bars`` the Day aggregate store and ``ticker_map`` the Ticker map::
+
+            PermatickerDayBarDataset(day_bars, ticker_map).ticker_bars is day_bars
+            # True
         """
         return getattr(self.config, self.SOURCE_FIELD)
 
@@ -120,8 +124,10 @@ class PermatickerDataset(MarketDataset):
 
         Examples
         --------
-        >>> PermatickerTradeBarDataset(trade_bars, ticker_map).inputs() == (trade_bars,)
-        True
+        With ``trade_bars`` the Trade bar store and ``ticker_map`` the Ticker map::
+
+            PermatickerTradeBarDataset(trade_bars, ticker_map).inputs() == (trade_bars,)
+            # True
         """
         return (self.ticker_bars,)
 
@@ -131,8 +137,10 @@ class PermatickerDataset(MarketDataset):
 
         Examples
         --------
-        >>> PermatickerTradeBarDataset(trade_bars, ticker_map).ticker_map is ticker_map
-        True
+        With ``trade_bars`` the Trade bar store and ``ticker_map`` the Ticker map::
+
+            PermatickerTradeBarDataset(trade_bars, ticker_map).ticker_map is ticker_map
+            # True
         """
         return self.config.ticker_map
 
@@ -141,8 +149,10 @@ class PermatickerDataset(MarketDataset):
 
         Examples
         --------
-        >>> PermatickerDayBarDataset(day_bars, ticker_map).stored_through()
-        datetime.date(2024, 11, 29)
+        With ``day_bars`` the Day aggregate store and ``ticker_map`` the Ticker map::
+
+            PermatickerDayBarDataset(day_bars, ticker_map).stored_through()
+            # datetime.date(2024, 11, 29)
         """
         raise NotImplementedError
 
@@ -151,8 +161,10 @@ class PermatickerDataset(MarketDataset):
 
         Examples
         --------
-        >>> PermatickerDayBarDataset(day_bars, ticker_map).no_bar_fills()
-        {'volume': 0.0, 'n_trades': 0.0}
+        With ``day_bars`` the Day aggregate store and ``ticker_map`` the Ticker map::
+
+            PermatickerDayBarDataset(day_bars, ticker_map).no_bar_fills()
+            # {'volume': 0.0, 'n_trades': 0.0}
         """
         return self.ticker_bars._widen_fill_values()
 
@@ -197,8 +209,10 @@ class PermatickerDataset(MarketDataset):
 
         Examples
         --------
-        >>> bars.stored_symbols()
-        [101, 202, 303, 404, 505]
+        With ``bars`` a permaticker view built beforehand (``PermatickerTradeBarDataset``)::
+
+            bars.stored_symbols()
+            # [101, 202, 303, 404, 505]
         """
         rows = self.ticker_map.read().filter(pl.col("permaticker").is_not_null())
         rows = rows.filter(pl.col("ticker").is_in(self.ticker_bars.stored_symbols()))
@@ -219,8 +233,10 @@ class PermatickerDataset(MarketDataset):
 
         Examples
         --------
-        >>> bars.unplaced("2024-11-27", "2024-11-29")   # ZZZ, a test symbol
-        {datetime.date(2024, 11, 27): 1, datetime.date(2024, 11, 29): 1}
+        With ``bars`` a permaticker view built beforehand (``PermatickerTradeBarDataset``)::
+
+            bars.unplaced("2024-11-27", "2024-11-29")   # ZZZ, a test symbol
+            # {datetime.date(2024, 11, 27): 1, datetime.date(2024, 11, 29): 1}
         """
         rows = self.ticker_map.read(start, end)
         rows = rows.filter(
@@ -248,8 +264,10 @@ class PermatickerDataset(MarketDataset):
 
         Examples
         --------
-        >>> bars.columns("2024-11-29", "2024-11-29").filter(pl.col("permaticker") == 101)["ticker"].to_list()
-        ['AAA']
+        With ``bars`` a permaticker view built beforehand (``PermatickerTradeBarDataset``)::
+
+            bars.columns("2024-11-29", "2024-11-29").filter(pl.col("permaticker") == 101)["ticker"].to_list()
+            # ['AAA']
         """
         first, last = check_range(start, end, f"{self.class_name}.columns()")
         rows = self._map_rows(first, last).filter(pl.col("date").is_between(first.date(), last.date()))
@@ -394,8 +412,10 @@ class PermatickerDataset(MarketDataset):
 
         Examples
         --------
-        >>> bars.panel("2024-11-27", "2024-11-30", symbols=[303], variables=["close"])["symbol"].values.tolist()
-        [303]
+        With ``bars`` a permaticker view built beforehand (``PermatickerTradeBarDataset``)::
+
+            bars.panel("2024-11-27", "2024-11-30", symbols=[303], variables=["close"])["symbol"].values.tolist()
+            # [303]
         """
         freq = self.config.resample_freq
         if freq is None:
@@ -424,8 +444,10 @@ class PermatickerDataset(MarketDataset):
 
         Examples
         --------
-        >>> bars.resample("1h").panel("2024-11-27", "2024-11-30").sizes["timestamp"]
-        11
+        With ``bars`` a permaticker view built beforehand (``PermatickerTradeBarDataset``)::
+
+            bars.resample("1h").panel("2024-11-27", "2024-11-30").sizes["timestamp"]
+            # 11
         """
         return type(self)(dataclasses.replace(self.config, resample_freq=freq, resample_how=how))
 
@@ -451,9 +473,11 @@ class PermatickerDataset(MarketDataset):
 
         Examples
         --------
-        >>> other = bars.copy()
-        >>> other == bars, other.ticker_bars is bars.ticker_bars
-        (True, False)
+        With ``bars`` a permaticker view built beforehand (``PermatickerTradeBarDataset``)::
+
+            other = bars.copy()
+            other == bars, other.ticker_bars is bars.ticker_bars
+            # (True, False)
         """
         return type(self)(
             dataclasses.replace(
@@ -509,8 +533,10 @@ class PermatickerTradeBarDataset(PermatickerDataset):
 
         Examples
         --------
-        >>> PermatickerTradeBarDataset(trade_bars, ticker_map).stored_through()
-        datetime.date(2024, 11, 29)
+        With ``trade_bars`` the Trade bar store and ``ticker_map`` the Ticker map::
+
+            PermatickerTradeBarDataset(trade_bars, ticker_map).stored_through()
+            # datetime.date(2024, 11, 29)
         """
         return self.trade_bars.converted_through()
 
@@ -527,9 +553,11 @@ class PermatickerDayBarDataset(PermatickerDataset):
 
     Examples
     --------
-    >>> bars = PermatickerDayBarDataset(day_bars, ticker_map)
-    >>> bars.panel("2024-11-27", "2024-11-30")["close"].sel(symbol=202).values.tolist()   # OLD, then NEW
-    [20.0, 21.0]
+    With ``day_bars`` the Day aggregate store and ``ticker_map`` the Ticker map::
+
+        bars = PermatickerDayBarDataset(day_bars, ticker_map)
+        bars.panel("2024-11-27", "2024-11-30")["close"].sel(symbol=202).values.tolist()   # OLD, then NEW
+        # [20.0, 21.0]
     """
 
     # Narrower type annotation for readers and type checkers only.
@@ -550,8 +578,10 @@ class PermatickerDayBarDataset(PermatickerDataset):
 
         Examples
         --------
-        >>> PermatickerDayBarDataset(day_bars, ticker_map).day_bars is day_bars
-        True
+        With ``day_bars`` the Day aggregate store and ``ticker_map`` the Ticker map::
+
+            PermatickerDayBarDataset(day_bars, ticker_map).day_bars is day_bars
+            # True
         """
         return self.config.day_bars
 
@@ -560,7 +590,9 @@ class PermatickerDayBarDataset(PermatickerDataset):
 
         Examples
         --------
-        >>> PermatickerDayBarDataset(day_bars, ticker_map).stored_through()
-        datetime.date(2024, 11, 29)
+        With ``day_bars`` the Day aggregate store and ``ticker_map`` the Ticker map::
+
+            PermatickerDayBarDataset(day_bars, ticker_map).stored_through()
+            # datetime.date(2024, 11, 29)
         """
         return self.day_bars.stored_through()

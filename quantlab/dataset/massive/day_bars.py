@@ -87,9 +87,11 @@ class MassiveDayBarDataset(StockDataset):
 
     Examples
     --------
-    >>> ds = MassiveDayBarDataset(config).update(granularity="day")
-    >>> list(ds.panel("2024-11-26", "2024-11-29").data_vars)
-    ['open', 'high', 'low', 'close', 'volume', 'n_trades']
+    With ``config`` a ``MassiveDayBarsDatasetConfig`` of a raw tier on disk::
+
+        ds = MassiveDayBarDataset(config).update(granularity="day")
+        list(ds.panel("2024-11-26", "2024-11-29").data_vars)
+        # ['open', 'high', 'low', 'close', 'volume', 'n_trades']
     """
 
     #: The config class used to rebuild the dataset from a saved ``config.json``.
@@ -140,8 +142,10 @@ class MassiveDayBarDataset(StockDataset):
 
         Examples
         --------
-        >>> MassiveDayBarDataset(config).has_raw_data()
-        True
+        With ``config`` a ``MassiveDayBarsDatasetConfig`` of a raw tier on disk::
+
+            MassiveDayBarDataset(config).has_raw_data()
+            # True
         """
         return bool(raw_days(self.config.raw_data_dir_path, self.DATA_TYPE))
 
@@ -188,8 +192,10 @@ class MassiveDayBarDataset(StockDataset):
 
         Examples
         --------
-        >>> MassiveDayBarDataset(config).update(granularity="day").stored_through()
-        datetime.date(2024, 11, 29)
+        With ``config`` a ``MassiveDayBarsDatasetConfig`` of a raw tier on disk::
+
+            MassiveDayBarDataset(config).update(granularity="day").stored_through()
+            # datetime.date(2024, 11, 29)
         """
         from quantlab.dataset._support.ledger import ChunkLedger
 
