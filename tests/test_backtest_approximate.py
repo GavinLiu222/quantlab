@@ -120,6 +120,7 @@ from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
 from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
 from quantlab.portfolio.predefined.top_n import TopNConstructor
 from quantlab.portfolio.predefined.topk_dropout import TopkDropoutConstructor
+from quantlab.runs import backtest_stats
 from quantlab.runs.backtest_attribution import attribution_metrics
 from quantlab.runs.backtest_run import BacktestRun
 from quantlab.runs.prediction_panel import LabelSpec, PredictionPanel
@@ -287,18 +288,18 @@ def test_the_whole_block_agrees_with_the_runs(case):
         assert whole[key] == pytest.approx(run_whole[key], abs=5.0), key
 
 
-def test_the_turnover_is_recorded_per_rebalance(case):
+def test_the_turnover_is_the_records_fills_on_each_rebalance(case):
     result, _, account, _, _ = case
     decided = result.weights["decided"].values
+    record = account.record
+    turnover = backtest_stats.turnover(record.orders, record.value, record.init_cash)
 
-    np.testing.assert_array_equal(
-        account.turnover.timestamp.values, result.weights.timestamp.values[decided]
-    )
+    # One entry per fill bar, the bar after each decided rebalance.
+    fill_bars = result.weights.timestamp.values[np.flatnonzero(decided) + 1]
+    np.testing.assert_array_equal(turnover.timestamp.values, fill_bars)
     # The first rebalance buys in from cash.
-    assert account.turnover.values[0] == pytest.approx(1.0)
-    assert account.metrics["whole"]["Turnover per Rebalance [%]"] == pytest.approx(
-        account.turnover.values.mean() * 100, rel=0.01
-    )
+    assert turnover.values[0] == pytest.approx(1.0)
+    assert account.metrics["whole"]["Turnover per Rebalance [%]"] == pytest.approx(turnover.values.mean() * 100)
 
 
 def test_top_n_decides_without_iterating(case):
@@ -1094,7 +1095,8 @@ def test_the_penalty_lowers_the_turnover(penalty_case, mvo_store):
         predictions, _mvo(**{**overrides, "turnover_penalty": 0.0})
     )
 
-    assert account.turnover.values[1:].mean() < free.turnover.values[1:].mean()
+    key = "Turnover per Rebalance [%]"
+    assert account.metrics["whole"][key] < free.metrics["whole"][key]
 
 
 def test_a_smaller_chunk_gives_the_penalised_weights_of_one_chunk(penalty_case, mvo_store):

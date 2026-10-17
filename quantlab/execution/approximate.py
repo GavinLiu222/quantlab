@@ -74,7 +74,7 @@ def entry_prices(fill, close):
 
 @njit(cache=True)
 def simulate(targets, decisions, entry, close, cost):
-    """Simulate the targets decided at ``decisions`` in one pass over the bars; ``(value, traded, fill_value, turnover, filled)``.
+    """Simulate the targets decided at ``decisions`` in one pass over the bars; ``(value, traded, fill_value, filled)``.
 
     ``targets[k]`` (``[K, S]``; an all-NaN row holds) is decided at row
     ``decisions[k]`` (in time order, each before the last row) and fills at
@@ -84,8 +84,7 @@ def simulate(targets, decisions, entry, close, cost):
     the first fill); for each fill, in order, the signed weight traded in
     each symbol (``[F, S]``, the target less the previous book marked at the
     fill's prices) and the value it was traded against (the book before the
-    fill's costs); the turnover of each fill (its traded weights' absolute
-    sum); and which decisions filled.
+    fill's costs); and which decisions filled.
     """
     T, S = close.shape
     K = targets.shape[0]
@@ -99,7 +98,6 @@ def simulate(targets, decisions, entry, close, cost):
     value = np.ones(T)
     traded = np.zeros((F, S))
     fill_value = np.empty(F)
-    turnover = np.empty(F)
     weights = np.zeros(S)
     book_entry = np.zeros(S)
     marked = np.zeros(S)
@@ -122,7 +120,6 @@ def simulate(targets, decisions, entry, close, cost):
                     traded[fills, i] = targets[due, i]
                     total += abs(targets[due, i])
             fill_value[fills] = at_fill
-            turnover[fills] = total
             at_fill *= 1.0 - cost * total
             weights[:] = targets[due]
             book_entry[:] = entry[t]
@@ -135,4 +132,4 @@ def simulate(targets, decisions, entry, close, cost):
             if filled[decision]:
                 due = decision
             decision += 1
-    return value, traded, fill_value, turnover, filled
+    return value, traded, fill_value, filled

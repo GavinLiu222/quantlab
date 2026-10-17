@@ -98,11 +98,6 @@ class ApproximateAccount:
         bar but the decided ones, and the rebalance record ``scheduled`` and
         ``decided`` on ``timestamp``: what ``DecisionInputs.weights`` returns,
         so a backtest run takes it as it is (``BaseBacktester.run_weights``).
-    turnover : xr.DataArray
-        The traded weight of each decided rebalance against the holdings
-        drifted to its fill bar's open (1.0 for a buy-in from cash), on the
-        decided bars; the metrics' turnover rows are a run's, notional over
-        the previous bar's value.
     metrics : dict
         ``run_metrics`` of ``record``: ``whole`` (opened by the return
         statistics of the window and ``Total Fees Paid``) and ``execution``,
@@ -136,7 +131,6 @@ class ApproximateAccount:
     record: AccountRecord
     value_without_costs: xr.DataArray
     weights: xr.Dataset
-    turnover: xr.DataArray
     metrics: dict
     universe_value: xr.DataArray | None = None
     benchmark_value: xr.DataArray | None = None
@@ -159,12 +153,11 @@ class ApproximateAccount:
 
 @dataclass(frozen=True)
 class _Simulation:
-    """What ``_simulate`` gives: the value curve, each fill's signed traded weights and the value they traded against, the turnover per fill and which decisions filled."""
+    """What ``_simulate`` gives: the value curve, each fill's signed traded weights and the value they traded against, and which decisions filled."""
 
     value: np.ndarray
     traded: np.ndarray
     fill_value: np.ndarray
-    turnover: np.ndarray
     filled: np.ndarray
 
 
@@ -203,8 +196,8 @@ def _simulate(
     missing on either side counting as no change; each fill costs ``cost``
     times its traded weight, against the previous book marked at the fill's
     prices. Returns the value (1.0 before the first fill), each fill's
-    signed traded weights and the value it traded against, the turnover of
-    each fill, and ``filled`` marking which decisions filled.
+    signed traded weights and the value it traded against, and ``filled``
+    marking which decisions filled.
     """
     from quantlab.execution.approximate import simulate
 
@@ -456,7 +449,6 @@ class ApproximateBacktest(Component):
                 },
                 coords={"timestamp": timestamps, "symbol": symbols},
             ),
-            turnover=xr.DataArray(simulation.turnover, dims="timestamp", coords={"timestamp": timestamps[decided]}),
             metrics=metrics,
             universe_value=curves["universe_value"],
             benchmark_value=None if benchmark is None else benchmark.value,

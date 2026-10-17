@@ -584,7 +584,7 @@ ValueError: USEquityApproximateBacktest cannot run TopkDropoutConstructor: TopkD
 
 - `record`：回测运行的指标所依据的账户记录（`quantlab.runs.run_metrics.AccountRecord`）：净值（窗口第一个 bar 为 1.0）及其收益、每个成交 bar 上每只交易的标的一笔成交（按成交价计的名义金额，`cost` 分摊为手续费），以及调仓记录。近似回测不清算、不拒单、不限现金，所以结算和被拒订单为空；它也不记录往返交易、逐 bar 持仓和目标偏离。`value` 和 `returns` 读它；
 - `value_without_costs`，在窗口的 bar 上；
-- `weights`：运行的权重格式（`weight` 铺满窗口每根 bar，决策 bar 之外为 NaN，加上调仓记录 `scheduled` 和 `decided`），`run_weights` 可原样接收；`decided_weights`：各决策 bar 的目标权重；`turnover`：每次调仓相对漂移到成交 bar 开盘的账户的成交权重（从现金建仓时为 1.0）；
+- `weights`：运行的权重格式（`weight` 铺满窗口每根 bar，决策 bar 之外为 NaN，加上调仓记录 `scheduled` 和 `decided`），`run_weights` 可原样接收；`decided_weights`：各决策 bar 的目标权重；
 - `universe_value`：归因所用的等权全体；`benchmark_value`（没有基准时为 `None`）；
 - `metrics`：与运行的 `metrics.json` 相同的各块，由同样的函数从 `record` 组装（ADR 0034）：`whole`（以窗口的收益统计和 `Total Fees Paid` 开头，运行在这里是 vectorbt 的各行；之后的换手行、`Total Orders` 和胜率与运行相同）和 `execution`；`attribution`，运行的归因块（`quantlab.runs.backtest_attribution.attribution_metrics`），股票池按规则的排序标签排名；`iterations`（求解器每个决策 bar 迭代次数的 `mean` 和 `max`，不迭代的规则为 0）和 `converged`。近似回测没有训练窗口，所以没有 `in_sample` 和 `out_of_sample` 切片。
 
