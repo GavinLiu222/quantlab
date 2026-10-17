@@ -121,6 +121,14 @@ stages:
           writes: [market/massive/massive_news_1d]
           reads: [market/massive/massive_ticker_map]
           allow_failure: true
+      # Massive's short interest on the permaticker (MassiveShortInterestDataset), a release shown from
+      # settlement + 8 trading days: appends the days SEP, the REST pull and the map all reach.
+      - run:
+          script: scripts/massive/short_interest.py
+          args: [--download-dir, "{download_dir}", --data-dir, "{data_dir}"]
+          writes: [market/massive/massive_short_interest_1d]
+          reads: [market/massive/massive_ticker_map]
+          allow_failure: true
       # The Trade bars mapped onto permatickers (MappedTradeBarDataset): maps again any stored day whose
       # map rows changed, then appends every day both stores above now hold (about 10 s a day; a store
       # far behind is caught up by scripts/massive/permaticker_bars.py --workers N).

@@ -366,6 +366,37 @@ The amounts are as declared on the day: `split_adjusted_cash_amount` and `histor
 
 The shared store is `<data-dir>/market/massive/massive_dividends_1d/`, beside its `README.md` and `component.json`. `scripts/massive/dividends.py --download-dir ... --data-dir ...` writes the folder when it is missing (the config starting at the Ticker map's first day) and appends the new days; the daily data update runs it after the Ticker map ([data_update.md](data_update.md)).
 
+## Short interest
+
+`MassiveShortInterestDataset` (`quantlab.dataset.massive.short_interest`) builds the release panel `massive_short_interest_1d` from the REST `short_interest` pull (FINRA's short interest, settled twice a month from 2017-12), on Sharadar's permaticker axis and SEP's trading calendar:
+
+```python
+from quantlab.dataset.config import MassiveShortInterestConfig
+from quantlab.dataset.massive.short_interest import MassiveShortInterestDataset
+
+short = MassiveShortInterestDataset(MassiveShortInterestConfig(
+    zarr_file_path="/data/quantlab/market/massive/massive_short_interest_1d/massive_short_interest_1d.zarr",
+    raw_data_dir_path="/data/quantlab/downloads/sharadar",
+    massive_dir="/data/quantlab/downloads/massive",
+    ticker_map_path="/data/quantlab/market/massive/massive_ticker_map/massive_ticker_map",
+    start_date="2016-10-10",
+))
+short.update()
+panel = short.panel("2024-01-02", "2024-12-31")
+```
+
+| Variable | Value |
+|---|---|
+| `short_interest` | shares sold short and not yet covered at the settlement date |
+| `short_avg_daily_volume` | Massive's `avg_daily_volume` over the settlement period |
+| `days_to_cover` | Massive's `days_to_cover` (`short_interest / avg_daily_volume`) |
+
+Each settlement date is a release. FINRA publishes it about seven business days after settlement, so a release is visible from the 8th trading day after its settlement date (`release_lag_bars`, default 8) and shown until the next release is visible. A cell shows only the release visible that day: a security the visible release does not carry is NaN, never an older figure. A release replaced before the store's first day is not read.
+
+Each record is placed through the Ticker map (above) on its settlement date, the day the figure is about, so a ticker reused between settlement and publication still lands on the security that held it. Rows the map cannot place are counted in `massive_short_interest_1d.zarr.unplaced.json`. The records have no id: a record pulled again with other values (a revision) replaces the earlier one for its ticker and settlement date. The pull asks again for the last 21 days each time, so a release published after the watermark has passed its settlement date is still read. The columns are the universe's permatickers, by default SEP's domestic common stock. The store is built through the last day SEP, the REST pull and the Ticker map all reach, so a store built day by day equals one built at once; a missing pull or an empty map is refused, naming the script to run.
+
+The shared store is `<data-dir>/market/massive/massive_short_interest_1d/`, beside its `README.md` and `component.json`. `scripts/massive/short_interest.py --download-dir ... --data-dir ...` writes the folder when it is missing (the config starting at the Ticker map's first day) and appends the new days; the daily data update runs it after the dividend panel ([data_update.md](data_update.md)).
+
 ## News
 
 Every news article from 2016-06 is kept in the raw tier by the REST `news` pull (above), with all its fields as the vendor returned them: `id`, `title`, `description`, `keywords`, `tickers`, the per-ticker `insights` (`ticker`, `sentiment`, `sentiment_reasoning`), `published_utc`, `publisher`, `author` and the URLs. The text stays raw. `MassiveNewsDataset` (`quantlab.dataset.massive.news`) counts the articles in the panel `massive_news_1d`, on Sharadar's permaticker axis and SEP's trading calendar:
@@ -394,7 +425,7 @@ panel = news.panel("2024-01-02", "2024-12-31")
 
 A cell without an article is 0. An article counts on the trading day of its `published_utc` in New York time when published before 16:00 there, and on the next trading day when published at 16:00 or later, or on a weekend or holiday, so news after the close never reaches the day's bar. The cut is 16:00 on every day, an early close included. An article's tickers are its `tickers` and those of its `insights`; each is placed through the Ticker map on the article's trading day, and the article counts once for each security placed (two tickers placed on one security count once). An article without an insight for a ticker counts in `news_count` only. A ticker the map cannot place is counted in `massive_news_1d.zarr.unplaced.json`; a ticker placed on a security outside the universe (a fund) is dropped. The store is built through the last day SEP, the news pull and the Ticker map all reach (every article counting on a trading day was published before that day ends in UTC, the pull watermark's day), so a store built day by day equals one built at once. A missing pull or an empty map is refused, naming the script to run.
 
-The first backfill (about ten years at 1,000 articles a page) is long; run `scripts/massive/rest_pull.py --endpoints news` by hand, in steps with `--end` if needed, before the daily update takes over: an interrupted pull resumes from its watermark. The shared store is `<data-dir>/market/massive/massive_news_1d/`, beside its `README.md` and `component.json`. `scripts/massive/news.py --download-dir ... --data-dir ...` writes the folder when it is missing (the config starting at the Ticker map's first day) and appends the new days; the daily data update runs it after the Ticker map ([data_update.md](data_update.md)). Each update reads every page of the news pull again.
+The first backfill (about ten years at 1,000 articles a page) is long; run `scripts/massive/rest_pull.py --endpoints news` by hand, in steps with `--end` if needed, before the daily update takes over: an interrupted pull resumes from its watermark. The shared store is `<data-dir>/market/massive/massive_news_1d/`, beside its `README.md` and `component.json`. `scripts/massive/news.py --download-dir ... --data-dir ...` writes the folder when it is missing (the config starting at the Ticker map's first day) and appends the new days; the daily data update runs it after the dividend panel ([data_update.md](data_update.md)). Each update reads every page of the news pull again.
 
 ## Reading Trade bars as securities
 

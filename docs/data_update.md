@@ -74,10 +74,12 @@ permatickers, `market/massive/massive_permaticker_bars_1m` (the Trade bars) and
 `market/massive/massive_permaticker_day_bars_1d` (the day aggregates), and
 `scripts/massive/dividends.py` appends the days SEP, the REST pull and the map all reach to the
 dividend panel `market/massive/massive_dividends_1d` (Massive's dividends and splits placed on
-permatickers through the map); `scripts/massive/news.py` likewise appends to the news panel
-`market/massive/massive_news_1d` (Massive's news counted per permaticker, allowed to fail). The four scripts are `run` steps with `allow_failure: true`; the
+permatickers through the map), `scripts/massive/short_interest.py` does the same for the short
+interest panel `market/massive/massive_short_interest_1d` (a release shown from settlement + 8 trading
+days), and `scripts/massive/news.py` for the news panel `market/massive/massive_news_1d` (Massive's
+news counted per permaticker). The six scripts are `run` steps with `allow_failure: true`; the
 conversion and the map do at most five days each (`--max-days 5`; a store far behind is caught up by a
-run of its own), the day bars and the dividend panel every new day on disk, and none of the stores is
+run of its own), the day bars and the three REST panels every new day on disk, and none of the stores is
 in `ready`: Massive publishes a day's files at about 00:30 ET the next day, and a late file
 never holds the paper trading, which reads none of these stores. Each script writes its folder's
 `component.json` and `README.md` when missing.
