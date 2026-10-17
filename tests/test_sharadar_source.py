@@ -52,6 +52,7 @@ def test_only_the_panel_tables_convert_through_the_registry():
     from quantlab.dataset.sharadar.fundamentals import SharadarFundamentalsDataset
     from quantlab.dataset.sharadar.holdings import SharadarHoldingsDataset
     from quantlab.dataset.sharadar.insiders import SharadarInsidersDataset
+    from quantlab.dataset.sharadar.listing import SharadarListingDataset
     from quantlab.dataset.sharadar.stock import SharadarStockDataset
 
     by_type = {c.data_type: c.dataset_cls for c in _source().capabilities}
@@ -62,8 +63,9 @@ def test_only_the_panel_tables_convert_through_the_registry():
     assert by_type["events"] is SharadarEventsDataset
     assert by_type["sf2"] is SharadarInsidersDataset
     assert by_type["sf3a"] is SharadarHoldingsDataset
+    assert by_type["tickers"] is SharadarListingDataset
     assert all(
-        by_type[t] is None for t in ("sf3", "sf3b", "actions", "sp500", "tickers", "indicators")
+        by_type[t] is None for t in ("sf3", "sf3b", "actions", "sp500", "indicators")
     )
 
 

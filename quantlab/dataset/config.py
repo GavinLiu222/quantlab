@@ -917,6 +917,30 @@ class SharadarShareClassConfig(SharadarDatasetConfig):
 
 
 @dataclass(kw_only=True, frozen=True)
+class SharadarListingConfig(SharadarDatasetConfig):
+    """Config of the point-in-time listing panel (SIC series and exchange) on the permaticker axis.
+
+    Each security's SIC history and exchange history are rebuilt from its
+    current TICKERS ``siccode`` and ``exchange`` and the ACTIONS
+    ``sicchangefrom`` and ``exchangefrom`` rows. The universe fields work as
+    for a price panel, on SEP's TICKERS rows; the default category filter
+    is domestic common stock.
+
+    Examples
+    --------
+    >>> cfg = SharadarListingConfig(
+    ...     zarr_file_path="/data/zarrs/sharadar_listing_1d.zarr",
+    ...     raw_data_dir_path="/data/downloads/sharadar",
+    ... )
+    >>> cfg.table
+    'sep'
+    """
+
+    #: Always SEP: its TICKERS rows give the current SIC and exchange, its dates the calendar.
+    table: str = "sep"
+
+
+@dataclass(kw_only=True, frozen=True)
 class FredRateConfig(DatasetConfig):
     """Config of a single-symbol panel of one FRED interest-rate series.
 
