@@ -14,7 +14,6 @@
 #               .update_stores): {rebuild_dropped: ..., keep_dropped: [...]}; fails when a store fails
 #   benchmarks: scripts/sharadar/price_return_benchmark.py --refresh for the tickers
 #   update:     a dataset rebuilt from <folder>/component.json, update()
-#   mirror:     append the source dataset's new bars to a store copying its variables
 #   extend:     a factor or factor risk model rebuilt from <folder>/component.json, to t
 #   run:        any repository script: {script: ..., args: [... {data_dir} ...], writes: [...], reads: [...]}
 # `writes` (benchmarks, sharadar_stores, run) and `reads` (run) list store folders or folder prefixes
