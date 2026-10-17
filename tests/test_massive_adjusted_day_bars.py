@@ -12,7 +12,7 @@ events left out. What is locked here:
   held the ticker that day, and each starts a chain of its own;
 - a seeded disagreement with SEP lands in the check file and the build completes; an event
   difference is one however small its return gap, a 2% return gap is one, while SEP's rounding
-  of a sub-dollar close to 0.001, a day either vendor has no bar on and one split ratio written
+  of a close to 0.001, or of a sub-dollar close to cents, a day either vendor has no bar on and one split ratio written
   two ways are not;
 - an event the Ticker map cannot place is counted, never guessed;
 - day-by-day ``update()`` equals a whole build, and the config rebuilds.
@@ -53,6 +53,8 @@ MASSIVE = {
     "ZZZ": {day: 7.0 for day in DAYS},  # SYNTHETIC
     # PNY (606): a sub-dollar stock; SEP's closes are these rounded to 3 decimals.
     "PNY": dict(zip(DAYS, (0.8, 0.8177, 0.6928, 0.7011, 0.7004, 0.7004))),  # SYNTHETIC
+    # CNT (612): a penny stock; SEP holds its closes to cents, 0.10 where Massive has 0.104.
+    "CNT": dict(zip(DAYS, (0.104, 0.115, 0.12, 0.118, 0.105, 0.105))),  # SYNTHETIC
     # GAP (707): no Massive bar on D3, where SEP carries D2's close on no volume.
     "GAP": dict(zip((D1, D2, D4, D5, D6), (10.0, 10.0, 10.5, 10.5, 10.5))),  # SYNTHETIC
     # STL (711): a Massive bar on D3, where SEP has none and carries D2's close on no volume.
@@ -74,6 +76,7 @@ SEP = {
     "TWX": {d: (25.0 if d < D4 else 50.0,) * 2 for d in DAYS},  # 404's history, under its new ticker
     "TWO": {d: (c, c / 3.0 if d < D5 else c) for d, c in MASSIVE["TWO"].items() if d >= D4},  # 405's
     "PNY": {d: (round(c, 3),) * 2 for d, c in MASSIVE["PNY"].items()},
+    "CNT": {d: (round(c, 2),) * 2 for d, c in MASSIVE["CNT"].items()},
     "GAP": {**{d: (c, c) for d, c in MASSIVE["GAP"].items()}, D3: (10.0, 10.0, 0.0)},
     "STL": {**{d: (c, c) for d, c in MASSIVE["STL"].items()}, D3: (10.0, 10.0, 0.0)},
     "JMP": {d: (40.0, 40.0) for d in DAYS},
@@ -127,6 +130,7 @@ def _sharadar(root: Path, through: date) -> None:
         tickers_row("SEP", 404, "TWX", firstpricedate="2010-01-04"),  # SYNTHETIC
         tickers_row("SEP", 405, "TWO", firstpricedate="2024-03-07"),  # SYNTHETIC
         tickers_row("SEP", 606, "PNY", firstpricedate="2015-01-02"),  # SYNTHETIC
+        tickers_row("SEP", 612, "CNT", firstpricedate="2015-01-02"),  # SYNTHETIC
         tickers_row("SEP", 707, "GAP", firstpricedate="2015-01-02"),  # SYNTHETIC
         tickers_row("SEP", 711, "STL", firstpricedate="2015-01-02"),  # SYNTHETIC
         tickers_row("SEP", 808, "JMP", firstpricedate="2015-01-02"),  # SYNTHETIC
@@ -339,6 +343,14 @@ def test_sep_rounding_a_sub_dollar_close_to_three_decimals_is_not_a_disagreement
     assert all(symbol != 606 for symbol, _ in _disagreeing(store))
 
 
+def test_sep_rounding_a_penny_close_to_cents_is_not_a_disagreement(built):
+    store, _ = built
+
+    # CNT's SEP closes are Massive's rounded to 0.01: 0.10 to 0.12 against 0.104 to 0.115 is
+    # a 9.4% return gap, within half a cent on each close.
+    assert all(symbol != 612 for symbol, _ in _disagreeing(store))
+
+
 def test_a_day_without_a_massive_bar_is_not_a_disagreement(built):
     store, _ = built
 
@@ -377,7 +389,7 @@ def test_a_two_percent_price_gap_is_a_disagreement(built):
     assert entry["massive_return"] == pytest.approx(40.4 / 39.6 - 1.0)
     assert entry["sep_return"] == pytest.approx(0.0)
     assert entry["events_differ"] is False
-    assert json.loads(store.check_path.read_text())["sep_tick"] == 0.001
+    assert json.loads(store.check_path.read_text())["sep_tick"] == {"below_1": 0.01, "from_1": 0.001}
 
 
 def test_an_event_the_map_cannot_place_is_counted_not_guessed(built):

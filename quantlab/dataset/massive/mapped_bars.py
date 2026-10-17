@@ -93,8 +93,10 @@ ADJUSTMENT_SIDECAR = ".adjustment.json"
 #: Suffix of the Day aggregate store's check file against SEP.
 SEP_CHECK_SUFFIX = ".sep_check.json"
 
-#: The tick SEP rounds its prices to: each SEP close is off the traded one by up to half of it.
-SEP_TICK = 0.001
+#: The ticks SEP rounds its prices to: each SEP close is off the traded one by up to half of
+#: its tick, 0.001 from a dollar up and 0.01 below one (a sub-dollar close of 2016 is often
+#: held to cents: 0.10 where Massive has 0.104).
+SEP_TICKS = {"below_1": 0.01, "from_1": 0.001}
 
 #: Relative and absolute tolerance of two vendors' ``divCash`` or ``splitFactor`` being one
 #: event: a ratio written as 1/35 at Massive and 0.028571 in ACTIONS is the same split.
@@ -614,8 +616,8 @@ class MappedDayBarDataset(MappedPermatickerDataset):
     With ``sep`` set, ``update()`` checks each new day's adjusted returns
     against SEP's store: a permaticker and day whose split or dividend
     differs from SEP's, or whose two returns differ by more than
-    ``check_tolerance`` plus SEP's rounding of its closes to 0.001
-    (``SEP_TICK``) on a day both vendors have a bar on and the bar before,
+    ``check_tolerance`` plus SEP's rounding of its closes (to 0.001, to
+    0.01 below a dollar: ``SEP_TICKS``) on a day both vendors have a bar on and the bar before,
     is written, with both vendors' events, to
     the check file ``<store>.sep_check.json`` (``check_path``,
     ``disagreements()``). A disagreement points at one vendor's events; it
@@ -934,8 +936,8 @@ class MappedDayBarDataset(MappedPermatickerDataset):
             return
         tolerance = float(self.config.check_tolerance)
         state = self._check_state()
-        if state.get("tolerance") != tolerance or state.get("sep_tick") != SEP_TICK:
-            state = {"tolerance": tolerance, "sep_tick": SEP_TICK, "checked_through": None, "disagreements": []}
+        if state.get("tolerance") != tolerance or state.get("sep_tick") != SEP_TICKS:
+            state = {"tolerance": tolerance, "sep_tick": SEP_TICKS, "checked_through": None, "disagreements": []}
         stored = self._open()
         try:
             stamps = pd.DatetimeIndex(stored["timestamp"].values)
@@ -970,8 +972,8 @@ class MappedDayBarDataset(MappedPermatickerDataset):
         or ``splitFactor`` differ (``EVENT_RTOL``, ``EVENT_ATOL``). Its return,
         its ``adjClose`` over the store's bar before it, disagrees with SEP's
         on the same two days by more than ``tolerance`` plus SEP's rounding,
-        ``(1 + r_sep) * SEP_TICK / 2 * (1 / C[t] + 1 / C[t-1])`` with ``C``
-        SEP's raw closes; it is compared only when both vendors have a bar
+        ``(1 + r_sep) * (h[t] / C[t] + h[t-1] / C[t-1])`` with ``C`` SEP's
+        raw closes and ``h`` half of each close's tick (``SEP_TICKS``); it is compared only when both vendors have a bar
         (a positive close on positive volume) on both days. Only days up to
         SEP's last bar are compared.
         """
@@ -1018,7 +1020,8 @@ class MappedDayBarDataset(MappedPermatickerDataset):
         bars = bars[0] & bars[1]
         closes = theirs["close"].values
         with np.errstate(divide="ignore", invalid="ignore"):
-            rounding = (1.0 + sep_returns) * (SEP_TICK / 2.0) * (1.0 / closes[1:] + 1.0 / closes[:-1])
+            half = np.where(closes < 1.0, SEP_TICKS["below_1"], SEP_TICKS["from_1"]) / 2.0
+            rounding = (1.0 + sep_returns) * (half[1:] / closes[1:] + half[:-1] / closes[:-1])
             gap = np.abs(massive - sep_returns) > tolerance + rounding
         both = np.isfinite(massive) & np.isfinite(sep_returns) & bars[1:] & bars[:-1] & days
         apart = events_differ | (both & gap)
