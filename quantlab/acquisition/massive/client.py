@@ -36,7 +36,8 @@ response gives; 401 and 403 raise
 
 A file is downloaded in ``streams`` byte ranges of ``part_bytes`` at once, each
 written at its offset of ``<name>.part``; a range whose stream breaks is
-asked again for only the bytes it still lacks. The whole file is then
+asked again for only the bytes it still lacks
+(``quantlab.acquisition._support.ranged_download``). The whole file is then
 checked against the vendor's size and decoded to the end of its gzip, and
 only then renamed into place. ``download_days`` runs over the XNYS sessions
 of a date range, oldest first, with several files in flight, and records a
@@ -80,6 +81,7 @@ from joblib import Parallel, delayed
 from loguru import logger
 
 from quantlab.acquisition._support.http import HttpResponse, Transport, http_get
+from quantlab.acquisition._support.ranged_download import DownloadAborted, download_ranges
 from quantlab.acquisition._support.request_policy import (
     REFUSAL_STATUSES,
     RequestPolicy,
@@ -169,10 +171,6 @@ class MassiveResponseError(ValueError):
     A ``ValueError``, but the vendor's: the refresh records the endpoint as
     failed, where a plain ``ValueError`` (a bug of ours) is raised.
     """
-
-
-class _Aborted(Exception):
-    """Another range of the same file failed; this one stops."""
 
 
 @dataclass(frozen=True)
@@ -753,7 +751,7 @@ class MassiveClient:
                 while index >= consumed + self.files and not abort.is_set():
                     handed.wait(timeout=1.0)
             if abort.is_set():
-                raise _Aborted
+                raise DownloadAborted(f"Massive: {data_type} {day}")
             try:
                 return day, self._timed(data_type, day, download_root, fetching, abort)
             except MassiveNotPublishedError:
@@ -796,8 +794,9 @@ class MassiveClient:
     ) -> tuple[Path, int]:
         """Make one day's file present and verified; return it and the bytes fetched.
 
-        Its ranges are fetched while holding ``fetching``; setting ``abort``
-        stops them at their next chunk.
+        Its ranges are fetched by ``download_ranges`` while holding
+        ``fetching``; setting ``abort`` stops them at their next chunk. A
+        file that is not a whole gzip is downloaded again, ``retries`` times.
         """
         key = s3_key(data_type, day)
         target = raw_file(Path(download_root) / VENDOR_DIR, data_type, day)
@@ -805,97 +804,31 @@ class MassiveClient:
         if target.exists() and target.stat().st_size == expected:
             return target, 0
         target.parent.mkdir(parents=True, exist_ok=True)
-        partial = target.with_name(target.name + ".part")
         started = time.monotonic()
         policy = self._policy
-        try:
-            for tries in range(self.retries + 1):
-                with fetching:
-                    self._fetch_parts(key, partial, expected, abort)
-                try:
-                    _check_gzip(partial, key)
-                    break
-                except MassiveTransportError as error:
-                    if tries == self.retries:
-                        raise
-                    policy.back_off(tries, lambda wait, error=error: f"Massive: {error}; downloading it again in {wait:g}s.")
-            os.replace(partial, target)
-        except BaseException:
-            partial.unlink(missing_ok=True)
-            raise
+        for tries in range(self.retries + 1):
+            try:
+                download_ranges(
+                    target,
+                    expected,
+                    lambda start, stop: self.store.read(key, start, stop),
+                    workers=self.streams,
+                    part_bytes=self.part_bytes,
+                    policy=policy,
+                    what=f"Massive: {key}",
+                    error=MassiveTransportError,
+                    verify=lambda partial: _check_gzip(partial, key),
+                    fetch_lock=fetching,
+                    abort=abort,
+                )
+                break
+            except _NotWholeGzip as error:
+                if tries == self.retries:
+                    raise
+                policy.back_off(tries, lambda wait, error=error: f"Massive: {error}; downloading it again in {wait:g}s.")
         elapsed = max(time.monotonic() - started, 1e-9)
         logger.info(f"Massive: {key} ({expected / 1e6:.1f} MB) fetched and verified in {elapsed:.0f}s.")
         return target, expected
-
-    def _fetch_parts(self, key: str, partial: Path, expected: int, run_abort: threading.Event) -> None:
-        """Write the object's ``expected`` bytes into ``partial`` in parallel ranges.
-
-        The ranges stop at their next chunk when one of them fails, the
-        caller is interrupted, or ``run_abort`` is set.
-        """
-        with partial.open("wb") as handle:
-            handle.truncate(expected)
-        parts = [(first, min(first + self.part_bytes, expected)) for first in range(0, expected, self.part_bytes)]
-        if not parts:
-            return
-        abort = threading.Event()
-
-        def fetch(first: int, stop: int) -> None:
-            self._fetch_range(key, partial, first, stop, lambda: abort.is_set() or run_abort.is_set())
-
-        # Threads, as every fan-out in quantlab: the ranges wait on the network.
-        try:
-            Parallel(n_jobs=min(self.streams, len(parts)), backend="threading", batch_size=1)(
-                delayed(fetch)(first, stop) for first, stop in parts
-            )
-        except BaseException:
-            abort.set()
-            raise
-
-    def _fetch_range(self, key: str, partial: Path, first: int, stop: int, aborted: Callable[[], bool]) -> None:
-        """Write bytes ``first`` up to ``stop`` of the object at their offset of ``partial``.
-
-        A stream that breaks or ends short after delivering bytes is asked
-        again at once for the rest; one that delivers nothing is retried
-        after a doubling back-off, ``retries`` times.
-        """
-        policy = self._policy
-        position = first
-        attempt = 0
-        with partial.open("r+b") as handle:
-            while position < stop:
-                if aborted():
-                    raise _Aborted
-                before = position
-                try:
-                    handle.seek(position)
-                    for chunk in self.store.read(key, position, stop):
-                        if aborted():
-                            raise _Aborted
-                        chunk = chunk[: stop - position]
-                        handle.write(chunk)
-                        position += len(chunk)
-                        if position >= stop:
-                            break
-                    if position < stop:
-                        raise MassiveTransportError(
-                            f"{key}: bytes {first}-{stop - 1} ended after {position - first} of "
-                            f"{stop - first} bytes"
-                        )
-                except MassiveTransportError as error:
-                    if position > before:
-                        logger.warning(
-                            policy.scrub(f"Massive: {error}; resuming at byte {position} of {first}-{stop - 1}.")
-                        )
-                        attempt = 0
-                        continue
-                    if attempt == self.retries or aborted():
-                        raise
-                    policy.back_off(
-                        attempt,
-                        lambda wait, error=error: f"Massive: {error}; retrying bytes {position}-{stop - 1} in {wait:g}s.",
-                    )
-                    attempt += 1
 
     def _get_json(self, url: str, params: Mapping[str, str], *, missing_ok: bool = False) -> dict | None:
         """GET ``url`` with the key in a header; retry throttling, 5xx and transport errors.
@@ -1242,14 +1175,18 @@ def _sessions(start: date, end: date) -> list[date]:
     return [stamp.date() for stamp in sessions]
 
 
+class _NotWholeGzip(MassiveTransportError):
+    """A downloaded file that does not decode to the end of its gzip; it is downloaded again."""
+
+
 def _check_gzip(path: Path, key: str) -> None:
-    """Decode ``path`` to its end; raise ``MassiveTransportError`` if it is not a whole gzip."""
+    """Decode ``path`` to its end; raise ``_NotWholeGzip`` if it is not a whole gzip."""
     try:
         with gzip.open(path, "rb") as handle:
             while handle.read(_CHUNK * 16):
                 pass
     except (OSError, EOFError, zlib.error) as error:
-        raise MassiveTransportError(f"{key}: not a whole gzip ({type(error).__name__}: {error})") from error
+        raise _NotWholeGzip(f"{key}: not a whole gzip ({type(error).__name__}: {error})") from error
 
 
 def _day_of(record: Mapping[str, object], field: str, endpoint: str) -> date:

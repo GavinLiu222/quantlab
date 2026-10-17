@@ -51,15 +51,15 @@ import shutil
 import tempfile
 import time
 import zipfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import polars as pl
-from joblib import Parallel, delayed
 from loguru import logger
 
 from quantlab.acquisition._support.http import HttpResponse, Transport, http_get
+from quantlab.acquisition._support.ranged_download import download_ranges
 from quantlab.acquisition._support.request_policy import (
     REFUSAL_STATUSES,
     RETRY_STATUSES,
@@ -543,19 +543,22 @@ class SharadarClient:
     def _download_zip(self, spec: SharadarTable, url: str, archive: Path) -> None:
         """Download the pre-signed zip to ``archive`` in parallel byte ranges.
 
-        A one-byte ``Range`` probe reads the size; the parts are then
-        fetched by ``download_workers`` threads and written at their
-        offsets. A part whose stream breaks is asked again for only the
-        bytes it still lacks, and only a retry that delivers no new byte
-        counts against ``max_retries``: the vendor's storage drops long
-        streams, so a part may need many resumed requests. Storage that ignores
-        ``Range`` (answers 200) is read as one stream instead. The
-        pre-signed URL is the vendor's file storage: it carries its own
-        signature and never gets the key.
+        A one-byte ``Range`` probe reads the size from ``Content-Range``; the
+        ranges are then fetched by ``download_workers`` threads through
+        ``quantlab.acquisition._support.ranged_download``, each one ``Range``
+        GET, which resumes a range whose stream breaks. Storage that ignores
+        ``Range`` (answers 200) is read as one stream instead. The pre-signed
+        URL is the vendor's file storage: it carries its own signature and
+        never gets the key.
         """
         probe = self._get(spec, url, params={}, headers={"Range": "bytes=0-0"}, keyed=False)
         if probe.status == 200:
-            self._write_body(spec, probe, archive, offset=0, length=None)
+            try:
+                with archive.open("wb") as handle:
+                    for chunk in probe.body:
+                        handle.write(chunk)
+            finally:
+                probe.close()
             return
         probe.close()
         total = _range_total(probe) if probe.status == 206 else None
@@ -564,89 +567,41 @@ class SharadarClient:
                 f"Sharadar table {spec.code!r}: the bulk zip answered HTTP "
                 f"{probe.status} to a range request."
             )
-        with archive.open("wb") as handle:
-            handle.truncate(total)
-        parts = [
-            (start, min(start + self._part_bytes, total) - 1)
-            for start in range(0, total, self._part_bytes)
-        ]
 
-        def fetch(part: tuple[int, int]) -> None:
-            first, last = part
-            start = first
-            attempt = 0
-            while True:
-                response = self._get(
-                    spec, url, params={}, headers={"Range": f"bytes={start}-{last}"}, keyed=False
-                )
+        def fetch_range(start: int, stop: int) -> Iterator[bytes]:
+            response = self._get(
+                spec, url, params={}, headers={"Range": f"bytes={start}-{stop - 1}"}, keyed=False
+            )
+            try:
                 if response.status != 206:
-                    response.close()
                     raise SharadarHttpError(
-                        f"Sharadar table {spec.code!r}: bytes {start}-{last} of the "
+                        f"Sharadar table {spec.code!r}: bytes {start}-{stop - 1} of the "
                         f"bulk zip answered HTTP {response.status}, not 206."
                     )
-                try:
-                    self._write_body(
-                        spec, response, archive, offset=start, length=last - start + 1
-                    )
-                    return
-                except _BrokenBody as exc:
-                    error = exc
-                if error.written:
-                    # Progress: resume after it, with a fresh retry budget.
-                    start += error.written
-                    attempt = 0
-                elif attempt >= self._max_retries:
-                    break
-                else:
-                    attempt += 1
-                self._back_off(
-                    spec, max(attempt - 1, 0), f"bytes {first}-{last} ({start - first} kept): {error}"
-                )
-            raise SharadarHttpError(
-                f"Sharadar table {spec.code!r}: bytes {first}-{last} of the bulk "
-                f"zip still broken after {self._max_retries} retries: {error}"
-            )
+                yield from response.body
+            finally:
+                response.close()
 
-        workers = min(self._download_workers, len(parts))
-        # Threads, as every fan-out in quantlab: the parts wait on the network.
-        Parallel(n_jobs=workers, backend="threading")(delayed(fetch)(part) for part in parts)
+        try:
+            parts = download_ranges(
+                archive,
+                total,
+                fetch_range,
+                workers=self._download_workers,
+                part_bytes=self._part_bytes,
+                policy=self._policy,
+                what=f"Sharadar table {spec.code!r}: the bulk zip",
+                error=SharadarTransportError,
+            )
+        except SharadarTransportError as error:
+            raise SharadarHttpError(
+                f"Sharadar table {spec.code!r}: the bulk zip still broken after "
+                f"{self._max_retries} retries: {error}"
+            ) from error
         logger.info(
             f"Sharadar {spec.code}: {total / 2**20:.1f} MiB downloaded in "
-            f"{len(parts)} part(s) by {workers} thread(s)"
+            f"{parts} part(s) by {min(self._download_workers, parts)} thread(s)"
         )
-
-    @staticmethod
-    def _write_body(
-        spec: SharadarTable, response: HttpResponse, archive: Path, *, offset: int, length: int | None
-    ) -> None:
-        """Write a response body into ``archive`` at ``offset``, checking its length.
-
-        Raises
-        ------
-        _BrokenBody
-            If the stream breaks or ends short of ``length``; it carries the
-            bytes written before that.
-        """
-        written = 0
-        try:
-            with archive.open("r+b" if length is not None else "wb") as handle:
-                handle.seek(offset)
-                for chunk in response.body:
-                    if length is not None:
-                        chunk = chunk[: length - written]
-                    handle.write(chunk)
-                    written += len(chunk)
-        except SharadarTransportError as exc:
-            raise _BrokenBody(str(exc), written) from exc
-        finally:
-            response.close()
-        if length is not None and written != length:
-            raise _BrokenBody(
-                f"Sharadar table {spec.code!r}: bytes {offset}-{offset + length - 1} "
-                f"of the bulk zip arrived as {written} bytes.",
-                written,
-            )
 
     @property
     def _policy(self) -> RequestPolicy:
@@ -723,19 +678,6 @@ class SharadarClient:
                 )
             ) from error
 
-    def _back_off(self, spec: SharadarTable, attempt: int, failure: str) -> None:
-        """Log a retryable failure and sleep before retry ``attempt + 1``.
-
-        The wait is ``backoff_seconds`` doubled on each attempt.
-        """
-        self._policy.back_off(
-            attempt,
-            lambda wait: (
-                f"Sharadar table {spec.code!r}: {failure}; retry "
-                f"{attempt + 1}/{self._max_retries} in {wait:.1f}s"
-            ),
-        )
-
     @staticmethod
     def _extract_csv(spec: SharadarTable, archive: Path, scratch: Path) -> Path:
         """Extract the zip's one CSV member and check its header is the schema."""
@@ -761,14 +703,6 @@ def _api_key(code: str) -> str:
         hint=f"cannot pull Sharadar table {code!r}; set it in the environment.",
         error=SharadarEntitlementError,
     )[0]
-
-
-class _BrokenBody(SharadarTransportError):
-    """A response body that broke or ended short, after ``written`` bytes were kept."""
-
-    def __init__(self, message: str, written: int):
-        super().__init__(message)
-        self.written = written
 
 
 def _range_total(response: HttpResponse) -> int | None:

@@ -26,7 +26,7 @@ for code in ("sep", "actions", "tickers", "indicators"):
     client.bulk_table(code, "/data/quantlab/downloads")
 ```
 
-The zip is downloaded in parallel byte ranges (`SharadarClient(download_workers=8, part_bytes=64 << 20)` by default), or as one stream when the storage ignores `Range`. Rate-limit (429) and server-error responses, connections that fail to open and byte ranges whose stream breaks are retried after a back-off. A full-history SEP zip is about 1 GB.
+The zip is downloaded in parallel byte ranges (`SharadarClient(download_workers=8, part_bytes=64 << 20)` by default), or as one stream when the storage ignores `Range`. Rate-limit (429) and server-error responses and connections that fail to open are retried after a back-off. A byte range whose stream breaks is asked again for only the bytes it still lacks: at once when the break delivered new bytes (which also restarts its retry budget), after a back-off when it delivered nothing, `max_retries` times. The ranges are written to `<name>.zip.part`, renamed into place once all are in. A full-history SEP zip is about 1 GB.
 
 ## Building and reading the panel
 

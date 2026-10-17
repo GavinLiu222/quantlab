@@ -256,7 +256,8 @@ def test_a_part_whose_connection_breaks_is_downloaded_again(api_key, tmp_path):
         _client(transport, sleeps, download_workers=1, part_bytes=1 << 20).bulk_table("sep", tmp_path)
     )
     assert frame["closeunadj"].to_list() == [10.0, 11.0]
-    assert len(sleeps) == 1
+    # The break delivered bytes, so the part resumes at once, without a wait.
+    assert sleeps == []
     assert transport.closed == len(transport.calls)
 
 
