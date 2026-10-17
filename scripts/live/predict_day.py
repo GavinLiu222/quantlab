@@ -35,7 +35,7 @@ argument). An unexpected error exits 1 with its traceback.
 
 Usage on the training server, after ``scripts/sharadar/update.py``::
 
-    QUANTLAB_DATA_DIR=/data/quantlab OMP_NUM_THREADS=1 taskset -c 64-127 \\
+    QUANTLAB_DATA_DIR=/data/quantlab taskset -c 64-127 \\
       .venv/bin/python scripts/live/predict_day.py \\
         /data/quantlab/runs/ibkr_barra_closed_loop/real/backtest/<run> \\
         --store /data/quantlab/live/sp500_xgb_mvo/live_predictions.zarr \\

@@ -150,8 +150,7 @@ QUANTLAB_DATA_DIR=/data/quantlab .venv/bin/python scripts/data_update/update.py 
     --download-dir /data/quantlab/downloads --data-dir /data/quantlab
 
 RUN=$(.venv/bin/python -c "import json; print(json.load(open('/data/quantlab/runs/ibkr_barra_closed_loop/real/backtest.json'))['run_dir'])")
-QUANTLAB_DATA_DIR=/data/quantlab OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
-  MKL_NUM_THREADS=1 taskset -c 64-127 \
+QUANTLAB_DATA_DIR=/data/quantlab taskset -c 64-127 \
   .venv/bin/python scripts/live/predict_day.py "$RUN" \
     --store /data/quantlab/live/sp500_xgb_mvo/live_predictions.zarr \
     --may-lag /data/quantlab/market/fred/fred_dtb3_1d/fred_dtb3_1d.zarr

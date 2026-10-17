@@ -40,8 +40,7 @@ run_update() {
     load_env "$QUANTLAB_DIR/.env"
     echo "$(ny '+%F %T %Z') data update: start ${UPDATE_FLAGS:-}" >> "$log_file"
     # shellcheck disable=SC2086
-    (cd "$QUANTLAB_DIR" && QUANTLAB_DATA_DIR=$DATA_DIR OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
-        MKL_NUM_THREADS=1 taskset -c "$CPUS" "$PY" scripts/data_update/update.py \
+    (cd "$QUANTLAB_DIR" && QUANTLAB_DATA_DIR=$DATA_DIR taskset -c "$CPUS" "$PY" scripts/data_update/update.py \
         --data-dir "$DATA_DIR" --download-dir "$DATA_DIR/downloads" ${UPDATE_FLAGS:-}) >> "$log_file" 2>&1
     local status=$?
     echo "$(ny '+%F %T %Z') data update: exit $status" >> "$log_file"
