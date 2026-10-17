@@ -63,6 +63,7 @@ Massive's REST endpoints are kept in the same raw tier, one directory per endpoi
 | `splits` | `/stocks/v1/splits` | `execution_date` | 1978-01-01 | 7 days |
 | `dividends` | `/stocks/v1/dividends` | `ex_dividend_date` | 2000-01-01 | 7 days |
 | `short_volume` | `/stocks/v1/short-volume` | `date` | 2024-02-06 | 7 days |
+| `8k_disclosures` | `/stocks/filings/8-K/vX/disclosures` | `filing_date` (1,000 rows a page) | 2020-01-01 | 7 days |
 
 These are the current `/stocks/v1` endpoints, not the deprecated `/v3/reference/splits` and `/v3/reference/dividends`.
 
@@ -121,6 +122,7 @@ These tables are kept in the raw tier only, with no panel: filing text and the s
 | `float` | `/stocks/vX/float` | snapshot, once a day | one snapshot a day | `rest_snapshots`, `read_rest_snapshot` | from the first pull on |
 | `tickers` | `/v3/reference/tickers` | as of each XNYS session (`date=`), `market=stocks` | one directory a session | `rest_as_of_days`, `read_rest_as_of` | from 2016-10-10 |
 | `ticker_events` | `/vX/reference/tickers/{id}/events` | one composite FIGI a call (`ids_from="tickers"`) | pages | `read_rest_records(root, "ticker_events", key="composite_figi")` | every FIGI of `tickers` |
+| `disclosure_taxonomy` | `/stocks/taxonomies/vX/disclosures` | snapshot, once a day | one snapshot a day | `rest_snapshots`, `read_rest_snapshot` | the whole taxonomy |
 
 `root` is `<download-dir>/massive`; the readers are in `quantlab.dataset.massive.raw`.
 
@@ -426,6 +428,32 @@ panel = short.panel("2024-03-01", "2024-03-29")
 A cell without a record is NaN. The totals only reach the panel; the per-venue columns (ADF, Nasdaq Carteret, Nasdaq Chicago, NYSE) stay in the raw tier. The records have no id, so the pull keeps them by their whole content and the panel keeps the newest copy of each ticker and day: a revision the 7-day overlap re-reads replaces the earlier copy. The store only appends days, so a revision of a day it already holds reaches it on a rebuild. Each record is placed through the Ticker map (above) on its own day; when two tickers place on one permaticker that day, their volumes are summed and the ratio is recomputed from the sums. Rows the map cannot place are counted in `massive_short_volume_1d.zarr.unplaced.json`. The columns are the universe's permatickers, by default SEP's domestic common stock. The store is built through the last day SEP, the REST pull and the Ticker map all reach, so a store built day by day equals one built at once; a missing pull or an empty map is refused, naming the script to run.
 
 The shared store is `<data-dir>/market/massive/massive_short_volume_1d/`, beside its `README.md` and `component.json`. `scripts/massive/short_volume.py --download-dir ... --data-dir ...` writes the folder when it is missing (the config starting at the later of the Ticker map's first day and 2024-02-06) and appends the new days; the daily data update runs it after the Ticker map ([data_update.md](data_update.md)), so the history grows by a day a day.
+
+## 8-K disclosures
+
+`MassiveDisclosureDataset` (`quantlab.dataset.massive.disclosures`) builds the 8-K disclosure panel `massive_disclosures_1d` from the REST `8k_disclosures` pull and the newest `disclosure_taxonomy` snapshot, on Sharadar's permaticker axis and SEP's trading calendar:
+
+```python
+from quantlab.dataset.config import MassiveDisclosuresConfig
+from quantlab.dataset.massive.disclosures import MassiveDisclosureDataset
+
+disclosures = MassiveDisclosureDataset(MassiveDisclosuresConfig(
+    zarr_file_path="/data/quantlab/market/massive/massive_disclosures_1d/massive_disclosures_1d.zarr",
+    raw_data_dir_path="/data/quantlab/downloads/sharadar",
+    massive_dir="/data/quantlab/downloads/massive",
+    ticker_map_path="/data/quantlab/market/massive/massive_ticker_map/massive_ticker_map",
+    start_date="2016-10-10",
+))
+disclosures.update()
+panel = disclosures.panel("2024-01-02", "2024-12-31")
+panel["financial_results"].attrs["description"]
+```
+
+Massive classifies each material event of an 8-K into a primary, a secondary and a tertiary category of its taxonomy, one record per event (a filing may have several, or none). The panel has one boolean per primary category of the taxonomy, named as the taxonomy spells it (`financial_results`, `leadership_and_governance`, ...); its attributes give a `description` and the `secondary_categories`, `tertiary_categories` and `taxonomy` version(s) under it. A variable is true on the first trading day after the `filing_date` of an 8-K with a disclosure in its category and false on every other day: an 8-K is often filed after the close, so a filing on a Friday shows on Monday. A filing with disclosures in two primary categories sets both. Secondary and tertiary categories stay raw (`read_rest_records(root, "8k_disclosures", key=None)`).
+
+A record names its filer's `tickers` (several for a filer with several share classes, none when Massive maps no ticker); it is placed once for each ticker, through the Ticker map (above) on the day the filing shows. Tickers the map cannot place, and records naming no ticker, are counted in `massive_disclosures_1d.zarr.unplaced.json`. The columns are the universe's permatickers, by default SEP's domestic common stock. A primary category the taxonomy does not list refuses the build, naming it: pull the taxonomy again and rebuild the store, since the taxonomy's categories are the store's variables. The store is built through the last day SEP, the disclosure pull and the Ticker map all reach, so `update()` appends a day once each holds it, and a store built day by day equals one built at once. A missing pull, a missing taxonomy or an empty map is refused, naming the script to run. Massive's disclosures start in 2020-01: every day before is false.
+
+The shared store is `<data-dir>/market/massive/massive_disclosures_1d/`, beside its `README.md` and `component.json`. `scripts/massive/disclosures.py --download-dir ... --data-dir ...` writes the folder when it is missing (the config starting at the Ticker map's first day) and appends the new days; the daily data update runs it after the Ticker map ([data_update.md](data_update.md)).
 
 ## Reading Trade bars as securities
 

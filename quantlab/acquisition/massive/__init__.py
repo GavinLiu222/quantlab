@@ -11,8 +11,9 @@ the credential variables, and the dataset classes that build Trade bars from
 the trade files (ADR 0030) and the Day aggregate store ``massive_day_bars_1d``
 from the day aggregates (#352), and the dividend panel ``massive_dividends_1d``
 from the REST dividends and splits (#351), the short interest panel
-``massive_short_interest_1d`` from the REST short interest (#355), and the short volume panel
-``massive_short_volume_1d`` from the REST short volume (#356). The minute aggregates are raw only: they are
+``massive_short_interest_1d`` from the REST short interest (#355), the short volume panel
+``massive_short_volume_1d`` from the REST short volume (#356), and the 8-K disclosure panel
+``massive_disclosures_1d`` from the REST 8-K disclosures (#358). The minute aggregates are raw only: they are
 kept to check Trade bars against.
 
 Massive's raw tier is one vendor file per data type and trading day, pulled by
@@ -27,13 +28,14 @@ Examples
 >>> from quantlab.acquisition.base import DataSourceRegistry
 >>> source = DataSourceRegistry.get("massive")
 >>> [c.data_type for c in source.capabilities]
-['trades', 'minute_aggs', 'day_aggs', 'dividends', 'short_interest', 'short_volume']
+['trades', 'minute_aggs', 'day_aggs', 'dividends', 'short_interest', 'short_volume', 'disclosures']
 >>> source.required_env
 ('MASSIVE_API_KEY', 'MASSIVE_S3_ACCESS_KEY_ID')
 """
 
 from quantlab.acquisition.base import Capability, SourceDescriptor, register_source
 from quantlab.dataset.massive.day_bars import MassiveDayBarDataset
+from quantlab.dataset.massive.disclosures import MassiveDisclosureDataset
 from quantlab.dataset.massive.dividends import MassiveDividendDataset
 from quantlab.dataset.massive.short_interest import MassiveShortInterestDataset
 from quantlab.dataset.massive.short_volume import MassiveShortVolumeDataset
@@ -92,6 +94,13 @@ MASSIVE_SOURCE = register_source(
                 market="us_equity", frequency="1d", data_type="short_volume",
                 dataset_cls=MassiveShortVolumeDataset,
                 earliest_available="2024-02-06", entitlement=_ENTITLEMENT,
+            ),
+            # The REST 8-K disclosures and their taxonomy; one flag per primary category on the
+            # permaticker, placed through the Ticker map (#358).
+            Capability(
+                market="us_equity", frequency="1d", data_type="disclosures",
+                dataset_cls=MassiveDisclosureDataset,
+                earliest_available="2020-01-01", entitlement=_ENTITLEMENT,
             ),
         ),
         # Literals, checked against the client's constants by a test. The S3
