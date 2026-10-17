@@ -158,7 +158,7 @@ def test_a_store_whose_symbol_left_the_axis_is_rebuilt_when_asked(roots):
 
 
 def test_the_refusal_is_typed(roots):
-    from quantlab.dataset._support.ledger import ResumeRefused
+    from quantlab.dataset.base import ResumeRefused
     from quantlab.dataset.sharadar.stores import build_stores, store
 
     downloads, data = roots

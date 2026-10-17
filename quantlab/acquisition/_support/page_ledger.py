@@ -11,10 +11,10 @@ back empty (the batch is re-fetched).
 
 Only the acquisition engine (``quantlab.acquisition.base.SymbolBatchAcquisition``) reads
 and writes page ledgers, so the ledger lives in the acquisition layer. It
-shares its sidecar mechanics (``_Sidecar``: the atomic rewrite, the symbol
-count and fingerprint last written) with ``ChunkLedger`` of
-``quantlab.dataset._support.ledger``, which the datasets use to resume a
-chunked conversion.
+shares its sidecar mechanics (``quantlab.utils.sidecar.JsonSidecar``: the
+atomic rewrite, the symbol count and fingerprint last written) with
+``ChunkLedger`` of ``quantlab.dataset._support.ledger``, which the datasets
+use to resume a chunked conversion.
 """
 
 
@@ -23,10 +23,10 @@ import json
 from pathlib import Path
 from typing import Iterable, Optional, Sequence
 
-from quantlab.dataset._support.ledger import _Sidecar
+from quantlab.utils.sidecar import JsonSidecar
 
 
-class PageLedger(_Sidecar):
+class PageLedger(JsonSidecar):
     """JSON sidecar recording which pages of one batch have been fetched.
 
     Ledgers live under ``{watermark_path}/_pages/``. ``watermark_path`` is

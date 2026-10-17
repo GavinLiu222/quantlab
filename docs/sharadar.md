@@ -457,7 +457,7 @@ outcome = update_stores("/data/quantlab/downloads", "/data/quantlab",
 outcome.failed  # () when every store is up to date
 ```
 
-A store refusing to resume raises `ResumeRefused` (`quantlab.dataset._support.ledger`, a `ValueError`) from its chunk ledger. That happens when its stored symbol axis is no longer the raw tier's, or when the store and its ledger disagree. `update_stores(rebuild_dropped=True)` rebuilds such a store, keeping the old one as `<store>.pre<YYYYMMDD>`; a store named in `keep_dropped` is not rebuilt. `update.py --no-pull` runs only the store update; the daily update runs it that way after its own `refresh` step.
+A store refusing to resume raises `ResumeRefused` (`quantlab.dataset.base`, a `ValueError`) from its chunk ledger. That happens when its stored symbol axis is no longer the raw tier's, or when the store and its ledger disagree. `update_stores(rebuild_dropped=True)` rebuilds such a store, keeping the old one as `<store>.pre<YYYYMMDD>`; a store named in `keep_dropped` is not rebuilt. `update.py --no-pull` runs only the store update; the daily update runs it that way after its own `refresh` step.
 
 ## Daily update
 

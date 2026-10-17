@@ -1,9 +1,9 @@
 """Resume ledgers: the JSON sidecars that let an interrupted download or conversion continue.
 
 A *sidecar* is a small bookkeeping file stored next to the data it describes. Two
-ledgers share its mechanics (``_Sidecar``: an atomic rewrite, the symbol count and
-fingerprint last written) and differ in what they protect, so each keeps its own
-reading rules and its own fingerprint:
+ledgers share its mechanics (``quantlab.utils.sidecar.JsonSidecar``: an atomic
+rewrite, the symbol count and fingerprint last written) and differ in what they
+protect, so each keeps its own reading rules and its own fingerprint:
 
 - ``ChunkLedger`` (here) records which time windows chunked ingestion already
   appended to a Zarr store, so a conversion resumes at the first window not yet
@@ -16,11 +16,10 @@ reading rules and its own fingerprint:
   its store raises.
 - ``PageLedger`` records which pages of one multi-page vendor batch were fetched.
   Only the acquisition engine writes it, so it lives in the acquisition layer
-  (``quantlab.acquisition._support.page_ledger``) and subclasses ``_Sidecar``
-  from here.
+  (``quantlab.acquisition._support.page_ledger``).
 
-``ChunkLedger`` is used by ``quantlab.dataset.base``. The module imports only
-pandas, xarray and the atomic JSON writer.
+``ChunkLedger`` is used by ``quantlab.dataset.raw``. A refused resume raises
+``quantlab.dataset.base.ResumeRefused``.
 """
 
 
@@ -32,53 +31,8 @@ from typing import Iterable, Optional, Sequence
 import pandas as pd
 import xarray as xr
 
-from quantlab.utils.atomic import write_json_atomically
-
-
-class _Sidecar:
-    """The mechanics both ledgers share: the payload, its atomic rewrite, the symbol stamp.
-
-    A subclass sets ``path`` and ``_payload`` (a dict holding at least
-    ``symbol_count`` and ``symbol_fingerprint``) and decides how the file is read.
-    """
-
-    path: str
-    _payload: dict
-
-    @property
-    def symbol_count(self) -> Optional[int]:
-        """Return the number of symbols the ledger was last written with, or None.
-
-        Examples
-        --------
-        >>> ledger.symbol_count
-        2
-        """
-        return self._payload["symbol_count"]
-
-    @property
-    def symbol_fingerprint(self) -> Optional[str]:
-        """Return the fingerprint of the symbols last written, or None.
-
-        ``ChunkLedger.axis_fingerprint`` or ``PageLedger.roster_fingerprint`` of
-        those symbols, by ledger.
-
-        Examples
-        --------
-        >>> ledger.symbol_fingerprint == ChunkLedger.axis_fingerprint(symbols)
-        True
-        """
-        return self._payload["symbol_fingerprint"]
-
-    def _flush(self) -> None:
-        """Rewrite the sidecar atomically.
-
-        The payload is written to a temporary file in the same directory and
-        then renamed over the destination, so a crash during the write leaves
-        either the old ledger or the new one, never a half-written file.
-        ``indent=2`` keeps the file readable and its format stable.
-        """
-        write_json_atomically(self.path, self._payload, indent=2)
+from quantlab.dataset.base import ResumeRefused
+from quantlab.utils.sidecar import JsonSidecar
 
 
 class TimeChunkPlanner:
@@ -238,25 +192,7 @@ class TimeChunkPlanner:
         return self._group_by_period(index)
 
 
-class ResumeRefused(ValueError):
-    """A store's chunk ledger refuses to resume: appending would misalign the store.
-
-    Raised by ``ChunkLedger.assert_consistent`` when the pinned symbol axis is
-    not the one the stored windows were written on (a stored symbol left the
-    raw tier's axis, or one joined it with history), or when the store's last
-    timestamp is not the end of the ledger's last window. Nothing has been
-    written; rebuilding the store from the raw tier is the remedy
-    (``quantlab.dataset.sharadar.stores.update_stores(rebuild_dropped=True)``
-    does so). A ``ValueError``, so a caller catching that still catches it.
-
-    Examples
-    --------
-    >>> issubclass(ResumeRefused, ValueError)
-    True
-    """
-
-
-class ChunkLedger(_Sidecar):
+class ChunkLedger(JsonSidecar):
     """JSON sidecar recording which time windows have been appended to a store.
 
     The file sits next to the Zarr store, never inside it, because rewriting

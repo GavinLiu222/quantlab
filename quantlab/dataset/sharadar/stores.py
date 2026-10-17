@@ -43,7 +43,7 @@ import pandas as pd
 import xarray as xr
 
 from quantlab.core.store_folder import COMPONENT_FILE, README_FILE, save_component
-from quantlab.dataset._support.ledger import ResumeRefused
+from quantlab.dataset.base import ResumeRefused
 from quantlab.dataset.config import (
     SPY_PERMATICKER,
     ConstituentDatasetConfig,

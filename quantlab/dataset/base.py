@@ -89,6 +89,24 @@ class InsufficientHistoryError(ValueError):
         self.requested = requested
 
 
+class ResumeRefused(ValueError):
+    """A store's chunk ledger refuses to resume: appending would misalign the store.
+
+    Raised by ``ChunkLedger.assert_consistent`` when the pinned symbol axis is
+    not the one the stored windows were written on (a stored symbol left the
+    raw tier's axis, or one joined it with history), or when the store's last
+    timestamp is not the end of the ledger's last window. Nothing has been
+    written; rebuilding the store from the raw tier is the remedy
+    (``quantlab.dataset.sharadar.stores.update_stores(rebuild_dropped=True)``
+    does so). A ``ValueError``, so a caller catching that still catches it.
+
+    Examples
+    --------
+    >>> issubclass(ResumeRefused, ValueError)
+    True
+    """
+
+
 @dataclass(frozen=True)
 class SymbolName:
     """The readable name of one symbol on one day: its ticker and company.
