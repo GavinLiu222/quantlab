@@ -198,5 +198,17 @@ ENDPOINTS: dict[str, RestEndpoint] = {
             "short_volume", f"{REST_HOST}/stocks/v1/short-volume", "date", date(2024, 2, 6),
             limit=50000, overlap_days=7, key=None,
         ),
+        # 8-K disclosures (#358), one record per categorised disclosure of a filing, from
+        # 2020-01; no id field (a filing has several), sorted on the filing date alone.
+        RestEndpoint(
+            "8k_disclosures", f"{REST_HOST}/stocks/filings/8-K/vX/disclosures", "filing_date",
+            date(2020, 1, 1), limit=1000, overlap_days=7, key=None, tiebreak=None,
+        ),
+        # The disclosure taxonomy (#358): primary, secondary and tertiary categories with a
+        # description; a small table kept as one snapshot a day.
+        RestEndpoint(
+            "disclosure_taxonomy", f"{REST_HOST}/stocks/taxonomies/vX/disclosures", None,
+            limit=1000, key=None, once_a_day=True,
+        ),
     )
 }

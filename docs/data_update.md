@@ -54,8 +54,8 @@ no price copy cut to the roster: SEP is brought up by the raw stage and the memb
 common-stock membership (`universe/sharadar/sharadar_common_stock_membership`, every security of SEP from
 its first to its last priced bar, `CommonStockConstituentDataset`, see the
 [constituent guide](constituent.md)), allowed to fail. The raw stage also runs
-`scripts/massive/rest_pull.py`, which brings Massive's REST endpoints (splits, dividends, short volume, news and
-the raw-only tables: filing text, Form 3/4, 13-F, reference tickers, ticker events, and a daily
+`scripts/massive/rest_pull.py`, which brings Massive's REST endpoints (splits, dividends, short volume, news, 8-K disclosures and
+their taxonomy, and the raw-only tables: filing text, Form 3/4, 13-F, reference tickers, ticker events, and a daily
 Float snapshot) up in the raw tier from each endpoint's watermark (see "REST pulls" in the [Massive guide](massive.md));
 it writes raw files only (`writes: []`) and is allowed to fail. WRDS data is not in the
 daily update; run `scripts/wrds/*.py` when the vendor publishes.
@@ -77,11 +77,13 @@ dividend panel `market/massive/massive_dividends_1d` (Massive's dividends and sp
 permatickers through the map), `scripts/massive/short_interest.py` does the same for the short
 interest panel `market/massive/massive_short_interest_1d` (a release shown from settlement + 8 trading
 days), `scripts/massive/short_volume.py` appends the same days to the short volume panel
-`market/massive/massive_short_volume_1d`, and `scripts/massive/news.py` to the news panel
-`market/massive/massive_news_1d` (Massive's news counted per permaticker). The seven scripts are
-`run` steps with `allow_failure: true`; the
+`market/massive/massive_short_volume_1d`, `scripts/massive/news.py` to the news panel
+`market/massive/massive_news_1d` (Massive's news counted per permaticker), and
+`scripts/massive/disclosures.py` does the same for the 8-K
+disclosure panel `market/massive/massive_disclosures_1d` (one flag per primary category of Massive's
+disclosure taxonomy). The scripts are `run` steps with `allow_failure: true`; the
 conversion and the map do at most five days each (`--max-days 5`; a store far behind is caught up by a
-run of its own), the day bars and the four REST panels every new day on disk, and none of the stores is
+run of its own), the day bars and the REST panels every new day on disk, and none of the stores is
 in `ready`: Massive publishes a day's files at about 00:30 ET the next day, and a late file
 never holds the paper trading, which reads none of these stores. Each script writes its folder's
 `component.json` and `README.md` when missing.
