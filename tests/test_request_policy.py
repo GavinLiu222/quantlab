@@ -188,3 +188,29 @@ def test_every_massive_next_url_is_stripped_of_the_key(massive_env, tmp_path):
         "https://api.massive.com/v3/reference/conditions?cursor=2",
     ]
     assert all(headers == {"Authorization": f"Bearer {MASSIVE_KEY}"} for _, _, headers in http_get.calls)
+
+
+# -- symbol-batched vendors --------------------------------------------------
+
+
+def test_tiingo_and_alpaca_name_the_missing_variables(monkeypatch, tmp_path):
+    from quantlab.acquisition.alpaca import AlpacaAcquisition
+    from quantlab.acquisition.config import AcquisitionConfig
+    from quantlab.acquisition.tiingo import TiingoAcquisition
+
+    for name in ("TIINGO_API_KEY", "APCA_API_KEY_ID", "APCA_API_SECRET_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("APCA_API_KEY_ID", "synthetic-id")  # SYNTHETIC
+
+    def config(vendor):
+        return AcquisitionConfig(
+            market="us_equity", frequency="1d", vendor=vendor, raw_data_dir_path=str(tmp_path / "raw"),
+            watermark_path=str(tmp_path / "wm"), symbols=("AAA",), start_date="2024-01-02",
+            end_date="2024-01-03",
+        )
+
+    with pytest.raises(RuntimeError, match="TIINGO_API_KEY not set"):
+        TiingoAcquisition(config("tiingo"))
+    with pytest.raises(RuntimeError, match="APCA_API_SECRET_KEY not set") as info:
+        AlpacaAcquisition(config("alpaca"))
+    assert "APCA_API_KEY_ID" not in str(info.value).split(" not set")[0]

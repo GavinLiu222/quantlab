@@ -351,6 +351,8 @@ timestamp
 
 凭证只需声明，不需要自己处理。厂商在 `__init__` 中读取环境变量，只把取值保存在内存中的客户端上，并把变量名列在 `CREDENTIAL_ENV_VARS` 里。每条被捕获的消息在写入日志或 `_failures.json` 之前都会经过 `_scrub`，其中每个凭证取值都会被替换为 `REDACTION`。
 
+所有厂商客户端共用一个请求策略 `quantlab.acquisition._support.request_policy`：`require_env` 读取凭证，在发出任何请求之前就失败并列出每个未设置的变量（`TIINGO_API_KEY not set; ...`）；`_scrub` 调用的就是其中的 `scrub`；Sharadar 和 Massive 的 REST 客户端通过 `RequestPolicy.call` 重试 `TransientError`（连接断开、429 或 5xx），服务器给了 `Retry-After` 就按它等待，否则按逐次加倍的退避等待；401 或 403 变成各自的权限错误并写明端点（`RequestPolicy.refusal`）；厂商返回的 URL 会去掉 `apiKey` 以及任何携带密钥的参数（`RequestPolicy.keyless`）；记录或抛出的每条消息都会抹去密钥。哪些状态码重试仍由各客户端决定，这个基类按批次的 `rate_limited` 等待也保持不变。
+
 ```python
 >>> import os
 >>> class KeyedAcquisition(DemoAcquisition):
