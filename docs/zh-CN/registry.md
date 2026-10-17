@@ -258,7 +258,7 @@ from pathlib import Path
 
 import polars as pl
 
-from quantlab.acquisition.base import SymbolBatchAcquisition
+from quantlab.acquisition.symbol_batch import SymbolBatchAcquisition
 from quantlab.acquisition.config import AcquisitionConfig
 from quantlab.dataset.config import DatasetConfig
 from quantlab.acquisition.config import stock_acquisition_config

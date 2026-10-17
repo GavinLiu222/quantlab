@@ -9,7 +9,7 @@ middle of a batch instead of paying again for every page. Its
 request whatever order its roster was given in. A corrupt page sidecar reads
 back empty (the batch is re-fetched).
 
-Only the acquisition engine (``quantlab.acquisition.base.SymbolBatchAcquisition``) reads
+Only the acquisition engine (``quantlab.acquisition.symbol_batch.SymbolBatchAcquisition``) reads
 and writes page ledgers, so the ledger lives in the acquisition layer. It
 shares its sidecar mechanics (``quantlab.utils.sidecar.JsonSidecar``: the
 atomic rewrite, the symbol count and fingerprint last written) with

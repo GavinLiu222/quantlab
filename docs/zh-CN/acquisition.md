@@ -24,7 +24,7 @@ Acquisition 是 quantlab 中把厂商原始数据下载到本地文件目录的�
 >>> from datetime import date
 >>> from pathlib import Path
 >>> import polars as pl
->>> from quantlab.acquisition.base import SymbolBatchAcquisition
+>>> from quantlab.acquisition.symbol_batch import SymbolBatchAcquisition
 >>> from quantlab.acquisition.config import AcquisitionConfig
 >>> class DemoAcquisition(SymbolBatchAcquisition):
 ...     VENDOR = "tiingo"
@@ -393,4 +393,4 @@ RuntimeError: APCA_API_KEY_ID and APCA_API_SECRET_KEY environment variables must
 
 ## 另请参阅
 
-[pageledger](pageledger.md) 指南介绍多页批次内部的续跑；[registry](registry.md) 指南介绍如何按名称查找厂商、从它下载并让它的原始层保持最新；[universes](../user-guide/universes.md) 指南介绍标的名单；[dataset](dataset.md) 指南介绍如何把原始文件转换成 xarray 面板。`quantlab.acquisition.base.SymbolBatchAcquisition`、`quantlab.acquisition._support.coverage.CoverageLedger` 和 `quantlab.utils.progress` 的类文档字符串列出了全部选项。
+[pageledger](pageledger.md) 指南介绍多页批次内部的续跑；[registry](registry.md) 指南介绍如何按名称查找厂商、从它下载并让它的原始层保持最新；[universes](../user-guide/universes.md) 指南介绍标的名单；[dataset](dataset.md) 指南介绍如何把原始文件转换成 xarray 面板。`quantlab.acquisition.symbol_batch.SymbolBatchAcquisition`、`quantlab.acquisition._support.coverage.CoverageLedger` 和 `quantlab.utils.progress` 的类文档字符串列出了全部选项。

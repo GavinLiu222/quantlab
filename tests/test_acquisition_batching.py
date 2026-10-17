@@ -103,7 +103,7 @@ def _acquisition(acquisition_config, **config_kwargs):
     rules under test belong to the base class, and instantiating a vendor here
     would let a vendor override silently satisfy the assertion.
     """
-    from quantlab.acquisition.base import SymbolBatchAcquisition
+    from quantlab.acquisition.symbol_batch import SymbolBatchAcquisition
 
     class _Batching(SymbolBatchAcquisition):
         VENDOR = "tiingo"
@@ -286,7 +286,7 @@ def test_the_abort_check_is_first_in_attempt_batch_abort_is_first():
     """
     import ast
 
-    from quantlab.acquisition.base import SymbolBatchAcquisition
+    from quantlab.acquisition.symbol_batch import SymbolBatchAcquisition
 
     first = _first_executable_statement(SymbolBatchAcquisition._attempt_batch)
 
@@ -355,7 +355,7 @@ def _concrete_acquisition_subclasses():
     import sys
 
     import quantlab.acquisition as acquisition
-    from quantlab.acquisition.base import SymbolBatchAcquisition
+    from quantlab.acquisition.symbol_batch import SymbolBatchAcquisition
 
     for info in pkgutil.iter_modules(
         acquisition.__path__, acquisition.__name__ + "."
@@ -549,7 +549,7 @@ def test_refresh_actually_dispatches_the_watermark_grouped_batches(
     this covers whichever vendor is multi-symbol rather than the one that
     happens to be today.
     """
-    from quantlab.acquisition.base import SymbolBatchAcquisition
+    from quantlab.acquisition.symbol_batch import SymbolBatchAcquisition
 
     requests_made: list[tuple[tuple[str, ...], str]] = []
 
@@ -1151,7 +1151,7 @@ def test_an_incomplete_batch_outcome_writes_zero_no_data_markers(
     substitution is the honest test: the property is `_attempt_batch`'s
     contract WITH `_fetch_batch`, not the page loop's behaviour.
     """
-    from quantlab.acquisition.base import BatchOutcome
+    from quantlab.acquisition.symbol_batch import BatchOutcome
 
     acq = _alpaca(acquisition_config, ("AAPL", "MSFT", "GOOG"))
     symbols = ["AAPL", "MSFT", "GOOG"]

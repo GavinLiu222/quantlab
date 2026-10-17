@@ -184,7 +184,7 @@ def test_run_still_returns_an_acquisition_result_and_converts_nothing() -> None:
     import inspect
 
     from quantlab.acquisition import registry
-    from quantlab.acquisition.base import AcquisitionResult
+    from quantlab.acquisition.symbol_batch import AcquisitionResult
 
     assert registry.download_symbols.__annotations__["return"] is AcquisitionResult
     assert registry.convert.__annotations__["return"] is ConversionResult

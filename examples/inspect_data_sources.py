@@ -30,7 +30,7 @@ from loguru import logger
 
 from quantlab.acquisition._support.inspector import SourceInspector
 from quantlab.acquisition.tiingo import TiingoAcquisition
-from quantlab.acquisition.base import SymbolBatchAcquisition
+from quantlab.acquisition.symbol_batch import SymbolBatchAcquisition
 from quantlab.utils.progress import CallbackProgressReporter, CancelToken
 from quantlab.acquisition.config import stock_acquisition_config
 from quantlab.config import set_data_root, stock_kline_config

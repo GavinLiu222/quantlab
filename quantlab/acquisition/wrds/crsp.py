@@ -45,7 +45,7 @@ from loguru import logger
 from psycopg2 import sql
 
 from quantlab.acquisition.wrds import taq as _wrds
-from quantlab.acquisition.base import SymbolBatchAcquisition
+from quantlab.acquisition.symbol_batch import SymbolBatchAcquisition
 from quantlab.acquisition.config import AcquisitionConfig
 from quantlab.config import get_data_root
 from quantlab.utils.atomic import write_json_atomically

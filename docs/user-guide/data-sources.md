@@ -191,7 +191,7 @@ config: `batch_size` (symbols per request), `max_workers` (concurrent
 requests), `resume`, `progress`, the quota and rate-limit knobs below, and
 vendor options such as Alpaca's `data_type`, `feed`, `adjustment` and
 `page_limit`. Alpaca bars are requested unadjusted (`adjustment="raw"`) unless
-you say otherwise. See the docstrings of `quantlab.acquisition.base.SymbolBatchAcquisition`
+you say otherwise. See the docstrings of `quantlab.acquisition.symbol_batch.SymbolBatchAcquisition`
 and each vendor class for details.
 
 ### Progress events

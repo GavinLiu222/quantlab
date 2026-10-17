@@ -245,7 +245,7 @@ def test_the_failure_manifest_name_is_declared_once_and_bound_by_acquisition(
     import inspect
     import re
 
-    import quantlab.acquisition.base as acquisition_module
+    import quantlab.acquisition.symbol_batch as acquisition_module
     from quantlab.acquisition._support.coverage import FAILURE_MANIFEST_NAME, CoverageLedger
 
     assert acquisition_module.SymbolBatchAcquisition.FAILURE_MANIFEST_NAME == (
@@ -282,7 +282,7 @@ def test_every_moved_acquisition_member_is_a_single_delegating_call() -> None:
     import inspect
     from pathlib import Path
 
-    import quantlab.acquisition.base as acquisition_module
+    import quantlab.acquisition.symbol_batch as acquisition_module
 
     moved = {
         "_watermark_root",
@@ -352,6 +352,7 @@ _INSPECTOR_RESOLVER_TOKEN = "INSPECTOR-FORBIDDEN-IMPORT-RESOLVED"
 _FORBIDDEN_INSPECTOR_MODULES = frozenset(
     {
         "quantlab.acquisition.base",
+        "quantlab.acquisition.symbol_batch",
         "quantlab.acquisition.tiingo",
         "quantlab.acquisition.alpaca",
         "quantlab.acquisition.registry",
@@ -568,7 +569,7 @@ def test_inspector_binds_no_client() -> None:
 
     import quantlab.acquisition._support.inspector as inspector_module
     import quantlab.acquisition._support.coverage as coverage_module
-    from quantlab.acquisition.base import SymbolBatchAcquisition
+    from quantlab.acquisition.symbol_batch import SymbolBatchAcquisition
 
     for module in (inspector_module, coverage_module):
         resolved = _resolved_imports(

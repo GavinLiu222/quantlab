@@ -1377,7 +1377,7 @@ def test_no_task_isolation_was_added() -> None:
     )
 
     tree = ast.parse(
-        (__import__("pathlib").Path("quantlab/acquisition/base.py")).read_text()
+        (__import__("pathlib").Path("quantlab/acquisition/symbol_batch.py")).read_text()
     )
     parallel_calls = [
         node

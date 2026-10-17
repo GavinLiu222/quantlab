@@ -48,7 +48,7 @@ import polars as pl
 import psycopg2
 from psycopg2 import sql
 
-from quantlab.acquisition.base import SymbolBatchAcquisition
+from quantlab.acquisition.symbol_batch import SymbolBatchAcquisition
 from quantlab.acquisition.config import AcquisitionConfig
 from quantlab.config import get_data_root
 

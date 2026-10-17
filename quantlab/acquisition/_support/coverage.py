@@ -10,7 +10,7 @@ the symbols whose download failed.
 ``CoverageLedger`` reads those files and answers the one question a refresh
 needs: which of the requested symbols still have to be fetched for the
 requested date range. It is the only implementation of that rule. The
-acquisition engine in ``quantlab/acquisition/base.py`` creates a ledger and
+acquisition engine in ``quantlab/acquisition/symbol_batch.py`` creates a ledger and
 delegates to it, and the source inspector (a read-only tool that reports
 what is on disk) builds one through ``CoverageLedger.for_config``, so the
 two always give the same answer.

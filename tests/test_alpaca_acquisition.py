@@ -476,7 +476,7 @@ def test_an_absent_rate_limit_header_contributes_nothing_not_a_default():
     would send an operator hunting a ceiling that was never reported.
     """
     from quantlab.acquisition.alpaca import AlpacaAcquisition
-    from quantlab.acquisition.base import SymbolBatchAcquisition
+    from quantlab.acquisition.symbol_batch import SymbolBatchAcquisition
 
     partial = _http_error(429, reason="Too Many Requests")
     partial.response.headers["X-RateLimit-Limit"] = "200"

@@ -191,7 +191,7 @@ def test_tracer_end_to_end_registry_to_raw_shard(
     """
     from quantlab.acquisition.base import DataSourceRegistry
     from quantlab.acquisition.registry import download_symbols, is_configured
-    from quantlab.acquisition.base import AcquisitionResult
+    from quantlab.acquisition.symbol_batch import AcquisitionResult
 
     descriptor = DataSourceRegistry.get("tiingo")
     config = acquisition_config(vendor="tiingo")
@@ -1050,7 +1050,7 @@ def _recording_acquisition(name: str):
     carries a `constructed` list so a test can assert WHICH class `download_symbols()`
     reached rather than inferring it from a side effect.
     """
-    from quantlab.acquisition.base import SymbolBatchAcquisition
+    from quantlab.acquisition.symbol_batch import SymbolBatchAcquisition
 
     class _Recording(SymbolBatchAcquisition):
         VENDOR = "tiingo"

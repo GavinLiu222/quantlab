@@ -28,7 +28,7 @@ import requests
 
 from quantlab.acquisition._support.request_policy import require_env
 from quantlab.acquisition.base import Capability, SourceDescriptor, register_source
-from quantlab.acquisition.base import SymbolBatchAcquisition
+from quantlab.acquisition.symbol_batch import SymbolBatchAcquisition
 from quantlab.acquisition.config import AcquisitionConfig
 from quantlab.acquisition.config import stock_acquisition_config
 from quantlab.dataset.stock import StockDataset

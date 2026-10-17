@@ -83,7 +83,7 @@ A symbol-batched vendor the daily update keeps current has both, its refresh
 wrapping its `SymbolBatchAcquisition` (FRED). The rest of this section builds a
 symbol-batched source.
 
-`SymbolBatchAcquisition` (`quantlab.acquisition.base`) owns everything but the
+`SymbolBatchAcquisition` (`quantlab.acquisition.symbol_batch`) owns everything but the
 request itself: batching,
 worker threads, pagination, resuming an interrupted run, per-symbol
 watermarks, the failure manifest, credential scrubbing and the Parquet shard
@@ -99,7 +99,7 @@ import numpy as np
 import pandas as pd
 import polars as pl
 
-from quantlab.acquisition.base import SymbolBatchAcquisition
+from quantlab.acquisition.symbol_batch import SymbolBatchAcquisition
 from quantlab.acquisition.config import AcquisitionConfig
 from quantlab.dataset.stock import StockDataset
 from quantlab.acquisition.base import Capability, SourceDescriptor, register_source

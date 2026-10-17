@@ -27,7 +27,7 @@ from typing import Optional
 
 import pytest
 
-import quantlab.acquisition.base as acquisition_module
+import quantlab.acquisition.symbol_batch as acquisition_module
 import quantlab.enums.data as enums_data
 
 
@@ -108,7 +108,7 @@ def _acquisition(acquisition_config, **config_kwargs):
     the assertion. `_validate_symbols` reads only `self.class_name` and
     `self.config.raw_data_dir_path`, so nothing here touches the network.
     """
-    from quantlab.acquisition.base import SymbolBatchAcquisition
+    from quantlab.acquisition.symbol_batch import SymbolBatchAcquisition
 
     class _Guard(SymbolBatchAcquisition):
         VENDOR = "tiingo"

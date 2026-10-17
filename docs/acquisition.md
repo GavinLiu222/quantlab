@@ -24,7 +24,7 @@ A vendor client is a subclass with three parts: `VENDOR` names the vendor, `RAW_
 >>> from datetime import date
 >>> from pathlib import Path
 >>> import polars as pl
->>> from quantlab.acquisition.base import SymbolBatchAcquisition
+>>> from quantlab.acquisition.symbol_batch import SymbolBatchAcquisition
 >>> from quantlab.acquisition.config import AcquisitionConfig
 >>> class DemoAcquisition(SymbolBatchAcquisition):
 ...     VENDOR = "tiingo"
@@ -397,4 +397,4 @@ Raw tick data is written exactly as the vendor sent it, with no resampling and n
 
 ## See also
 
-The [pageledger](pageledger.md) guide for resuming inside a multi-page batch, the [registry](registry.md) guide for looking up a vendor, downloading from it by name and keeping its raw tier current, the [universes](user-guide/universes.md) guide for the symbol roster, and the [dataset](dataset.md) guide for converting raw files to the xarray panel. The class docstrings of `quantlab.acquisition.base.SymbolBatchAcquisition`, `quantlab.acquisition._support.coverage.CoverageLedger` and `quantlab.utils.progress` list every option.
+The [pageledger](pageledger.md) guide for resuming inside a multi-page batch, the [registry](registry.md) guide for looking up a vendor, downloading from it by name and keeping its raw tier current, the [universes](user-guide/universes.md) guide for the symbol roster, and the [dataset](dataset.md) guide for converting raw files to the xarray panel. The class docstrings of `quantlab.acquisition.symbol_batch.SymbolBatchAcquisition`, `quantlab.acquisition._support.coverage.CoverageLedger` and `quantlab.utils.progress` list every option.

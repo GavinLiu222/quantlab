@@ -44,11 +44,11 @@ import polars as pl
 import requests
 
 from quantlab.acquisition.base import (
-    SymbolBatchAcquisition,
     Capability,
     SourceDescriptor,
     register_source,
 )
+from quantlab.acquisition.symbol_batch import SymbolBatchAcquisition
 from quantlab.acquisition.config import AcquisitionConfig, stock_acquisition_config
 from quantlab.acquisition.refresh import RawTierRefreshResult, RefreshedPart
 from quantlab.dataset.fred import FredRateDataset

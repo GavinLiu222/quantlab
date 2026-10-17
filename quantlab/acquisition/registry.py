@@ -48,10 +48,8 @@ import os
 from datetime import date
 from pathlib import Path
 
-from quantlab.acquisition.base import (
-    AcquisitionResult,
-    SourceDescriptor,
-)
+from quantlab.acquisition.base import SourceDescriptor
+from quantlab.acquisition.symbol_batch import AcquisitionResult
 from quantlab.acquisition.config import AcquisitionConfig
 from quantlab.acquisition.refresh import RawTierRefreshResult
 from quantlab.dataset.config import DatasetConfig
