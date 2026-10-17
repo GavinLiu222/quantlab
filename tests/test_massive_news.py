@@ -8,8 +8,9 @@ TICKERS, ACTIONS and SEP the Ticker map reads. What is locked here:
 
 - the raw tier keeps every field of every article, and an interrupted
   backfill resumes from its watermark;
-- an article counts on the trading day it was published before 16:00 New
-  York time, or else on the next trading day (after the close, on a weekend);
+- an article counts on the trading day it was published before the session's
+  close in New York (16:00, 13:00 on an early close), or else on the next
+  trading day (after the close, on a weekend);
 - an article naming several tickers counts once for each placed ticker,
   its sentiment the per-ticker ``insights`` label, and a ticker the Ticker
   map cannot place is counted in the sidecar;
@@ -288,3 +289,23 @@ def test_an_article_dated_before_seps_first_day_is_not_counted_on_it(tmp_path, m
     _raw(tmp_path)
     panel = _read(_dataset(tmp_path).update())
     assert _series(panel, "news_count", 101) == [1.0, 1.0, 1.0, 1.0, 0.0, 2.0]
+
+
+def test_an_article_after_an_early_close_counts_on_the_next_trading_day(tmp_path, monkeypatch):
+    import tests.test_massive_dividends as dividend_tests
+
+    # NYSE closed at 13:00 New York time (EDT, UTC-4) on 2024-07-03; 2024-07-04 was a holiday.
+    july = (date(2024, 7, 1), date(2024, 7, 2), date(2024, 7, 3), date(2024, 7, 5), date(2024, 7, 8))
+    monkeypatch.setattr(dividend_tests, "CLOSES", {  # SYNTHETIC: the prices the Ticker map matches
+        "AAA": {day: 10.0 for day in july}, "TWX": {day: 50.0 for day in july}, "TWO": {day: 30.0 for day in july},
+    })
+    monkeypatch.setattr(sys.modules[__name__], "DAYS", july)
+    monkeypatch.setattr(sys.modules[__name__], "ARTICLES", [
+        _article(1, "2024-07-03T16:59:00Z", ["AAA"]),  # 12:59: before the early close, 07-03
+        _article(2, "2024-07-03T18:00:00Z", ["AAA"]),  # 14:00: after it, the next session 07-05
+        _article(3, "2024-07-02T19:59:00Z", ["AAA"]),  # 15:59 on a full day: 07-02
+    ])
+    _raw(tmp_path, through=july[-1])
+    panel = _dataset(tmp_path).update().panel("2024-07-01", "2024-07-31").load()
+    assert [d.date() for d in panel.indexes["timestamp"]] == list(july)
+    assert _series(panel, "news_count", 101) == [0.0, 1.0, 1.0, 1.0, 0.0]

@@ -11,10 +11,11 @@ become four variables on SEP's trading calendar, one column per permaticker:
   ``news_count`` only.
 
 A cell without an article is 0. An article counts on the trading day of
-its ``published_utc`` in New York time when published before 16:00 there,
-and on the next trading day when published at or after 16:00 or on a day
-without trading, so news after the close never reaches the day's bar. The
-cut is 16:00 on every day, an early close included.
+its ``published_utc`` in New York time when published before that
+session's close, and on the next trading day when published at or after the
+close or on a day without trading, so news after the close never reaches the
+day's bar. The close is the session's actual one on the XNYS calendar
+(``XnysSessionCalendar``): 16:00, and 13:00 on an early close.
 
 An article's tickers are its ``tickers`` and the tickers of its
 ``insights``; each is placed on the permaticker the Ticker map gives it on
@@ -28,7 +29,7 @@ default SEP's domestic common stock) are columns.
 The store is built through the last day SEP, the news pull and the Ticker
 map all reach, so ``update()`` appends a day only once each of them holds
 it. The pull's watermark is a day in UTC; every article counting on a
-trading day was published by 16:00 New York time that day, before the UTC
+trading day was published by its close in New York that day, before the UTC
 day ends, so a watermark through the day holds them all.
 
 Examples
@@ -49,9 +50,12 @@ Build the store and read a security's daily counts::
 from __future__ import annotations
 
 import json
+from datetime import date, datetime, time
 
+import pandas as pd
 import polars as pl
 
+from quantlab.dataset._support.session_calendar import XnysSessionCalendar
 from quantlab.dataset.config import MassiveNewsConfig
 from quantlab.dataset.massive.placement import TickerPlacement
 from quantlab.dataset.massive.raw import rest_page_files
@@ -84,9 +88,8 @@ VARIABLES: dict[str, dict] = {
 #: The REST endpoint read (``quantlab.acquisition.massive.rest.ENDPOINTS``).
 ENDPOINT = "news"
 
-#: The time zone, and the hour there from which an article counts on the next trading day.
+#: The time zone of the sessions.
 NEW_YORK = "America/New_York"
-CLOSE_HOUR = 16
 
 #: The sentiment labels counted, each its variable.
 SENTIMENTS = {"positive": "news_positive", "negative": "news_negative", "neutral": "news_neutral"}
@@ -123,6 +126,61 @@ def _article_tickers(vendor_root) -> pl.DataFrame:
     return frame.with_columns(
         pl.col("published_utc").str.to_datetime(time_zone="UTC", strict=False).alias("published")
     ).drop("published_utc")
+
+
+def _session_closes(days: list[date]) -> pl.DataFrame:
+    """Return each NYSE session's close among ``days`` as a UTC time: ``date``, ``_close``.
+
+    The close is the session's actual one (13:00 New York time on an early
+    close). A day past the session calendar's last one closes at 16:00 when
+    it is a weekday; a day without a session has no row.
+    """
+    sessions = XnysSessionCalendar()
+    known = set(sessions.calendar.sessions.date)
+    last = sessions.calendar.last_session.date()
+    inside = sorted(day for day in days if day in known)
+    closes = sessions.session_bounds(inside).select("date", pl.col("close").alias("_close"))
+    beyond = sorted(day for day in days if day > last and day.weekday() < 5)
+    if beyond:
+        regular = [
+            pd.Timestamp(datetime.combine(day, time(16))).tz_localize(NEW_YORK).tz_convert("UTC").tz_localize(None)
+            for day in beyond
+        ]
+        closes = pl.concat([closes, pl.DataFrame({"date": beyond, "_close": regular},
+                                                 schema={"date": pl.Date, "_close": pl.Datetime("ns")})])
+    return closes.with_columns(pl.col("_close").dt.replace_time_zone("UTC"))
+
+
+def _trading_day(rows: pl.DataFrame) -> pl.DataFrame:
+    """Return ``rows`` with ``_day``, the day each article counts on before rolling onto SEP's calendar.
+
+    An article published before its New York day's session close counts on
+    that day; one published at or after the close, or on a day without a
+    session, on the next day (which ``TradingCalendar.place`` rolls onto the
+    next trading day).
+
+    Examples
+    --------
+    NYSE closed at 13:00 on 2024-07-03:
+
+    >>> rows = pl.DataFrame({"published": ["2024-07-03T16:59:00Z", "2024-07-03T18:00:00Z"]}).with_columns(
+    ...     pl.col("published").str.to_datetime(time_zone="UTC"))
+    >>> _trading_day(rows).get_column("_day").to_list()
+    [datetime.date(2024, 7, 3), datetime.date(2024, 7, 4)]
+    """
+    rows = rows.with_columns(pl.col("published").dt.convert_time_zone(NEW_YORK).dt.date().alias("_local_day"))
+    closes = _session_closes(rows.get_column("_local_day").drop_nulls().unique().to_list())
+    before_close = pl.col("published") < pl.col("_close").cast(rows.schema["published"])
+    return (
+        rows.join(closes, left_on="_local_day", right_on="date", how="left")
+        .with_columns(
+            pl.when(before_close.fill_null(False))
+            .then(pl.col("_local_day"))
+            .otherwise(pl.col("_local_day") + pl.duration(days=1))
+            .alias("_day")
+        )
+        .drop("_local_day", "_close")
+    )
 
 
 class MassiveNewsDataset(MassiveRestEventPanel):
@@ -174,13 +232,7 @@ class MassiveNewsDataset(MassiveRestEventPanel):
         with Timer(f"{self.class_name}: place news"):
             if window.len():
                 rows = _article_tickers(self.config.massive_dir).drop_nulls(["published", "ticker"])
-                local = pl.col("published").dt.convert_time_zone(NEW_YORK)
-                after_close = local.dt.hour() >= CLOSE_HOUR
-                rows = rows.with_columns(
-                    pl.when(after_close).then(local.dt.date() + pl.duration(days=1)).otherwise(local.dt.date())
-                    .alias("_day")
-                )
-                rows = self._on_trading_days(rows, calendar, "_day", window.min())
+                rows = self._on_trading_days(_trading_day(rows), calendar, "_day", window.min())
                 placed = placement.place(rows, source="news")
                 frame = (
                     placed.sort("id", "ticker")

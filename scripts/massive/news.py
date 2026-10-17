@@ -45,8 +45,8 @@ Sharadar's permaticker axis and SEP's trading calendar, the whole market's domes
 (SEP's default category filter). Variables, 0 on a day without an article: `news_count` (articles
 naming the security), and `news_positive`, `news_negative`, `news_neutral` (those whose per-ticker
 `insights` sentiment for the security is that label). An article counts on the trading day it was
-published before 16:00 New York time, otherwise on the next trading day (after the close, on a
-weekend or holiday).
+published before that session's close in New York (16:00, 13:00 on an early close), otherwise on
+the next trading day (after the close, on a weekend or holiday).
 
 Each of an article's tickers is placed on the permaticker the Ticker map gives it on the article's
 trading day, and the article counts once for each security placed; a ticker the map cannot place
