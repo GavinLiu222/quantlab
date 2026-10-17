@@ -1,4 +1,4 @@
-"""Literature-backed short-selling, news and 8-K event factors in one KunQuant graph.
+"""Literature-backed short-selling, news, 8-K event and 10-K text factors in one KunQuant graph.
 
 Every output comes from data beyond prices and the financial statements,
 signed so that a higher value predicts a higher return in its source paper:
@@ -19,6 +19,11 @@ output                            formula                                       
 ``distress_events``               ``-`` delisting notices, impairments, non-reliance,  Hennes, Leone and Miller (2008)
                                   bankruptcy, accelerated obligations, 252 bars
 ``equity_issuance_8k``            ``-`` unregistered equity sales, 252 bars            Hertzel et al. (2002)
+``lazy_prices_business``          10-K Item 1 cosine similarity with the year before   Cohen, Malloy and Nguyen (2020)
+``lazy_prices_risk``              10-K Item 1A cosine similarity                       Cohen, Malloy and Nguyen (2020)
+``lazy_prices_business_jaccard``  10-K Item 1 Jaccard similarity                       Cohen, Malloy and Nguyen (2020)
+``lazy_prices_risk_jaccard``      10-K Item 1A Jaccard similarity                      Cohen, Malloy and Nguyen (2020)
+``risk_disclosure_growth``        ``-`` log growth of the Item 1A word count           Cohen, Malloy and Nguyen (2020)
 ================================  ===================================================  ================================
 
 ``shares`` is DAILY's market cap over SEP's unadjusted close and ``SIR``
@@ -30,9 +35,14 @@ an 8-K item 2.02 (``event_22``) filing available on bar ``d`` is the
 every symbol with one; the output averages it over the filings of the last
 63 bars and is NaN without one.
 
+The 10-K outputs are the text-change panel's values
+(``quantlab.dataset.massive.ten_k``), shown from the filing until the next
+one: a firm that rewrites its annual report ("changers") underperforms.
+
 The panel merges Sharadar SEP (``adjClose``, ``close``, ``volume``), DAILY
-(``marketcap``), SF3A holdings, Sharadar EVENTS and the Massive short
-interest, short volume and news panels, each point in time. Event, short
+(``marketcap``), SF3A holdings, Sharadar EVENTS, the Massive short
+interest, short volume and news panels and the 10-K text-change panel,
+each point in time. Event, short
 volume and news counts are 0 on a priced bar without one and NaN without a
 price or before their source's first non-zero bar
 (``fundamental_alpha.fill_flows``); the news sentiment counts start on their
@@ -48,7 +58,7 @@ Desai, Ramesh, Thiagarajan and Balachandran (2002); Diether, Lee and Werner
 (2009); Fang and Peress (2009); Heston and Sinha (2017); Brandt, Kishore,
 Santa-Clara and Venkatachalam (2008); Brav, Jiang, Partnoy and Thomas
 (2008); Hennes, Leone and Miller (2008); Hertzel, Lemmon, Linck and Rees
-(2002).
+(2002); Cohen, Malloy and Nguyen (2020).
 """
 
 from __future__ import annotations
@@ -93,6 +103,18 @@ OUTPUT_COLUMNS: dict[str, tuple[str, ...]] = {
     "activist_13d": ("event_35", "adjClose"),
     "distress_events": (*DISTRESS_EVENTS, "adjClose"),
     "equity_issuance_8k": ("event_32", "adjClose"),
+    "lazy_prices_business": ("business_similarity",),
+    "lazy_prices_risk": ("risk_similarity",),
+    "lazy_prices_business_jaccard": ("business_jaccard",),
+    "lazy_prices_risk_jaccard": ("risk_jaccard",),
+    "risk_disclosure_growth": ("risk_length_change",),
+}
+#: The 10-K outputs that are the text-change panel's similarity as it is.
+_TEXT_SIMILARITY = {
+    "lazy_prices_business": "business_similarity",
+    "lazy_prices_risk": "risk_similarity",
+    "lazy_prices_business_jaccard": "business_jaccard",
+    "lazy_prices_risk_jaccard": "risk_jaccard",
 }
 
 
@@ -175,7 +197,7 @@ class AlternativeAlphaParameters:
 
 
 class AlternativeAlpha(FactorKunQuant):
-    """Compute the eleven short-selling, news and 8-K event characteristics in KunQuant.
+    """Compute the sixteen short-selling, news, 8-K event and 10-K text characteristics in KunQuant.
 
     Only the selected ``factor_names`` are built, and ``data_columns`` must
     name exactly ``AlternativeAlphaParameters.required_panel_columns`` of
@@ -313,6 +335,12 @@ class AlternativeAlpha(FactorKunQuant):
                 outputs["distress_events"] = 0.0 - count(*DISTRESS_EVENTS)
             if "equity_issuance_8k" in wanted:
                 outputs["equity_issuance_8k"] = 0.0 - count("event_32")
+            for name, column in _TEXT_SIMILARITY.items():
+                if name in wanted:
+                    # An output must be an op, not an input.
+                    outputs[name] = x(column) * 1.0
+            if "risk_disclosure_growth" in wanted:
+                outputs["risk_disclosure_growth"] = 0.0 - x("risk_length_change")
             for name in wanted:
                 Output(Rank(outputs[name]) if params.ranked else outputs[name], name)
         return Function(builder.ops, name="alternative_alpha")

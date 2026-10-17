@@ -436,6 +436,31 @@ A cell without an article is 0. An article counts on the trading day of its `pub
 
 The first backfill (about ten years at 1,000 articles a page) is long; run `scripts/massive/rest_pull.py --endpoints news` by hand, in steps with `--end` if needed, before the daily update takes over: an interrupted pull resumes from its watermark. The shared store is `<data-dir>/market/massive/massive_news_1d/`, beside its `README.md` and `component.json`. `scripts/massive/news.py --download-dir ... --data-dir ...` writes the folder when it is missing (`MassiveNewsDataset.from_data_root`, the config starting at the later of the Ticker map's first day and 2016-06-01, the endpoint's first day) and appends the new days; once the folder exists, an `update` step of the daily data update appends to it after the dividend panel ([data_update.md](data_update.md)). Each update reads every page of the news pull again.
 
+## 10-K text changes
+
+`MassiveTenKChangesDataset` (`quantlab.dataset.massive.ten_k`) compares every 10-K in the REST `10k_sections` pull with the filer's report for the fiscal year before (Cohen, Malloy and Nguyen 2020, "Lazy Prices"), for the `business` (Item 1) and `risk_factors` (Item 1A) sections, and shows the result in the panel `massive_10k_changes_1d` on Sharadar's permaticker axis and SEP's trading calendar:
+
+```python
+from quantlab.dataset.config import MassiveTenKChangesConfig
+from quantlab.dataset.massive.ten_k import MassiveTenKChangesDataset
+
+changes = MassiveTenKChangesDataset(MassiveTenKChangesConfig(
+    zarr_file_path="/data/quantlab/market/massive/massive_10k_changes_1d/massive_10k_changes_1d.zarr",
+    raw_data_dir_path="/data/quantlab/downloads/sharadar",
+    massive_dir="/data/quantlab/downloads/massive",
+    workers=32,
+))
+changes.update()
+```
+
+| variable | meaning |
+|---|---|
+| `business_similarity`, `risk_similarity` | cosine similarity of the section's word counts with the previous report's |
+| `business_jaccard`, `risk_jaccard` | Jaccard similarity of their sets of words |
+| `business_length_change`, `risk_length_change` | log of the section's word count over the previous report's |
+
+Words are runs of three or more letters, lowercased, without English stop words, counted into 2**20 hashed buckets. The report of a filer, section and fiscal period is its first filing (a later one is an amendment); the previous report is the one whose period ends 300 to 430 days earlier. A section under 100 words on either side, or a report with no previous one, is NaN. A filing is shown from the first SEP trading day on or after its filing date until the filer's next filing, for at most `stale_after_days` (400), on every SEP security of the universe whose TICKERS `secfilings` carries the filer's CIK and that is priced on the filing date. The records are keyed by CIK, not ticker, so the Ticker map is not used and the panel starts with the pull (2003; dense from 2006). Each build reads every page again (about 17 GB of text, minutes with `workers`).
+
 ## Short volume
 
 `MassiveShortVolumeDataset` (`quantlab.dataset.massive.short_volume`) builds the short volume panel `massive_short_volume_1d` from the REST `short_volume` pull (FINRA's daily short sale volume, from 2024-02-06), on Sharadar's permaticker axis and SEP's trading calendar:

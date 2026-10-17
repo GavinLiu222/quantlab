@@ -1403,6 +1403,42 @@ class MassiveShortInterestConfig(MassiveRestPanelConfig):
 
 
 @dataclass(kw_only=True, frozen=True)
+class MassiveTenKChangesConfig(SharadarDatasetConfig):
+    """Config of the 10-K text-change panel on the permaticker axis.
+
+    Massive's 10-K sections (the REST raw tier ``rest/10k_sections`` under
+    ``massive_dir``) are compared with the same filer's previous annual
+    report, keyed by SEC CIK and placed on every SEP security whose TICKERS
+    ``secfilings`` carries the CIK. ``raw_data_dir_path`` is Sharadar's raw
+    tier: SEP's dates are the calendar and SEP's TICKERS rows the universe,
+    whose fields work as for a price panel (the default is domestic common
+    stock).
+
+    Examples
+    --------
+    >>> cfg = MassiveTenKChangesConfig(
+    ...     zarr_file_path="/data/zarrs/massive_10k_changes_1d.zarr",
+    ...     raw_data_dir_path="/data/downloads/sharadar",
+    ...     massive_dir="/data/downloads/massive",
+    ... )
+    >>> cfg.vendor, cfg.table, cfg.stale_after_days, cfg.workers
+    ('massive', 'sep', 400, 4)
+    """
+
+    #: Massive's text; the calendar and the universe are Sharadar's.
+    vendor: Vendor | None = "massive"
+    #: Always SEP: its TICKERS rows give the universe and the CIKs, its dates the calendar.
+    table: str = "sep"
+    #: Massive's raw tier (``<download-dir>/massive``), holding ``rest/10k_sections``.
+    massive_dir: str
+    #: Days after its filing date a report stops being shown when no newer
+    #: one has replaced it: a little over a year, so a skipped report shows nothing.
+    stale_after_days: int | None = 400
+    #: Processes the documents are vectorized on (``joblib``).
+    workers: int = 4
+
+
+@dataclass(kw_only=True, frozen=True)
 class MassiveNewsConfig(MassiveRestPanelConfig):
     """Config of the Massive news count and sentiment panel on the permaticker axis (#357).
 

@@ -55,6 +55,9 @@ def _panel() -> xr.Dataset:
         data[name][:100] = 0.0
     for name in EVENTS:
         data[name] = rng.random(shape) < (0.05 if name == "event_22" else 0.01)
+    for name in ("business_similarity", "risk_similarity", "business_jaccard", "risk_jaccard"):
+        data[name] = np.where(rng.random(shape) < 0.8, rng.uniform(0.5, 1.0, size=shape), np.nan)
+    data["risk_length_change"] = rng.normal(0.0, 0.2, size=shape)
     for name in ("short_total_volume", "short_volume", "news_count", "news_positive", "news_negative",
                  "news_neutral"):
         data[name][:, 9] = np.nan
@@ -139,6 +142,11 @@ def _reference(panel) -> dict[str, np.ndarray]:
         "activist_13d": count("event_35"),
         "distress_events": -count(*DISTRESS_EVENTS),
         "equity_issuance_8k": -count("event_32"),
+        "lazy_prices_business": v["business_similarity"],
+        "lazy_prices_risk": v["risk_similarity"],
+        "lazy_prices_business_jaccard": v["business_jaccard"],
+        "lazy_prices_risk_jaccard": v["risk_jaccard"],
+        "risk_disclosure_growth": -v["risk_length_change"],
     }
     return {name: frame.values for name, frame in out.items()}
 

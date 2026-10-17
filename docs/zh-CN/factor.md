@@ -667,7 +667,7 @@ signals.build("2016-10-11", "2026-10-13")
 | `LiteratureAlpha` | KunQuant | 覆盖价格、风险、流动性、基本面和盈利事件的 8 个原始值/排名因子 |
 | `ShortHorizonAlpha` | KunQuant | 日线上的短周期文献因子：1、3、5 日反转（中性化后即行业内相对反转）、低 MAX、换手率条件动量、异常成交量、隔夜与日内收益均值；`data_columns` 必须是 `SHORT_HORIZON_COLUMNS` |
 | `FundamentalAlpha` | KunQuant | 基于财报、13F 和内部人数据的 23 个文献因子（应计、现金与经营盈利、ROE、EBIT/EV、自由现金流与净派息收益率、综合发行、投资/资产、研发/市值、ROA 变化、F-score、盈利与收入 SUE、持有机构数变化与年增长、机构持股及其变化、内部人净买入比率、净买入额、买入额、买入人数和人数差）；`ranked=True` 输出全市场截面排名，`NeutralizedFactor` 应包装它，符号使越大预期收益越高；读 SEP、DAILY、SF1 ART、SF3A、SF2，按财报期滞后（`report_lags`）；`data_columns` 必须是 `FundamentalAlphaParameters().required_panel_columns(factor_names)`；仅批量 |
-| `AlternativeAlpha` | KunQuant | 基于卖空、新闻和 8-K 事件的 11 个文献因子（空头比例、回补天数、空头变化、空头/机构持股、卖空量占比、新闻关注度与情绪、财报公告收益、13D 申报、困境事件、非公开增发），符号使越大预期收益越高；读 SEP、DAILY、SF3A、EVENTS 和 Massive 空头持仓、卖空量、新闻；`data_columns` 必须是 `AlternativeAlphaParameters.required_panel_columns(factor_names)`；`ranked=True` 输出全市场排名；仅批量 |
+| `AlternativeAlpha` | KunQuant | 基于卖空、新闻和 8-K 事件的 11 个文献因子（空头比例、回补天数、空头变化、空头/机构持股、卖空量占比、新闻关注度与情绪、财报公告收益、13D 申报、困境事件、非公开增发）和 10-K 文本变化（Lazy Prices：第 1 项、第 1A 项与上一年的余弦和 Jaccard 相似度，第 1A 项篇幅增长），符号使越大预期收益越高；读 SEP、DAILY、SF3A、EVENTS、Massive 空头持仓、卖空量、新闻和 `MassiveTenKChangesDataset`；`data_columns` 必须是 `AlternativeAlphaParameters.required_panel_columns(factor_names)`；`ranked=True` 输出全市场排名；仅批量 |
 | `MarketFeatures` | xarray | 每个指数或 ETF 序列 21 个收益和成交额特征，每个有 bar 的标的取值相同；配置类 `MarketFeatureConfig` |
 | `Forward` | 任意 | 把一个因子向前平移成标签 |
 | `Return`、`BinaryReturn` | KunQuant | 前瞻收益标签，`Forward` 的子类 |
