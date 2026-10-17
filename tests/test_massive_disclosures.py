@@ -291,3 +291,12 @@ def test_the_endpoints_are_registered_for_the_rest_pull():
     assert (disclosures.date_field, disclosures.earliest, disclosures.limit) == ("filing_date", date(2020, 1, 1), 1000)
     assert taxonomy.url == "https://api.massive.com/stocks/taxonomies/vX/disclosures"
     assert taxonomy.date_field is None
+
+
+def test_a_filing_dated_before_seps_first_day_is_not_stamped_on_it(tmp_path):
+    # SEP starts on D1 (Monday 2024-03-04); an 8-K of the Wednesday before shows on a day the
+    # calendar does not hold, not on D1.
+    before = _disclosure("B1", ["AAA"], date(2024, 2, 28), "financial_results", "quarterly_earnings")
+    _raw(tmp_path, disclosures=[*DISCLOSURES, before])
+    panel = _read(_dataset(tmp_path).update())
+    assert _series(panel, "financial_results", 101) == [False, True, False, False, False, True]

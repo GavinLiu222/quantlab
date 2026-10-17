@@ -162,8 +162,8 @@ class MassiveShortVolumeDataset(MassiveRestEventPanel):
         frame = pl.DataFrame(schema=schema)
         with Timer(f"{self.class_name}: place short volume"):
             if window.len():
-                rows = calendar.place(_records(self.config.massive_dir), on="date").filter(
-                    pl.col("available").is_between(window.min(), window.max())
+                rows = self._on_trading_days(_records(self.config.massive_dir), calendar, "date", window.min()).filter(
+                    pl.col("available") <= window.max()
                 )
                 rows = placement.place(rows, source=ENDPOINT)
                 frame = (

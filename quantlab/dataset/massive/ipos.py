@@ -172,7 +172,7 @@ class MassiveIpoDataset(MassiveRestEventPanel):
         ipos = _newest_copies(self.config.massive_dir).filter(
             pl.col("ipo_status").is_in(LISTED) & pl.col("listing_date").is_not_null()
         )
-        rows = calendar.place(ipos, on="listing_date", drop_earlier=True).filter(pl.col("available") >= first)
+        rows = self._on_trading_days(ipos, calendar, "listing_date", first)
         usd = pl.col("currency_code").fill_null("") == "USD"
         for (currency,), unusable in rows.filter(~usd).group_by(["currency_code"]):
             reason = "no currency" if currency is None else f"currency {currency}, not USD"

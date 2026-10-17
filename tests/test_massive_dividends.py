@@ -21,6 +21,7 @@ Every record is SYNTHETIC; field names are Massive's (#350's endpoint facts).
 from __future__ import annotations
 
 import json
+import sys
 import math
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -259,3 +260,18 @@ def test_a_store_without_the_rest_pull_is_refused(tmp_path):
         (tmp_path / "downloads" / "massive" / "rest" / name / "_watermark.json").unlink()
     with pytest.raises(ValueError, match="rest_pull"):
         _dataset(tmp_path).update()
+
+
+def test_an_event_dated_before_seps_first_day_is_not_stamped_on_it(tmp_path, monkeypatch):
+    # SEP starts on D1 (Monday 2024-03-04); an ex-date and a split on the Friday before it are
+    # events of a day the calendar does not hold, not of D1.
+    friday = date(2024, 3, 1)
+    monkeypatch.setattr(sys.modules[__name__], "DIVIDENDS", [*DIVIDENDS, _dividend(9, "AAA", friday, 0.7)])
+    monkeypatch.setattr(sys.modules[__name__], "SPLITS", [*SPLITS, {  # SYNTHETIC
+        "id": "S0", "ticker": "AAA", "execution_date": friday.isoformat(), "split_from": 1, "split_to": 2,
+        "adjustment_type": "forward_split", "historical_adjustment_factor": 0.5,
+    }])
+    _raw(tmp_path)
+    panel = _read(_dataset(tmp_path).update())
+    assert _series(panel, "dividend_cash", 101) == [None, None, None, None, 0.75, None]
+    assert _series(panel, "split_ratio", 101) == [None, None, 4.0, None, None, None]

@@ -21,6 +21,7 @@ Every record is SYNTHETIC; field names are Massive's (docs, 2026-10-17).
 from __future__ import annotations
 
 import json
+import sys
 import math
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -261,3 +262,13 @@ def test_the_endpoint_pulls_by_date_from_2024_02_06():
     endpoint = ENDPOINTS["short_volume"]
     assert endpoint.url.endswith("/stocks/v1/short-volume")
     assert (endpoint.date_field, endpoint.earliest) == ("date", date(2024, 2, 6))
+
+
+def test_a_record_dated_before_seps_first_day_is_not_stamped_on_it(tmp_path, monkeypatch):
+    # SEP starts on D1 (Monday 2024-03-04); the Friday before is a day of its own, not added to D1.
+    before = _short("AAA", date(2024, 3, 1), 7.0, 100.0, 0.0)
+    monkeypatch.setattr(sys.modules[__name__], "FIRST_PULL", [before, *FIRST_PULL])
+    _raw(tmp_path)
+    panel = _read(_dataset(tmp_path).update())
+    assert _series(panel, "short_volume", 101)[0] == 400.0
+    assert _series(panel, "short_total_volume", 101)[0] == 1000.0

@@ -212,8 +212,8 @@ class MassiveDisclosureDataset(MassiveRestPanel, FilingPanelDataset):
         with Timer(f"{self.class_name}: place 8-K disclosures"):
             if window.len():
                 rows = (
-                    calendar.place(self._records(), on="filing_date", lag=timedelta(days=1))
-                    .filter(pl.col("available") >= window.min())
+                    self._on_trading_days(self._records(), calendar, "filing_date", window.min(),
+                                          lag=timedelta(days=1))
                     .explode("tickers", empty_as_null=True)
                     .rename({"tickers": "ticker"})
                 )

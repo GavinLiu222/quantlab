@@ -153,9 +153,12 @@ class MassiveRestPanel:
     ) -> pl.DataFrame:
         """Return ``rows`` placed on the trading day of ``on`` (+ ``lag``), from the store's first day.
 
-        An event placed before ``first``, the window's first day, is dropped.
+        An event dated before the calendar's first day is dropped rather
+        than stamped on that day (``TradingCalendar.place(drop_earlier=True)``):
+        it happened on a day the calendar does not hold. So is one placed
+        before ``first``, the window's first day.
         """
-        return calendar.place(rows, on=on, lag=lag).filter(pl.col("available") >= first)
+        return calendar.place(rows, on=on, lag=lag, drop_earlier=True).filter(pl.col("available") >= first)
 
 
 class MassiveRestEventPanel(MassiveRestPanel, ReleasePanelDataset):

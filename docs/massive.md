@@ -340,6 +340,8 @@ A row the map cannot place is never guessed. It is left out and counted in the s
 
 A panel's own reasons for leaving a row out (no amount, another currency) go in the same report through `leave_out`. `TickerMap.read_days(days, tickers)` reads only the map's files and tickers a placement needs.
 
+The six REST panels below share `MassiveRestPanel` (`quantlab.dataset.massive.rest_panel`): the Ticker map, the sidecar's path, the calendar through the last day SEP, every endpoint read and the Ticker map reach, and the placement of an event on its trading day. An event dated before SEP's first day (an ex-date, a split, an article, a filing, a short volume record, a listing) is dropped, not rolled onto that day: it happened on a day the calendar does not hold. A state still holds on the first day, so a dividend declared before it is shown from it.
+
 ## Dividends and splits
 
 `MassiveDividendDataset` (`quantlab.dataset.massive.dividends`) builds the dividend panel `massive_dividends_1d` from the REST `dividends` and `splits` pulls, on Sharadar's permaticker axis and SEP's trading calendar:

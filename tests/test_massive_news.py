@@ -22,6 +22,7 @@ read 2026-10-17).
 from __future__ import annotations
 
 import json
+import sys
 from datetime import UTC, date, datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -278,3 +279,12 @@ def test_a_store_without_the_news_pull_is_refused(tmp_path):
     (tmp_path / "downloads" / "massive" / "rest" / "news" / "_watermark.json").unlink()
     with pytest.raises(ValueError, match="rest_pull"):
         _dataset(tmp_path).update()
+
+
+def test_an_article_dated_before_seps_first_day_is_not_counted_on_it(tmp_path, monkeypatch):
+    # SEP starts on D1 (Monday 2024-03-04); an article of the Friday before is not D1's news.
+    before = _article(9, "2024-03-01T15:00:00Z", ["AAA"], {"AAA": "positive"})
+    monkeypatch.setattr(sys.modules[__name__], "ARTICLES", [*ARTICLES, before])
+    _raw(tmp_path)
+    panel = _read(_dataset(tmp_path).update())
+    assert _series(panel, "news_count", 101) == [1.0, 1.0, 1.0, 1.0, 0.0, 2.0]

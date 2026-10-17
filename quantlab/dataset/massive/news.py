@@ -180,7 +180,7 @@ class MassiveNewsDataset(MassiveRestEventPanel):
                     pl.when(after_close).then(local.dt.date() + pl.duration(days=1)).otherwise(local.dt.date())
                     .alias("_day")
                 )
-                rows = calendar.place(rows, on="_day").filter(pl.col("available") >= window.min())
+                rows = self._on_trading_days(rows, calendar, "_day", window.min())
                 placed = placement.place(rows, source="news")
                 frame = (
                     placed.sort("id", "ticker")
