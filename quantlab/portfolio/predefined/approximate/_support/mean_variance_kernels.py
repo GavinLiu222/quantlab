@@ -474,6 +474,12 @@ def _solve_bar(mu, cap, ut, specific, bound, start, anchor, settings, out):
 
 
 @njit(cache=True)
+def _held(selectable, holding):
+    """Whether a selectable symbol is held: above ``HELD_WEIGHT_TOLERANCE``."""
+    return selectable and abs(holding) > HELD_WEIGHT_TOLERANCE
+
+
+@njit(cache=True)
 def _caps(pool, selectable, holdings, strength, top_k, weight_cap, long_only, cap):
     """The bar's caps: ``weight_cap`` on its candidates; whether it is solvable.
 
@@ -483,8 +489,7 @@ def _caps(pool, selectable, holdings, strength, top_k, weight_cap, long_only, ca
     """
     m = pool.shape[0]
     for i in range(m):
-        held = selectable[i] and abs(holdings[i]) > HELD_WEIGHT_TOLERANCE
-        cap[i] = weight_cap if (pool[i] or held) else 0.0
+        cap[i] = weight_cap if (pool[i] or _held(selectable[i], holdings[i])) else 0.0
     if top_k > 0:
         index = np.flatnonzero(cap > 0)
         keys = np.empty(index.shape[0])
@@ -493,7 +498,7 @@ def _caps(pool, selectable, holdings, strength, top_k, weight_cap, long_only, ca
         order = np.argsort(keys, kind="mergesort")
         for n in range(top_k, index.shape[0]):
             i = index[order[n]]
-            if not (selectable[i] and abs(holdings[i]) > HELD_WEIGHT_TOLERANCE):
+            if not _held(selectable[i], holdings[i]):
                 cap[i] = 0.0
     count = 0
     for i in range(m):

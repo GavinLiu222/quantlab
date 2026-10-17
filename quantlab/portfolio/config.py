@@ -17,12 +17,12 @@ if TYPE_CHECKING:
     from quantlab.risk.base import FactorRiskModel
 
 
-#: The smallest weight ``candidate_top_k`` counts as held. A solver leaves
-#: residues up to about 1e-9 on names it does not hold, an exact 0 on one
-#: platform and a residue on another, so a residue counted as held changed the
-#: next bar's candidates by platform; both the optimizer and the approximate
-#: backtest read this one threshold.
+#: The weight above which the mean-variance optimizer and the approximate
+#: backtest count a symbol as held (``|w| > HELD_WEIGHT_TOLERANCE``). It sits
+#: above a solver's residues on the names it does not hold (up to about 1e-9,
+#: platform-dependent) and below any weight that is a position.
 HELD_WEIGHT_TOLERANCE = 1e-8
+
 
 @dataclass(frozen=True)
 class TopNConfig(FrozenConfig):
@@ -259,9 +259,9 @@ class MeanVarianceConfig(FrozenConfig):
     #: gets no weight. Empty: no exposure is bounded.
     exposure_bounds: dict[str, tuple[float, float]] = field(default_factory=dict)
     #: The cvxpy solver each bar's problem is solved with, by its cvxpy name
-    #: (``cvxpy.installed_solvers()``). ``None`` is refused: cvxpy's own
-    #: choice depends on which solvers are installed (it picks an unlicensed
-    #: MOSEK and fails) and on the cvxpy version. Our choice: ``"CLARABEL"``
+    #: (``cvxpy.installed_solvers()``). ``None`` is refused, since cvxpy's
+    #: own choice depends on the installed solvers and the cvxpy version.
+    #: Our choice: ``"CLARABEL"``
     #: (interior point), whose constraints hold to about 1e-9, against about
     #: 1e-5 for ``"OSQP"`` (first order, the one cvxpy 1.9 picks); it leaves
     #: residues of 1e-10 to 1e-6 on the symbols it does not hold, which

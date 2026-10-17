@@ -1215,12 +1215,10 @@ def configuration_case(request, mvo_store):
 
 
 def test_each_configuration_s_weights_are_within_the_bound_of_the_runs(configuration_case):
-    # candidate_top_k keeps the held names in its pool, a name counting as
-    # held above HELD_WEIGHT_TOLERANCE in both backtests. With any nonzero
-    # weight counting, the run's 1.9e-9 residue on a name at bar 53 (an exact
-    # 0 on macOS) put it in bar 54's pool on Linux only, and the books there
-    # differed by 8.3e-3 (L1); with the shared threshold every bar is within
-    # 7e-6 on both.
+    # candidate_top_k keeps the held names in its pool, both backtests
+    # counting a name as held above HELD_WEIGHT_TOLERANCE, so a solver residue
+    # (1.9e-9 on one name at bar 53 on Linux, an exact 0 on macOS) pools on
+    # neither; every bar is within 7e-6.
     _, result, account = configuration_case
 
     assert _weights_gap(result, account).max() <= WEIGHTS_L1

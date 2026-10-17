@@ -408,9 +408,7 @@ def test_the_solver_defaults_to_clarabel_and_is_the_one_used(monkeypatch):
 
 
 def test_no_solver_is_refused():
-    # cvxpy's own choice depends on which solvers happen to be installed (with
-    # mosek installed and no licence it picks MOSEK and fails), so the same
-    # config would solve differently, or not at all, on another machine.
+    # cvxpy's own choice depends on the installed solvers.
     with pytest.raises(ValueError, match="solver=None"):
         _optimizer(solver=None)
 
@@ -428,9 +426,7 @@ def test_the_solver_round_trips_through_the_config():
 
 
 def test_a_solver_residue_is_not_held_by_candidate_top_k():
-    # A 1.9e-9 weight is the solver's round-off, not a holding: whether a name
-    # ends a bar at it or at an exact 0 depends on the platform's last digits,
-    # so counting it as held changed the next bar's pool on Linux only.
+    # A 1.9e-9 weight is a solver's round-off, below HELD_WEIGHT_TOLERANCE.
     prediction = np.array([3.0, 2.0, 1.0, 0.0, -1.0, -2.0])
     rule = _optimizer(candidate_top_k=2)
     residue = rule.problem_inputs(_context(prediction=prediction, current=[0, 0, 0, 0, 0, 1.9e-9]))
@@ -453,3 +449,12 @@ def test_the_approximate_kernel_does_not_hold_a_solver_residue_either():
 
     assert capped(1.9e-9) == [0.5, 0.5, 0.0, 0.0]
     assert capped(1e-4) == [0.5, 0.5, 0.0, 0.5]
+
+
+def test_a_solver_residue_without_a_prediction_is_not_a_candidate():
+    prediction = np.array([3.0, 2.0, 1.0, 0.0, -1.0, np.nan])
+    rule = _optimizer()
+    residue = rule.problem_inputs(_context(prediction=prediction, current=[0, 0, 0, 0, 0, 1.9e-9]))
+    assert "FFF" not in residue.symbols.tolist()
+    held = rule.problem_inputs(_context(prediction=prediction, current=[0, 0, 0, 0, 0, 1e-4]))
+    assert "FFF" in held.symbols.tolist()

@@ -9,7 +9,8 @@ holds only ``__version__`` and may import the standard library only
 import importlib.metadata
 
 try:
-    #: The installed distribution's version (the PyPI name is ``quantlab-py``).
+    #: The installed distribution's version, by its PyPI name ``quantlab-py``
+    #: (``0+unknown`` until ``pyproject.toml`` names the distribution so).
     __version__ = importlib.metadata.version("quantlab-py")
 except importlib.metadata.PackageNotFoundError:
     __version__ = "0+unknown"

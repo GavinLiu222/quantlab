@@ -242,7 +242,7 @@ ul,ol{ margin:4pt 0 8pt; padding-left:18pt; } li{ margin:2pt 0; }
 <tr><td><code>dataset/</code> 和 <code>acquisition/</code> 的顶层像一份“菜单”</td><td>这两个目录的每个顶层条目都是一个完整可用的东西（一种数据集 / 一家数据供应商），辅助代码一律放进 <code>_support/</code>。浏览目录就等于浏览功能清单。</td></tr>
 <tr><td><code>__init__.py</code> 不转发（re-export）别的模块</td><td>所有 import 都写完整路径，例如 <code>from quantlab.factor.predefined.alpha158 import Alpha158Stock</code>。一个名字只有一种写法，grep 一定能找到定义处。</td></tr>
 <tr><td>少数包的 <code>__init__.py</code> <b>本身就是</b>入口模块</td><td>例如 <code>quantlab/dataset/crsp/__init__.py</code> 就是 CRSP 数据集的主模块，相关的子模块放在同一目录下。规则是“__init__ 就是模块本身”，而不是“__init__ 转发别的模块”。</td></tr>
-<tr><td>若干 <code>__init__.py</code> 必须是 0 字节</td><td>非空的 <code>__init__</code> 会在其下每次 import 时执行。有一个保证（“不需要凭证的数据源查看器不会间接加载任何供应商客户端”）依赖这几个空文件，有测试保证（第 10 章）。</td></tr>
+<tr><td>若干 <code>__init__.py</code> 不能加载任何东西</td><td><code>__init__</code> 会在其下每次 import 时执行。有一个保证（“不需要凭证的数据源查看器不会间接加载任何供应商客户端”）依赖两个空文件，以及 <code>quantlab/__init__.py</code> 只导入标准库，有测试保证（第 10 章）。</td></tr>
 <tr><td>根类与配置不加载 torch</td><td>import 任意层的 <code>base.py</code> 或 <code>config.py</code> 都不会加载 torch。测试会起一个子进程检查 <code>'torch' in sys.modules</code>。</td></tr>
 </table>
 
@@ -892,7 +892,7 @@ inputs = DecisionInputs.from_run(run_dir) <span class="c"># 实盘执行器：�
 <div class="keep"><h2>10.2 凭证与“无凭证查看器”</h2>
 <ul>
 <li>所有 API key 只从环境变量读取，不通过命令行参数传入，不写进配置文件，也不出现在日志里。</li>
-<li><code>SourceInspector</code> 用来回答“这个项目能下载哪些数据”，它必须能在<b>不加载任何供应商客户端</b>的情况下被 import。保证方法是：用 AST 扫描它自身的源码，再在运行时检查 <code>vars()</code>。但这两种检查都看不到通过包的 <code>__init__.py</code> 间接引入的 import，所以 import 链上的三个 <code>__init__.py</code> 必须保持 0 字节，并有测试断言这一点。</li>
+<li><code>SourceInspector</code> 用来回答“这个项目能下载哪些数据”，它必须能在<b>不加载任何供应商客户端</b>的情况下被 import。保证方法是：用 AST 扫描它自身的源码，再在运行时检查 <code>vars()</code>。但这两种检查都看不到通过包的 <code>__init__.py</code> 间接引入的 import，所以 import 链上的三个 <code>__init__.py</code> 中，两个 acquisition 的必须保持 0 字节，<code>quantlab/__init__.py</code>（放着 <code>__version__</code>）只能导入标准库，并有测试断言这一点。</li>
 </ul></div>
 
 <div class="keep"><h2>10.3 平台差异写进文档和测试</h2>
@@ -908,7 +908,7 @@ inputs = DecisionInputs.from_run(run_dir) <span class="c"># 实盘执行器：�
 <tr><td><code>test_layer_layout.py</code></td><td>每一条 <code>quantlab</code> 的 import（包括函数内的）都符合层顺序；每个模块都归属某一层；根类不加载 torch；框架模块不 import <code>predefined</code>；cvxpy、wandb、mlflow 各只有一个 import 位置；<code>predefined/__init__.py</code> 为空。</td></tr>
 <tr><td><code>test_run_ownership.py</code></td><td>运行目录的文件名只出现在 <code>quantlab/runs</code>；不允许 <code>.parent.parent</code> 式的目录猜测。</td></tr>
 <tr><td><code>test_backtest_predictor_protocol.py</code></td><td>不继承基类的包装器回测结果完全一致；缺少成员的对象被拒绝；回测层只读取协议成员。</td></tr>
-<tr><td><code>test_source_inspector.py</code></td><td>无凭证查看器访问不到任何供应商客户端；三个 <code>__init__.py</code> 为空。</td></tr>
+<tr><td><code>test_source_inspector.py</code></td><td>无凭证查看器访问不到任何供应商客户端；两个 <code>__init__.py</code> 为空，<code>quantlab/__init__.py</code> 只导入标准库。</td></tr>
 <tr><td><code>test_data_recorder.py</code> 等</td><td>数据指纹的记录与比较；只有数据、因子和指纹模块会去询问因子“你读了什么”。</td></tr>
 <tr><td><code>test_code_record.py</code></td><td>代码记录的内容与比较。</td></tr>
 <tr><td><code>test_undefined_names.py</code></td><td>用 ruff 检查未定义的名字和未使用的 import。</td></tr>

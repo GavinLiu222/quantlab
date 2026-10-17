@@ -199,7 +199,7 @@ A research result depends on data, parameters and code together. Data is appende
 <tr><td>The top level of <code>dataset/</code> and <code>acquisition/</code> reads like a menu</td><td>Every top-level entry of these two directories is one complete, usable thing (a dataset, a vendor); helpers go into <code>_support/</code>. Browsing the directory is browsing the feature list.</td></tr>
 <tr><td>No <code>__init__.py</code> re-exports</td><td>Every import spells the full path, e.g. <code>from quantlab.factor.predefined.alpha158 import Alpha158Stock</code>. Each name has one spelling, so grep always finds its definition.</td></tr>
 <tr><td>A few packages' <code>__init__.py</code> <b>is</b> the entry module</td><td>For example <code>quantlab/dataset/crsp/__init__.py</code> is the CRSP dataset's main module, with its submodules beside it. The rule is "the __init__ is the module itself", never "the __init__ forwards other modules".</td></tr>
-<tr><td>Some <code>__init__.py</code> files must be empty</td><td>A non-empty <code>__init__</code> runs on every import beneath it. One guarantee ("the credential-free source inspector never loads a vendor client, not even indirectly") depends on a few empty files, and a test checks them (chapter 10).</td></tr>
+<tr><td>Some <code>__init__.py</code> files must load nothing</td><td>An <code>__init__</code> runs on every import beneath it. One guarantee ("the credential-free source inspector never loads a vendor client, not even indirectly") depends on two empty files and on <code>quantlab/__init__.py</code> importing only the standard library, and a test checks them (chapter 10).</td></tr>
 <tr><td>Root classes and configs load no torch</td><td>Importing any layer's <code>base.py</code> or <code>config.py</code> does not load torch. A test checks <code>'torch' in sys.modules</code> in a subprocess.</td></tr>
 </table>
 
@@ -839,7 +839,7 @@ inputs = DecisionInputs.from_run(run_dir) <span class="c"># live executor: rebui
 <div class="keep"><h2>10.2 Credentials and the credential-free inspector</h2>
 <ul>
 <li>Every API key is read from environment variables only: never passed on the command line, never written to a config file, never logged.</li>
-<li><code>SourceInspector</code> answers "what can this project download", and must be importable <b>without loading any vendor client</b>. It is checked by an AST scan of its own source plus a run-time look at <code>vars()</code>. Neither can see an import pulled in by a package <code>__init__.py</code>, so the three <code>__init__.py</code> files on its import chain must stay empty, and a test asserts it.</li>
+<li><code>SourceInspector</code> answers "what can this project download", and must be importable <b>without loading any vendor client</b>. It is checked by an AST scan of its own source plus a run-time look at <code>vars()</code>. Neither can see an import pulled in by a package <code>__init__.py</code>, so of the three <code>__init__.py</code> files on its import chain the two acquisition ones stay empty and <code>quantlab/__init__.py</code> (which holds <code>__version__</code>) imports only the standard library, and a test asserts it.</li>
 </ul></div>
 
 <div class="keep"><h2>10.3 Platform differences live in docs and tests</h2>
@@ -855,7 +855,7 @@ inputs = DecisionInputs.from_run(run_dir) <span class="c"># live executor: rebui
 <tr><td><code>test_layer_layout.py</code></td><td>Every <code>quantlab</code> import (function-level ones included) follows the layer order; every module belongs to a layer; root classes load no torch; framework modules never import <code>predefined</code>; cvxpy, wandb and mlflow each have one importer; <code>predefined/__init__.py</code> is empty.</td></tr>
 <tr><td><code>test_run_ownership.py</code></td><td>Run-directory file names appear only in <code>quantlab/runs</code>; no <code>.parent.parent</code> guessing.</td></tr>
 <tr><td><code>test_backtest_predictor_protocol.py</code></td><td>A non-inheriting wrapper backtests identically; an object missing a member is refused; the backtest layer reads protocol members only.</td></tr>
-<tr><td><code>test_source_inspector.py</code></td><td>The credential-free inspector reaches no vendor client; three <code>__init__.py</code> files are empty.</td></tr>
+<tr><td><code>test_source_inspector.py</code></td><td>The credential-free inspector reaches no vendor client; two <code>__init__.py</code> files are empty and <code>quantlab/__init__.py</code> imports only the standard library.</td></tr>
 <tr><td><code>test_data_recorder.py</code> and others</td><td>Recording and comparing data fingerprints; only the data, factor and fingerprint modules ask a factor what it reads.</td></tr>
 <tr><td><code>test_code_record.py</code></td><td>The content and comparison of code records.</td></tr>
 <tr><td><code>test_undefined_names.py</code></td><td>Undefined names and unused imports, checked with ruff.</td></tr>

@@ -32,7 +32,6 @@ except ImportError as exc:
         "with `uv sync --extra optimize` or `pip install 'quantlab[optimize]'`."
     ) from exc
 
-from quantlab.portfolio.config import HELD_WEIGHT_TOLERANCE, MeanVarianceConfig
 from quantlab.portfolio.base import (
     ExpectedReturnModel,
     InputDeclaration,
@@ -40,6 +39,7 @@ from quantlab.portfolio.base import (
     PortfolioConstructor,
     PortfolioContext,
 )
+from quantlab.portfolio.config import HELD_WEIGHT_TOLERANCE, MeanVarianceConfig
 from quantlab.runs.prediction_panel import LabelSpec
 
 if TYPE_CHECKING:
@@ -784,7 +784,7 @@ class MeanVarianceOptimizer(PortfolioConstructor):
         )
         tradable = np.asarray(context.tradable.values, dtype=bool)
         locked = np.asarray(context.locked.values, dtype=bool)
-        held = current_all != 0
+        held = np.abs(current_all) > HELD_WEIGHT_TOLERANCE
         volatility = None
         if config.volatility_label is not None:
             # The label is on the span; the covariance estimator takes one-bar volatilities.
@@ -843,7 +843,7 @@ class MeanVarianceOptimizer(PortfolioConstructor):
             top = np.argsort(-strength, kind="stable")[: config.candidate_top_k]
             pool = np.zeros(len(index), dtype=bool)
             pool[top] = True
-            pool |= np.abs(current) > HELD_WEIGHT_TOLERANCE
+            pool |= held[index]
             index, expected, current = index[pool], expected[pool], current[pool]
         locked_index = np.flatnonzero(locked)
         risk_locked = locked_index[position[locked_index] >= 0]
