@@ -1,4 +1,4 @@
-"""Massive client: one trading day's file from S3, and the trade-condition table over REST.
+"""Massive client: one trading day's file from S3, and REST endpoints into the raw tier.
 
 Massive (Stocks Developer, personal use) serves every SIP trade and its own
 minute and day aggregates as one gzipped CSV per data type and trading day
@@ -24,6 +24,14 @@ refused, or the day is outside the plan's window) and
 ``MassiveTransportError`` (the network, throttling included), which alone is
 retried after a back-off that doubles on each attempt.
 
+``pull`` keeps one REST endpoint (``quantlab.acquisition.massive.rest``) in
+the raw tier: it pages on the endpoint's date field from the day after its
+watermark, follows every ``next_url`` (stripped of any key), writes each page
+as the vendor returned it and moves the watermark after each page, so a rerun
+asks only for what is new and an interrupted backfill resumes. HTTP 429 and
+5xx are retried after the same back-off; 401 and 403 raise
+``MassiveEntitlementError`` naming the endpoint.
+
 A file is downloaded in ``streams`` byte ranges of ``part_bytes`` at once, each
 written at its offset of ``<name>.part``; a range whose stream breaks is
 asked again for only the bytes it still lacks. The whole file is then
@@ -42,6 +50,7 @@ Needs the credentials and the network::
 
     client = MassiveClient()
     client.condition_table("/data/quantlab/downloads")
+    client.pull("splits", "/data/quantlab/downloads")
     client.download_day("trades", date(2024, 11, 29), "/data/quantlab/downloads")
     for day in client.download_days("minute_aggs", date(2016, 10, 11), date(2016, 12, 30),
                                      "/data/quantlab/downloads"):
@@ -61,19 +70,25 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import exchange_calendars as xcals
 import requests
 from joblib import Parallel, delayed
 from loguru import logger
 
+from quantlab.acquisition.massive.rest import ENDPOINTS, RestEndpoint
 from quantlab.dataset.massive.raw import (
     BUCKET,
     VENDOR_DIR,
     conditions_file,
     raw_file,
+    read_rest_watermark,
     read_watermark,
+    rest_page_file,
     s3_key,
+    write_rest_page,
+    write_rest_watermark,
     write_watermark,
 )
 from quantlab.utils.atomic import write_json_atomically
@@ -374,6 +389,37 @@ def rest_get(url: str, *, params: Mapping[str, str], headers: Mapping[str, str])
     except requests.RequestException as error:
         raise MassiveTransportError(f"{type(error).__name__} on {url.split('?')[0]}") from error
     return HttpResponse(response.status_code, response.content)
+
+
+@dataclass(frozen=True)
+class RestPull:
+    """What ``MassiveClient.pull`` did for one endpoint.
+
+    Attributes
+    ----------
+    endpoint : str
+        The endpoint's name.
+    pages : int
+        Pages fetched.
+    rows : int
+        Records written (a record re-read past the watermark counts again).
+    through : date or None
+        The endpoint's watermark after the pull; ``None`` for a snapshot
+        endpoint, or while nothing is pulled through a day yet.
+    files : tuple of Path
+        The page files written, in order.
+
+    Examples
+    --------
+    >>> RestPull("splits", 2, 7000, date(2026, 10, 15)).rows
+    7000
+    """
+
+    endpoint: str
+    pages: int
+    rows: int
+    through: date | None
+    files: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -783,10 +829,15 @@ class MassiveClient:
 
         def attempt() -> dict:
             response = self.http_get(url, params=params, headers=headers)
-            if response.status in (401, 403):
+            if response.status == 401:
                 raise MassiveEntitlementError(
                     f"Massive refused the API key on {where} ({response.status}: "
                     f"{_vendor_error(response.body)})."
+                )
+            if response.status == 403:
+                raise MassiveEntitlementError(
+                    f"Massive refused {where} (403): the plan is not entitled to this endpoint "
+                    f"({_vendor_error(response.body)})."
                 )
             if response.status == 429 or response.status >= 500:
                 raise MassiveTransportError(f"HTTP {response.status} on {where}")
@@ -797,6 +848,115 @@ class MassiveClient:
             return json.loads(response.body)
 
         return self._retrying(f"GET {where}", attempt)
+
+    def pull(
+        self,
+        endpoint: RestEndpoint | str,
+        download_root: str | Path,
+        *,
+        end: date | None = None,
+        today: date | None = None,
+    ) -> RestPull:
+        """Pull one REST endpoint's new rows into the raw tier.
+
+        The first page asks for ``<date_field>.gte`` the day after the
+        endpoint's watermark less its ``overlap_days`` (``earliest`` without
+        one), and ``.lte`` ``end`` when given, sorted by the date field
+        ascending; every ``next_url`` is followed with no other parameter
+        (its cursor carries the filters), after any ``apiKey`` in it is
+        dropped. Each page is written as the vendor returned it
+        (``raw.rest_page_file``), and the watermark moves after each one: to
+        the day before its last row's day while more pages follow (that day
+        may continue on the next page), and to the last day asked for once
+        the last page is in. The watermark never passes yesterday in New
+        York, so today's and future rows (a split announced ahead) are asked
+        for again by the next pull, and it never moves back. A snapshot
+        endpoint (``date_field`` ``None``) is pulled whole and keeps no
+        watermark.
+
+        Parameters
+        ----------
+        endpoint : RestEndpoint or str
+            The endpoint, or its name in ``rest.ENDPOINTS``.
+        download_root : str or Path
+            The download directory; pages land under its ``massive/rest/``.
+        end : date, optional
+            The last day asked for; no upper bound when omitted.
+        today : date, optional
+            Today in New York; the system clock's when omitted.
+
+        Returns
+        -------
+        RestPull
+            The pages and rows written and the watermark after the pull.
+
+        Raises
+        ------
+        ValueError
+            If ``endpoint`` is a name not in ``rest.ENDPOINTS``.
+        MassiveEntitlementError
+            If Massive refused the key (401) or the endpoint (403), naming
+            it; the pages written before stay, and so does the watermark.
+        MassiveTransportError
+            If a page kept failing after ``retries`` back-offs; likewise, so
+            the next pull resumes from the watermark.
+
+        Examples
+        --------
+        Needs the credentials and the network::
+
+            client = MassiveClient()
+            done = client.pull("dividends", "/data/quantlab/downloads")
+            print(done.rows, done.through)
+        """
+        if isinstance(endpoint, str):
+            if endpoint not in ENDPOINTS:
+                raise ValueError(f"Unknown Massive REST endpoint {endpoint!r}; expected one of {list(ENDPOINTS)}.")
+            endpoint = ENDPOINTS[endpoint]
+        vendor_root = Path(download_root) / VENDOR_DIR
+        pulled_at = datetime.now(UTC)
+        field = endpoint.date_field
+        params: dict[str, str] = {**endpoint.params, "limit": str(endpoint.limit)}
+        watermark = cap = None
+        if field is not None:
+            watermark = read_rest_watermark(vendor_root, endpoint.name)
+            start = endpoint.earliest
+            if watermark is not None:
+                start = max(start, watermark + timedelta(days=1 - endpoint.overlap_days))
+            cap = (today if today is not None else _new_york_today()) - timedelta(days=1)
+            bounds = {f"{field}.gte": start.isoformat()}
+            if end is not None:
+                cap = min(cap, end)
+                bounds[f"{field}.lte"] = end.isoformat()
+            params = {**bounds, **params, "sort": endpoint.sort}
+            logger.info(f"Massive: pulling {endpoint.name} from {field} {start} (watermark {watermark}).")
+
+        url: str | None = endpoint.url
+        pages = rows = 0
+        files: list[Path] = []
+        while url:
+            page = self._get_json(url, params)
+            pages += 1
+            records = page.get("results") or []
+            following = page.get("next_url")
+            if records:
+                path = rest_page_file(vendor_root, endpoint.name, pulled_at, len(files) + 1)
+                write_rest_page(path, records)
+                files.append(path)
+                rows += len(records)
+            if field is not None:
+                through = cap
+                if following:
+                    # The last row's day may continue on the next page.
+                    through = _day_of(records[-1], field, endpoint.name) - timedelta(days=1) if records else None
+                if through is not None:
+                    through = min(through, cap)
+                    if watermark is None or through > watermark:
+                        write_rest_watermark(vendor_root, endpoint.name, field, through)
+                        watermark = through
+            url, params = (_without_key(following) if following else None), {}
+        logger.info(f"Massive: {endpoint.name}: {rows:,} row(s) in {pages} page(s); watermark {watermark}.")
+        return RestPull(endpoint.name, pages, rows, watermark, tuple(files))
 
     def condition_table(self, download_root: str | Path) -> Path:
         """Pull the stock condition table over REST and store it as a snapshot.
@@ -863,6 +1023,21 @@ def _check_gzip(path: Path, key: str) -> None:
                 pass
     except (OSError, EOFError, zlib.error) as error:
         raise MassiveTransportError(f"{key}: not a whole gzip ({type(error).__name__}: {error})") from error
+
+
+def _day_of(record: Mapping[str, object], field: str, endpoint: str) -> date:
+    """Return the day of a record's date field (a date, or an ISO timestamp's date)."""
+    value = record.get(field)
+    if not value:
+        raise ValueError(f"A Massive {endpoint} record has no {field!r}; cannot move its watermark: {record}")
+    return date.fromisoformat(str(value)[:10])
+
+
+def _without_key(url: str) -> str:
+    """Return ``url`` without an ``apiKey`` query parameter: the key travels in a header only."""
+    parts = urlsplit(url)
+    query = [(name, value) for name, value in parse_qsl(parts.query, keep_blank_values=True) if name != "apiKey"]
+    return urlunsplit(parts._replace(query=urlencode(query)))
 
 
 def _vendor_error(body: bytes) -> str:
