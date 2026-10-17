@@ -317,3 +317,43 @@ def test_check_validates_refresh_and_store_steps(tmp_path):
     assert any("refresh fred" in p and "start" in p for p in problems)
     assert sum("sharadar_stores" in p for p in problems) == 1
     assert any("sharadar_stores" in p and "rebuild" in p for p in problems)
+
+
+#: The Massive REST panels the intraday stage appends to (``MassiveRestPanel``).
+REST_PANELS = ("dividends", "news", "short_interest", "short_volume", "disclosures", "ipos")
+
+
+def test_the_plan_updates_the_massive_rest_panels_without_a_script():
+    from pathlib import Path
+
+    import yaml
+
+    update = _update_script()
+    plan = yaml.safe_load((Path(update.REPO_ROOT) / "config" / "data_update.yaml").read_text())
+    steps = [update.parse_step(step) for stage in plan["stages"] for step in stage["steps"]]
+
+    updated = [kwargs["store"] for action, kwargs, _ in steps if action == "update"]
+    for panel in REST_PANELS:
+        assert f"market/massive/massive_{panel}_1d" in updated
+        assert not any(kwargs.get("script") == f"scripts/massive/{panel}.py" for _, kwargs, _ in steps)
+
+
+def test_check_takes_a_built_rest_panel_folder_and_reports_one_never_built(tmp_path):
+    from quantlab.dataset.massive.short_volume import MassiveShortVolumeDataset
+    from tests.test_massive_short_volume import _raw
+
+    update = _update_script()
+    _raw(tmp_path)
+    MassiveShortVolumeDataset.from_data_root(tmp_path, tmp_path / "downloads")
+
+    def check(store: str) -> list[str]:
+        plan = {"calendar": "market/sharadar/sharadar_sep_1d", "stages": [
+            {"name": "raw", "steps": [{"run": {"script": "scripts/massive/ticker_map.py",
+                                                "writes": ["market/sharadar/sharadar_sep_1d"]}}]},
+            {"name": "intraday", "steps": [{"update": {"store": store, "allow_failure": True}}]},
+        ]}
+        return update.Update(plan, tmp_path, tmp_path / "downloads", dry_run=True).check()
+
+    assert check("market/massive/massive_short_volume_1d") == []
+    # A folder its script never built is reported, naming its component.json.
+    assert any("massive_ipos_1d/component.json is missing" in p for p in check("market/massive/massive_ipos_1d"))

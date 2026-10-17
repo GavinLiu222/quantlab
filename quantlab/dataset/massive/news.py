@@ -208,6 +208,34 @@ class MassiveNewsDataset(MassiveRestEventPanel):
 
     #: The REST endpoints read (``MassiveRestPanel``).
     REST_ENDPOINTS = (ENDPOINT,)
+
+    #: The latest first day of the endpoints read (``MassiveRestPanel.EARLIEST``).
+    EARLIEST = date(2016, 6, 1)
+
+    #: The store folder under ``market/massive`` (``MassiveRestPanel.from_data_root``).
+    STORE_NAME = "massive_news_1d"
+
+    #: The store folder's ``README.md``.
+    STORE_README = """# massive_news_1d
+
+Massive's news articles (its REST `/v2/reference/news`) counted per security and trading day, on
+Sharadar's permaticker axis and SEP's trading calendar, the whole market's domestic common stock
+(SEP's default category filter). Variables, 0 on a day without an article: `news_count`
+(articles naming the security), and `news_positive`, `news_negative`, `news_neutral` (those
+whose per-ticker `insights` sentiment for the security is that label). An article counts on the
+trading day it was published before that session's close in New York (16:00, 13:00 on an early
+close), otherwise on the next trading day (after the close, on a weekend or holiday).
+
+Each of an article's tickers is placed on the permaticker the Ticker map gives it on the
+article's trading day, and the article counts once for each security placed; a ticker the map
+cannot place is left out and counted in `massive_news_1d.zarr.unplaced.json`. The article text
+(title, description, keywords, insights) stays raw under `downloads/massive/rest/news`. Built by
+`quantlab.dataset.massive.news.MassiveNewsDataset` from `downloads/massive/rest/news`,
+`market/massive/massive_ticker_map` and Sharadar's SEP and TICKERS, from the Ticker map's first
+day; first built by `scripts/massive/news.py`, then appended day by day by the daily data
+update. docs/massive.md, "News". Licensed data: personal use.
+"""
+
     #: The module's ``VARIABLES``.
     VARIABLES = VARIABLES
     #: A day without an article counts 0.

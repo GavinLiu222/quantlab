@@ -51,6 +51,8 @@ Build the store and read the IPOs of a year::
 
 from __future__ import annotations
 
+from datetime import date
+
 import numpy as np
 import polars as pl
 
@@ -141,6 +143,33 @@ class MassiveIpoDataset(MassiveRestEventPanel):
 
     #: The REST endpoints read (``MassiveRestPanel``).
     REST_ENDPOINTS = (ENDPOINT,)
+
+    #: The latest first day of the endpoints read (``MassiveRestPanel.EARLIEST``).
+    EARLIEST = date(2008, 12, 1)
+
+    #: The store folder under ``market/massive`` (``MassiveRestPanel.from_data_root``).
+    STORE_NAME = "massive_ipos_1d"
+
+    #: The store folder's ``README.md``.
+    STORE_README = """# massive_ipos_1d
+
+Massive's IPOs (its REST `/vX/reference/ipos`) as a daily panel on Sharadar's permaticker axis
+and SEP's trading calendar, the whole market's domestic common stock (SEP's default category
+filter). On an IPO's listing day only, NaN otherwise: `ipo_offer_price` (final offer price per
+share, `final_issue_price`), `ipo_offer_size` (total amount raised, `total_offer_size`) and
+`ipo_days_announced` (trading days from the announcement to the listing, 0 on the same day).
+Only IPOs that listed (`ipo_status` new, history or direct_listing_process) are shown; pending,
+rumoured, postponed and withdrawn IPOs stay in the raw tier. Each IPO is read from its newest
+copy.
+
+Each IPO is placed on the permaticker the Ticker map gives its ticker on the listing day; one it
+cannot place, or not in USD, is left out and counted in `massive_ipos_1d.zarr.unplaced.json`.
+Built by `quantlab.dataset.massive.ipos.MassiveIpoDataset` from `downloads/massive/rest/ipos`,
+`market/massive/massive_ticker_map` and Sharadar's SEP and TICKERS, from the Ticker map's first
+day; first built by `scripts/massive/ipos.py`, then appended day by day by the daily data
+update. docs/massive.md, "IPOs". Licensed data: personal use.
+"""
+
     #: The module's ``VARIABLES``.
     VARIABLES = VARIABLES
 

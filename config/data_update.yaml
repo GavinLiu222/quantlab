@@ -110,53 +110,22 @@ stages:
           writes: [market/massive/massive_ticker_map]
           reads: [market/sharadar/sharadar_sep_1d]
           allow_failure: true
-      # Massive's dividends and splits on the permaticker (MassiveDividendDataset), placed through the
-      # Ticker map above: appends the days SEP, the raw stage's REST pull and the map all reach.
-      - run:
-          script: scripts/massive/dividends.py
-          args: [--download-dir, "{download_dir}", --data-dir, "{data_dir}"]
-          writes: [market/massive/massive_dividends_1d]
-          reads: [market/massive/massive_ticker_map]
-          allow_failure: true
-      # Massive's news counted per permaticker (MassiveNewsDataset), placed through the Ticker map:
-      # appends the days SEP, the raw stage's news pull and the map all reach.
-      - run:
-          script: scripts/massive/news.py
-          args: [--download-dir, "{download_dir}", --data-dir, "{data_dir}"]
-          writes: [market/massive/massive_news_1d]
-          reads: [market/massive/massive_ticker_map]
-          allow_failure: true
-      # Massive's short interest on the permaticker (MassiveShortInterestDataset), a release shown from
-      # settlement + 8 trading days: appends the days SEP, the REST pull and the map all reach.
-      - run:
-          script: scripts/massive/short_interest.py
-          args: [--download-dir, "{download_dir}", --data-dir, "{data_dir}"]
-          writes: [market/massive/massive_short_interest_1d]
-          reads: [market/massive/massive_ticker_map]
-          allow_failure: true
-      # Massive's daily short volume on the permaticker (MassiveShortVolumeDataset, #356), placed
-      # through the Ticker map: appends the days SEP, the raw stage's REST pull and the map all reach.
-      - run:
-          script: scripts/massive/short_volume.py
-          args: [--download-dir, "{download_dir}", --data-dir, "{data_dir}"]
-          writes: [market/massive/massive_short_volume_1d]
-          reads: [market/massive/massive_ticker_map]
-          allow_failure: true
-      # Massive's 8-K disclosure categories on the permaticker (MassiveDisclosureDataset), placed the same
-      # way: one flag per primary category of the disclosure taxonomy.
-      - run:
-          script: scripts/massive/disclosures.py
-          args: [--download-dir, "{download_dir}", --data-dir, "{data_dir}"]
-          writes: [market/massive/massive_disclosures_1d]
-          reads: [market/massive/massive_ticker_map]
-          allow_failure: true
-      # Massive's listed IPOs on the permaticker (MassiveIpoDataset), on the listing day, placed the same way.
-      - run:
-          script: scripts/massive/ipos.py
-          args: [--download-dir, "{download_dir}", --data-dir, "{data_dir}"]
-          writes: [market/massive/massive_ipos_1d]
-          reads: [market/massive/massive_ticker_map]
-          allow_failure: true
+      # Massive's REST panels on the permaticker, each placed through the Ticker map above and appended
+      # with the days SEP, the raw stage's REST pull and the map all reach (MassiveRestPanel). Each
+      # folder is first built by its script (scripts/massive/<panel>.py, MassiveRestPanel.from_data_root):
+      # until then the step fails, which holds nothing, and --check reports its component.json missing.
+      # Dividends and splits (MassiveDividendDataset).
+      - update: {store: market/massive/massive_dividends_1d, allow_failure: true}
+      # News counted per permaticker (MassiveNewsDataset).
+      - update: {store: market/massive/massive_news_1d, allow_failure: true}
+      # Short interest (MassiveShortInterestDataset), a release shown from settlement + 8 trading days.
+      - update: {store: market/massive/massive_short_interest_1d, allow_failure: true}
+      # Daily short volume (MassiveShortVolumeDataset, #356), from the endpoint's first day 2024-02-06.
+      - update: {store: market/massive/massive_short_volume_1d, allow_failure: true}
+      # 8-K disclosure categories (MassiveDisclosureDataset): one flag per primary category of the taxonomy.
+      - update: {store: market/massive/massive_disclosures_1d, allow_failure: true}
+      # Listed IPOs on the listing day (MassiveIpoDataset).
+      - update: {store: market/massive/massive_ipos_1d, allow_failure: true}
       # The Trade bars mapped onto permatickers (MappedTradeBarDataset): maps again any stored day whose
       # map rows changed, then appends every day both stores above now hold (about 10 s a day; a store
       # far behind is caught up by scripts/massive/permaticker_bars.py --workers N).

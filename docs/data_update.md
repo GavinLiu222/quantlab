@@ -86,23 +86,24 @@ permatickers, `market/massive/massive_permaticker_bars_1m` (the Trade bars) and
 `market/massive/massive_permaticker_day_bars_1d` (the day aggregates, adjusted by Massive's own
 splits and dividends and checked against SEP: the step's result reports how many permaticker-days
 disagree, and a disagreement never fails the step; docs/massive.md, "Adjusted by Massive's own
-events"), and
-`scripts/massive/dividends.py` appends the days SEP, the REST pull and the map all reach to the
-dividend panel `market/massive/massive_dividends_1d` (Massive's dividends and splits placed on
-permatickers through the map), `scripts/massive/news.py` does the same for the news panel
-`market/massive/massive_news_1d` (Massive's news counted per permaticker),
-`scripts/massive/short_interest.py` for the short interest panel
-`market/massive/massive_short_interest_1d` (a release shown from settlement + 8 trading days),
-`scripts/massive/short_volume.py` for the short volume panel `market/massive/massive_short_volume_1d`,
-`scripts/massive/disclosures.py` for the 8-K
-disclosure panel `market/massive/massive_disclosures_1d` (one flag per primary category of Massive's
-disclosure taxonomy), and `scripts/massive/ipos.py` for the IPO panel `market/massive/massive_ipos_1d`
-(listed IPOs on their listing day). The scripts are `run` steps with `allow_failure: true`; the
+events"), and six more `update` steps append the days SEP, the REST pull and the map all reach to
+Massive's REST panels on the permaticker (`MassiveRestPanel`, each record placed through the map):
+the dividend panel `market/massive/massive_dividends_1d` (Massive's dividends and splits), the news
+panel `market/massive/massive_news_1d` (news counted per permaticker), the short interest panel
+`market/massive/massive_short_interest_1d` (a release shown from settlement + 8 trading days), the
+short volume panel `market/massive/massive_short_volume_1d`, the 8-K disclosure panel
+`market/massive/massive_disclosures_1d` (one flag per primary category of Massive's disclosure
+taxonomy) and the IPO panel `market/massive/massive_ipos_1d` (listed IPOs on their listing day).
+The scripts are `run` steps and every step of the stage has `allow_failure: true`; the
 conversion and the map do at most five days each (`--max-days 5`; a store far behind is caught up by a
 run of its own), the day bars and the REST panels every new day on disk, and none of the stores is
 in `ready`: Massive publishes a day's files at about 00:30 ET the next day, and a late file
 never holds the paper trading, which reads none of these stores. Each script writes its folder's
-`component.json` and `README.md` when missing.
+`component.json` and `README.md` when missing. An `update` step only rebuilds a folder that has
+them, so a REST panel is first built by its script, `scripts/massive/<panel>.py --download-dir ...
+--data-dir ...` (`MassiveRestPanel.from_data_root`: the config starts at the later of the Ticker
+map's first day and the endpoints' first day); until then its step fails, which holds nothing, and
+`--check` reports its `component.json` missing.
 
 ```bash
 cd ~/projects/quantlab2

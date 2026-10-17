@@ -45,6 +45,8 @@ Build the store and read one security's short interest::
 
 from __future__ import annotations
 
+from datetime import date
+
 import numpy as np
 import polars as pl
 import xarray as xr
@@ -117,6 +119,34 @@ class MassiveShortInterestDataset(MassiveRestEventPanel):
 
     #: The REST endpoints read (``MassiveRestPanel``).
     REST_ENDPOINTS = (ENDPOINT,)
+
+    #: The latest first day of the endpoints read (``MassiveRestPanel.EARLIEST``).
+    EARLIEST = date(2017, 12, 1)
+
+    #: The store folder under ``market/massive`` (``MassiveRestPanel.from_data_root``).
+    STORE_NAME = "massive_short_interest_1d"
+
+    #: The store folder's ``README.md``.
+    STORE_README = """# massive_short_interest_1d
+
+Massive's short interest (its REST `/stocks/v1/short-interest`, FINRA's figures settled twice a
+month from 2017-12) as a daily release panel on Sharadar's permaticker axis and SEP's trading
+calendar, the whole market's domestic common stock (SEP's default category filter). Variables:
+`short_interest` (shares short at the settlement date), `short_avg_daily_volume` (Massive's
+`avg_daily_volume`) and `days_to_cover` (Massive's own ratio). A release is visible from the 8th
+trading day after its settlement date and shown until the next release is visible; a security
+the visible release does not carry is NaN.
+
+Each record is placed on the permaticker the Ticker map gives its ticker on the settlement date;
+a record it cannot place is left out and counted in
+`massive_short_interest_1d.zarr.unplaced.json`. Built by
+`quantlab.dataset.massive.short_interest.MassiveShortInterestDataset` from
+`downloads/massive/rest/short_interest`, `market/massive/massive_ticker_map` and Sharadar's SEP
+and TICKERS, from the Ticker map's first day; first built by
+`scripts/massive/short_interest.py`, then appended day by day by the daily data update.
+docs/massive.md, "Short interest". Licensed data: personal use.
+"""
+
     #: The module's ``VARIABLES``.
     VARIABLES = VARIABLES
 

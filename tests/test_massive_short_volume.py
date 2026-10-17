@@ -270,3 +270,65 @@ def test_a_record_dated_before_seps_first_day_is_not_stamped_on_it(tmp_path, mon
     panel = _read(_dataset(tmp_path).update())
     assert _series(panel, "short_volume", 101)[0] == 400.0
     assert _series(panel, "short_total_volume", 101)[0] == 1000.0
+
+
+def test_the_store_folder_is_written_on_the_first_call_and_opened_after(tmp_path, monkeypatch):
+    from quantlab.core.store_folder import COMPONENT_FILE, load_component
+    from quantlab.dataset.massive.short_volume import MassiveShortVolumeDataset
+
+    _raw(tmp_path)
+    # The Ticker map starts on D1; a floor after it (the endpoint's first day) moves the start.
+    monkeypatch.setattr(MassiveShortVolumeDataset, "EARLIEST", D2)
+    ds = MassiveShortVolumeDataset.from_data_root(tmp_path, tmp_path / "downloads")
+    folder = tmp_path / "market" / "massive" / "massive_short_volume_1d"
+    assert ds.config.zarr_file_path == str(folder / "massive_short_volume_1d.zarr")
+    assert ds.config.ticker_map_path == str(_map_path(tmp_path))
+    assert ds.config.massive_dir == str(tmp_path / "downloads" / "massive")
+    assert ds.config.raw_data_dir_path == str(tmp_path / "downloads" / "sharadar")
+    assert ds.config.start_date == D2.isoformat()
+    assert load_component(folder) == ds
+    assert (folder / "README.md").read_text().startswith("# massive_short_volume_1d\n")
+
+    # Opened from component.json after; a README already there is kept.
+    (folder / "README.md").write_text("# kept\n")
+    monkeypatch.setattr(MassiveShortVolumeDataset, "EARLIEST", D1)
+    again = MassiveShortVolumeDataset.from_data_root(tmp_path, tmp_path / "downloads")
+    assert again == ds and again.config.start_date == D2.isoformat()
+    assert (folder / "README.md").read_text() == "# kept\n"
+    assert (folder / COMPONENT_FILE).is_file()
+
+
+def test_the_store_folder_starts_on_the_ticker_maps_first_day_after_the_floor(tmp_path):
+    from quantlab.dataset.massive.short_volume import MassiveShortVolumeDataset
+
+    _raw(tmp_path)
+    ds = MassiveShortVolumeDataset.from_data_root(tmp_path, tmp_path / "downloads")
+    assert ds.config.start_date == D1.isoformat()
+
+
+def test_a_store_folder_is_not_written_without_a_ticker_map_day(tmp_path):
+    from quantlab.dataset.massive.short_volume import MassiveShortVolumeDataset
+
+    with pytest.raises(ValueError, match="ticker_map.py"):
+        MassiveShortVolumeDataset.from_data_root(tmp_path, tmp_path / "downloads")
+    assert not (tmp_path / "market" / "massive" / "massive_short_volume_1d").exists()
+
+
+@pytest.mark.parametrize("module, name, store", [
+    ("dividends", "MassiveDividendDataset", "massive_dividends_1d"),
+    ("news", "MassiveNewsDataset", "massive_news_1d"),
+    ("short_interest", "MassiveShortInterestDataset", "massive_short_interest_1d"),
+    ("short_volume", "MassiveShortVolumeDataset", "massive_short_volume_1d"),
+    ("disclosures", "MassiveDisclosureDataset", "massive_disclosures_1d"),
+    ("ipos", "MassiveIpoDataset", "massive_ipos_1d"),
+])
+def test_every_rest_panel_names_its_store_and_starts_no_earlier_than_its_endpoints(module, name, store):
+    import importlib
+
+    from quantlab.acquisition.massive.rest import ENDPOINTS
+
+    cls = getattr(importlib.import_module(f"quantlab.dataset.massive.{module}"), name)
+    assert cls.STORE_NAME == store
+    assert cls.STORE_README.startswith(f"# {store}\n")
+    # The dataset layer cannot import acquisition, so the floor is declared and locked here.
+    assert cls.EARLIEST == max(ENDPOINTS[e].earliest for e in cls.REST_ENDPOINTS)

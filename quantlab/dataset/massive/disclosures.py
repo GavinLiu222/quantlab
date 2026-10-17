@@ -48,7 +48,7 @@ Build the store and read the earnings 8-Ks of one security::
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import date, timedelta
 
 import polars as pl
 
@@ -104,6 +104,36 @@ class MassiveDisclosureDataset(MassiveRestPanel, FilingPanelDataset):
 
     #: The REST endpoints read (``MassiveRestPanel``).
     REST_ENDPOINTS = (DISCLOSURES,)
+
+    #: The latest first day of the endpoints read (``MassiveRestPanel.EARLIEST``).
+    EARLIEST = date(2020, 1, 1)
+
+    #: The store folder under ``market/massive`` (``MassiveRestPanel.from_data_root``).
+    STORE_NAME = "massive_disclosures_1d"
+
+    #: The store folder's ``README.md``.
+    STORE_README = """# massive_disclosures_1d
+
+Massive's 8-K disclosure categories (its REST `/stocks/filings/8-K/vX/disclosures`, classified
+by `/stocks/taxonomies/vX/disclosures`) as a daily panel on Sharadar's permaticker axis and
+SEP's trading calendar, the whole market's domestic common stock (SEP's default category
+filter). One boolean per primary category of the taxonomy, named as the taxonomy spells it (for
+example `financial_results`, `leadership_and_governance`) and described by the secondary and
+tertiary categories under it: true on the first trading day after the filing date of an 8-K with
+a disclosure in that category (a Friday filing shows on Monday), false otherwise. Secondary and
+tertiary categories stay raw.
+
+A filing is placed once for each ticker it names, on the permaticker the Ticker map gives that
+ticker on the day it shows; a ticker the map cannot place, or a filing naming none, is left out
+and counted in `massive_disclosures_1d.zarr.unplaced.json`. A primary category the taxonomy does
+not list refuses the build. Built by
+`quantlab.dataset.massive.disclosures.MassiveDisclosureDataset` from
+`downloads/massive/rest/8k_disclosures`, `downloads/massive/rest/disclosure_taxonomy`,
+`market/massive/massive_ticker_map` and Sharadar's SEP and TICKERS, from the later of the Ticker
+map's first day and 2020-01-01 (Massive's disclosures start in 2020-01); first built by
+`scripts/massive/disclosures.py`, then appended day by day by the daily data update.
+docs/massive.md, "8-K disclosures". Licensed data: personal use.
+"""
 
     def _on_config_installed(self) -> None:
         """Drop what was cached for the previous config."""

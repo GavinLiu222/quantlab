@@ -164,6 +164,34 @@ class MassiveDividendDataset(MassiveRestEventPanel):
 
     #: The REST endpoints read (``MassiveRestPanel``).
     REST_ENDPOINTS = ENDPOINTS
+
+    #: The latest first day of the endpoints read (``MassiveRestPanel.EARLIEST``).
+    EARLIEST = date(2000, 1, 1)
+
+    #: The store folder under ``market/massive`` (``MassiveRestPanel.from_data_root``).
+    STORE_NAME = "massive_dividends_1d"
+
+    #: The store folder's ``README.md``.
+    STORE_README = """# massive_dividends_1d
+
+Massive's dividends and splits (its REST `/stocks/v1/dividends` and `/stocks/v1/splits`) as a
+daily panel on Sharadar's permaticker axis and SEP's trading calendar, the whole market's
+domestic common stock (SEP's default category filter). Variables, NaN on a day without one:
+`dividend_declared` (declared cash per share, from the declaration date through the ex-date),
+`dividend_days_to_ex` (trading days left to that ex-date, 0 on it), `dividend_cash` (cash per
+share going ex that day, summed) and `split_ratio` (`split_to / split_from` executed that day,
+multiplied). Amounts are as declared; Massive's `historical_adjustment_factor` is never read.
+
+Each record is placed on the permaticker the Ticker map gives its ticker on the record's own
+day; a record it cannot place, or a dividend not in USD, is left out and counted in
+`massive_dividends_1d.zarr.unplaced.json`. Built by
+`quantlab.dataset.massive.dividends.MassiveDividendDataset` from
+`downloads/massive/rest/dividends`, `downloads/massive/rest/splits`,
+`market/massive/massive_ticker_map` and Sharadar's SEP and TICKERS, from the Ticker map's first
+day; first built by `scripts/massive/dividends.py`, then appended day by day by the daily data
+update. docs/massive.md, "Dividends and splits". Licensed data: personal use.
+"""
+
     #: The module's ``VARIABLES``.
     VARIABLES = VARIABLES
 

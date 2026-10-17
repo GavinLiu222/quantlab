@@ -10,7 +10,8 @@ the shared part:
 - ``MassiveRestPanel``, a mixin for any Sharadar release or filing panel:
   the Ticker map, the report of the records left out, the calendar built
   through the last day SEP, every endpoint read and the Ticker map all
-  reach, and the placement of an event on its trading day;
+  reach, the placement of an event on its trading day, and the store folder
+  under the data root (``from_data_root``), written on its first build;
 - ``MassiveRestEventPanel``, a ``ReleasePanelDataset`` whose rows are
   events shown on their own day only: the config checks, the window and
   the symbols an update adds.
@@ -30,17 +31,19 @@ A panel names the endpoints it reads and its variables::
 
 from __future__ import annotations
 
-from datetime import timedelta
-from typing import ClassVar
+from datetime import date, timedelta
+from pathlib import Path
+from typing import ClassVar, Self
 
 import numpy as np
 import pandas as pd
 import polars as pl
 import xarray as xr
 
+from quantlab.core.store_folder import COMPONENT_FILE, README_FILE, load_component, save_component
 from quantlab.dataset.config import DatasetConfig, MassiveRestPanelConfig, TickerMapConfig
 from quantlab.dataset.massive.placement import UNPLACED_SUFFIX
-from quantlab.dataset.massive.raw import read_rest_watermark
+from quantlab.dataset.massive.raw import VENDOR_DIR, read_rest_watermark
 from quantlab.dataset.massive.ticker_map import TickerMap
 from quantlab.dataset.sharadar.point_in_time import (
     ReleasePanelDataset,
@@ -52,7 +55,13 @@ from quantlab.dataset.sharadar.point_in_time import (
 from quantlab.dataset.sharadar.tables import raw_through, trading_days
 from quantlab.dataset.sharadar.universe import normalize_universe
 
-__all__ = ["MassiveRestEventPanel", "MassiveRestPanel"]
+__all__ = ["STORE_AREA", "TICKER_MAP_PATH", "MassiveRestEventPanel", "MassiveRestPanel"]
+
+#: Where the Massive stores sit under the data root.
+STORE_AREA = Path("market") / "massive"
+
+#: The Ticker map's directory under the data root (``scripts/massive/ticker_map.py``).
+TICKER_MAP_PATH = STORE_AREA / "massive_ticker_map" / "massive_ticker_map"
 
 
 class MassiveRestPanel:
@@ -73,6 +82,14 @@ class MassiveRestPanel:
     #: The REST endpoints read (``quantlab.acquisition.massive.rest.ENDPOINTS``);
     #: the store is built only through the day each one is pulled through.
     REST_ENDPOINTS: ClassVar[tuple[str, ...]] = ()
+    #: The latest first day of those endpoints (their ``RestEndpoint.earliest``):
+    #: a first build starts no earlier. Declared here because the dataset layer
+    #: comes before acquisition; a test locks it to ``ENDPOINTS``.
+    EARLIEST: ClassVar[date] = date(1970, 1, 1)
+    #: The store folder's name under ``STORE_AREA``, and its store's stem.
+    STORE_NAME: ClassVar[str] = ""
+    #: The folder's ``README.md``, written by a first build when there is none.
+    STORE_README: ClassVar[str] = ""
 
     config: MassiveRestPanelConfig
 
@@ -80,6 +97,72 @@ class MassiveRestPanel:
         """Drop what was cached for the previous config."""
         super()._on_config_installed()
         self._ticker_map: TickerMap | None = None
+
+    @classmethod
+    def from_data_root(cls, data_dir: str | Path, download_dir: str | Path) -> Self:
+        """Return the panel of its store folder under ``data_dir``, writing the folder on the first call.
+
+        A folder holding ``component.json`` is rebuilt from it. Otherwise the
+        config is built on the shared layout: the store
+        ``<data_dir>/market/massive/<STORE_NAME>/<STORE_NAME>.zarr``,
+        Sharadar's raw tier ``<download_dir>/sharadar``, Massive's
+        ``<download_dir>/massive``, the Ticker map
+        ``<data_dir>/market/massive/massive_ticker_map/massive_ticker_map``,
+        from the later of the map's first day and ``EARLIEST``, with no end;
+        ``component.json`` is written, and ``STORE_README`` when the folder
+        has no ``README.md``. Nothing is read from or written to the store
+        itself: ``update()`` builds it.
+
+        Parameters
+        ----------
+        data_dir : str or pathlib.Path
+            The data root.
+        download_dir : str or pathlib.Path
+            The download root, holding ``sharadar/`` and ``massive/``.
+
+        Returns
+        -------
+        MassiveRestPanel
+            The panel, ready to ``update()``.
+
+        Raises
+        ------
+        ValueError
+            If the folder has no ``component.json`` and the Ticker map maps no
+            day (naming ``ticker_map.py``); nothing is written then.
+
+        Examples
+        --------
+        Needs the raw tiers and the Ticker map under the two roots, so it is
+        not run here::
+
+            ds = MassiveShortVolumeDataset.from_data_root("/data/quantlab", "/data/quantlab/downloads")
+            ds.update().store_path
+            # '/data/quantlab/market/massive/massive_short_volume_1d/massive_short_volume_1d.zarr'
+        """
+        data_dir, download_dir = Path(data_dir), Path(download_dir)
+        folder = data_dir / STORE_AREA / cls.STORE_NAME
+        if (folder / COMPONENT_FILE).is_file():
+            return load_component(folder)
+        massive_dir, sharadar_dir = download_dir / VENDOR_DIR, download_dir / "sharadar"
+        ticker_map = TickerMap(TickerMapConfig(
+            path=str(data_dir / TICKER_MAP_PATH), massive_dir=str(massive_dir), sharadar_dir=str(sharadar_dir),
+        ))
+        days = ticker_map.days()
+        if not days:
+            raise ValueError(
+                f"{cls.__name__}: the Ticker map at {ticker_map.path} maps no day; "
+                f"run scripts/massive/ticker_map.py first."
+            )
+        dataset = cls(cls.config_cls(
+            zarr_file_path=str(folder / f"{cls.STORE_NAME}.zarr"),
+            raw_data_dir_path=str(sharadar_dir),
+            massive_dir=str(massive_dir),
+            ticker_map_path=str(ticker_map.path),
+            start_date=max(days[0], cls.EARLIEST).isoformat(),
+        ))
+        save_component(dataset, folder, readme=None if (folder / README_FILE).exists() else cls.STORE_README)
+        return dataset
 
     @property
     def ticker_map(self) -> TickerMap:

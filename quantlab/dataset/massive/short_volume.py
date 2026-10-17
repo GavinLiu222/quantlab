@@ -51,6 +51,8 @@ Build the store and read one security's short volume ratio::
 
 from __future__ import annotations
 
+from datetime import date
+
 import polars as pl
 
 from quantlab.dataset.config import MassiveShortVolumeConfig
@@ -141,6 +143,33 @@ class MassiveShortVolumeDataset(MassiveRestEventPanel):
 
     #: The REST endpoints read (``MassiveRestPanel``).
     REST_ENDPOINTS = (ENDPOINT,)
+
+    #: The latest first day of the endpoints read (``MassiveRestPanel.EARLIEST``).
+    EARLIEST = date(2024, 2, 6)
+
+    #: The store folder under ``market/massive`` (``MassiveRestPanel.from_data_root``).
+    STORE_NAME = "massive_short_volume_1d"
+
+    #: The store folder's ``README.md``.
+    STORE_README = """# massive_short_volume_1d
+
+Massive's daily short volume (its REST `/stocks/v1/short-volume`, FINRA's daily short sale
+volume) as a daily panel on Sharadar's permaticker axis and SEP's trading calendar, the whole
+market's domestic common stock (SEP's default category filter), from 2024-02-06. Variables, each
+on the record's own trading day, NaN on a day without one: `short_volume` (shares sold short
+across all venues), `short_total_volume` (total volume across all venues), `short_exempt_volume`
+(short volume exempt from Regulation SHO) and `short_volume_ratio` (percent of the total volume
+sold short). The per-venue columns stay in the raw tier; a record re-read by a later pull
+replaces the earlier copy, but a day already stored changes only on a rebuild.
+
+Each record is placed on the permaticker the Ticker map gives its ticker on its day; a record it
+cannot place is left out and counted in `massive_short_volume_1d.zarr.unplaced.json`. Built by
+`quantlab.dataset.massive.short_volume.MassiveShortVolumeDataset` from
+`downloads/massive/rest/short_volume`, `market/massive/massive_ticker_map` and Sharadar's SEP
+and TICKERS; first built by `scripts/massive/short_volume.py`, then appended day by day by the
+daily data update. docs/massive.md, "Short volume". Licensed data: personal use.
+"""
+
     #: The module's ``VARIABLES``.
     VARIABLES = VARIABLES
 
