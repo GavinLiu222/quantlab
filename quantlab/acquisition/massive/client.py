@@ -292,7 +292,7 @@ class S3ObjectStore:
         except ImportError as exc:
             raise ImportError(
                 "S3ObjectStore needs boto3, an optional extra of quantlab: install it "
-                "with `uv sync --extra massive` or `pip install 'quantlab[massive]'`."
+                "with `uv sync --extra massive` or `pip install 'quantlab-py[massive]'`."
             ) from exc
 
         self._client = boto3.session.Session().client(

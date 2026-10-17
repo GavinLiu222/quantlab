@@ -3,7 +3,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "quantlab"
+name = "quantlab-py"
 version = "0.1.0"
 description = "End-to-end config-driven quant research backend: data -> factors -> return model -> portfolio optimization -> target positions -> backtest."
 readme = "README.md"
@@ -65,7 +65,10 @@ Issues = "https://github.com/ZhaorongDai/quantlab/issues"
 # quantlab.acquisition.massive
 massive = ["boto3>=1.43.110", "botocore>=1.43.110"]
 # quantlab.portfolio.predefined.mean_variance
-optimize = ["cvxpy>=1.9.3", "mosek>=11.2.6"]
+optimize = ["cvxpy>=1.9.3"]
+# The MOSEK solver, which max_names needs; commercial, it runs only with a
+# licence at ~/mosek/mosek.lic, so `all` leaves it out.
+mosek = ["cvxpy>=1.9.3", "mosek>=11.2.6"]
 # quantlab.model.predefined.realmlp and xgb_td
 tabkit = ["pytabkit>=1.7.3"]
 # quantlab.model.predefined.lgbm, double_ensemble and catboost_model
@@ -79,7 +82,6 @@ all = [
     "cvxpy>=1.9.3",
     "lightgbm>=4.6.0",
     "mlflow-skinny>=3.0",
-    "mosek>=11.2.6",
     "protobuf>=7",
     "pytabkit>=1.7.3",
     "wandb>=0.29.0",

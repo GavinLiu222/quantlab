@@ -23,9 +23,12 @@ it downloads one. Linux and macOS are supported. A GPU is optional (see below).
 ## Install from PyPI
 
 ```bash
-pip install quantlab            # or: uv add quantlab
-pip install 'quantlab[all]'     # with every optional extra
+pip install quantlab-py         # or: uv add quantlab-py
+pip install 'quantlab-py[all]'  # with every optional extra except mosek
 ```
+
+The distribution is named `quantlab-py` on PyPI (`quantlab` there is an unrelated project);
+the package is imported as `quantlab`.
 
 Some components need an optional extra; importing one without it raises an `ImportError` that
 names the extra:
@@ -36,8 +39,10 @@ names the extra:
 | `tabkit` | pytabkit | `RealMLPRegressor`, `XGBTDRegressor` |
 | `wandb` | wandb | `WandbTracker` |
 | `mlflow` | mlflow-skinny | `MlflowTracker` |
+| `gbdt` | lightgbm, catboost | `LGBMRegressor`, `CatBoostRegressor`, `DoubleEnsembleRegressor` |
 | `massive` | boto3 | Massive flat-file downloads |
-| `all` | every extra above | |
+| `mosek` | cvxpy, mosek | `MeanVarianceOptimizer` with `max_names` (needs a MOSEK licence) |
+| `all` | every extra above except `mosek` | |
 
 An installed package keeps its data under `~/.quantlab/data` unless `QUANTLAB_DATA_DIR` is set
 (see Environment variables below).
@@ -174,14 +179,14 @@ Nothing is tracked unless a model or backtest config names a tracker in its `tra
 the default sends nothing anywhere, which is what the test suite and the examples rely on.
 
 - **Weights & Biases** is the optional extra `wandb` (`uv sync --extra wandb`, or
-  `pip install 'quantlab[wandb]'`). Log in once with
+  `pip install 'quantlab-py[wandb]'`). Log in once with
   `uv run wandb login`, or set `WANDB_API_KEY`, then use
   `quantlab.tracking.wandb.WandbTracker`. Its `mode="offline"` keeps runs under `./wandb` for
   a later `wandb sync`, and `mode="disabled"` records nothing.
 - **MLflow** is an optional extra. Install it with
 
   ```bash
-  uv sync --extra mlflow          # or: pip install 'quantlab[mlflow]'
+  uv sync --extra mlflow          # or: pip install 'quantlab-py[mlflow]'
   ```
 
   which installs `mlflow-skinny`, then use `quantlab.tracking.mlflow.MlflowTracker` with a

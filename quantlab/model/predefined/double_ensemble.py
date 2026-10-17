@@ -23,7 +23,7 @@ try:
 except ImportError as exc:
     raise ImportError(
         "DoubleEnsembleRegressor needs lightgbm, an optional extra of quantlab: install it "
-        "with `uv sync --extra gbdt` or `pip install 'quantlab[gbdt]'`."
+        "with `uv sync --extra gbdt` or `pip install 'quantlab-py[gbdt]'`."
     ) from exc
 
 

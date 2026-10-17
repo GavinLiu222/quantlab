@@ -1,7 +1,7 @@
 """The MLflow tracker; the only module that imports mlflow (ADR 0015).
 
 mlflow is an optional extra (``uv sync --extra mlflow`` or
-``pip install 'quantlab[mlflow]'``) and is imported only when an
+``pip install 'quantlab-py[mlflow]'``) and is imported only when an
 ``MlflowTracker`` opens a run, so the library imports, and a config naming
 an ``MlflowTracker`` is rebuilt, without it.
 
@@ -81,7 +81,7 @@ def _import_mlflow():
     except ImportError as exc:
         raise ImportError(
             "MlflowTracker needs mlflow, an optional extra of quantlab: install it "
-            "with `uv sync --extra mlflow` or `pip install 'quantlab[mlflow]'`."
+            "with `uv sync --extra mlflow` or `pip install 'quantlab-py[mlflow]'`."
         ) from exc
     return mlflow
 

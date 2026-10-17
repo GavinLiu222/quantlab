@@ -26,7 +26,7 @@ try:
 except ImportError as exc:
     raise ImportError(
         "RealMLPRegressor needs pytabkit, an optional extra of quantlab: install it "
-        "with `uv sync --extra tabkit` or `pip install 'quantlab[tabkit]'`."
+        "with `uv sync --extra tabkit` or `pip install 'quantlab-py[tabkit]'`."
     ) from exc
 
 from quantlab.tracking.base import TrackingRun

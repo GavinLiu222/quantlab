@@ -3071,7 +3071,7 @@ wheels = [
 ]
 
 [[package]]
-name = "quantlab"
+name = "quantlab-py"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
@@ -3110,7 +3110,6 @@ all = [
     { name = "cvxpy" },
     { name = "lightgbm" },
     { name = "mlflow-skinny" },
-    { name = "mosek" },
     { name = "protobuf" },
     { name = "pytabkit" },
     { name = "wandb" },
@@ -3127,9 +3126,12 @@ mlflow = [
     { name = "mlflow-skinny" },
     { name = "protobuf" },
 ]
-optimize = [
+mosek = [
     { name = "cvxpy" },
     { name = "mosek" },
+]
+optimize = [
+    { name = "cvxpy" },
 ]
 tabkit = [
     { name = "pytabkit" },
@@ -3157,6 +3159,7 @@ requires-dist = [
     { name = "catboost", marker = "extra == 'all'", specifier = ">=1.2.8" },
     { name = "catboost", marker = "extra == 'gbdt'", specifier = ">=1.2.8" },
     { name = "cvxpy", marker = "extra == 'all'", specifier = ">=1.9.3" },
+    { name = "cvxpy", marker = "extra == 'mosek'", specifier = ">=1.9.3" },
     { name = "cvxpy", marker = "extra == 'optimize'", specifier = ">=1.9.3" },
     { name = "exchange-calendars", specifier = ">=4.13.2" },
     { name = "joblib", specifier = ">=1.6.0" },
@@ -3168,8 +3171,7 @@ requires-dist = [
     { name = "matplotlib", specifier = ">=3.11.1" },
     { name = "mlflow-skinny", marker = "extra == 'all'", specifier = ">=3.0" },
     { name = "mlflow-skinny", marker = "extra == 'mlflow'", specifier = ">=3.0" },
-    { name = "mosek", marker = "extra == 'all'", specifier = ">=11.2.6" },
-    { name = "mosek", marker = "extra == 'optimize'", specifier = ">=11.2.6" },
+    { name = "mosek", marker = "extra == 'mosek'", specifier = ">=11.2.6" },
     { name = "numba", specifier = ">=0.67.0" },
     { name = "numpy", specifier = ">=2.3.2" },
     { name = "pandas", specifier = ">=3.0.5" },
@@ -3195,7 +3197,7 @@ requires-dist = [
     { name = "xgboost", specifier = ">=3.4.1" },
     { name = "zarr", specifier = ">=3.3.0" },
 ]
-provides-extras = ["massive", "optimize", "tabkit", "gbdt", "wandb", "all", "mlflow"]
+provides-extras = ["massive", "optimize", "mosek", "tabkit", "gbdt", "wandb", "all", "mlflow"]
 
 [package.metadata.requires-dev]
 dev = [

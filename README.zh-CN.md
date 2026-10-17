@@ -73,9 +73,11 @@ quantlab 需要 Python 3.13 或更高版本、[uv](https://docs.astral.sh/uv/) �
 （KunQuant 在运行时编译因子代码）。
 
 ```bash
-pip install quantlab            # 或：uv add quantlab
-pip install 'quantlab[all]'     # 连同全部可选 extra
+pip install quantlab-py         # 或：uv add quantlab-py
+pip install 'quantlab-py[all]'  # 连同除 mosek 外的全部可选 extra
 ```
+
+PyPI 上的发行名是 `quantlab-py`（那里的 `quantlab` 是另一个无关项目），导入时仍写 `import quantlab`。
 
 部分组件需要可选 extra；没装时导入它会抛出 `ImportError`，并写明该装哪个 extra：
 
@@ -85,8 +87,10 @@ pip install 'quantlab[all]'     # 连同全部可选 extra
 | `tabkit` | pytabkit | `RealMLPRegressor`、`XGBTDRegressor` |
 | `wandb` | wandb | `WandbTracker` |
 | `mlflow` | mlflow-skinny | `MlflowTracker` |
+| `gbdt` | lightgbm、catboost | `LGBMRegressor`、`CatBoostRegressor`、`DoubleEnsembleRegressor` |
 | `massive` | boto3 | Massive 平面文件下载 |
-| `all` | 以上全部 | |
+| `mosek` | cvxpy、mosek | 设了 `max_names` 的 `MeanVarianceOptimizer`（需要 MOSEK 许可证） |
+| `all` | 除 `mosek` 外以上全部 | |
 
 从源码安装（含全部 extra 和开发工具）：
 

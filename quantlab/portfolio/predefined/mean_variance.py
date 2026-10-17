@@ -29,7 +29,7 @@ try:
 except ImportError as exc:
     raise ImportError(
         "MeanVarianceOptimizer needs cvxpy, an optional extra of quantlab: install it "
-        "with `uv sync --extra optimize` or `pip install 'quantlab[optimize]'`."
+        "with `uv sync --extra optimize` or `pip install 'quantlab-py[optimize]'`."
     ) from exc
 
 from quantlab.portfolio.base import (

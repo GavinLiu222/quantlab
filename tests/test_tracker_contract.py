@@ -517,5 +517,5 @@ def test_without_mlflow_a_config_rebuilds_and_opening_a_run_names_the_extra():
         [sys.executable, "-c", code], capture_output=True, text=True, cwd=REPO_ROOT
     )
     assert result.returncode == 0, result.stderr
-    assert "quantlab[mlflow]" in result.stdout
+    assert "quantlab-py[mlflow]" in result.stdout
     assert "--extra mlflow" in result.stdout

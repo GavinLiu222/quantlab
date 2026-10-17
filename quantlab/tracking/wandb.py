@@ -16,7 +16,7 @@ try:
 except ImportError as exc:
     raise ImportError(
         "WandbTracker needs wandb, an optional extra of quantlab: install it "
-        "with `uv sync --extra wandb` or `pip install 'quantlab[wandb]'`."
+        "with `uv sync --extra wandb` or `pip install 'quantlab-py[wandb]'`."
     ) from exc
 
 from quantlab.tracking.base import Tracker, TrackingRun

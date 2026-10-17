@@ -10,7 +10,7 @@ import importlib.metadata
 
 try:
     #: The installed distribution's version, by its PyPI name ``quantlab-py``
-    #: (``0+unknown`` until ``pyproject.toml`` names the distribution so).
+    #: (``0+unknown`` when it is not installed).
     __version__ = importlib.metadata.version("quantlab-py")
 except importlib.metadata.PackageNotFoundError:
     __version__ = "0+unknown"

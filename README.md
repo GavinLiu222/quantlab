@@ -83,9 +83,12 @@ quantlab needs Python 3.13 or newer, [uv](https://docs.astral.sh/uv/) and a C++ 
 (KunQuant compiles factor code at run time).
 
 ```bash
-pip install quantlab            # or: uv add quantlab
-pip install 'quantlab[all]'     # with every optional extra
+pip install quantlab-py         # or: uv add quantlab-py
+pip install 'quantlab-py[all]'  # with every optional extra except mosek
 ```
+
+The distribution is named `quantlab-py` on PyPI (`quantlab` there is an unrelated project);
+the package is imported as `quantlab`.
 
 Some components need an optional extra; importing one without it raises an `ImportError` that
 names the extra:
@@ -96,8 +99,10 @@ names the extra:
 | `tabkit` | pytabkit | `RealMLPRegressor`, `XGBTDRegressor` |
 | `wandb` | wandb | `WandbTracker` |
 | `mlflow` | mlflow-skinny | `MlflowTracker` |
+| `gbdt` | lightgbm, catboost | `LGBMRegressor`, `CatBoostRegressor`, `DoubleEnsembleRegressor` |
 | `massive` | boto3 | Massive flat-file downloads |
-| `all` | every extra above | |
+| `mosek` | cvxpy, mosek | `MeanVarianceOptimizer` with `max_names` (needs a MOSEK licence) |
+| `all` | every extra above except `mosek` | |
 
 From source, with every extra and the development tools:
 

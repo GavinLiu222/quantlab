@@ -23,7 +23,7 @@ try:
 except ImportError as exc:
     raise ImportError(
         "XGBTDRegressor needs pytabkit, an optional extra of quantlab: install it "
-        "with `uv sync --extra tabkit` or `pip install 'quantlab[tabkit]'`."
+        "with `uv sync --extra tabkit` or `pip install 'quantlab-py[tabkit]'`."
     ) from exc
 
 from quantlab.model.library_model import Rows
