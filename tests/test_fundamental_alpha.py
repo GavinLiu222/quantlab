@@ -235,3 +235,17 @@ def test_stream_mode_is_refused(built, tmp_path):
         data_columns=FundamentalAlphaParameters().required_panel_columns(names)))
     with pytest.raises(ValueError, match="batch only"):
         factor.init_stream()
+
+
+def test_ranked_outputs_are_the_cross_sectional_ranks(built, outputs, tmp_path):
+    panel, _ = built
+    dataset = FrameDataset(panel).to_zarr(tmp_path / "panel.zarr")
+    names = ("f_score", "fcf_yield")
+    ranked = FundamentalAlpha(FactorConfig(
+        warmup_bars=0, dataset=dataset, mode="batch", factor_names=names, kwargs={"ranked": True},
+        data_columns=FundamentalAlphaParameters().required_panel_columns(names), njobs=2,
+    )).compute(START, END)
+    for name in names:
+        expected = outputs[name].to_pandas().rank(axis=1, pct=True)
+        got = ranked[name].to_pandas().reindex_like(expected)
+        np.testing.assert_allclose(got.values, expected.values, atol=1e-6, err_msg=name)

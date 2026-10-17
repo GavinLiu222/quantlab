@@ -70,7 +70,7 @@ import numpy as np
 import xarray as xr
 from KunQuant.Driver import KunCompilerConfig
 from KunQuant.jit import cfake
-from KunQuant.Op import Builder, ConstantOp, Input, OpBase, Output
+from KunQuant.Op import Builder, ConstantOp, Input, OpBase, Output, Rank
 from KunQuant.ops import Abs, BackRef, Equals, Log, Select, Sqrt, WindowedSum
 from KunQuant.Stage import Function
 
@@ -133,6 +133,12 @@ class FundamentalAlphaParameters:
         Largest gap between ``k`` quarters and two reports' period ends.
     denominator_floor : float, default 1e-9
         Smallest absolute denominator of a ratio; smaller gives NaN.
+    ranked : bool, default False
+        Whether each output is its cross-sectional percentile rank
+        (KunQuant ``Rank``, NaN ignored) instead of the raw value. The
+        raw ratios are heavy-tailed, so neutralize the ranks
+        (``NeutralizedFactor``), not the raw values: a regression on raw
+        values follows the outliers.
     """
 
     issuance_window: int = 252
@@ -142,6 +148,7 @@ class FundamentalAlphaParameters:
     quarter_days: float = 91.3
     lag_tolerance_days: float = 45.0
     denominator_floor: float = 1.0e-9
+    ranked: bool = False
 
     @classmethod
     def from_config(cls, config: FactorConfig) -> "FundamentalAlphaParameters":
@@ -308,8 +315,9 @@ class FundamentalAlpha(FactorKunQuant):
 
     Only the selected ``factor_names`` are built, and ``data_columns`` must
     name exactly ``FundamentalAlphaParameters.required_panel_columns`` of
-    them. The outputs are raw characteristics; rank or neutralize them
-    downstream (``NeutralizedFactor``). ``warmup_bars`` should cover the
+    them. The outputs are raw characteristics, or their cross-sectional
+    ranks with ``ranked=True``, which is what ``NeutralizedFactor`` should
+    wrap. ``warmup_bars`` should cover the
     longest lag: about ``63 * (sue_quarters + 1)`` bars for a SUE (600 by
     default), ``issuance_window`` for the issuance, 260 for the year-ago
     reports.
@@ -476,7 +484,7 @@ class FundamentalAlpha(FactorKunQuant):
                 outputs["insider_breadth"] = WindowedSum(
                     x("insiders_buying") - x("insiders_selling"), params.insider_window)
             for name in wanted:
-                Output(outputs[name], name)
+                Output(Rank(outputs[name]) if params.ranked else outputs[name], name)
         return Function(builder.ops, name="fundamental_alpha")
 
     def _kunquant_inputs(
