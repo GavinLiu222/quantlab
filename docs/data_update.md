@@ -19,18 +19,17 @@ root `--data-dir`. Each step is one action on one store folder (paths relative t
 
 | action | what it does |
 |--------|--------------|
-| `sharadar` | `scripts/sharadar/update.py`: downloads every Sharadar table and updates `market/sharadar/` and `universe/sharadar/` |
-| `fred` | downloads the FRED series from `start` (required), then updates the store in the named folder |
+| `refresh` | keeps a vendor's raw tier current from its watermarks: `{vendor: ..., <options>}` calls `quantlab.acquisition.registry.refresh_raw_tier` with the vendor's options (Sharadar: `trading_days`; Massive: `endpoints`, `end`; FRED: `series`, `start`); raw files only; it raises when a part (a table, an endpoint, a series) failed, and its result names every part |
 | `benchmarks` | `scripts/sharadar/price_return_benchmark.py --refresh` for the listed tickers (`market/benchmarks/`) |
 | `update` | rebuilds the dataset of a store folder from its `component.json` and calls `update()` |
 | `mirror` | appends a source dataset's new bars to a store that copies its variables (`quantlab.backtest.live.mirror_new_bars`) |
 | `extend` | rebuilds the folder's component from its `component.json` and extends every store it declares it owns, written by date range, to t (`Component.store_uses()`, the `owns` uses: a factor's store, or a factor risk model's regression and estimate stores, in that order); the step's result names each store, `extended to <t>` or `current` |
 | `run` | runs any script under the repository: `{script: ..., args: [...], writes: [...], reads: [...]}`; `{data_dir}` and `{download_dir}` in `args` are filled in (other braces are kept) |
 
-Any other action is an error, in a run and in `--check`. A `sharadar`, `benchmarks` or `run` step
+Any other action is an error, in a run and in `--check`. A `benchmarks` or `run` step
 lists in `writes` the store folders, or folder prefixes ending in `/`, it writes (the shipped file:
-`market/sharadar/` and `universe/sharadar/` for `sharadar`, `market/benchmarks/` for
-`benchmarks`); `update`, `extend`, `mirror` and `fred` write their `store`. A `run` step may list
+`market/sharadar/` and `universe/sharadar/` for the `scripts/sharadar/update.py` step, `market/benchmarks/` for
+`benchmarks`); `refresh` writes raw files only; `update`, `extend` and `mirror` write their `store`. A `run` step may list
 in `reads` the folders or prefixes it reads; the others' reads come from their components.
 `--check` orders every step's reads against the later steps' writes.
 
@@ -46,19 +45,22 @@ is extended only by its owner (`owns_store()`), never by a factor view pinned to
 outputs; `extend` refuses a component that declares no ranged store or does not own one.
 
 The shipped file updates what the us3000 paper trading reads, plus the base data: every Sharadar
-table, the FRED 3-month T-bill rate, the price-return benchmarks, the Barra exposures, the us3000
+table (a `refresh` step for the raw tier, then `scripts/sharadar/update.py --no-pull --rebuild-dropped`,
+which brings every Sharadar store up from it, `quantlab.dataset.sharadar.stores.update_stores`; a
+failed refresh no longer keeps the stores from being brought up to what the raw tier holds), the FRED
+3-month T-bill rate (a `refresh` step, then `update` of its store), the price-return benchmarks, the Barra exposures, the us3000
 membership, the us3000 alphas and the USE4 risk stores. The us3000 alphas read Sharadar SEP on
 the membership's roster (`RosterDataset`, see the [dataset guide](dataset.md)), so the update keeps
 no price copy cut to the roster: SEP is brought up by the raw stage and the membership by the
 `universe` stage, both before the `factors` stage. The `universe` stage also brings up the
 common-stock membership (`universe/sharadar/sharadar_common_stock_membership`, every security of SEP from
 its first to its last priced bar, `CommonStockConstituentDataset`, see the
-[constituent guide](constituent.md)), allowed to fail. The raw stage also runs
-`scripts/massive/rest_pull.py`, which brings every Massive REST endpoint (splits, dividends, news, short interest,
+[constituent guide](constituent.md)), allowed to fail. The raw stage also refreshes
+Massive's raw tier (`refresh: {vendor: massive}`, what `scripts/massive/rest_pull.py` runs by hand), which brings every Massive REST endpoint (splits, dividends, news, short interest,
 short volume, IPOs, 8-K disclosures and their taxonomy, and the raw-only tables: 10-K sections, 8-K text, risk
 factors, Form 3/4, 13-F, reference tickers, ticker events, and a daily Float snapshot) up in the raw tier from each
 endpoint's watermark (see "REST pulls" in the [Massive guide](massive.md));
-it writes raw files only (`writes: []`) and is allowed to fail. WRDS data is not in the
+it writes raw files only and is allowed to fail. WRDS data is not in the
 daily update; run `scripts/wrds/*.py` when the vendor publishes.
 
 The last stage, `intraday`, runs once `done` is written (`after_done: true`: its steps are added

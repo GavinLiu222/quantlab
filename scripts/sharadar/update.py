@@ -1,6 +1,12 @@
 """Refresh the Sharadar raw tier and append the new bars to the stores.
 
-Run every morning after ``download.py`` has built the stores. One run:
+Run every morning after ``download.py`` has built the stores. A thin shell
+over the library: steps 1 and 2 are the Sharadar raw-tier refresh
+(``quantlab.acquisition.sharadar.refresh``, through
+``quantlab.acquisition.registry.refresh_raw_tier``), step 3 is
+``quantlab.dataset.sharadar.stores.update_stores``. With ``--no-pull`` only
+step 3 runs; the daily update (``scripts/data_update/update.py``) refreshes
+the raw tier in a step of its own and runs this script so. One run:
 
 1. pulls TICKERS whole (new listings and ticker changes), INDICATORS whole
    (units and the 8-K event codes), SP500 and SF3A whole (they are
@@ -74,176 +80,20 @@ must be the ones ``download.py`` used.
 """
 
 import argparse
-import os
-import traceback
-from datetime import date
 from pathlib import Path
 
-import pandas as pd
-import xarray as xr
-
-from quantlab.acquisition.sharadar.client import (
-    SharadarClient,
-    SharadarEntitlementError,
-    SharadarHttpError,
-)
-from quantlab.core.store_folder import README_FILE, save_component
-from quantlab.dataset.config import (
-    SPY_PERMATICKER,
-    ConstituentDatasetConfig,
-    SharadarActionsConfig,
-    SharadarDailyConfig,
-    SharadarDatasetConfig,
-    SharadarEventsConfig,
-    SharadarFiscalYearsConfig,
-    SharadarFundamentalsConfig,
-    SharadarHoldingsConfig,
-    SharadarIndustryConfig,
-    SharadarInsidersConfig,
-    SharadarListingConfig,
-    SharadarShareClassConfig,
-)
-from quantlab.dataset.sharadar.actions import SharadarActionsDataset
-from quantlab.dataset.sharadar.daily import SharadarDailyDataset
-from quantlab.dataset.sharadar.events import SharadarEventsDataset
-from quantlab.dataset.sharadar.fiscal_years import SharadarFiscalYearsDataset
-from quantlab.dataset.sharadar.holdings import SharadarHoldingsDataset
-from quantlab.dataset.sharadar.industry import SharadarIndustryDataset
-from quantlab.dataset.sharadar.insiders import SharadarInsidersDataset
-from quantlab.dataset.sharadar.listing import SharadarListingDataset
-from quantlab.dataset.sharadar.share_class import SharadarShareClassDataset
-from quantlab.dataset.sharadar.fundamentals import SharadarFundamentalsDataset
-from quantlab.dataset.sharadar.membership import SharadarSP500ConstituentDataset
-from quantlab.dataset.sharadar.stock import SharadarStockDataset
-from quantlab.dataset.sharadar.tables import VENDOR_DIR
+from quantlab.acquisition.base import DataSourceRegistry
+from quantlab.acquisition.registry import refresh_raw_tier
+from quantlab.acquisition.sharadar.client import SharadarEntitlementError
+from quantlab.dataset.sharadar.stores import missing_stores, update_stores
 from quantlab.utils.cli import (
     add_output_dir_args,
     inside_repository,
-    print_conversion_result,
     resolve_output_dirs,
 )
 
 #: The repository this script lives in; no output may go inside it.
 REPO_ROOT = Path(__file__).resolve().parents[2]
-
-#: Folders under the data root: Sharadar's market stores and its universe stores.
-MARKET_FOLDER = Path("market") / "sharadar"
-UNIVERSE_FOLDER = Path("universe") / "sharadar"
-
-
-def store_path(folder: Path, stem: str) -> Path:
-    """``<folder>/<stem>/<stem>.zarr``: a store in its own folder, beside its README.md."""
-    return folder / stem / f"{stem}.zarr"
-
-
-#: Pulled whole every run: reference and membership tables are small.
-WHOLE_TABLES = ("tickers", "indicators", "sp500", "sf3a", "actions")
-#: Pulled as a trailing date window.
-WINDOW_TABLES = ("sep", "sfp", "events", "sf2")
-#: Pulled as the rows changed since the watermark (``lastupdated``).
-UPDATED_TABLES = ("sf1", "daily")
-
-#: Each price store and the config fields it is built with beyond its paths:
-#: the whole SEP and SFP tables, every permaticker ever an S&P 500 member
-#: with all its bars (the backtest's price dataset), and SPY alone (the
-#: benchmark).
-PRICE_STORES = {
-    "sharadar_sep_1d": {"table": "sep"},
-    "sharadar_sfp_1d": {"table": "sfp"},
-    "sharadar_sp500_1d": {"table": "sep", "roster_universe": "sp500"},
-    "sharadar_spy_1d": {"table": "sfp", "permatickers": (SPY_PERMATICKER,)},
-}
-MEMBERSHIP_STORE = "sharadar_sp500_membership"
-#: Each point-in-time fundamentals store and its as-reported SF1 dimension.
-FUNDAMENTALS_STORES = {"sharadar_sf1_arq": "ARQ", "sharadar_sf1_art": "ART"}
-#: The DAILY valuation store.
-DAILY_STORE = "sharadar_daily_1d"
-#: The stores of the filing, ownership, industry, fiscal-year, share-class and listing panels, with their config and dataset classes.
-PANEL_STORES = {
-    "sharadar_events_1d": (SharadarEventsConfig, SharadarEventsDataset),
-    "sharadar_insiders_1d": (SharadarInsidersConfig, SharadarInsidersDataset),
-    "sharadar_holdings_1d": (SharadarHoldingsConfig, SharadarHoldingsDataset),
-    "sharadar_actions_1d": (SharadarActionsConfig, SharadarActionsDataset),
-    "sharadar_industry_1d": (SharadarIndustryConfig, SharadarIndustryDataset),
-    "sharadar_sf1_fiscal_years": (SharadarFiscalYearsConfig, SharadarFiscalYearsDataset),
-    "sharadar_share_class_1d": (SharadarShareClassConfig, SharadarShareClassDataset),
-    "sharadar_listing_1d": (SharadarListingConfig, SharadarListingDataset),
-}
-
-
-def _store_start(path: Path) -> str:
-    """Return the first day a store holds, so an update keeps its range."""
-    first = xr.open_zarr(path)["timestamp"].values[0]
-    return pd.Timestamp(first).date().isoformat()
-
-
-#: Messages of ``update()`` refusing a store whose stored symbols left the
-#: raw tier's symbol axis.
-_DROPPED_SYMBOL_REFUSALS = ("refusing to resume", "absent from the pinned whole-range axis")
-
-
-def _build_panel_store(
-    path: Path, config_cls, dataset_cls, vendor_root: Path, start: str, failures: list
-) -> None:
-    """Build a panel store not built yet from ``start`` (SEP's first day), with its README.md and component.json."""
-    try:
-        dataset = dataset_cls(config_cls(
-            zarr_file_path=str(path), raw_data_dir_path=str(vendor_root), start_date=start,
-        )).update()
-        print_conversion_result(dataset.last_chunk_result)
-        readme = path.parent / README_FILE
-        save_component(dataset, path.parent, readme=None if readme.exists() else (
-            f"# {path.stem}\n\n{dataset_cls.__doc__.strip().splitlines()[0]}\n\n"
-            f"Built by `scripts/sharadar/update.py` from {start}; it appends the new bars every morning.\n"
-        ))
-        print(f"{path.name}: built from {start}")
-    except Exception:  # noqa: BLE001 - one store's failure must not stop the others
-        failures.append(path.name)
-        print(f"{path.name}: build failed:\n{traceback.format_exc()}")
-
-
-def _update_store(path: Path, make, rebuild_except: set[str] | None, failures: list) -> None:
-    """Update one store; rebuild it on a dropped-symbol refusal when asked; record a failure.
-
-    ``make(start_date)`` returns the store's dataset. ``rebuild_except`` is
-    None when no store is rebuilt, else the store names (``path.stem``) that
-    are not.
-    """
-    rebuild_dropped = rebuild_except is not None and path.stem not in rebuild_except
-    try:
-        dataset = make(_store_start(path)).update()
-        print_conversion_result(dataset.last_chunk_result)
-        corrections = getattr(dataset, "corrections_path", None)
-        if corrections is not None and corrections().exists():
-            print(f"  vendor corrections: {corrections()}")
-        return
-    except ValueError as exc:
-        if not (rebuild_dropped and any(m in str(exc) for m in _DROPPED_SYMBOL_REFUSALS)):
-            failures.append(path.name)
-            print(f"{path.name}: update failed: {exc}")
-            return
-        print(f"{path.name}: a stored symbol left the raw tier's axis; rebuilding")
-    except Exception:  # noqa: BLE001 - one store's failure must not stop the others
-        failures.append(path.name)
-        print(f"{path.name}: update failed:\n{traceback.format_exc()}")
-        return
-    try:
-        start = _store_start(path)
-        before = set(xr.open_zarr(path)["symbol"].values.tolist())
-        kept = path.with_name(f"{path.name}.pre{date.today():%Y%m%d}")
-        os.rename(path, kept)
-        ledger = Path(f"{path}.chunks.json")
-        if ledger.exists():
-            os.rename(ledger, f"{kept}.chunks.json")
-        print_conversion_result(make(start).update().last_chunk_result)
-        after = set(xr.open_zarr(path)["symbol"].values.tolist())
-        print(
-            f"  rebuilt {path.name}; old store kept as {kept.name}; symbols removed "
-            f"{sorted(before - after)}, added {sorted(after - before)}"
-        )
-    except Exception:  # noqa: BLE001
-        failures.append(path.name)
-        print(f"{path.name}: rebuild failed:\n{traceback.format_exc()}")
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -263,6 +113,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Raw dates re-pulled before each table's watermark, so a late "
             "vendor correction is seen. Default: 10."
+        ),
+    )
+    parser.add_argument(
+        "--no-pull",
+        action="store_true",
+        help=(
+            "Pull nothing: update the stores from the raw tier on disk (the "
+            "daily update refreshes the raw tier in a step of its own)."
         ),
     )
     parser.add_argument(
@@ -314,93 +172,21 @@ if __name__ == "__main__":
             f"{[str(p) for p in offending]}. Pass --download-dir and --data-dir "
             f"outside it.\n",
         )
-    vendor_root = download_dir / VENDOR_DIR
-    market_dir = data_dir / MARKET_FOLDER
-    membership_path = store_path(data_dir / UNIVERSE_FOLDER, MEMBERSHIP_STORE)
-    missing = [
-        str(path) for path in (
-            *(store_path(market_dir, stem) for stem in (
-                *PRICE_STORES, *FUNDAMENTALS_STORES, DAILY_STORE
-            )),
-            membership_path,
-        )
-        if not path.exists()
-    ]
-    if missing:
-        parser.exit(1, f"no store {missing}; run download.py first.\n")
+    if missing := missing_stores(data_dir):
+        parser.exit(1, f"no store {[str(p) for p in missing]}; run download.py first.\n")
 
-    client = SharadarClient()
-    try:
-        for code in WHOLE_TABLES:
-            print(f"{code}: {client.bulk_table(code, download_dir)}")
-        for code in WINDOW_TABLES:
-            print(f"{code}: {client.window_table(code, download_dir, trading_days=args.trading_days)}")
-        for code in UPDATED_TABLES:
-            try:
-                print(f"{code}: {client.updated_table(code, download_dir)}")
-            except SharadarHttpError as exc:
-                # Sharadar stops a query after 15 seconds; after a mass
-                # re-stamp of lastupdated the changed rows are most of the
-                # table, and the bulk zip is the cheaper copy of them.
-                print(f"{code}: updated pull failed ({exc}); pulling it in bulk instead")
-                print(f"{code}: {client.bulk_table(code, download_dir)}")
-    except (SharadarEntitlementError, RuntimeError, ValueError) as exc:
-        parser.exit(1, f"{exc}\n")
-
-    failures: list[str] = []
-    rebuild_except = set(args.keep_dropped) if args.rebuild_dropped else None
-    for store, fields in PRICE_STORES.items():
-        _update_store(
-            store_path(market_dir, store),
-            lambda start, fields=fields, store=store: SharadarStockDataset(SharadarDatasetConfig(
-                zarr_file_path=str(store_path(market_dir, store)), raw_data_dir_path=str(vendor_root),
-                **fields, start_date=start,
-            )),
-            rebuild_except, failures,
-        )
-    _update_store(
-        membership_path,
-        lambda start: SharadarSP500ConstituentDataset(ConstituentDatasetConfig(
-            zarr_file_path=str(membership_path), cache_dir=str(vendor_root),
-            start_date=start,
-        )),
-        rebuild_except, failures,
-    )
-    for store, dimension in FUNDAMENTALS_STORES.items():
-        _update_store(
-            store_path(market_dir, store),
-            lambda start, store=store, dimension=dimension: SharadarFundamentalsDataset(
-                SharadarFundamentalsConfig(
-                    zarr_file_path=str(store_path(market_dir, store)), raw_data_dir_path=str(vendor_root),
-                    dimension=dimension, start_date=start,
-                )
-            ),
-            rebuild_except, failures,
-        )
-    _update_store(
-        store_path(market_dir, DAILY_STORE),
-        lambda start: SharadarDailyDataset(SharadarDailyConfig(
-            zarr_file_path=str(store_path(market_dir, DAILY_STORE)), raw_data_dir_path=str(vendor_root),
-            start_date=start,
-        )),
-        rebuild_except, failures,
-    )
-    for store, (config_cls, dataset_cls) in PANEL_STORES.items():
-        if not store_path(market_dir, store).exists():
-            _build_panel_store(
-                store_path(market_dir, store), config_cls, dataset_cls, vendor_root,
-                _store_start(store_path(market_dir, "sharadar_sep_1d")), failures,
+    if not args.no_pull:
+        try:
+            pulled = refresh_raw_tier(
+                DataSourceRegistry.get("sharadar"), download_dir, trading_days=args.trading_days
             )
-            continue
-        _update_store(
-            store_path(market_dir, store),
-            lambda start, store=store, config_cls=config_cls, dataset_cls=dataset_cls: dataset_cls(
-                config_cls(
-                    zarr_file_path=str(store_path(market_dir, store)), raw_data_dir_path=str(vendor_root),
-                    start_date=start,
-                )
-            ),
-            rebuild_except, failures,
-        )
-    if failures:
-        parser.exit(1, f"{len(failures)} store(s) not updated: {failures}\n")
+        except (SharadarEntitlementError, RuntimeError, ValueError) as exc:
+            parser.exit(1, f"{exc}\n")
+        for part in pulled.parts:
+            print(f"{part.name}: {part.summary}")
+
+    outcome = update_stores(
+        download_dir, data_dir, rebuild_dropped=args.rebuild_dropped, keep_dropped=args.keep_dropped
+    )
+    if outcome.failed:
+        parser.exit(1, f"{len(outcome.failed)} store(s) not updated: {list(outcome.failed)}\n")

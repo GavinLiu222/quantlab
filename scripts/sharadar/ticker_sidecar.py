@@ -10,7 +10,8 @@ each price store ``download.py`` builds that exists under the data root
 ``--data-dir`` (``sharadar_sep_1d.zarr``, ``sharadar_sfp_1d.zarr``,
 ``sharadar_sp500_1d.zarr``, ``sharadar_spy_1d.zarr``, each at
 ``<data-dir>/market/sharadar/<stem>/<stem>.zarr``), naming the store's
-permatickers from ``<download-dir>/sharadar``. The stores are only read.
+permatickers from ``<download-dir>/sharadar``
+(``quantlab.dataset.sharadar.stores.write_ticker_sidecars``). The stores are only read.
 Nothing is downloaded; run ``update.py`` first for the latest tables.
 
 Usage::
@@ -25,9 +26,7 @@ must be the ones ``download.py`` used.
 import argparse
 from pathlib import Path
 
-from quantlab.dataset.config import SharadarDatasetConfig
-from quantlab.dataset.sharadar.stock import SharadarStockDataset
-from quantlab.dataset.sharadar.tables import VENDOR_DIR
+from quantlab.dataset.sharadar.stores import MARKET_FOLDER, PRICE_STORES, write_ticker_sidecars
 from quantlab.utils.cli import (
     add_output_dir_args,
     inside_repository,
@@ -36,22 +35,6 @@ from quantlab.utils.cli import (
 
 #: The repository this script lives in; no output may go inside it.
 REPO_ROOT = Path(__file__).resolve().parents[2]
-
-#: The folder under the data root that holds Sharadar's market stores.
-MARKET_FOLDER = Path("market") / "sharadar"
-
-#: Each price store ``download.py`` builds and its price table.
-PRICE_STORES = {
-    "sharadar_sep_1d": "sep",
-    "sharadar_sfp_1d": "sfp",
-    "sharadar_sp500_1d": "sep",
-    "sharadar_spy_1d": "sfp",
-}
-
-
-def store_path(folder: Path, stem: str) -> Path:
-    """``<folder>/<stem>/<stem>.zarr``: a store in its own folder, beside its README.md."""
-    return folder / stem / f"{stem}.zarr"
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -88,19 +71,11 @@ if __name__ == "__main__":
             f"refusing to write Sharadar data inside the repository ({REPO_ROOT}): "
             f"{[str(p) for p in offending]}. Pass --data-dir outside it.\n",
         )
-    market_dir = data_dir / MARKET_FOLDER
-    stores = {
-        name: code for name, code in PRICE_STORES.items()
-        if store_path(market_dir, name).exists()
-    }
-    if not stores:
-        parser.exit(1, f"no Sharadar price store {list(PRICE_STORES)} under {market_dir}.\n")
-    for name, code in stores.items():
-        dataset = SharadarStockDataset(
-            SharadarDatasetConfig(
-                zarr_file_path=str(store_path(market_dir, name)),
-                raw_data_dir_path=str(download_dir / VENDOR_DIR),
-                table=code,
-            )
+    written = write_ticker_sidecars(download_dir, data_dir)
+    if not written:
+        parser.exit(
+            1,
+            f"no Sharadar price store {[s.name for s in PRICE_STORES]} under {data_dir / MARKET_FOLDER}.\n",
         )
-        print(f"{name}: {dataset.write_ticker_sidecar()}")
+    for name, sidecar in written.items():
+        print(f"{name}: {sidecar}")

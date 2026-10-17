@@ -8,15 +8,15 @@
 # which the paper trading waits for (docs/data_update.md).
 #
 # Actions:
-#   sharadar:   scripts/sharadar/update.py (every Sharadar table to market/ and universe/)
-#   fred:       download the FRED series from `start` (required), then update the store in that folder
+#   refresh:    a vendor's raw tier kept current from its watermarks (quantlab.acquisition.registry
+#               .refresh_raw_tier): {vendor: ..., <the vendor's options>}; raw files only, fails when a part fails
 #   benchmarks: scripts/sharadar/price_return_benchmark.py --refresh for the tickers
 #   update:     a dataset rebuilt from <folder>/component.json, update()
 #   mirror:     append the source dataset's new bars to a store copying its variables
 #   extend:     a factor or factor risk model rebuilt from <folder>/component.json, to t
 #   run:        any repository script: {script: ..., args: [... {data_dir} ...], writes: [...], reads: [...]}
-# `writes` (sharadar, benchmarks, run) and `reads` (run) list store folders or folder prefixes
-# ending in /; the other actions write their `store`. --check orders reads against later writes.
+# `writes` (benchmarks, run) and `reads` (run) list store folders or folder prefixes
+# ending in /; `refresh` writes raw files only, the other actions write their `store`. --check orders reads against later writes.
 # After editing, run `scripts/data_update/update.py --check`.
 # A step with `allow_failure: true` is recorded as failed when it raises, and the run goes on.
 # A stage with `after_done: true` runs once `done` is written; nothing waiting for `done` waits for it.
@@ -36,22 +36,27 @@ stages:
   - name: raw
     steps:
       # A table no strategy reads failing (a vendor hiccup) must not hold the day; the ready stores decide.
+      # Every Sharadar table of the daily plan (whole, trailing window, changed rows) into the raw tier.
+      - refresh: {vendor: sharadar, allow_failure: true}
+      # Every Sharadar store appended from the raw tier (quantlab.dataset.sharadar.stores).
       # TICKERS is read with its history (#263), so a row the vendor drops for a day no longer
       # takes a security off a store; --rebuild-dropped is left for a real move of rows.
-      - sharadar: {args: [--rebuild-dropped], allow_failure: true, writes: [market/sharadar/, universe/sharadar/]}
-      # IWV alone from the SFP raw tier the sharadar step pulled (MASTER's market features read it);
-      # scripts/sharadar/update.py keeps SPY but not IWV.
+      - run:
+          script: scripts/sharadar/update.py
+          args: [--download-dir, "{download_dir}", --data-dir, "{data_dir}", --no-pull, --rebuild-dropped]
+          writes: [market/sharadar/, universe/sharadar/]
+          allow_failure: true
+      # IWV alone from the SFP raw tier the sharadar refresh pulled (MASTER's market features read it);
+      # the Sharadar stores keep SPY but not IWV.
       - update: market/sharadar/sharadar_iwv_1d
-      - fred: {series: [DTB3], start: "1954-01-04", store: market/fred/fred_dtb3_1d}
+      # DTB3 from its watermark (a series FRED could not answer is recorded as failed), then its store.
+      - refresh: {vendor: fred, series: [DTB3], start: "1954-01-04", allow_failure: true}
+      - update: market/fred/fred_dtb3_1d
       - benchmarks: {tickers: [vt, spy, acwi], writes: [market/benchmarks/]}
       # Every Massive REST endpoint (quantlab.acquisition.massive.rest.ENDPOINTS: the ones the
       # intraday stage's REST panels read and the raw-only tables) into the raw tier, each from its
       # watermark (docs/massive.md, "REST pulls"); raw files only, so a failure holds nothing.
-      - run:
-          script: scripts/massive/rest_pull.py
-          args: [--download-dir, "{download_dir}"]
-          writes: []
-          allow_failure: true
+      - refresh: {vendor: massive, allow_failure: true}
   - name: market-factors
     steps:
       - extend: factors/market/barra_style
