@@ -407,10 +407,16 @@ def test_the_solver_defaults_to_clarabel_and_is_the_one_used(monkeypatch):
     assert used == ["CLARABEL", "OSQP"]
 
 
-def test_no_solver_is_refused():
+def test_no_solver_is_refused_by_the_config():
     # cvxpy's own choice depends on the installed solvers.
     with pytest.raises(ValueError, match="solver=None"):
-        _optimizer(solver=None)
+        MeanVarianceConfig(
+            expected_return_label="ret_5",
+            covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=LOOKBACK)),
+            expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
+            risk_aversion=5.0,
+            solver=None,
+        )
 
 
 def test_another_solver_reaches_the_same_weights():

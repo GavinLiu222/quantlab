@@ -349,8 +349,8 @@ class MeanVarianceOptimizer(PortfolioConstructor):
         ``risk_aversion`` or ``turnover_penalty`` is negative,
         ``candidate_top_k`` is not a positive integer, ``volatility_label``
         is set with a covariance estimator that does not take volatilities
-        (``FactorRiskStoreEstimator``), ``solver`` is ``None`` or not an
-        installed cvxpy solver, ``max_names`` is not a positive integer, is set
+        (``FactorRiskStoreEstimator``), ``solver`` is not an installed
+        cvxpy solver, ``max_names`` is not a positive integer, is set
         long-only with ``weight_cap * max_names < 1``, or with a solver
         that cannot solve mixed-integer conic programs, or ``mip_gap`` is
         outside ``(0, 1)``, set without ``max_names`` or for a solver it is
@@ -450,11 +450,6 @@ class MeanVarianceOptimizer(PortfolioConstructor):
                 f"volatility_label={config.volatility_label!r} asks the covariance estimator "
                 f"for volatilities in place of its own, which "
                 f"{type(config.covariance).__name__} does not take; leave volatility_label unset"
-            )
-        if config.solver is None:
-            raise ValueError(
-                f"solver=None leaves the choice to cvxpy, which picks among the solvers "
-                f"installed on the machine; name one of {cp.installed_solvers()}"
             )
         if config.solver not in cp.installed_solvers():
             raise ValueError(

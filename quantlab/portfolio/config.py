@@ -274,9 +274,14 @@ class MeanVarianceConfig(FrozenConfig):
         Raises
         ------
         ValueError
-            If a bound is not a pair.
+            If ``solver`` is ``None`` or a bound is not a pair.
         """
         super().__post_init__()
+        if self.solver is None:
+            raise ValueError(
+                "solver=None leaves the choice to cvxpy, which picks among the solvers "
+                "installed on the machine; name one, e.g. 'CLARABEL'"
+            )
         # A rebuild hands the components over as a list.
         object.__setattr__(self, "exposure_factors", tuple(self.exposure_factors))
         bounds = {}
