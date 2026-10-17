@@ -618,10 +618,11 @@ def _build_panel(entry: SharadarStore, path: Path, data_dir, download_dir) -> St
 
 def _update(entry: SharadarStore, path: Path, data_dir, download_dir,
             rebuild_except: set[str] | None, today: date | None) -> StoreResult:
-    """Update one store; rebuild it on a refusal to resume when asked."""
+    """Update one store, or rebuild it on a refusal to resume when asked, and write its component.json."""
     rebuild = rebuild_except is not None and path.stem not in rebuild_except
     try:
         dataset = entry.dataset(data_dir, download_dir, _store_start(path)).update()
+        _save_folder(entry, dataset, path)
         corrections = getattr(dataset, "corrections_path", None)
         corrections = corrections() if corrections is not None else None
         return StoreResult(
@@ -644,7 +645,9 @@ def _update(entry: SharadarStore, path: Path, data_dir, download_dir,
         ledger = Path(ChunkLedger.default_path(str(path)))
         if ledger.exists():
             os.rename(ledger, ChunkLedger.default_path(str(kept)))
-        conversion = entry.dataset(data_dir, download_dir, start).update().last_chunk_result
+        dataset = entry.dataset(data_dir, download_dir, start).update()
+        _save_folder(entry, dataset, path)
+        conversion = dataset.last_chunk_result
         after = set(xr.open_zarr(path)["symbol"].values.tolist())
         return StoreResult(
             path, StoreState.REBUILT, conversion, start=start, kept=kept,

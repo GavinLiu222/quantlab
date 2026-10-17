@@ -92,6 +92,25 @@ def test_a_built_store_is_brought_up_to_date_with_the_new_bars(roots):
         assert len(stored["timestamp"]) == 4
 
 
+def test_an_updated_store_without_a_component_json_gets_one(roots):
+    from quantlab.core.store_folder import load_component
+    from quantlab.dataset.sharadar.stores import build_stores, store, update_stores
+
+    downloads, data = roots
+    vendor = _vendor(DAYS[:3])
+    _pull(vendor, downloads)
+    build_stores(downloads, data, stores=["sharadar_sep_1d"])
+    path = store("sharadar_sep_1d").path(data)
+    (path.parent / "component.json").unlink()  # a store built before build_stores wrote one
+
+    vendor.tables["stocks"][1].extend([sep_row("AAA", DAYS[3], 103.0), sep_row("BBB", DAYS[3], 113.0)])  # SYNTHETIC
+    _pull(vendor, downloads)
+    update_stores(downloads, data, stores=["sharadar_sep_1d"])
+
+    rebuilt = load_component(path.parent)
+    assert rebuilt.config.zarr_file_path == str(path) and rebuilt.config.start_date == DAYS[0]
+
+
 def test_a_missing_panel_store_is_built_from_the_first_day_of_sep(roots):
     from quantlab.dataset.sharadar.stores import build_stores, store, update_stores
 
@@ -211,6 +230,7 @@ def test_a_rebuild_reports_the_kept_store_and_the_symbols_it_changed(roots):
     path = store("sharadar_sep_1d").path(data)
     assert entry.state is StoreState.REBUILT
     assert entry.kept == path.with_name("sharadar_sep_1d.zarr.pre20240109")
+    assert (path.parent / "component.json").exists()
     assert (entry.removed, entry.added) == ((202,), (303,))
 
 
