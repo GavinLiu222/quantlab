@@ -597,6 +597,8 @@ rule = BlackLittermanOptimizer(BlackLittermanConfig(
 ))
 ```
 
+在 us3000 上（quantlab-experiment `2026-10-17-us3000-black-litterman`，#344），以模拟盘集成的预测为唯一观点、市场取 us3000 市值加权、`risk_aversion` 20、单只上限 5%、换手惩罚 0.002、不加暴露约束、基准为 SPY 全收益时，Black-Litterman 没有胜过同样设置下用 `GrinoldExpectedReturn(ic=0.0122)` 的 `ActiveRiskOptimizer`。Grinold alpha 观点取 `omega="idzorek"`、`confidence=1` 时得到的就是主动风险组合（主动风险的目标等于期望收益为 `mu + risk_aversion * Sigma * b` 的总收益均值方差）；`"he_litterman"` 等于 `confidence=0.5` 的 `"idzorek"`；`tau` 从 0.01 到 0.1 对超额 IR 的影响不到 0.01；把按 IC 缩放的模型当总收益观点每年少 3 到 6 个百分点。选股期最好的配置是 alpha 观点（`views_relative_to_prior=True`）加 `"he_litterman"`、`tau=0.025`，它收缩了 alpha，年换手 184%（基线 435%）：回测运行中选股期超额 IR 0.20 对 −0.05（每年 +1.4 个百分点，t 0.82），holdout −0.26 对 0.54（−4.5 个百分点，t −1.79）。只有一个模型的分数作观点时用 `ActiveRiskOptimizer`；要按置信度合成多种观点时用 Black-Litterman，取 alpha 观点、`"he_litterman"` 和 `tau=0.025`。
+
 不要重写 `decide`：它是回测与执行器共用的唯一决策路径。规则不含组装代码，它的 context 由 `DecisionInputs` 构造。
 
 近似回测（见[用近似回测做参数扫描](backtest.md#用近似回测做参数扫描)）只运行它有自己实现的那些内置规则，按确切类选择：新规则或内置规则的子类可以在回测运行中使用，在近似回测中会被拒绝。要扫描它，就在 `quantlab/portfolio/predefined/approximate` 里加上它的实现（一个含 `decide(rule, panel, prices, stopping)` 函数的模块），并在 `quantlab/portfolio/approximate.py` 里加上它的字段表。
