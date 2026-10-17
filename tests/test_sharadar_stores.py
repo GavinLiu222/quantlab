@@ -178,3 +178,51 @@ def test_missing_stores_lists_the_stores_download_builds_but_not_the_panels(root
     names = [path.name for path in missing_stores(data)]
     assert "sharadar_sep_1d.zarr" in names and "sharadar_sp500_membership.zarr" in names
     assert "sharadar_actions_1d.zarr" not in names
+
+
+def test_every_built_store_gets_a_component_json_and_the_build_is_reported(roots):
+    from quantlab.dataset.sharadar.stores import StoreState, build_stores, store
+
+    downloads, data = roots
+    _pull(_vendor(DAYS[:3]), downloads)
+
+    outcome = build_stores(downloads, data, stores=["sharadar_sep_1d"])
+
+    path = store("sharadar_sep_1d").path(data)
+    assert (path.parent / "component.json").exists()
+    assert outcome.built == ("sharadar_sep_1d.zarr",)
+    (entry,) = outcome.stores
+    assert entry.state is StoreState.BUILT and entry.conversion.rows_written > 0
+
+
+def test_a_rebuild_reports_the_kept_store_and_the_symbols_it_changed(roots):
+    from quantlab.dataset.sharadar.stores import StoreState, build_stores, store, update_stores
+
+    downloads, data = roots
+    vendor = _vendor(DAYS[:3])
+    _pull(vendor, downloads)
+    build_stores(downloads, data, stores=["sharadar_sep_1d"])
+    _drop_bbb(vendor, downloads)
+
+    outcome = update_stores(downloads, data, stores=["sharadar_sep_1d"],
+                            rebuild_dropped=True, today=date(2024, 1, 9))
+
+    (entry,) = outcome.stores
+    path = store("sharadar_sep_1d").path(data)
+    assert entry.state is StoreState.REBUILT
+    assert entry.kept == path.with_name("sharadar_sep_1d.zarr.pre20240109")
+    assert (entry.removed, entry.added) == ((202,), (303,))
+
+
+def test_a_refused_update_is_failed_with_its_reason(roots):
+    from quantlab.dataset.sharadar.stores import StoreState, build_stores, update_stores
+
+    downloads, data = roots
+    vendor = _vendor(DAYS[:3])
+    _pull(vendor, downloads)
+    build_stores(downloads, data, stores=["sharadar_sep_1d"])
+    _drop_bbb(vendor, downloads)
+
+    (entry,) = update_stores(downloads, data, stores=["sharadar_sep_1d"]).stores
+
+    assert entry.state is StoreState.FAILED and "refusing to resume" in entry.error

@@ -52,7 +52,7 @@ store and are not refreshed here; ``download.py`` pulls them whole.
 An interrupted run resumes from each table's watermark and each store's last
 bar; running it twice in a day appends nothing the second time.
 
-A store that fails does not stop the others: its error is printed, the run
+A store that fails does not stop the others: its error is logged and printed, the run
 goes on with the next store and exits 1 at the end. A store refusing because
 a symbol it holds is no longer on the raw tier's symbol axis (a security's
 raw rows now map to another permaticker; ``update()`` refuses rather than
@@ -188,5 +188,7 @@ if __name__ == "__main__":
     outcome = update_stores(
         download_dir, data_dir, rebuild_dropped=args.rebuild_dropped, keep_dropped=args.keep_dropped
     )
+    for line in outcome.lines():
+        print(line)
     if outcome.failed:
         parser.exit(1, f"{len(outcome.failed)} store(s) not updated: {list(outcome.failed)}\n")

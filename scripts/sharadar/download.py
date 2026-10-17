@@ -5,8 +5,8 @@ One run pulls each table the raw tier knows (``sep``, ``sfp``, ``actions``,
 ``sf3b``, ``tickers``, ``indicators``; METRICS is never downloaded) as a bulk
 zip into ``<download-dir>/sharadar/<table>/``, then builds or extends these
 stores under the data root ``--data-dir``, each in its own folder
-``<folder>/<stem>/<stem>.zarr`` beside a short ``README.md`` (written when the
-folder has none; a panel store's folder also gets a ``component.json``). The price, fundamental, valuation and panel stores go to
+``<folder>/<stem>/<stem>.zarr`` beside its ``component.json`` and a short
+``README.md`` (written when the folder has none). The price, fundamental, valuation and panel stores go to
 ``<data-dir>/market/sharadar/``, the S&P 500 membership to
 ``<data-dir>/universe/sharadar/``:
 
@@ -131,7 +131,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         data_help=(
             "The data root. Each store goes to <data-dir>/market/sharadar/<stem>/"
             "<stem>.zarr (the S&P 500 membership to <data-dir>/universe/sharadar/), "
-            "beside a README.md. Default: the current directory, which must be "
+            "beside its component.json and a README.md. Default: the current directory, which must be "
             "outside this repository."
         ),
     )
@@ -159,4 +159,5 @@ if __name__ == "__main__":
     except (SharadarEntitlementError, RuntimeError, ValueError) as exc:
         parser.exit(1, f"{exc}\n")
 
-    build_stores(download_dir, data_dir, start=args.start)
+    for line in build_stores(download_dir, data_dir, start=args.start).lines():
+        print(line)

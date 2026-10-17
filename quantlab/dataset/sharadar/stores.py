@@ -12,12 +12,17 @@ Three entry points act on them:
 - ``build_stores`` builds or extends them after a first download
   (``scripts/sharadar/download.py``);
 - ``update_stores`` brings them up to date after a raw-tier refresh
-  (``scripts/sharadar/update.py``, the daily update): each store appends its
+  (``scripts/sharadar/update.py``, the daily update's ``sharadar_stores``
+  step): each store appends its
   new bars from the first day it already holds; a panel store not built yet is
   built from the SEP store's first day; a store refusing because its stored
   symbols are no longer the raw tier's axis (``ResumeRefused``) is rebuilt
   from the raw tier when asked, the old store kept beside it; one store
   failing does not stop the others;
+
+  both return a ``StoreUpdate``, one ``StoreResult`` per store (a
+  ``StoreState`` and the conversion result), and log what they did; the
+  scripts print ``StoreUpdate.lines()``;
 - ``write_ticker_sidecars`` writes the ticker sidecar of the price stores
   (``scripts/sharadar/ticker_sidecar.py``).
 
@@ -37,12 +42,15 @@ import traceback
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import date
+from enum import Enum
 from pathlib import Path
 
 import pandas as pd
 import xarray as xr
+from loguru import logger
 
-from quantlab.core.store_folder import COMPONENT_FILE, README_FILE, save_component
+from quantlab.core.store_folder import README_FILE, save_component
+from quantlab.dataset._support.ledger import ChunkLedger
 from quantlab.dataset.base import ResumeRefused
 from quantlab.dataset.config import (
     SPY_PERMATICKER,
@@ -101,7 +109,7 @@ class SharadarStore:
     panel : bool, default False
         Whether it is a filing, ownership, industry, fiscal-year, share-class
         or listing panel: built from SEP's first day by ``update_stores``
-        when missing, with a ``component.json`` beside it.
+        when missing.
 
     Examples
     --------
@@ -285,17 +293,21 @@ def _store_start(path: Path) -> str:
     return pd.Timestamp(first).date().isoformat()
 
 
-def _write_readme(entry: SharadarStore, path: Path) -> None:
-    """Create the store's folder and write its ``README.md`` unless one is there."""
-    readme = path.parent / README_FILE
-    if readme.exists():
-        return
+def _write_readme(entry: SharadarStore, path: Path) -> str | None:
+    """Create the store's folder and return its ``README.md`` text, ``None`` when one is there."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    readme.write_text(
+    if (path.parent / README_FILE).exists():
+        return None
+    return (
         f"# {entry.name}\n\n{entry.description}\n\n"
-        f"Written by `scripts/sharadar/download.py`; `scripts/sharadar/update.py` "
-        f"appends the new bars every morning.\n"
+        f"Built from the Sharadar raw tier by `quantlab.dataset.sharadar.stores.build_stores`, or by "
+        f"`update_stores` for a panel store added later; `update_stores` appends the new bars.\n"
     )
+
+
+def _save_folder(entry: SharadarStore, dataset, path: Path) -> None:
+    """Write the store's ``component.json``, and its ``README.md`` when it has none."""
+    save_component(dataset, path.parent, readme=_write_readme(entry, path))
 
 
 def missing_stores(data_dir: str | Path) -> list[Path]:
@@ -322,20 +334,170 @@ def missing_stores(data_dir: str | Path) -> list[Path]:
     return [s.path(data_dir) for s in STORES if not s.panel and not s.path(data_dir).exists()]
 
 
+class StoreState(Enum):
+    """What happened to one store in ``build_stores`` or ``update_stores``.
+
+    Examples
+    --------
+    >>> StoreState.REBUILT.value
+    'rebuilt'
+    """
+
+    #: An existing store appended its new bars (or had none to append).
+    UPDATED = "updated"
+    #: A store built because it was missing.
+    BUILT = "built"
+    #: A store rebuilt from the raw tier after refusing to resume.
+    REBUILT = "rebuilt"
+    #: A store not brought up to date; ``error`` says why.
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class StoreResult:
+    """What ``build_stores`` or ``update_stores`` did to one store.
+
+    Attributes
+    ----------
+    path : Path
+        The store.
+    state : StoreState
+        What happened to it.
+    conversion : ConversionResult or None, default None
+        The last conversion run on it; ``None`` when it failed before one.
+    error : str or None, default None
+        For a failed store, its error (a traceback for an unexpected one).
+    start : str or None, default None
+        For a built or rebuilt store, the first day it was built from.
+    corrections : Path or None, default None
+        The vendor corrections a price store reported, when there are any.
+    kept : Path or None, default None
+        For a rebuilt store, where its old store and ledger were kept.
+    removed, added : tuple, default ()
+        For a rebuilt store, the symbols the rebuild removed and added.
+
+    Examples
+    --------
+    >>> StoreResult(Path("/data/sharadar_sep_1d.zarr"), StoreState.FAILED, error="boom").summary
+    'sharadar_sep_1d.zarr: failed: boom'
+    """
+
+    path: Path
+    state: StoreState
+    conversion: object = None
+    error: str | None = None
+    start: str | None = None
+    corrections: Path | None = None
+    kept: Path | None = None
+    removed: tuple = ()
+    added: tuple = ()
+
+    @property
+    def name(self) -> str:
+        """The store's file name, ``<name>.zarr``."""
+        return self.path.name
+
+    @property
+    def summary(self) -> str:
+        """One line saying what happened to the store.
+
+        Examples
+        --------
+        >>> StoreResult(Path("/data/x.zarr"), StoreState.BUILT, start="2024-01-02").summary
+        'x.zarr: built from 2024-01-02'
+        """
+        if self.state is StoreState.FAILED:
+            return f"{self.name}: failed: {self.error}"
+        if self.state is StoreState.REBUILT:
+            return (
+                f"{self.name}: rebuilt from {self.start}; old store kept as {self.kept.name}; "
+                f"symbols removed {list(self.removed)}, added {list(self.added)}"
+            )
+        if self.state is StoreState.BUILT:
+            return f"{self.name}: built from {self.start}" if self.start else f"{self.name}: built"
+        line = f"{self.name}: updated"
+        return f"{line}; vendor corrections: {self.corrections}" if self.corrections else line
+
+
+@dataclass(frozen=True)
+class StoreUpdate:
+    """What ``build_stores`` or ``update_stores`` did, one ``StoreResult`` per store.
+
+    Attributes
+    ----------
+    stores : tuple of StoreResult
+        The stores acted on, in ``STORES`` order.
+
+    Examples
+    --------
+    >>> outcome = StoreUpdate((StoreResult(Path("/d/sharadar_sep_1d.zarr"), StoreState.UPDATED),))
+    >>> outcome.updated, outcome.failed
+    (('sharadar_sep_1d.zarr',), ())
+    """
+
+    stores: tuple[StoreResult, ...] = ()
+
+    def _named(self, state: StoreState) -> tuple[str, ...]:
+        return tuple(result.name for result in self.stores if result.state is state)
+
+    @property
+    def updated(self) -> tuple[str, ...]:
+        """Stores that appended their new bars (or had none to append)."""
+        return self._named(StoreState.UPDATED)
+
+    @property
+    def built(self) -> tuple[str, ...]:
+        """Stores built because they were missing."""
+        return self._named(StoreState.BUILT)
+
+    @property
+    def rebuilt(self) -> tuple[str, ...]:
+        """Stores rebuilt from the raw tier after refusing to resume."""
+        return self._named(StoreState.REBUILT)
+
+    @property
+    def failed(self) -> tuple[str, ...]:
+        """Stores not brought up to date."""
+        return self._named(StoreState.FAILED)
+
+    def lines(self) -> list[str]:
+        """The text a script prints: each store's conversion result, then its summary.
+
+        Examples
+        --------
+        >>> StoreUpdate((StoreResult(Path("/d/x.zarr"), StoreState.FAILED, error="boom"),)).lines()
+        ['x.zarr: failed: boom']
+        """
+        lines: list[str] = []
+        for result in self.stores:
+            if result.conversion is not None:
+                print_conversion_result(result.conversion, print_fn=lines.append)
+            lines.append(result.summary)
+        return lines
+
+
+def _logged(result: StoreResult) -> StoreResult:
+    """Log ``result``'s summary (an error for a failed store) and return it."""
+    if result.state is StoreState.FAILED:
+        logger.error(result.summary)
+    else:
+        logger.info(result.summary)
+    return result
+
+
 def build_stores(
     download_dir: str | Path,
     data_dir: str | Path,
     *,
     start: str | None = None,
     stores: Iterable[str] | None = None,
-) -> None:
-    """Build or extend the stores from the raw tier, each beside a README.md.
+) -> StoreUpdate:
+    """Build or extend the stores from the raw tier, each beside a README.md and a component.json.
 
     Each store is built with ``update()``, so it keeps the chunk ledger
     ``update_stores`` reads; a store that already exists is extended, not
-    rebuilt. A README.md is written into a store's folder when it has none,
-    and a ``component.json`` beside a panel store when it has none. Each
-    conversion's result is printed.
+    rebuilt. Every store's folder gets its ``component.json``, and a
+    README.md when it has none.
 
     Parameters
     ----------
@@ -349,6 +511,12 @@ def build_stores(
     stores : iterable of str or None, default None
         The names of the stores to build; every store when omitted.
 
+    Returns
+    -------
+    StoreUpdate
+        Each store built (``BUILT``) or extended (``UPDATED``), with its
+        conversion result.
+
     Raises
     ------
     Exception
@@ -358,42 +526,17 @@ def build_stores(
     --------
     Needs the raw tier of a first download::
 
-        build_stores("/data/quantlab/downloads", "/data/quantlab", start="2010-01-01")
+        outcome = build_stores("/data/quantlab/downloads", "/data/quantlab", start="2010-01-01")
+        print("\\n".join(outcome.lines()))
     """
+    results = []
     for entry in _selected(stores):
         path = entry.path(data_dir)
-        _write_readme(entry, path)
+        state = StoreState.UPDATED if path.exists() else StoreState.BUILT
         dataset = entry.dataset(data_dir, download_dir, start).update()
-        print_conversion_result(dataset.last_chunk_result)
-        if entry.panel and not (path.parent / COMPONENT_FILE).exists():
-            save_component(dataset, path.parent)
-
-
-@dataclass(frozen=True)
-class StoreUpdate:
-    """What ``update_stores`` did, by store file name (``<name>.zarr``).
-
-    Attributes
-    ----------
-    updated : tuple of str
-        Stores that appended their new bars (or had none to append).
-    built : tuple of str
-        Panel stores built because they were missing.
-    rebuilt : tuple of str
-        Stores rebuilt from the raw tier after refusing to resume.
-    failed : tuple of str
-        Stores not brought up to date; their error was printed.
-
-    Examples
-    --------
-    >>> StoreUpdate(updated=("sharadar_sep_1d.zarr",)).failed
-    ()
-    """
-
-    updated: tuple[str, ...] = ()
-    built: tuple[str, ...] = ()
-    rebuilt: tuple[str, ...] = ()
-    failed: tuple[str, ...] = ()
+        _save_folder(entry, dataset, path)
+        results.append(_logged(StoreResult(path, state, dataset.last_chunk_result, start=start)))
+    return StoreUpdate(tuple(results))
 
 
 def update_stores(
@@ -411,13 +554,14 @@ def update_stores(
     holds: new bars are appended and earlier rows are never rewritten. A
     panel store not built yet is built from the SEP store's first day, beside
     a README.md and a ``component.json``. A store that fails does not stop
-    the others: its error is printed and it is listed in ``failed``.
+    the others: its error is logged and recorded, and its state is
+    ``FAILED``.
 
     A store refusing to resume (``ResumeRefused``: a stored symbol left the
     raw tier's symbol axis, or the store and its ledger disagree) is rebuilt
     from the raw tier with ``rebuild_dropped``: the old store and its ledger
-    are kept beside it as ``<store>.pre<YYYYMMDD>`` and the symbols removed
-    and added are printed.
+    are kept beside it as ``<store>.pre<YYYYMMDD>``, and the result records
+    the symbols removed and added.
 
     Parameters
     ----------
@@ -439,7 +583,7 @@ def update_stores(
     Returns
     -------
     StoreUpdate
-        The stores updated, built, rebuilt and failed.
+        One ``StoreResult`` per store: updated, built, rebuilt or failed.
 
     Examples
     --------
@@ -449,76 +593,65 @@ def update_stores(
                                 rebuild_dropped=True, keep_dropped=["sharadar_insiders_1d"])
         outcome.failed  # ()
     """
-    outcome = {"updated": [], "built": [], "rebuilt": [], "failed": []}
     rebuild_except = set(keep_dropped) if rebuild_dropped else None
+    results = []
     for entry in _selected(stores):
         path = entry.path(data_dir)
         if entry.panel and not path.exists():
-            start = _store_start(store(CALENDAR_STORE).path(data_dir))
-            state = _build_panel(entry, path, data_dir, download_dir, start)
+            result = _build_panel(entry, path, data_dir, download_dir)
         else:
-            state = _update(entry, path, data_dir, download_dir, rebuild_except, today)
-        outcome[state].append(path.name)
-    return StoreUpdate(**{key: tuple(names) for key, names in outcome.items()})
+            result = _update(entry, path, data_dir, download_dir, rebuild_except, today)
+        results.append(_logged(result))
+    return StoreUpdate(tuple(results))
 
 
-def _build_panel(entry: SharadarStore, path: Path, data_dir, download_dir, start: str) -> str:
-    """Build a panel store not built yet from ``start``, with its README.md and component.json."""
+def _build_panel(entry: SharadarStore, path: Path, data_dir, download_dir) -> StoreResult:
+    """Build a panel store not built yet from SEP's first day, with its README.md and component.json."""
     try:
+        start = _store_start(store(CALENDAR_STORE).path(data_dir))
         dataset = entry.dataset(data_dir, download_dir, start).update()
-        print_conversion_result(dataset.last_chunk_result)
-        readme = path.parent / README_FILE
-        save_component(dataset, path.parent, readme=None if readme.exists() else (
-            f"# {path.stem}\n\n{entry.dataset_cls.__doc__.strip().splitlines()[0]}\n\n"
-            f"Built by `scripts/sharadar/update.py` from {start}; it appends the new bars every morning.\n"
-        ))
-        print(f"{path.name}: built from {start}")
-        return "built"
+        _save_folder(entry, dataset, path)
+        return StoreResult(path, StoreState.BUILT, dataset.last_chunk_result, start=start)
     except Exception:  # noqa: BLE001 - one store's failure must not stop the others
-        print(f"{path.name}: build failed:\n{traceback.format_exc()}")
-        return "failed"
+        return StoreResult(path, StoreState.FAILED, error=traceback.format_exc())
 
 
 def _update(entry: SharadarStore, path: Path, data_dir, download_dir,
-            rebuild_except: set[str] | None, today: date | None) -> str:
+            rebuild_except: set[str] | None, today: date | None) -> StoreResult:
     """Update one store; rebuild it on a refusal to resume when asked."""
     rebuild = rebuild_except is not None and path.stem not in rebuild_except
     try:
         dataset = entry.dataset(data_dir, download_dir, _store_start(path)).update()
-        print_conversion_result(dataset.last_chunk_result)
         corrections = getattr(dataset, "corrections_path", None)
-        if corrections is not None and corrections().exists():
-            print(f"  vendor corrections: {corrections()}")
-        return "updated"
+        corrections = corrections() if corrections is not None else None
+        return StoreResult(
+            path, StoreState.UPDATED, dataset.last_chunk_result,
+            corrections=corrections if corrections is not None and corrections.exists() else None,
+        )
     except ResumeRefused as exc:
         if not rebuild:
-            print(f"{path.name}: update failed: {exc}")
-            return "failed"
-        print(f"{path.name}: a stored symbol left the raw tier's axis; rebuilding")
+            return StoreResult(path, StoreState.FAILED, error=str(exc))
+        logger.warning(f"{path.name}: refused to resume ({exc}); rebuilding from the raw tier")
     except ValueError as exc:
-        print(f"{path.name}: update failed: {exc}")
-        return "failed"
+        return StoreResult(path, StoreState.FAILED, error=str(exc))
     except Exception:  # noqa: BLE001 - one store's failure must not stop the others
-        print(f"{path.name}: update failed:\n{traceback.format_exc()}")
-        return "failed"
+        return StoreResult(path, StoreState.FAILED, error=traceback.format_exc())
     try:
         start = _store_start(path)
         before = set(xr.open_zarr(path)["symbol"].values.tolist())
         kept = path.with_name(f"{path.name}.pre{today or date.today():%Y%m%d}")
         os.rename(path, kept)
-        ledger = Path(f"{path}.chunks.json")
+        ledger = Path(ChunkLedger.default_path(str(path)))
         if ledger.exists():
-            os.rename(ledger, f"{kept}.chunks.json")
-        print_conversion_result(entry.dataset(data_dir, download_dir, start).update().last_chunk_result)
+            os.rename(ledger, ChunkLedger.default_path(str(kept)))
+        conversion = entry.dataset(data_dir, download_dir, start).update().last_chunk_result
         after = set(xr.open_zarr(path)["symbol"].values.tolist())
-        print(
-            f"  rebuilt {path.name}; old store kept as {kept.name}; symbols removed "
-            f"{sorted(before - after)}, added {sorted(after - before)}"
+        return StoreResult(
+            path, StoreState.REBUILT, conversion, start=start, kept=kept,
+            removed=tuple(sorted(before - after)), added=tuple(sorted(after - before)),
         )
-        return "rebuilt"
     except Exception:  # noqa: BLE001
-        print(f"{path.name}: rebuild failed:\n{traceback.format_exc()}")
-        return "failed"
+        return StoreResult(path, StoreState.FAILED, error=f"rebuild failed:\n{traceback.format_exc()}")
 
 
 def write_ticker_sidecars(download_dir: str | Path, data_dir: str | Path) -> dict[str, Path]:
