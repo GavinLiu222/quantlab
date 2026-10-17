@@ -483,7 +483,8 @@ class MappedDayBarsConfig(FrozenConfig):
     zarr_file_path: str
     #: SEP's store, whose adjusted returns the store's are checked against; ``None`` checks nothing.
     sep: "MarketDataset | None" = component(default=None)
-    #: The largest difference of two daily adjusted returns that is not a disagreement.
+    #: The largest difference of two daily adjusted returns that is not a disagreement, on top of
+    #: what SEP's rounding of its closes to 0.001 allows.
     check_tolerance: float = 1e-4
     #: The coarser bars the panel is resampled to; ``None`` for the store's bars.
     resample_freq: str | None = None

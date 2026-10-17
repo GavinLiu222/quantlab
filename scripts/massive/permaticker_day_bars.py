@@ -58,9 +58,10 @@ rows (a day whose map rows change is refused on read and mapped again by `update
 the number of Massive tickers the map could not place (`unplaced`): their bars are in no column.
 `.adjustment.json` records the last day chained; `.unplaced.json` the split and dividend records
 left out (not placed by the Ticker map, not USD, another ticker's bar). `.sep_check.json` is the
-check file: each permaticker and day whose adjusted return differs from SEP's
-(`market/sharadar/sharadar_sep_1d`) by more than 1e-4, with both vendors' `divCash` and
-`splitFactor`; a disagreement never stops the build, and the daily update reports the count.
+check file: each permaticker and day whose split or dividend differs from SEP's
+(`market/sharadar/sharadar_sep_1d`), or whose adjusted return differs from SEP's by more than 1e-4
+plus SEP's rounding of its closes to 0.001 on a day both vendors have a bar on, with both vendors'
+`divCash` and `splitFactor`; a disagreement never stops the build, and the daily update reports the count.
 Built by `scripts/massive/permaticker_day_bars.py`; brought up to date every day by the data update
 (`update` step after the Ticker map). From 2016-10-10, the plan's rolling ten years. SEP stays the
 daily price of research and trading. Licensed data: personal use.
