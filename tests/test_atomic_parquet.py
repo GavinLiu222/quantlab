@@ -53,7 +53,7 @@ def test_a_failed_write_keeps_the_previous_file_and_leaves_no_temporary(tmp_path
         "quantlab/acquisition/sharadar/client.py",
         "quantlab/acquisition/wrds/crsp_reference.py",
         "quantlab/dataset/massive/ticker_map.py",
-        "quantlab/dataset/sharadar/tables.py",
+        "quantlab/acquisition/sharadar/raw_tier.py",
     ],
 )
 def test_no_module_hand_rolls_an_atomic_parquet_write(module):

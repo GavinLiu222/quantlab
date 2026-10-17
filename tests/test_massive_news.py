@@ -176,7 +176,8 @@ def test_a_bounded_pull_keeps_the_whole_last_day(env, tmp_path):
 def _raw(root: Path, through: date = D6) -> None:
     """Every raw tier as of ``through``, the Ticker map appended day by day to it."""
     from quantlab.dataset.config import TickerMapConfig
-    from quantlab.dataset.massive.raw import rest_page_file, write_rest_page, write_rest_watermark
+    from quantlab.acquisition.massive.raw_tier import write_rest_page, write_rest_watermark
+    from quantlab.dataset.massive.raw import rest_page_file
     from quantlab.dataset.massive.ticker_map import TickerMap
 
     massive, sharadar = root / "downloads" / "massive", root / "downloads" / "sharadar"

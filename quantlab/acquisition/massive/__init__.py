@@ -21,7 +21,10 @@ kept to check Trade bars against.
 Massive's raw tier is one vendor file per data type and trading day, pulled by
 ``MassiveClient``, not the symbol-batched hive tree an ``Acquisition``
 writes. The descriptor therefore names no acquisition class and no config
-factory: ``registry.run()`` refuses it, and the download is the client's
+factory: ``registry.run()`` refuses it. Its raw-tier refresh is
+``quantlab.acquisition.massive.refresh.refresh_raw_tier`` (every REST endpoint
+from its watermark), which ``registry.refresh_raw_tier`` calls; the daily
+files are downloaded beside their conversion
 (``scripts/massive/convert.py --download``).
 
 Examples
@@ -36,6 +39,7 @@ Examples
 """
 
 from quantlab.acquisition.base import Capability, SourceDescriptor, register_source
+from quantlab.acquisition.massive.refresh import refresh_raw_tier
 from quantlab.dataset.massive.day_bars import MassiveDayBarDataset
 from quantlab.dataset.massive.disclosures import MassiveDisclosureDataset
 from quantlab.dataset.massive.dividends import MassiveDividendDataset
@@ -122,5 +126,6 @@ MASSIVE_SOURCE = register_source(
         # Literals, checked against the client's constants by a test. The S3
         # secret defaults to the API key.
         required_env=("MASSIVE_API_KEY", "MASSIVE_S3_ACCESS_KEY_ID"),
+        raw_tier_refresh=refresh_raw_tier,
     )
 )

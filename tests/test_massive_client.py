@@ -236,6 +236,22 @@ def test_not_published_and_not_entitled_are_told_apart(env, tmp_path):
         _client(store).download_day("trades", DAY, tmp_path)
 
 
+def test_the_size_of_a_published_file_is_asked_without_downloading_it(env):
+    from quantlab.acquisition.massive.client import (
+        MassiveEntitlementError,
+        MassiveNotPublishedError,
+    )
+
+    store = FakeStore({KEY: BODY}, errors={KEY: [MassiveEntitlementError("403")]})
+    client = _client(store)
+    with pytest.raises(MassiveEntitlementError):
+        client.published_size("trades", DAY)
+    assert client.published_size("trades", DAY) == len(BODY)
+    with pytest.raises(MassiveNotPublishedError):
+        client.published_size("trades", date(2024, 11, 28))
+    assert store.reads == []
+
+
 def test_a_transport_error_is_retried_after_a_back_off(env, tmp_path):
     from quantlab.acquisition.massive.client import MassiveTransportError
 

@@ -41,6 +41,8 @@ folder has none; a panel store's folder also gets a ``component.json``). The pri
   SIC division, SIC industry, Fama-French 48 industry and exchange;
 - ``sharadar_sp500_membership.zarr``, point-in-time S&P 500 membership.
 
+The stores and how each is built are ``quantlab.dataset.sharadar.stores``
+(``STORES``, ``build_stores``); this script pulls the tables and calls it.
 Each store is built with ``update()``, so it keeps the chunk ledger the daily
 update (``update.py``) reads; a store that already exists is extended, not
 rebuilt, and a vendor correction to a stored date is reported in
@@ -70,125 +72,22 @@ from quantlab.acquisition.sharadar.client import (
     SharadarClient,
     SharadarEntitlementError,
 )
-from quantlab.core.store_folder import COMPONENT_FILE, save_component
-from quantlab.dataset.config import (
-    SPY_PERMATICKER,
-    ConstituentDatasetConfig,
-    SharadarActionsConfig,
-    SharadarDailyConfig,
-    SharadarDatasetConfig,
-    SharadarEventsConfig,
-    SharadarFiscalYearsConfig,
-    SharadarFundamentalsConfig,
-    SharadarHoldingsConfig,
-    SharadarIndustryConfig,
-    SharadarInsidersConfig,
-    SharadarListingConfig,
-    SharadarShareClassConfig,
-)
-from quantlab.dataset.sharadar.actions import SharadarActionsDataset
-from quantlab.dataset.sharadar.daily import SharadarDailyDataset
-from quantlab.dataset.sharadar.events import SharadarEventsDataset
-from quantlab.dataset.sharadar.fiscal_years import SharadarFiscalYearsDataset
-from quantlab.dataset.sharadar.holdings import SharadarHoldingsDataset
-from quantlab.dataset.sharadar.industry import SharadarIndustryDataset
-from quantlab.dataset.sharadar.insiders import SharadarInsidersDataset
-from quantlab.dataset.sharadar.listing import SharadarListingDataset
-from quantlab.dataset.sharadar.share_class import SharadarShareClassDataset
-from quantlab.dataset.sharadar.fundamentals import SharadarFundamentalsDataset
-from quantlab.dataset.sharadar.membership import SharadarSP500ConstituentDataset
-from quantlab.dataset.sharadar.stock import SharadarStockDataset
-from quantlab.dataset.sharadar.tables import TABLES, VENDOR_DIR
+from quantlab.dataset.sharadar.stores import build_stores
+from quantlab.dataset.sharadar.tables import TABLES
 from quantlab.utils.cli import (
     add_output_dir_args,
     inside_repository,
-    print_conversion_result,
     resolve_output_dirs,
 )
 
 #: The repository this script lives in; no output may go inside it.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-#: Folders under the data root: Sharadar's market stores and its universe stores.
-MARKET_FOLDER = Path("market") / "sharadar"
-UNIVERSE_FOLDER = Path("universe") / "sharadar"
-
-#: What each store holds, the first line of the README.md in its folder.
-STORE_DESCRIPTIONS = {
-    "sharadar_sep_1d": "Sharadar SEP stock prices on the permaticker axis, raw and adjusted (domestic common stock).",
-    "sharadar_sfp_1d": "Sharadar SFP fund prices (ETFs and the like), every category, on the permaticker axis.",
-    "sharadar_sp500_1d": "Sharadar SEP prices of every permaticker ever an S&P 500 member, with all its bars.",
-    "sharadar_spy_1d": "Sharadar SFP prices of SPY alone, the S&P 500 benchmark.",
-    "sharadar_sp500_membership": "Point-in-time S&P 500 membership from the Sharadar SP500 table.",
-    "sharadar_sf1_arq": "Point-in-time Sharadar SF1 fundamentals, as reported, quarterly (ARQ), on SEP's trading days.",
-    "sharadar_sf1_art": "Point-in-time Sharadar SF1 fundamentals, as reported, trailing twelve months (ART), on SEP's trading days.",
-    "sharadar_daily_1d": "Sharadar DAILY valuations (market cap and EV in USD, PE, PB, PS, EV/EBIT, EV/EBITDA).",
-    "sharadar_events_1d": "Sharadar EVENTS: one boolean per 8-K event code, set on the filing date.",
-    "sharadar_insiders_1d": "Sharadar SF2 insiders' net shares and USD per transaction code, derivative units and buyer and seller counts, on the filing date.",
-    "sharadar_holdings_1d": "Sharadar SF3A 13F holders and shares held, each quarter shown from quarter end + 45 days.",
-    "sharadar_actions_1d": "Sharadar ACTIONS corporate actions by family (dividend, split, spinoff, acquisition, merger, delisting, flags), each on its effective date.",
-    "sharadar_industry_1d": "Each security's point-in-time Fama-French 48 industry, from its Sharadar SIC history.",
-    "sharadar_sf1_fiscal_years": "EPS and sales per share of each company's latest five fiscal years (Sharadar SF1 ARY), point in time.",
-    "sharadar_share_class_1d": "The permaticker whose Sharadar DAILY and SF1 rows hold each security's firm values.",
-    "sharadar_listing_1d": (
-        "Each security's point-in-time SIC code, SIC division, SIC industry, Fama-French 48 industry "
-        "and exchange, walked back from Sharadar TICKERS through the ACTIONS SIC and exchange changes "
-        "(domestic common stock, SEP's trading days, from the first to the last price date)."
-    ),
-}
-
-
-def store_path(folder: Path, stem: str) -> Path:
-    """``<folder>/<stem>/<stem>.zarr``: a store in its own folder, beside its README.md."""
-    return folder / stem / f"{stem}.zarr"
-
-
-def write_readme(store: Path) -> None:
-    """Create the store's folder and write its ``README.md`` unless one is there."""
-    readme = store.parent / "README.md"
-    if readme.exists():
-        return
-    store.parent.mkdir(parents=True, exist_ok=True)
-    stem = store.parent.name
-    readme.write_text(
-        f"# {stem}\n\n{STORE_DESCRIPTIONS[stem]}\n\n"
-        f"Written by `scripts/sharadar/download.py`; `scripts/sharadar/update.py` "
-        f"appends the new bars every morning.\n"
-    )
-
-
 #: Pulled first: the price conversions map tickers through TICKERS.
 TABLE_ORDER = (
     "tickers", "indicators", "sep", "sfp", "actions", "sp500", "sf1", "daily",
     "events", "sf2", "sf3", "sf3a", "sf3b",
 )
-
-#: Each price store and the config fields it is built with beyond its paths:
-#: the whole SEP and SFP tables, every permaticker ever an S&P 500 member
-#: with all its bars (the backtest's price dataset), and SPY alone (the
-#: benchmark).
-PRICE_STORES = {
-    "sharadar_sep_1d": {"table": "sep"},
-    "sharadar_sfp_1d": {"table": "sfp"},
-    "sharadar_sp500_1d": {"table": "sep", "roster_universe": "sp500"},
-    "sharadar_spy_1d": {"table": "sfp", "permatickers": (SPY_PERMATICKER,)},
-}
-MEMBERSHIP_STORE = "sharadar_sp500_membership"
-#: Each point-in-time fundamentals store and its as-reported SF1 dimension.
-FUNDAMENTALS_STORES = {"sharadar_sf1_arq": "ARQ", "sharadar_sf1_art": "ART"}
-#: The DAILY valuation store.
-DAILY_STORE = "sharadar_daily_1d"
-#: The stores of the filing, ownership, industry, fiscal-year, share-class and listing panels, with their config and dataset classes.
-PANEL_STORES = {
-    "sharadar_events_1d": (SharadarEventsConfig, SharadarEventsDataset),
-    "sharadar_insiders_1d": (SharadarInsidersConfig, SharadarInsidersDataset),
-    "sharadar_holdings_1d": (SharadarHoldingsConfig, SharadarHoldingsDataset),
-    "sharadar_actions_1d": (SharadarActionsConfig, SharadarActionsDataset),
-    "sharadar_industry_1d": (SharadarIndustryConfig, SharadarIndustryDataset),
-    "sharadar_sf1_fiscal_years": (SharadarFiscalYearsConfig, SharadarFiscalYearsDataset),
-    "sharadar_share_class_1d": (SharadarShareClassConfig, SharadarShareClassDataset),
-    "sharadar_listing_1d": (SharadarListingConfig, SharadarListingDataset),
-}
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -260,59 +159,4 @@ if __name__ == "__main__":
     except (SharadarEntitlementError, RuntimeError, ValueError) as exc:
         parser.exit(1, f"{exc}\n")
 
-    vendor_root = download_dir / VENDOR_DIR
-    market_dir = data_dir / MARKET_FOLDER
-
-    def market_store(stem: str) -> Path:
-        """The store ``stem`` under market/sharadar/, its folder and README.md created."""
-        path = store_path(market_dir, stem)
-        write_readme(path)
-        return path
-
-    for store, fields in PRICE_STORES.items():
-        config = SharadarDatasetConfig(
-            zarr_file_path=str(market_store(store)),
-            raw_data_dir_path=str(vendor_root),
-            **fields,
-            start_date=args.start,
-        )
-        print_conversion_result(SharadarStockDataset(config).update().last_chunk_result)
-
-    membership_path = store_path(data_dir / UNIVERSE_FOLDER, MEMBERSHIP_STORE)
-    write_readme(membership_path)
-    membership = SharadarSP500ConstituentDataset(
-        ConstituentDatasetConfig(
-            zarr_file_path=str(membership_path),
-            cache_dir=str(vendor_root),
-            start_date=args.start,
-        )
-    )
-    print_conversion_result(membership.update().last_chunk_result)
-
-    for store, dimension in FUNDAMENTALS_STORES.items():
-        config = SharadarFundamentalsConfig(
-            zarr_file_path=str(market_store(store)),
-            raw_data_dir_path=str(vendor_root),
-            dimension=dimension,
-            start_date=args.start,
-        )
-        print_conversion_result(SharadarFundamentalsDataset(config).update().last_chunk_result)
-
-    daily = SharadarDailyConfig(
-        zarr_file_path=str(market_store(DAILY_STORE)),
-        raw_data_dir_path=str(vendor_root),
-        start_date=args.start,
-    )
-    print_conversion_result(SharadarDailyDataset(daily).update().last_chunk_result)
-
-    for store, (config_cls, dataset_cls) in PANEL_STORES.items():
-        config = config_cls(
-            zarr_file_path=str(market_store(store)),
-            raw_data_dir_path=str(vendor_root),
-            start_date=args.start,
-        )
-        dataset = dataset_cls(config).update()
-        print_conversion_result(dataset.last_chunk_result)
-        folder = market_store(store).parent
-        if not (folder / COMPONENT_FILE).exists():
-            save_component(dataset, folder)
+    build_stores(download_dir, data_dir, start=args.start)

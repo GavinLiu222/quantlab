@@ -22,11 +22,11 @@ the environment and are never stored on a config or written to a log.
 """
 
 import functools
-import os
 
 import polars as pl
 import requests
 
+from quantlab.acquisition._support.request_policy import require_env
 from quantlab.acquisition.base import Capability, SourceDescriptor, register_source
 from quantlab.acquisition.base import Acquisition
 from quantlab.acquisition.config import AcquisitionConfig
@@ -104,17 +104,16 @@ class _AlpacaMarketDataClient:
             If ``APCA_API_KEY_ID`` or ``APCA_API_SECRET_KEY`` is
             unset or empty.
         """
-        key = os.environ.get(self.KEY_ENV)
-        secret = os.environ.get(self.SECRET_ENV)
-        if not key or not secret:
-            raise RuntimeError(
-                f"{self.KEY_ENV} and {self.SECRET_ENV} environment variables "
-                f"must both be set. Alpaca market-data credentials are read "
-                f"from the environment and are never stored on the config, "
-                f"so that they never end up on disk. Export them before "
-                f"running acquisition (see your Alpaca dashboard for the key "
-                f"pair)."
-            )
+        key, secret = require_env(
+            (self.KEY_ENV, self.SECRET_ENV),
+            hint=(
+                f"{self.KEY_ENV} and {self.SECRET_ENV} must both be set. Alpaca "
+                f"market-data credentials are read from the environment and "
+                f"are never stored on the config, so that they never end up "
+                f"on disk. Export them before running acquisition (see your "
+                f"Alpaca dashboard for the key pair)."
+            ),
+        )
         self._session = requests.Session()
         self._session.headers.update(
             {

@@ -12,8 +12,8 @@ Install the project with `uv sync --all-extras`. Browsing the catalogue and insp
 |---|---|---|
 | `alpaca` | `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY` | US equity 1d and 1m bars; tick quotes and trades |
 | `fred` | none | Interest-rate series such as DTB3, the 3-month Treasury bill rate (key-free CSV endpoint); `FredRateDataset` makes a single-symbol `rate` and `risk_free` panel |
-| `massive` | `MASSIVE_API_KEY`, `MASSIVE_S3_ACCESS_KEY_ID` (`MASSIVE_S3_SECRET_ACCESS_KEY` optional) | Every US-equity SIP trade, and Massive's minute and day aggregates, as daily S3 files; `MassiveTradeBarDataset` builds Trade bars and `MassiveDayBarDataset` the Day aggregate store, both on the Massive ticker axis, and `MassiveDividendDataset` the dividend panel on the permaticker from the REST dividends and splits, `MassiveShortInterestDataset` the short interest panel from the REST short interest, `MassiveShortVolumeDataset` the short volume panel from the REST short volume, `MassiveNewsDataset` the news count and sentiment panel from the REST news, `MassiveDisclosureDataset` the 8-K disclosure panel from the REST 8-K disclosures, and `MassiveIpoDataset` the IPO panel from the REST IPOs; downloaded by `MassiveClient`, not `run()` (see [Massive](massive.md)) |
-| `sharadar` | `SHARADAR_API_KEY` | US stock (SEP) and fund (SFP) daily prices, SF1 fundamentals, DAILY valuations, 8-K events, insider transactions, 13F holdings, ACTIONS, S&P 500 membership, TICKERS, INDICATORS; downloaded by `scripts/sharadar/`, not `run()` (see [Sharadar](sharadar.md)) |
+| `massive` | `MASSIVE_API_KEY`, `MASSIVE_S3_ACCESS_KEY_ID` (`MASSIVE_S3_SECRET_ACCESS_KEY` optional) | Every US-equity SIP trade, and Massive's minute and day aggregates, as daily S3 files; `MassiveTradeBarDataset` builds Trade bars and `MassiveDayBarDataset` the Day aggregate store, both on the Massive ticker axis, and `MassiveDividendDataset` the dividend panel on the permaticker from the REST dividends and splits, `MassiveShortInterestDataset` the short interest panel from the REST short interest, `MassiveShortVolumeDataset` the short volume panel from the REST short volume, `MassiveNewsDataset` the news count and sentiment panel from the REST news, `MassiveDisclosureDataset` the 8-K disclosure panel from the REST 8-K disclosures, and `MassiveIpoDataset` the IPO panel from the REST IPOs; downloaded by `MassiveClient`, not `run()`; its REST endpoints are kept current by `refresh_raw_tier()` (see [Massive](massive.md)) |
+| `sharadar` | `SHARADAR_API_KEY` | US stock (SEP) and fund (SFP) daily prices, SF1 fundamentals, DAILY valuations, 8-K events, insider transactions, 13F holdings, ACTIONS, S&P 500 membership, TICKERS, INDICATORS; downloaded by `scripts/sharadar/download.py`, not `run()`, and kept current by `refresh_raw_tier()` (see [Sharadar](sharadar.md)) |
 | `tiingo` | `TIINGO_API_KEY` | US equity daily bars |
 | `wrds` | `WRDS_USERNAME` (password in `~/.pgpass`) | TAQ NBBO quotes; CRSP daily bars |
 
@@ -200,6 +200,20 @@ shape: (2, 3)
 ```
 
 `granularity` sets the window size (`"year"` by default) and `on_new_listing` says what to do with a symbol that is not on the store's axis. See the chunking guide for both.
+
+### Keep a raw tier current
+
+A vendor the daily update keeps current registers a raw-tier refresh on its descriptor (`raw_tier_refresh`, a `quantlab.acquisition.refresh.RawTierRefresh`). `refresh_raw_tier(descriptor, download_dir, end=None, **options)` calls it. Each part of the raw tier is brought from its watermark up to `end`: a Sharadar table, a Massive REST endpoint, a FRED series. The function returns a `RawTierRefreshResult` with one `RefreshedPart` per part, and `failed` names the parts not refreshed. The options are the vendor's own: `trading_days` for Sharadar, `endpoints` for Massive, `series` and `start` for FRED. Tiingo, Alpaca and WRDS register none, and `refresh_raw_tier` refuses them.
+
+```python
+>>> from quantlab.acquisition.registry import refresh_raw_tier
+>>> refresh_raw_tier(DataSourceRegistry.get("tiingo"), "downloads")
+Traceback (most recent call last):
+...
+ValueError: Tiingo EOD registers no raw-tier refresh; download it with run().
+```
+
+With the network, `refresh_raw_tier(DataSourceRegistry.get("fred"), "/data/quantlab/downloads", series=["DTB3"], start="1954-01-04")` writes `<download_dir>/fred` and its watermarks under `<download_dir>/_watermarks/fred`. The daily update's `refresh` step makes this call (see the [data update guide](data_update.md)).
 
 ### Find out why a symbol failed
 

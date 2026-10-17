@@ -1,7 +1,10 @@
 """Pull Massive REST endpoints into the raw tier, each from its watermark.
 
-Each endpoint named by ``--endpoints`` (``quantlab.acquisition.massive.rest.ENDPOINTS``)
-is pulled by ``MassiveClient.pull``: pages from the day after its watermark,
+A thin shell over Massive's raw-tier refresh
+(``quantlab.acquisition.massive.refresh``, through
+``quantlab.acquisition.registry.refresh_raw_tier``), which the daily update
+calls itself. Each endpoint named by ``--endpoints``
+(``quantlab.acquisition.massive.rest.ENDPOINTS``) is pulled by ``MassiveClient.pull``: pages from the day after its watermark,
 written as the vendor returned them under
 ``<download-dir>/massive/rest/<endpoint>/<YYYY>/``, the watermark moved after
 every page (docs/massive.md, "REST pulls"). A first run backfills the whole
@@ -21,16 +24,12 @@ Usage::
 
 import argparse
 import sys
-import time
 from datetime import date
 from pathlib import Path
 
-from quantlab.acquisition.massive.client import (
-    MassiveClient,
-    MassiveEntitlementError,
-    MassiveTransportError,
-)
+from quantlab.acquisition.base import DataSourceRegistry
 from quantlab.acquisition.massive.rest import ENDPOINTS
+from quantlab.acquisition.registry import refresh_raw_tier
 from quantlab.utils.cli import (
     add_output_dir_args,
     inside_repository,
@@ -62,19 +61,10 @@ def main() -> int:
     if unknown := [name for name in names if name not in ENDPOINTS]:
         parser.exit(1, f"unknown endpoint(s) {unknown}; expected some of {list(ENDPOINTS)}\n")
 
-    client = MassiveClient()
-    failed = []
-    for name in names:
-        started = time.monotonic()
-        try:
-            done = client.pull(name, download_dir, end=args.end)
-        except (MassiveEntitlementError, MassiveTransportError, ValueError) as error:
-            failed.append(name)
-            print(f"{name}: failed: {error}", flush=True)
-            continue
-        print(f"{name}: {done.rows:,} row(s) in {done.pages} page(s), through {done.through}; "
-              f"{time.monotonic() - started:.0f}s.", flush=True)
-    return 1 if failed else 0
+    result = refresh_raw_tier(DataSourceRegistry.get("massive"), download_dir, end=args.end, endpoints=names)
+    for part in result.parts:
+        print(f"{part.name}: {part.summary}." if part.ok else f"{part.name}: failed: {part.error}", flush=True)
+    return 1 if result.failed else 0
 
 
 if __name__ == "__main__":

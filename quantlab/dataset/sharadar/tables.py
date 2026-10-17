@@ -4,7 +4,9 @@ The raw tier is Sharadar's own rows, kept as parquet under
 ``<download-dir>/sharadar/<code>/``, one directory per table. The
 acquisition layer writes it and the datasets read it; both take the table
 names, the column schemas and the directory layout from this module, so the
-writer and the reader cannot disagree.
+writer and the reader cannot disagree. This module only reads; the writers
+of the watermarks, bulk-pull records and TICKERS history are in
+``quantlab.acquisition.sharadar.raw_tier``.
 
 Each table has a short *code*, the lower-cased legacy Sharadar code (``sep``
 for stock prices), which names its directory, and an *API name*
@@ -36,7 +38,8 @@ from zoneinfo import ZoneInfo
 
 import polars as pl
 
-from quantlab.utils.atomic import write_json_atomically, write_parquet_atomically
+from quantlab.utils.watermark import WATERMARK_FILE
+from quantlab.utils.watermark import read_watermark as _read_watermark
 
 #: Directory under ``--download-dir`` holding every Sharadar raw table.
 VENDOR_DIR = "sharadar"
@@ -635,16 +638,6 @@ def tickers_snapshot_file(vendor_root: str | Path, pulled_at: datetime) -> Path:
     )
 
 
-def write_bulk_pull(vendor_root: str | Path, code: str, pulled_at: datetime) -> None:
-    """Record when a table's bulk file was pulled (``BULK_PULL_FILE``), in UTC."""
-    write_json_atomically(
-        raw_table_dir(vendor_root, code) / BULK_PULL_FILE,
-        {"table": table(code).code, "pulled_at": pulled_at.astimezone(UTC).isoformat()},
-        indent=2,
-        sort_keys=True,
-    )
-
-
 def pull_time(path: str | Path) -> datetime:
     """Return when a raw file was pulled, in UTC.
 
@@ -668,11 +661,9 @@ def pull_time(path: str | Path) -> datetime:
     return datetime.fromtimestamp(path.stat().st_mtime, UTC)
 
 
-#: Name of the TICKERS history, beside ``tickers.parquet`` (``fold_tickers_history``).
+#: Name of the TICKERS history, beside ``tickers.parquet``
+#: (``quantlab.acquisition.sharadar.raw_tier.fold_tickers_history``).
 TICKERS_HISTORY_FILE = "_history.parquet"
-
-#: What one row of the TICKERS history is: a security under one ticker in one table.
-_HISTORY_KEY = ["table", "permaticker", "ticker"]
 
 
 def tickers_history_file(vendor_root: str | Path) -> Path:
@@ -684,62 +675,6 @@ def tickers_history_file(vendor_root: str | Path) -> Path:
     PosixPath('/d/sharadar/tickers/_history.parquet')
     """
     return raw_table_dir(vendor_root, "tickers") / TICKERS_HISTORY_FILE
-
-
-def fold_tickers_history(vendor_root: str | Path) -> Path | None:
-    """Fold every TICKERS snapshot into the TICKERS history, and return its path.
-
-    The history holds one row per table, permaticker and ticker ever seen in
-    a snapshot: TICKERS' columns as of the latest snapshot holding it, plus
-    ``first_seen`` and ``last_seen``, the pull times (UTC) of the first and
-    last. Folding is idempotent and keeps what earlier folds saw, so a
-    snapshot pruned after it is folded (``prune_tickers_snapshots``) loses
-    nothing. Every bulk pull folds before it prunes.
-
-    Parameters
-    ----------
-    vendor_root : str or Path
-        ``<download-dir>/sharadar``.
-
-    Returns
-    -------
-    Path or None
-        The history (``tickers_history_file``), or ``None`` when there is
-        no snapshot and no history, and nothing was written.
-
-    Examples
-    --------
-    Needs the Sharadar raw tier::
-
-        fold_tickers_history("/data/downloads/sharadar")
-        # PosixPath('/data/downloads/sharadar/tickers/_history.parquet')
-    """
-    path = tickers_history_file(vendor_root)
-    schema = TABLES["tickers"].schema
-    frames = [] if not path.exists() else [pl.read_parquet(path)]
-    for snapshot in tickers_snapshots(vendor_root):
-        seen = pull_time(snapshot)
-        frames.append(
-            pl.read_parquet(snapshot)
-            .select([pl.col(name).cast(dtype) for name, dtype in schema.items()])
-            .with_columns(pl.lit(seen).alias("first_seen"), pl.lit(seen).alias("last_seen"))
-        )
-    if not frames:
-        return None
-    rows = pl.concat(frames, how="vertical_relaxed").drop_nulls(_HISTORY_KEY)
-    folded = (
-        rows.sort("last_seen")
-        .group_by(_HISTORY_KEY, maintain_order=True)
-        .agg(
-            *(pl.col(name).last() for name in schema if name not in _HISTORY_KEY),
-            pl.col("first_seen").min(),
-            pl.col("last_seen").max(),
-        )
-        .select(*schema, "first_seen", "last_seen")
-        .sort(_HISTORY_KEY)
-    )
-    write_parquet_atomically(path, folded)
-    return path
 
 
 def tickers_history(vendor_root: str | Path) -> pl.DataFrame | None:
@@ -817,33 +752,6 @@ def snapshot_for(vendor_root: str | Path, pulled_at: datetime) -> Path | None:
     return after[0][1] if after else None
 
 
-def prune_tickers_snapshots(vendor_root: str | Path) -> list[Path]:
-    """Delete the TICKERS snapshots no raw file maps with, and return them.
-
-    The newest snapshot is always kept (the next pulls of its run map with
-    it); an older one is kept while a raw file of any table pairs with it
-    (``snapshot_for``). A bulk pull deletes its table's windows, so the
-    snapshots only they used go too. Fold the snapshots into the TICKERS
-    history first (``fold_tickers_history``), as a bulk pull does, so a
-    deleted one loses nothing.
-    """
-    snapshots = tickers_snapshots(vendor_root)
-    if len(snapshots) < 2:
-        return []
-    used = {snapshots[-1]}
-    for spec in TABLES.values():
-        if spec.code == "tickers" or "ticker" not in spec.schema:
-            continue
-        for path in raw_files(vendor_root, spec.code):
-            paired = snapshot_for(vendor_root, pull_time(path))
-            if paired is not None:
-                used.add(paired)
-    removed = [path for path in snapshots if path not in used]
-    for path in removed:
-        path.unlink()
-    return removed
-
-
 #: Sharadar's time zone: its tables are updated on US/Eastern evenings, so a
 #: pull's "today" is the Eastern date.
 VENDOR_TZ = ZoneInfo("America/New_York")
@@ -854,27 +762,29 @@ def vendor_today() -> date:
     return datetime.now(VENDOR_TZ).date()
 
 
-#: Name of a table's watermark file, beside its parquet.
-WATERMARK_FILE = "_watermark.json"
-
-
 def read_watermark(vendor_root: str | Path, code: str) -> date | None:
     """Return the day a table's raw tier is complete through, or ``None``.
 
-    The watermark is written after a bulk pull (the day of the pull) and
-    after each date-window pull (the window's last day), once its rows are
-    on disk; an interrupted pull leaves the previous one.
+    The watermark (``<table>/_watermark.json``, the ``"table"`` granularity
+    of ``quantlab.utils.watermark``) is written by
+    ``quantlab.acquisition.sharadar.raw_tier.write_table_watermark`` after a
+    bulk pull (the day of the pull) and after each date-window pull (the
+    window's last day), once its rows are on disk; an interrupted pull
+    leaves the previous one.
 
     Examples
     --------
-    >>> write_watermark(root, "sep", date(2024, 1, 11))
-    >>> read_watermark(root, "sep")
-    datetime.date(2024, 1, 11)
+    >>> import tempfile
+    >>> read_watermark(tempfile.mkdtemp(), "sep") is None
+    True
+
+    With ``write_table_watermark(root, "sep", date(2024, 1, 11))`` done::
+
+        read_watermark(root, "sep")
+        # datetime.date(2024, 1, 11)
     """
-    path = raw_table_dir(vendor_root, code) / WATERMARK_FILE
-    if not path.exists():
-        return None
-    return date.fromisoformat(json.loads(path.read_text())["through"])
+    watermark = _read_watermark(raw_table_dir(vendor_root, code) / WATERMARK_FILE, "table")
+    return None if watermark is None else watermark.day
 
 
 def raw_through(vendor_root: str | Path, codes: tuple[str, ...]) -> date:
@@ -919,16 +829,6 @@ def trading_days(vendor_root: str | Path, through: date) -> pl.Series:
         .get_column("date")
         .cast(pl.Datetime("ns"))
         .alias("timestamp")
-    )
-
-
-def write_watermark(vendor_root: str | Path, code: str, through: date) -> None:
-    """Record that a table's raw tier is complete through ``through``."""
-    write_json_atomically(
-        raw_table_dir(vendor_root, code) / WATERMARK_FILE,
-        {"table": table(code).code, "through": through.isoformat()},
-        indent=2,
-        sort_keys=True,
     )
 
 

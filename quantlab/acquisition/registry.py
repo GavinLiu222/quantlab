@@ -13,7 +13,9 @@ files that record how far each symbol has been downloaded so that a later run
 can resume. A dataset class then converts the raw tier into a Zarr store
 holding a panel, an ``xarray.Dataset`` indexed by ``timestamp`` and
 ``symbol``. The module-level functions ``run()`` and ``convert()`` perform
-these two steps without the caller naming any vendor class.
+these two steps without the caller naming any vendor class. A vendor the
+daily update keeps current also registers a raw-tier refresh, which
+``refresh_raw_tier()`` calls.
 
 Descriptors register themselves by calling ``register_source``
 (``quantlab.acquisition.base``) beside the acquisition class they describe,
@@ -35,12 +37,15 @@ Examples
 
 import dataclasses
 import os
+from datetime import date
+from pathlib import Path
 
 from quantlab.acquisition.base import (
     AcquisitionResult,
     SourceDescriptor,
 )
 from quantlab.acquisition.config import AcquisitionConfig
+from quantlab.acquisition.refresh import RawTierRefreshResult
 from quantlab.dataset.config import DatasetConfig
 from quantlab.dataset.raw import ConversionResult
 from quantlab.utils.progress import CancelToken, ProgressReporter
@@ -192,6 +197,70 @@ def run(
     else:
         acquisition.download()
     return acquisition.last_result
+
+
+def refresh_raw_tier(
+    descriptor: SourceDescriptor,
+    download_dir: str | Path,
+    *,
+    end: date | None = None,
+    **options,
+) -> RawTierRefreshResult:
+    """Keep a vendor's raw tier current from its watermarks, in the current process.
+
+    Calls the refresh the vendor registered on its descriptor
+    (``SourceDescriptor.raw_tier_refresh``, a
+    ``quantlab.acquisition.refresh.RawTierRefresh``), so the caller names a
+    vendor, never a client: Sharadar's daily table plan, Massive's REST
+    endpoints, FRED's series. It writes the raw tier only; the stores are
+    brought up to date afterwards from it.
+
+    Parameters
+    ----------
+    descriptor : SourceDescriptor
+        The vendor to refresh.
+    download_dir : str or Path
+        The download root; the vendor's raw tier sits under it.
+    end : date or None, default None
+        The last day to pull; ``None`` is the vendor's today.
+    **options
+        The vendor's own settings, passed through (Sharadar's
+        ``trading_days``; Massive's ``endpoints``; FRED's ``series`` and
+        ``start``).
+
+    Returns
+    -------
+    RawTierRefreshResult
+        Every part tried, a failed one with its error.
+
+    Raises
+    ------
+    ValueError
+        If the vendor registered no refresh (Tiingo, Alpaca, WRDS).
+
+    Examples
+    --------
+    Needs the vendor's credential in the environment and network access::
+
+        from quantlab.acquisition.base import DataSourceRegistry
+        from quantlab.acquisition.registry import refresh_raw_tier
+
+        result = refresh_raw_tier(DataSourceRegistry.get("massive"), "/data/quantlab/downloads")
+        result.failed  # the endpoints not refreshed
+
+    A vendor without one is refused before anything is touched:
+
+    >>> from quantlab.acquisition.base import DataSourceRegistry
+    >>> refresh_raw_tier(DataSourceRegistry.get("tiingo"), "downloads")
+    Traceback (most recent call last):
+    ...
+    ValueError: Tiingo EOD registers no raw-tier refresh; download it with run().
+    """
+    if descriptor.raw_tier_refresh is None:
+        raise ValueError(
+            f"{descriptor.display_name} registers no raw-tier refresh; download it with run()."
+        )
+    return descriptor.raw_tier_refresh(download_dir, end=end, **options)
 
 
 def convert(
