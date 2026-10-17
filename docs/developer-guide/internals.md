@@ -44,13 +44,13 @@ removes the entry.
 
 A *batch* is one request covering several symbols. Vendors such as Alpaca
 answer it as a chain of pages linked by opaque tokens, so a batch can itself
-be interrupted halfway. The *page ledger* (`quantlab.dataset._support.ledger`)
+be interrupted halfway. The *page ledger* (`quantlab.acquisition._support.page_ledger`)
 records, per batch, every page fetched, the token the next request must send,
 and the shard files each page was written to. `Acquisition._fetch_batch` is
 the only pagination loop, and it resumes from the ledger:
 
 ```python
-from quantlab.dataset._support.ledger import PageLedger
+from quantlab.acquisition._support.page_ledger import PageLedger
 
 roster = ["AAPL", "MSFT"]
 key = PageLedger.batch_key("alpaca", "1m", "2024-01-02", "2024-01-05", roster)

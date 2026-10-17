@@ -23,7 +23,7 @@ from the next page instead of starting over.
 This layer writes raw files only. Converting them into the project's
 canonical panel, an ``xarray.Dataset`` indexed by ``timestamp`` and
 ``symbol``, is the matching dataset class's job. Coverage bookkeeping lives
-in ``quantlab.acquisition._support.coverage``, the page ledger in ``quantlab.dataset._support.ledger``
+in ``quantlab.acquisition._support.coverage``, the page ledger in ``quantlab.acquisition._support.page_ledger``
 and progress events in ``quantlab.utils.progress``.
 """
 
@@ -48,7 +48,7 @@ from quantlab.acquisition._support.coverage import (
     LEGACY_WATERMARK_POLICIES as _LEGACY_WATERMARK_POLICIES,
 )
 from quantlab.acquisition._support.coverage import CoverageLedger
-from quantlab.dataset._support.ledger import PageLedger
+from quantlab.acquisition._support.page_ledger import PageLedger
 from quantlab.dataset.base import MarketDataset
 from quantlab.utils.progress import (
     QUOTA_EXHAUSTED_DESCRIPTION,

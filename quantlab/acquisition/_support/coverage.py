@@ -33,7 +33,7 @@ from quantlab.enums.data import TRADEABLE_TICKER_PATTERN
 FAILURE_MANIFEST_NAME = "_failures.json"
 
 #: Subdirectory under ``watermark_root`` that holds the per-batch page ledgers
-#: (see ``quantlab.dataset._support.ledger``). Named here so that
+#: (see ``quantlab.acquisition._support.page_ledger``). Named here so that
 #: ``iter_watermark_symbols`` skips it instead of reporting it as a symbol.
 PAGE_LEDGER_DIR_NAME = "_pages"
 

@@ -156,7 +156,7 @@ def test_tracer_one_alpaca_daily_batch_lands_as_a_hive_shard_and_reads_back(
 
     from quantlab.acquisition.alpaca import AlpacaAcquisition
     from quantlab.dataset.config import DatasetConfig
-    from quantlab.dataset._support.ledger import PageLedger
+    from quantlab.acquisition._support.page_ledger import PageLedger
     from quantlab.dataset.stock import StockDataset
 
     # ONE single-symbol, single-page envelope: `next_page_token=None` makes it
@@ -715,7 +715,7 @@ def test_a_minute_fetch_lands_one_date_partition_per_session_date(
     duplicated row (D-19 contract 4), so it is asserted here for the minute
     tier exactly as the daily tracer asserts it for `month=`.
     """
-    from quantlab.dataset._support.ledger import PageLedger
+    from quantlab.acquisition._support.page_ledger import PageLedger
 
     from quantlab.acquisition.alpaca import AlpacaAcquisition
 
@@ -820,7 +820,7 @@ def test_the_minute_path_paginates_through_the_same_base_class_loop_as_daily(
     """
     import json
 
-    from quantlab.dataset._support.ledger import PageLedger
+    from quantlab.acquisition._support.page_ledger import PageLedger
 
     from quantlab.acquisition.alpaca import AlpacaAcquisition
 
@@ -1080,7 +1080,7 @@ def test_tick_shards_land_under_data_type_then_session_date_then_symbol(
     The data-type directory leads: it is what keeps two different column
     sets from meeting inside one scan.
     """
-    from quantlab.dataset._support.ledger import PageLedger
+    from quantlab.acquisition._support.page_ledger import PageLedger
 
     from quantlab.acquisition.alpaca import AlpacaAcquisition
 
