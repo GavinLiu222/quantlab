@@ -44,6 +44,13 @@ stages:
       - update: market/sharadar/sharadar_iwv_1d
       - fred: {series: [DTB3], start: "1954-01-04", store: market/fred/fred_dtb3_1d}
       - benchmarks: {tickers: [vt, spy, acwi], writes: [market/benchmarks/]}
+      # Massive's REST endpoints (splits, dividends) into the raw tier, each from its watermark
+      # (docs/massive.md, "REST pulls"); raw files only, so a failure holds nothing.
+      - run:
+          script: scripts/massive/rest_pull.py
+          args: [--download-dir, "{download_dir}"]
+          writes: []
+          allow_failure: true
   - name: market-factors
     steps:
       - extend: factors/market/barra_style
@@ -84,6 +91,13 @@ stages:
           script: scripts/massive/convert.py
           args: [--download-dir, "{download_dir}", --data-dir, "{data_dir}", --download, --workers, "2", --threads, "8", --max-days, "5", --idle-hours, "2"]
           writes: [market/massive/massive_trade_bars_1m]
+          allow_failure: true
+      # Massive's own daily bars on the Massive ticker (MassiveDayBarDataset): appends every day
+      # aggregate file the conversion above downloaded after the store's last day.
+      - run:
+          script: scripts/massive/day_bars.py
+          args: [--download-dir, "{download_dir}", --data-dir, "{data_dir}"]
+          writes: [market/massive/massive_day_bars_1d]
           allow_failure: true
       - run:
           script: scripts/massive/ticker_map.py

@@ -12,7 +12,7 @@
 |---|---|---|
 | `alpaca` | `APCA_API_KEY_ID`、`APCA_API_SECRET_KEY` | 美股 1d、1m 行情；tick 报价与成交 |
 | `fred` | 无 | 利率序列，例如 DTB3（3 个月期国库券利率，免 key 的 CSV 接口）；`FredRateDataset` 生成单 symbol 的 `rate` 与 `risk_free` 面板 |
-| `massive` | `MASSIVE_API_KEY`、`MASSIVE_S3_ACCESS_KEY_ID`（`MASSIVE_S3_SECRET_ACCESS_KEY` 可选） | 美股每一笔 SIP 成交，以及 Massive 自己的分钟、日 bar，按日放在 S3 文件里；`MassiveTradeBarDataset` 在 permaticker 轴上生成 Trade bar；由 `MassiveClient` 下载，不走 `run()`（见 [Massive](../massive.md)） |
+| `massive` | `MASSIVE_API_KEY`、`MASSIVE_S3_ACCESS_KEY_ID`（`MASSIVE_S3_SECRET_ACCESS_KEY` 可选） | 美股每一笔 SIP 成交，以及 Massive 自己的分钟、日 bar，按日放在 S3 文件里；`MassiveTradeBarDataset` 生成 Trade bar，`MassiveDayBarDataset` 生成日 bar 库，都在 Massive 代码轴上；由 `MassiveClient` 下载，不走 `run()`（见 [Massive](../massive.md)） |
 | `sharadar` | `SHARADAR_API_KEY` | 美股股票（SEP）与基金（SFP）日线、SF1 基本面、DAILY 估值、8-K 事件、内部人交易、13F 持仓、ACTIONS、标普 500 成分、TICKERS、INDICATORS；由 `scripts/sharadar/` 下载，不走 `run()`（见 [Sharadar](../sharadar.md)） |
 | `tiingo` | `TIINGO_API_KEY` | 美股日线 |
 | `wrds` | `WRDS_USERNAME`（密码放在 `~/.pgpass`） | TAQ NBBO 报价；CRSP 日线 |
