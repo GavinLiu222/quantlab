@@ -103,7 +103,56 @@ A pull works like this:
     --endpoints dividends --end 2010-12-31
 ```
 
-A new endpoint is one more `RestEndpoint` in `ENDPOINTS`, with its name, URL and date field, its earliest day, its own fixed filters in `params`, and `key` and `tiebreak` when they are not `id` and `ticker`. A snapshot endpoint (`date_field=None`) is pulled whole on every run and keeps no watermark.
+A new endpoint is one more `RestEndpoint` in `ENDPOINTS`, with its name, URL and date field, its earliest day, its own fixed filters in `params`, and `key` and `tiebreak` when they are not `id` and `ticker`. A snapshot endpoint (`date_field=None`) is pulled whole on every run and keeps no watermark; with `once_a_day=True` it keeps one snapshot a day. Its pages wait in `massive/rest/<endpoint>/_pending/` until the last one is in, so an interrupted snapshot leaves nothing behind, and the next pull takes it again from the start. Two more kinds serve the reference tickers and the ticker events, below: `as_of_param` and `ids_from`.
+
+### Raw-only tables
+
+These tables are kept in the raw tier only, with no panel: filing text and the second sources of Sharadar's SF2 and SF3 (spec #345, Vendor table). Each is pulled by `scripts/massive/rest_pull.py` with the others, so the daily update keeps them current.
+
+| Endpoint | URL | Kind | Layout | Read with | Coverage asked |
+|---|---|---|---|---|---|
+| `10k_sections` | `/stocks/filings/10-K/vX/sections` | `filing_date`, 100 rows a page | pages | `read_rest_records(root, "10k_sections", key=None)` | from 1993-01-01 |
+| `8k_text` | `/stocks/filings/8-K/vX/text` | `filing_date`, 100 rows a page | pages | `read_rest_records(root, "8k_text", key=None)` | from 1993-01-01 (the vendor's starts in 1999-11) |
+| `risk_factors` | `/stocks/filings/vX/risk-factors` | `filing_date`, 50,000 rows a page | pages | `read_rest_records(root, "risk_factors", key=None)` | from 1993-01-01 (the vendor's starts in 2015-01) |
+| `form_3` | `/stocks/filings/vX/form-3` | `filing_date`, 10,000 rows a page | pages | `read_rest_records(root, "form_3", key=None)` | from 1993-01-01 |
+| `form_4` | `/stocks/filings/vX/form-4` | `filing_date`, 10,000 rows a page | pages | `read_rest_records(root, "form_4", key=None)` | from 1993-01-01 (the vendor's starts in 2003-09) |
+| `13f` | `/stocks/filings/vX/13-F` | `filing_date`, 1,000 rows a page | pages | `read_rest_records(root, "13f", key=None)` | from 1993-01-01 |
+| `float` | `/stocks/vX/float` | snapshot, once a day | one snapshot a day | `rest_snapshots`, `read_rest_snapshot` | from the first pull on |
+| `tickers` | `/v3/reference/tickers` | as of each XNYS session (`date=`), `market=stocks` | one directory a session | `rest_as_of_days`, `read_rest_as_of` | from 2016-10-10 |
+| `ticker_events` | `/vX/reference/tickers/{id}/events` | one composite FIGI a call (`ids_from="tickers"`) | pages | `read_rest_records(root, "ticker_events", key="composite_figi")` | every FIGI of `tickers` |
+
+`root` is `<download-dir>/massive`; the readers are in `quantlab.dataset.massive.raw`.
+
+- **Filings.** Six date-ranged endpoints on `filing_date`, sorted on it alone (the only sort column the docs name), with a 7-day overlap for filings the vendor adds late. Their rows have no id: a 13-F has one row per holding and a Form 4 one per line, all under one `accession_number`. So `key=None` names a record by all its fields, and a row re-read in the overlap is kept once.
+- **Float.** The table holds only each ticker's latest free float (`effective_date`, `free_float`, `free_float_percent`, `ticker`). So the whole table is kept once a day, and the history builds up from the first pull. The watermark is the New York day of the newest snapshot, and a second pull that day asks for nothing. A snapshot is named by its pull's UTC stamp and is never overwritten:
+
+  ```text
+  massive/rest/float/2026/20261016T120000000000_000001.jsonl
+  massive/rest/float/_watermark.json
+  ```
+
+  ```python
+  from quantlab.dataset.massive.raw import read_rest_snapshot, rest_snapshots
+
+  root = "/data/quantlab/downloads/massive"
+  history = {stamp: read_rest_snapshot(root, "float", stamp) for stamp in rest_snapshots(root, "float")}
+  ```
+
+- **Reference tickers.** The table of stock tickers listed as of each session, pulled whole with `date=<session>` (the endpoint's default `active=true`: the tickers trading that day), 1,000 rows a page, sorted by ticker. Each session goes in its own directory, which appears only once the session is whole. The watermark moves to each session as it is kept, so an interrupted backfill resumes at the session it stopped on. The vendor's history goes back to 2003-09-10. The pull starts at 2016-10-10, the first day of the Day aggregates and of the Ticker map, at about 11,000 rows (12 pages) a session:
+
+  ```text
+  massive/rest/tickers/2016/2016-10-10/20261016T120000000000_000001.jsonl
+  massive/rest/tickers/_watermark.json
+  ```
+
+- **Ticker events.** A composite FIGI's ticker changes, one FIGI a call. A pull reads the reference tickers' sessions after its watermark. It asks for every FIGI with no record kept yet, and for every FIGI whose ticker changed from one session to the next. Each record is the vendor's `results` object (`composite_figi`, `name`, `events` with `date`, `type` and `ticker_change.ticker`), 1,000 a page file. The watermark moves to the last session read once every FIGI has been asked for, so an interrupted pull asks the next time for the FIGIs it did not reach. A FIGI Massive does not know (404) is counted in the log and asked for again with the next new session. Pull the reference tickers first; `ENDPOINTS` lists them in that order.
+
+The first pull of these tables is a long backfill: the reference tickers ask for about 30,000 pages from 2016-10-10, and the 100-row filing text endpoints ask for one page per 100 filings. Run it once by hand, in steps with `--end` if you like, before the daily update takes over:
+
+```bash
+.venv/bin/python scripts/massive/rest_pull.py --download-dir /data/quantlab/downloads \
+    --endpoints tickers,ticker_events --end 2020-12-31
+```
 
 ## The conversion script
 
