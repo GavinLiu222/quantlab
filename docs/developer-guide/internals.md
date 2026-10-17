@@ -3,7 +3,7 @@
 This page describes the machinery that keeps quantlab's long-running jobs
 safe to interrupt and its results safe to trust: how downloads and
 conversions resume where they stopped, how a store is rebuilt without losing
-the old one, why three package `__init__.py` files stay empty, how files are
+the old one, why the package `__init__.py` files import nothing, how files are
 written atomically, how data fingerprints and code records tie a
 run to the data it read and the code it ran, and how a model and an ensemble
 share one Evaluation and one Walk-forward training. It is written for contributors who change these
@@ -189,15 +189,17 @@ returned only after the conversion succeeded. `data_root` is required and has
 no default, because a rebuild run from a git worktree, which has no `data/`
 directory, must not report success against a tree it never read.
 
-## Empty package `__init__` files
+## Package `__init__` files that import nothing
 
-`quantlab/__init__.py`, `quantlab/acquisition/__init__.py` and
-`quantlab/acquisition/_support/__init__.py` are empty. A package `__init__`
-runs on every import beneath it, and the credential-free `SourceInspector`
-(`quantlab.acquisition._support.inspector`) must be importable without loading
-a vendor client: `tests/test_source_inspector.py` fails if a client becomes
-reachable from it. Do not add imports to those files. Downloads are not
-estimated or refused by size.
+`quantlab/acquisition/__init__.py` and `quantlab/acquisition/_support/__init__.py`
+are empty, and `quantlab/__init__.py` holds only `__version__`, read through
+`importlib.metadata`. A package `__init__` runs on every import beneath it, and
+the credential-free `SourceInspector` (`quantlab.acquisition._support.inspector`)
+must be importable without loading a vendor client: `tests/test_source_inspector.py`
+fails if a client becomes reachable from it, if either acquisition `__init__` is
+not empty, or if `quantlab/__init__.py` imports anything outside the standard
+library. Do not add imports to those files. Downloads are not estimated or
+refused by size.
 
 ## Atomic writes
 

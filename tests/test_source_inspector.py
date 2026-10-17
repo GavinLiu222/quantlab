@@ -35,7 +35,9 @@ TWO RULES THIS FILE IS SUBJECT TO, both from incidents recorded in
    ZERO tests until the behaviour exists.
 """
 
+import ast
 import re
+import sys
 from pathlib import Path
 
 import xarray as xr
@@ -561,8 +563,9 @@ def test_inspector_binds_no_client() -> None:
     Reddened by: adding `from quantlab.acquisition.registry import ...` (or any
     relative spelling of it) to either module, or binding a `SymbolBatchAcquisition`
     subclass into the inspector's namespace, or putting a single byte into any
-    of the three package `__init__.py` files on the inspector's import path --
-    the last of which is what the emptiness arm below exists for.
+    of the two acquisition package `__init__.py` files on the inspector's import
+    path, or a non-stdlib import into `quantlab/__init__.py` -- the last two of
+    which are what the arms below exist for.
     """
     import inspect
     from pathlib import Path
@@ -599,8 +602,25 @@ def test_inspector_binds_no_client() -> None:
     # comment above, which prefers a copy to a cross-test import because
     # `tests/` is not a package -- and not duplication to be factored out.
     repo_root = Path(__file__).resolve().parents[1]
+    # The top package holds `__version__`, read through `importlib.metadata`.
+    # It may import the standard library only: no `quantlab` module and no
+    # third-party package, so no client can be reached through it.
+    top_init = repo_root / "quantlab/__init__.py"
+    imported = set()
+    for node in ast.walk(ast.parse(top_init.read_text())):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            imported.add("." * node.level + (node.module or ""))
+    outside_stdlib = sorted(
+        name for name in imported if name.split(".")[0] not in sys.stdlib_module_names
+    )
+    assert not outside_stdlib, (
+        f"{_INSPECTOR_RESOLVER_TOKEN}: quantlab/__init__.py imports {outside_stdlib}; "
+        f"it runs ahead of the read surface on every import and may import the "
+        f"standard library only"
+    )
     for relative in (
-        "quantlab/__init__.py",
         "quantlab/acquisition/__init__.py",
         "quantlab/acquisition/_support/__init__.py",
     ):
