@@ -161,7 +161,6 @@ SHARADAR_SOURCE = register_source(
         # A literal rather than the client's API_KEY_ENV, so a test can check
         # the two against each other.
         required_env=("SHARADAR_API_KEY",),
-        universe_categories=("sp500_constituent",),
         raw_tier_refresh=refresh_raw_tier,
     )
 )

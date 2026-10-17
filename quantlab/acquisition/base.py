@@ -68,7 +68,6 @@ from quantlab.enums.data import (
     TRADEABLE_TICKER_PATTERN,
     Frequency,
     Market,
-    UniverseCategory,
     Vendor,
 )
 from quantlab.utils.atomic import write_json_atomically
@@ -2011,11 +2010,6 @@ class SourceDescriptor:
         credentials. Never a value, and never anything derived from one.
         They are written out here rather than read from ``symbol_batch_cls``
         so that a test can check the two against each other.
-    universe_categories : tuple of UniverseCategory, default ()
-        Symbol universes, such as S&P 500 constituents, that a user interface
-        might offer beside this source. Informational only: the actual symbol
-        list comes from ``UniverseCatalog``, and ``download_symbols()`` never
-        reads this field.
     raw_tier_refresh : RawTierRefresh or None, default None
         The function that keeps the vendor's raw tier current from its
         watermarks (``quantlab.acquisition.refresh``), which
@@ -2049,7 +2043,6 @@ class SourceDescriptor:
     config_factory: Callable[..., AcquisitionConfig] | None
     capabilities: tuple[Capability, ...]
     required_env: tuple[str, ...]
-    universe_categories: tuple[UniverseCategory, ...] = ()
     raw_tier_refresh: RawTierRefresh | None = None
 
     def supports(

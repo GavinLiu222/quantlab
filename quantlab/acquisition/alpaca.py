@@ -855,13 +855,5 @@ ALPACA_SOURCE = register_source(
         # Written out rather than taken from ``CREDENTIAL_ENV_VARS``, so each
         # declaration can be checked against the other.
         required_env=("APCA_API_KEY_ID", "APCA_API_SECRET_KEY"),
-        # For information only; the symbol list comes from
-        # ``UniverseCatalog``, never from the vendor.
-        universe_categories=(
-            "nasdaq_all",
-            "us_all",
-            "sp500_constituent",
-            "nasdaq100_constituent",
-        ),
     )
 )

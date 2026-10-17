@@ -106,6 +106,5 @@ WRDS_SOURCE = register_source(
         # so a test can check the two against each other. One variable serves
         # the whole account.
         required_env=("WRDS_USERNAME",),
-        universe_categories=("sp500_constituent", "nasdaq100_constituent"),
     )
 )
