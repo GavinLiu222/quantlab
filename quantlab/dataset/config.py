@@ -1068,6 +1068,74 @@ class MassiveDividendsConfig(SharadarDatasetConfig):
 
 
 @dataclass(kw_only=True, frozen=True)
+class MassiveShortVolumeConfig(SharadarDatasetConfig):
+    """Config of the Massive short volume panel on the permaticker axis (#356).
+
+    Massive's daily short volume records (the REST raw tier under
+    ``massive_dir``) are placed on permatickers through the Ticker map at
+    ``ticker_map_path``, on SEP's trading calendar. ``raw_data_dir_path`` is
+    Sharadar's raw tier: SEP's dates are the calendar and SEP's TICKERS rows
+    the universe, whose fields work as for a price panel (the default is
+    domestic common stock).
+
+    Examples
+    --------
+    >>> cfg = MassiveShortVolumeConfig(
+    ...     zarr_file_path="/data/zarrs/massive_short_volume_1d.zarr",
+    ...     raw_data_dir_path="/data/downloads/sharadar",
+    ...     massive_dir="/data/downloads/massive",
+    ...     ticker_map_path="/data/market/massive/massive_ticker_map/massive_ticker_map",
+    ... )
+    >>> cfg.vendor, cfg.table
+    ('massive', 'sep')
+    """
+
+    #: Massive's records; the calendar and the universe are Sharadar's.
+    vendor: Vendor | None = "massive"
+    #: Always SEP: its TICKERS rows give the universe, its dates the calendar.
+    table: str = "sep"
+    #: Massive's raw tier (``<download-dir>/massive``), holding the REST pull
+    #: ``rest/short_volume`` and the day aggregates.
+    massive_dir: str
+    #: The Ticker map's directory (``TickerMapConfig.path``).
+    ticker_map_path: str
+
+
+@dataclass(kw_only=True, frozen=True)
+class MassiveDisclosuresConfig(SharadarDatasetConfig):
+    """Config of the Massive 8-K disclosure panel on the permaticker axis (#358).
+
+    Massive's 8-K disclosure records and its disclosure taxonomy (the REST
+    raw tier under ``massive_dir``) are placed on permatickers through the
+    Ticker map at ``ticker_map_path``, on SEP's trading calendar.
+    ``raw_data_dir_path`` is Sharadar's raw tier: SEP's dates are the
+    calendar and SEP's TICKERS rows the universe, whose fields work as for a
+    price panel (the default is domestic common stock).
+
+    Examples
+    --------
+    >>> cfg = MassiveDisclosuresConfig(
+    ...     zarr_file_path="/data/zarrs/massive_disclosures_1d.zarr",
+    ...     raw_data_dir_path="/data/downloads/sharadar",
+    ...     massive_dir="/data/downloads/massive",
+    ...     ticker_map_path="/data/market/massive/massive_ticker_map/massive_ticker_map",
+    ... )
+    >>> cfg.vendor, cfg.table
+    ('massive', 'sep')
+    """
+
+    #: Massive's records; the calendar and the universe are Sharadar's.
+    vendor: Vendor | None = "massive"
+    #: Always SEP: its TICKERS rows give the universe, its dates the calendar.
+    table: str = "sep"
+    #: Massive's raw tier (``<download-dir>/massive``), holding the REST pulls
+    #: ``rest/8k_disclosures`` and ``rest/disclosure_taxonomy`` and the day aggregates.
+    massive_dir: str
+    #: The Ticker map's directory (``TickerMapConfig.path``).
+    ticker_map_path: str
+
+
+@dataclass(kw_only=True, frozen=True)
 class SharadarListingConfig(SharadarDatasetConfig):
     """Config of the point-in-time listing panel (SIC series and exchange) on the permaticker axis.
 
@@ -1277,3 +1345,40 @@ class FrameDatasetConfig(BaseDatasetConfig):
     #: Path of a Zarr store holding the panel, read at construction; ``None`` for a
     #: panel handed over in memory.
     zarr_file_path: str | None = None
+
+
+@dataclass(kw_only=True, frozen=True)
+class MassiveShortInterestConfig(SharadarDatasetConfig):
+    """Config of the Massive short interest panel on the permaticker axis (#355).
+
+    Massive's short interest records (the REST raw tier under
+    ``massive_dir``) are placed on permatickers through the Ticker map at
+    ``ticker_map_path``, on SEP's trading calendar. ``raw_data_dir_path`` is
+    Sharadar's raw tier: SEP's dates are the calendar and SEP's TICKERS rows
+    the universe, whose fields work as for a price panel (the default is
+    domestic common stock).
+
+    Examples
+    --------
+    >>> cfg = MassiveShortInterestConfig(
+    ...     zarr_file_path="/data/zarrs/massive_short_interest_1d.zarr",
+    ...     raw_data_dir_path="/data/downloads/sharadar",
+    ...     massive_dir="/data/downloads/massive",
+    ...     ticker_map_path="/data/market/massive/massive_ticker_map/massive_ticker_map",
+    ... )
+    >>> cfg.vendor, cfg.table, cfg.release_lag_bars
+    ('massive', 'sep', 8)
+    """
+
+    #: Massive's records; the calendar and the universe are Sharadar's.
+    vendor: Vendor | None = "massive"
+    #: Always SEP: its TICKERS rows give the universe, its dates the calendar.
+    table: str = "sep"
+    #: Massive's raw tier (``<download-dir>/massive``), holding the REST pull
+    #: ``rest/short_interest`` and the day aggregates.
+    massive_dir: str
+    #: The Ticker map's directory (``TickerMapConfig.path``).
+    ticker_map_path: str
+    #: Trading days after its settlement date a release becomes visible
+    #: (FINRA publishes it about seven business days after settlement).
+    release_lag_bars: int = 8
