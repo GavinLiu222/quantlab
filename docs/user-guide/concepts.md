@@ -45,7 +45,7 @@ date; see [universes](universes.md).
 A factor computes a feature from a dataset, for example a momentum or volatility measure. A
 label is a factor shifted forward in time by `Forward`: it is the quantity to be predicted,
 typically the return over the next few bars, and its value at bar t reads a fixed number of
-bars after t (its lookahead). Both produce a panel. Factors are written either
+the factor's bars after t (its lookahead). Both produce a panel. Factors are written either
 as KunQuant operator graphs, compiled to native code and able to run bar by bar on live data,
 or as Polars expressions, which are batch only. See [factors](factors.md).
 

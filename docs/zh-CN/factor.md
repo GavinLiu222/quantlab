@@ -396,7 +396,7 @@ DatetimeIndex(['2024-01-02', '2024-01-03'], dtype='datetime64[ns]', freq=None)
 True
 ```
 
-`compute(start, end)` 和 `read(start, end)` 向被包装的因子请求到 `end` 之后 `lookahead_bars()` 根 bar 为止的数据（在数据集日历上数，截止到日历的最后一根 bar），平移后再裁回请求的区间。因此，区间末尾的标签只在未来的 bar 尚不存在时才是 NaN。现货存储结束于 2024-03-30，所以二月一直填到最后一天，只有三月的最后 6 根 bar 没有标签：
+`compute(start, end)` 和 `read(start, end)` 向被包装的因子请求到 `end` 之后 `lookahead_bars()` 根 bar 为止的数据（在因子日历上数，即因子输出的 bar，通过 `Factor.bar_after`；截止到日历的最后一根 bar），平移后再裁回请求的区间。从分钟 bar 重采样到日频的因子（或它的视图）按交易日数前瞻。因此，区间末尾的标签只在未来的 bar 尚不存在时才是 NaN。现货存储结束于 2024-03-30，所以二月一直填到最后一天，只有三月的最后 6 根 bar 没有标签：
 
 ```python
 >>> int(fwd_mom.isnull().sum())
@@ -876,7 +876,7 @@ Polars 因子引用了存储中不存在的列时，构造对象就会失败，�
 
 `read(start, end)` 和 `extend(end)` 需要 `build` 记录的区间：用其他方式写出的存储会抛出 `ValueError: Momentum.read(): the store at data/factors/nob.zarr has no recorded range, so it cannot answer a date-range request; write it with build(start, end).` 给 `extend(end)` 传入记录区间已经覆盖到的 `end` 会抛出 `ValueError: Momentum.extend(): the store at data/factors/momentum.zarr already covers 2024-01-21 to 2024-03-20; extend() appends only bars after 2024-03-20, got end '2024-03-10'.`
 
-`Forward` 拒绝小于 1 的 `span`（`ValueError: Forward: span must be at least 1, got 0.`）、负的 `delay`，以及它无法平移的因子：流式模式的因子（`ValueError: Return: _TrailingOpenReturn is in 'stream' mode; a label reads bars after t, which a stream never has.`）或重采样过的因子（`ValueError: Forward: Momentum is resampled to '1d'; a label counts its lookahead on the dataset's own bars, so wrap an unresampled factor.`）。
+`Forward` 拒绝小于 1 的 `span`（`ValueError: Forward: span must be at least 1, got 0.`）、负的 `delay`，以及它无法平移的流式模式因子（`ValueError: Return: _TrailingOpenReturn is in 'stream' mode; a label reads bars after t, which a stream never has.`）。重采样过的因子可以接受：前瞻在它重采样后的 bar 上数。
 
 `warmup_bars` 是数据集自己日历上的 bar 数，没有数据的日子会被跳过，不计入。嵌套的滚动窗口需要两个窗口长度之和。
 

@@ -411,12 +411,13 @@ bar `t`. It is configured by `quantlab.label.config.ForwardConfig`:
 `delay + span` is the label's lookahead, returned by `lookahead_bars()`: the
 label at `t` is known only once bar `t + lookahead` has closed. `read(start,
 end)` and `compute(start, end)` ask the wrapped factor for `lookahead` bars
-past `end`, counted on the dataset's calendar, then shift and trim the panel
-back to the request. The shift therefore adds NaN only where the later bars
-do not exist, at the end of the dataset; a NaN of the wrapped factor stays
-NaN in the label. A `Forward` owns no store: `build`,
-`extend` and `read` act on the wrapped factor's store, which then serves as
-a feature and, wrapped, as a label.
+past `end`, counted on the factor calendar (the factor's output bars, so a
+factor resampled from minute bars to daily counts trading days), then shift
+and trim the panel back to the request. The shift therefore adds NaN only
+where the later bars do not exist, at the end of the factor's calendar; a
+NaN of the wrapped factor stays NaN in the label. A `Forward` owns no store:
+`build`, `extend` and `read` act on the wrapped factor's store, which then
+serves as a feature and, wrapped, as a label.
 
 ### Forward-return labels
 

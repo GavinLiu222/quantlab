@@ -27,13 +27,15 @@ class Forward(Component):
     """A factor shifted ``delay + span`` bars earlier, used as a label.
 
     ``read`` and ``compute`` ask the wrapped factor for the requested range
-    plus ``lookahead_bars()`` bars after it, counted on the factor's dataset
-    calendar and stopping at the calendar's last bar, then shift the panel
-    and trim it back to the request. The last bars of a request are
-    therefore filled wherever the dataset has later bars, and NaN only past
-    the calendar's end. A ``Forward`` owns no store: ``read`` reads the
-    wrapped factor's, so one factor store serves as a feature and, wrapped,
-    as a label.
+    plus ``lookahead_bars()`` bars after it, counted on the factor calendar
+    (the bars of the factor's output, ``Factor.bar_after``) and stopping at
+    the calendar's last bar, then shift the panel and trim it back to the
+    request. A factor resampled from minute bars to daily counts its
+    lookahead in trading days. The last bars of a request are therefore
+    filled wherever the factor has later bars, and NaN only past the
+    calendar's end. A ``Forward`` owns no store: ``read`` reads the wrapped
+    factor's, so one factor store serves as a feature and, wrapped, as a
+    label.
 
     Parameters
     ----------
@@ -44,7 +46,7 @@ class Forward(Component):
     ------
     ValueError
         If ``span`` is below 1, ``delay`` is negative, or the factor is in
-        stream mode or resampled.
+        stream mode.
 
     Examples
     --------
@@ -103,12 +105,6 @@ class Forward(Component):
             raise ValueError(
                 f"{owner}: {factor.class_name} is in {factor.config.mode!r} "
                 f"mode; a label reads bars after t, which a stream never has."
-            )
-        if factor.config.resample_freq is not None:
-            raise ValueError(
-                f"{owner}: {factor.class_name} is resampled to "
-                f"{factor.config.resample_freq!r}; a label counts its lookahead "
-                f"on the dataset's own bars, so wrap an unresampled factor."
             )
 
     @property
@@ -171,8 +167,8 @@ class Forward(Component):
     ) -> xr.Dataset:
         """Return the label from ``start`` to ``end``, read from the factor's store.
 
-        The factor store must cover ``start`` to ``lookahead_bars()`` bars
-        after ``end``, or to the dataset's last bar when fewer follow.
+        The factor store must cover ``start`` to ``lookahead_bars()`` factor
+        bars after ``end``, or to the factor's last bar when fewer follow.
 
         Parameters
         ----------
@@ -208,7 +204,7 @@ class Forward(Component):
         """Compute the label from ``start`` to ``end``, both inclusive.
 
         The factor is computed from ``start`` (with its own warm-up) to
-        ``lookahead_bars()`` bars after ``end``.
+        ``lookahead_bars()`` factor bars after ``end``.
 
         Parameters
         ----------
@@ -247,8 +243,9 @@ class Forward(Component):
         """Build the factor store the label needs to ``read`` ``start`` to ``end``.
 
         The wrapped factor's store is built from ``start`` to
-        ``lookahead_bars()`` bars after ``end``, or to the dataset's last
-        bar when fewer follow; ``store_range`` then reports that later end.
+        ``lookahead_bars()`` factor bars after ``end``, or to the factor's
+        last bar when fewer follow; ``store_range`` then reports that later
+        end.
 
         Parameters
         ----------
@@ -272,8 +269,8 @@ class Forward(Component):
     def extend(self, end: "str | datetime.date | pd.Timestamp") -> Self:
         """Extend the factor store so the label can be read up to ``end``.
 
-        The wrapped factor's store is extended to ``lookahead_bars()`` bars
-        after ``end``, or to the dataset's last bar when fewer follow.
+        The wrapped factor's store is extended to ``lookahead_bars()`` factor
+        bars after ``end``, or to the factor's last bar when fewer follow.
 
         Parameters
         ----------
@@ -307,10 +304,9 @@ class Forward(Component):
         return self.config.factor.store_range()
 
     def _later_end(self, end):
-        """Return the bar ``lookahead_bars()`` after ``end``, or ``end`` when none follow."""
-        dataset = self.config.factor.config.dataset
+        """Return the factor bar ``lookahead_bars()`` after ``end``, or ``end`` when none follow."""
         last = last_moment(end)
-        later = dataset.bar_after(last, self.lookahead_bars())
+        later = self.config.factor.bar_after(last, self.lookahead_bars())
         return end if later == last else later
 
     def _shifted(self, request, start, end, method: str) -> xr.Dataset:

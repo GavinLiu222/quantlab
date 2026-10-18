@@ -2,30 +2,34 @@
 
 The label at bar t is the wrapped factor at bar t + delay + span. ``read`` and
 ``compute`` read that many bars past the requested end on the wrapped factor's
-dataset calendar, so the last requested bars are filled wherever the dataset
-has later bars, and NaN only past the calendar's end.
+calendar (the bars of its output, ADR 0051), so the last requested bars are
+filled wherever the factor has later bars, and NaN only past the calendar's
+end. A factor resampled from minute bars to daily counts its lookahead in
+days; the minute fixtures come from ``tests.test_factor_calendar``.
 """
 
 import dataclasses
 import json
 from pathlib import Path
 
+import KunQuant.ops as op
 import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
-import KunQuant.ops as op
 from KunQuant.Op import Builder, Input, Output
 from KunQuant.Stage import Function
 
-from quantlab.factor.config import FactorConfig, PolarsFactorConfig
-from quantlab.label.config import ForwardConfig
-from quantlab.dataset.config import DatasetConfig
-from quantlab.factor.kunquant import FactorKunQuant
-from quantlab.dataset.spot import SpotKlineDataset
-from quantlab.factor.predefined.momentum import Momentum
-from quantlab.label.forward import Forward
 from quantlab.core.component import rebuild
+from quantlab.dataset.config import DatasetConfig
+from quantlab.dataset.spot import SpotKlineDataset
+from quantlab.factor.config import FactorConfig, PolarsFactorConfig, RosterConfig
+from quantlab.factor.kunquant import FactorKunQuant
+from quantlab.factor.predefined.momentum import Momentum
+from quantlab.factor.predefined.roster import RosterFactor
+from quantlab.label.config import ForwardConfig
+from quantlab.label.forward import Forward
+from tests.test_factor_calendar import DAYS, _frame, _minutes
 
 
 class MaDeviation(FactorKunQuant):
@@ -168,11 +172,66 @@ def test_a_label_refuses_a_stream_mode_factor(spot_kline_zarr, tmp_path):
         Forward(ForwardConfig(factor=stream, span=3))
 
 
-def test_a_label_refuses_a_resampled_factor(factor):
-    resampled = factor.resample("1d", "last")
+def _daily_from_minutes(tmp_path: Path) -> Momentum:
+    """A 1-bar momentum on five days of four minute bars, resampled to daily."""
+    return Momentum(
+        PolarsFactorConfig(
+            warmup_bars=1,
+            dataset=_frame(_minutes()),
+            file_path=str(tmp_path / "factors" / "minute_momentum.zarr"),
+            kwargs={"n": 1},
+        )
+    ).resample("1d", "last")
 
-    with pytest.raises(ValueError, match="resampled"):
-        Forward(ForwardConfig(factor=resampled, span=3))
+
+def test_a_label_accepts_a_resampled_factor(tmp_path):
+    label = Forward(ForwardConfig(factor=_daily_from_minutes(tmp_path), span=3))
+
+    assert label.lookahead_bars() == 4
+
+
+def test_a_label_over_a_resampled_factor_counts_its_lookahead_in_daily_bars(tmp_path):
+    resampled = _daily_from_minutes(tmp_path)
+    label = Forward(ForwardConfig(factor=resampled, span=1, delay=1))
+
+    got = label.compute("2024-01-02", "2024-01-04")
+    # 2024-01-04 .. 2024-01-08 is 2 bars (delay + span) later on the daily calendar.
+    expected = resampled.compute("2024-01-04", "2024-01-08")
+
+    assert pd.DatetimeIndex(got["timestamp"].values).tolist() == DAYS[:3].tolist()
+    assert not np.isnan(_values(got, "momentum_1")).any()
+    _assert_same(_values(got, "momentum_1"), _values(expected, "momentum_1"))
+
+
+def test_a_label_over_a_resampled_factor_builds_to_the_lookahead_in_trading_days(tmp_path):
+    resampled = _daily_from_minutes(tmp_path)
+    label = Forward(ForwardConfig(factor=resampled, span=1, delay=1))
+
+    # Two trading days after Thursday 2024-01-04 is Monday 2024-01-08.
+    assert label.build("2024-01-02", "2024-01-04").store_range() == (
+        "2024-01-02",
+        "2024-01-08T00:00:00",
+    )
+    _assert_same(
+        _values(label.read("2024-01-02", "2024-01-04"), "momentum_1"),
+        _values(label.compute("2024-01-02", "2024-01-04"), "momentum_1"),
+    )
+
+
+def test_a_label_over_a_roster_of_a_resampled_factor_counts_daily_bars(tmp_path):
+    resampled = _daily_from_minutes(tmp_path)
+    roster = _frame(DAYS, symbols=["A", "B"]).to_zarr(tmp_path / "roster.zarr")
+    rostered = RosterFactor(RosterConfig(factor=resampled, roster=roster))
+    Forward(ForwardConfig(factor=resampled, span=1, delay=1)).build("2024-01-02", "2024-01-04")
+    label = Forward(ForwardConfig(factor=rostered, span=1, delay=1))
+
+    got = label.read("2024-01-02", "2024-01-04")
+    expected = rostered.compute("2024-01-04", "2024-01-08")
+
+    assert label.store_range() == ("2024-01-02", "2024-01-08T00:00:00")
+    assert got["symbol"].values.tolist() == ["A", "B"]
+    assert pd.DatetimeIndex(got["timestamp"].values).tolist() == DAYS[:3].tolist()
+    _assert_same(_values(got, "momentum_1"), _values(expected, "momentum_1"))
 
 
 def test_a_label_rebuilds_from_its_config(factor):

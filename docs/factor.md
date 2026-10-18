@@ -396,7 +396,7 @@ Any factor becomes a label this way. Wrapping the 5-bar `Momentum` `factor` of t
 True
 ```
 
-`compute(start, end)` and `read(start, end)` request the wrapped factor up to `lookahead_bars()` bars past `end`, counted on the dataset's calendar and clipped at its last bar, then shift and trim back to the request. A label is therefore NaN at the end of a range only where the future bars do not exist yet. The spot store ends on 2024-03-30, so February is filled to its last day and only the last 6 bars of March have no label:
+`compute(start, end)` and `read(start, end)` request the wrapped factor up to `lookahead_bars()` bars past `end`, counted on the factor calendar (the factor's output bars, through `Factor.bar_after`) and clipped at its last bar, then shift and trim back to the request. A factor resampled from minute bars to daily, or a view of one, counts its lookahead in trading days. A label is therefore NaN at the end of a range only where the future bars do not exist yet. The spot store ends on 2024-03-30, so February is filled to its last day and only the last 6 bars of March have no label:
 
 ```python
 >>> int(fwd_mom.isnull().sum())
@@ -881,7 +881,7 @@ A Polars factor that names a column its store does not have fails when the objec
 
 `read(start, end)` and `extend(end)` need the range `build` records: a store written some other way raises `ValueError: Momentum.read(): the store at data/factors/nob.zarr has no recorded range, so it cannot answer a date-range request; write it with build(start, end).` `extend(end)` with an `end` the recorded range already reaches raises `ValueError: Momentum.extend(): the store at data/factors/momentum.zarr already covers 2024-01-21 to 2024-03-20; extend() appends only bars after 2024-03-20, got end '2024-03-10'.`
 
-`Forward` refuses a `span` below 1 (`ValueError: Forward: span must be at least 1, got 0.`), a negative `delay`, and a factor it cannot shift: a stream-mode factor (`ValueError: Return: _TrailingOpenReturn is in 'stream' mode; a label reads bars after t, which a stream never has.`) or a resampled one (`ValueError: Forward: Momentum is resampled to '1d'; a label counts its lookahead on the dataset's own bars, so wrap an unresampled factor.`).
+`Forward` refuses a `span` below 1 (`ValueError: Forward: span must be at least 1, got 0.`), a negative `delay`, and a stream-mode factor, which it cannot shift (`ValueError: Return: _TrailingOpenReturn is in 'stream' mode; a label reads bars after t, which a stream never has.`). A resampled factor is accepted: the lookahead is counted on its resampled bars.
 
 `warmup_bars` is a number of bars on the dataset's own calendar, so days without data are skipped, not counted. A rolling window nested inside another needs the sum of both lengths.
 
