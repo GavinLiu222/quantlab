@@ -4,7 +4,7 @@ quantlab follows [semantic versioning](https://semver.org/). While the version i
 minor release may break the API, the config format or the store layout; there are no
 compatibility shims or config migrations.
 
-## 0.1.0 (unreleased)
+## 0.1.0 (2026-10-17)
 
 The first release, published to PyPI as `quantlab-py` and imported as `quantlab`.
 
