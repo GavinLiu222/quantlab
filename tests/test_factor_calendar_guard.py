@@ -131,6 +131,7 @@ def _calendar_violations(source: str, relpath: str) -> set[tuple[str, int]]:
 
 
 def _tree_violations() -> set[tuple[str, int]]:
+    """Return the violations of every module under ``ROOTS`` outside the factor layer."""
     found: set[tuple[str, int]] = set()
     for root in ROOTS:
         for path in _python_files(REPO_ROOT / root):

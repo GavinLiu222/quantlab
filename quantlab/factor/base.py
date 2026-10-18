@@ -48,7 +48,12 @@ from quantlab.core.store_uses import OWNS, READS, StoreUse
 from quantlab.factor.config import BaseFactorConfig
 from quantlab.backend.ranged import RangedStore
 from quantlab.backend.zarr import XrBackend
-from quantlab.dataset.base import InsufficientHistoryError
+from quantlab.dataset.base import (
+    InsufficientHistoryError,
+    bar_after_on,
+    bar_before_on,
+    stores_text,
+)
 from quantlab.dataset.merged import MergedDataset
 from quantlab.utils.date_range import (
     as_label,
@@ -538,25 +543,13 @@ class Factor(Component, ABC):
         """
         if self.config.resample_freq is None:
             return self.config.dataset.bar_before(date, n)
-        if n < 0:
-            raise ValueError(
-                f"{self.class_name}.bar_before(): n must be non-negative, "
-                f"got {n}."
-            )
-        target = pd.Timestamp(date)
-        if n == 0:
-            return target
-        calendar = self._resampled_bars(_EARLIEST, target)
-        position = int(calendar.searchsorted(target, side="left"))
-        if position < n:
-            raise InsufficientHistoryError(
-                f"{self.class_name}.bar_before(): only {position} bar(s) "
-                f"exist before {date!r} in {self._stores_text()} resampled "
-                f"to {self.config.resample_freq!r}, but {n} were requested.",
-                available=position,
-                requested=n,
-            )
-        return calendar[position - n]
+        return bar_before_on(
+            lambda target: self._resampled_bars(_EARLIEST, target),
+            date,
+            n,
+            self.class_name,
+            self._stores_text,
+        )
 
     def bar_after(
         self, date: "str | datetime.date | pd.Timestamp", n: int
@@ -598,17 +591,9 @@ class Factor(Component, ABC):
         """
         if self.config.resample_freq is None:
             return self.config.dataset.bar_after(date, n)
-        if n < 0:
-            raise ValueError(
-                f"{self.class_name}.bar_after(): n must be non-negative, "
-                f"got {n}."
-            )
-        target = pd.Timestamp(date)
-        calendar = self._resampled_bars(target, _LATEST)
-        following = len(calendar) - int(calendar.searchsorted(target, side="right"))
-        if n == 0 or following == 0:
-            return target
-        return calendar[len(calendar) - following + min(n, following) - 1]
+        return bar_after_on(
+            lambda target: self._resampled_bars(target, _LATEST), date, n, self.class_name
+        )
 
     def _resampled_bars(self, first: pd.Timestamp, last: pd.Timestamp) -> pd.DatetimeIndex:
         """Return the resampled bars the dataset's bars around ``[first, last]`` fall into.
@@ -625,8 +610,11 @@ class Factor(Component, ABC):
         return pd.DatetimeIndex(np.unique(dataset.resample_labels(source.values, freq)))
 
     def _stores_text(self) -> str:
-        """Return the dataset's stores, joined, for error messages."""
-        return " + ".join(self.config.dataset.stores()) or "the panel held in memory"
+        """Return the dataset's stores, joined, and the resample frequency, for error messages."""
+        return (
+            f"{stores_text(self.config.dataset.stores())} resampled to "
+            f"{self.config.resample_freq!r}"
+        )
 
     def compute(
         self,

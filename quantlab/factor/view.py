@@ -200,9 +200,19 @@ class FactorView(Factor):
 
         Examples
         --------
-        >>> view.calendar("2024-01-04", "2024-01-08").equals(
-        ...     view.config.factor.calendar("2024-01-04", "2024-01-08"))
-        True
+        With ``daily`` a momentum on one-minute bars (two days of four
+        bars each from 2024-01-02) resampled to ``"1d"``, a roster over it
+        answers in days while its own dataset still answers in minutes:
+
+        >>> view = RosterFactor(RosterConfig(factor=daily, roster=roster))
+        >>> view.calendar("2024-01-02", "2024-01-03")
+        DatetimeIndex(['2024-01-02', '2024-01-03'], dtype='datetime64[ns]', freq=None)
+        >>> view.config.dataset.calendar("2024-01-02", "2024-01-03")
+        DatetimeIndex(['2024-01-02 00:00:00', '2024-01-02 00:01:00',
+                       '2024-01-02 00:02:00', '2024-01-02 00:03:00',
+                       '2024-01-03 00:00:00', '2024-01-03 00:01:00',
+                       '2024-01-03 00:02:00', '2024-01-03 00:03:00'],
+                      dtype='datetime64[ns]', freq=None)
         """
         return self.config.factor.calendar(start, end)
 

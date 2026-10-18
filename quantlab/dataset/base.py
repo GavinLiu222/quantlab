@@ -33,6 +33,7 @@ import dataclasses
 import datetime
 import os
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Self, Sequence
@@ -89,6 +90,168 @@ class InsufficientHistoryError(ValueError):
         super().__init__(message)
         self.available = available
         self.requested = requested
+
+
+def stores_text(stores: Sequence[str]) -> str:
+    """Return ``stores`` joined for an error message, or the in-memory text.
+
+    Parameters
+    ----------
+    stores : sequence of str
+        The stores a panel reads, as ``BaseDataset.stores`` lists them.
+
+    Returns
+    -------
+    str
+        The stores joined with ``" + "``, or ``"the panel held in memory"``
+        when there are none.
+
+    Examples
+    --------
+    >>> stores_text(["data/a.zarr", "data/b.zarr"])
+    'data/a.zarr + data/b.zarr'
+    >>> stores_text([])
+    'the panel held in memory'
+    """
+    return " + ".join(stores) or "the panel held in memory"
+
+
+def bar_before_on(
+    bars: Callable[[pd.Timestamp], pd.DatetimeIndex],
+    date: "str | datetime.date | pd.Timestamp",
+    n: int,
+    caller: str,
+    where: Callable[[], str],
+) -> pd.Timestamp:
+    """Return the bar ``n`` bars before ``date`` on the bars ``bars`` gives.
+
+    The arithmetic behind ``BaseDataset.bar_before`` and
+    ``Factor.bar_before`` (``quantlab.factor.base``), which differ only in
+    the bars they count on and in the text naming them. The bars before
+    ``date`` are those stamped strictly earlier; ``n=1`` is the last of
+    them and ``n=0`` returns ``date`` itself.
+
+    Parameters
+    ----------
+    bars : callable
+        Called with ``date`` as a ``pd.Timestamp`` and returning the sorted
+        bar timestamps, at least every one before ``date``, as a
+        ``pd.DatetimeIndex``. Called only when the bars are needed, so
+        ``n=0`` reads nothing.
+    date : str, datetime.date or pd.Timestamp
+        The date to count back from.
+    n : int
+        How many bars to count back; non-negative.
+    caller : str
+        The class name the error messages start with
+        (``"<caller>.bar_before(): ..."``).
+    where : callable
+        Returns the text naming where the bars come from, for the history
+        error (``stores_text`` of the stores read); called only when that
+        error is raised.
+
+    Returns
+    -------
+    pd.Timestamp
+        The timestamp of that bar.
+
+    Raises
+    ------
+    ValueError
+        If ``n`` is negative.
+    InsufficientHistoryError
+        If fewer than ``n`` bars exist before ``date``.
+
+    Examples
+    --------
+    >>> bars = pd.DatetimeIndex(["2024-01-05", "2024-01-08", "2024-01-09"])
+    >>> bar_before_on(lambda _: bars, "2024-01-08", 1, "Demo", lambda: "the demo bars")
+    Timestamp('2024-01-05 00:00:00')
+    >>> bar_before_on(lambda _: bars, "2024-01-08", 3, "Demo", lambda: "the demo bars")
+    Traceback (most recent call last):
+    quantlab.dataset.base.InsufficientHistoryError: Demo.bar_before(): only 1 bar(s) exist before '2024-01-08' in the demo bars, but 3 were requested.
+    """
+    if n < 0:
+        raise ValueError(f"{caller}.bar_before(): n must be non-negative, got {n}.")
+    target = pd.Timestamp(date)
+    if n == 0:
+        return target
+    calendar = bars(target)
+    # The bars strictly before ``target`` are the first ``position`` ones.
+    position = int(calendar.searchsorted(target, side="left"))
+    if position < n:
+        raise InsufficientHistoryError(
+            f"{caller}.bar_before(): only {position} bar(s) exist before "
+            f"{date!r} in {where()}, but {n} were requested.",
+            available=position,
+            requested=n,
+        )
+    return calendar[position - n]
+
+
+def bar_after_on(
+    bars: Callable[[pd.Timestamp], pd.DatetimeIndex],
+    date: "str | datetime.date | pd.Timestamp",
+    n: int,
+    caller: str,
+) -> pd.Timestamp:
+    """Return the bar ``n`` bars after ``date`` on the bars ``bars`` gives, or the last bar there is.
+
+    The arithmetic behind ``BaseDataset.bar_after`` and ``Factor.bar_after``
+    (``quantlab.factor.base``), the forward counterpart of
+    ``bar_before_on``: the bars after ``date`` are those stamped strictly
+    later, ``n=1`` is the first of them, ``n=0`` returns ``date`` itself,
+    and when fewer than ``n`` bars follow ``date`` the last bar is
+    returned, ``date`` itself when none follow, so the result is never
+    before ``date``.
+
+    Parameters
+    ----------
+    bars : callable
+        Called with ``date`` as a ``pd.Timestamp`` and returning the sorted
+        bar timestamps, at least every one after ``date``, as a
+        ``pd.DatetimeIndex``. Called only when the bars are needed, so
+        ``n=0`` reads nothing.
+    date : str, datetime.date or pd.Timestamp
+        The date to count forward from.
+    n : int
+        How many bars to count forward; non-negative.
+    caller : str
+        The class name the error message starts with
+        (``"<caller>.bar_after(): ..."``).
+
+    Returns
+    -------
+    pd.Timestamp
+        The timestamp of that bar.
+
+    Raises
+    ------
+    ValueError
+        If ``n`` is negative.
+
+    Examples
+    --------
+    >>> bars = pd.DatetimeIndex(["2024-01-05", "2024-01-08", "2024-01-09"])
+    >>> bar_after_on(lambda _: bars, "2024-01-05", 1, "Demo")
+    Timestamp('2024-01-08 00:00:00')
+    >>> bar_after_on(lambda _: bars, "2024-01-05", 5, "Demo")  # fewer follow: the last bar
+    Timestamp('2024-01-09 00:00:00')
+    """
+    if n < 0:
+        raise ValueError(f"{caller}.bar_after(): n must be non-negative, got {n}.")
+    target = pd.Timestamp(date)
+    if n == 0:
+        return target
+    calendar = bars(target)
+    # ``position`` is the first bar strictly after ``target``; ``following``
+    # bars start there, and the n-th of them is at ``position + n - 1``,
+    # cut to the last bar when fewer than ``n`` follow.
+    position = int(calendar.searchsorted(target, side="right"))
+    following = len(calendar) - position
+    if following == 0:
+        return target
+    return calendar[position + min(n, following) - 1]
 
 
 class ResumeRefused(ValueError):
@@ -571,7 +734,7 @@ class BaseDataset(Component, ABC):
 
     def _stores_text(self) -> str:
         """Return the stores read, joined, for error messages."""
-        return " + ".join(self.stores()) or "the panel held in memory"
+        return stores_text(self.stores())
 
     def copy(self) -> Self:
         """Return a copy with its own config.
@@ -975,25 +1138,9 @@ class BaseDataset(Component, ABC):
         Traceback (most recent call last):
         ValueError: DemoDataset.bar_before(): only 2 bar(s) exist before ...
         """
-        if n < 0:
-            raise ValueError(
-                f"{self.class_name}.bar_before(): n must be non-negative, "
-                f"got {n}."
-            )
-        target = pd.Timestamp(date)
-        if n == 0:
-            return target
-        calendar = self._calendar()
-        position = int(calendar.searchsorted(target, side="left"))
-        if position < n:
-            raise InsufficientHistoryError(
-                f"{self.class_name}.bar_before(): only {position} bar(s) "
-                f"exist before {date!r} in {self._stores_text()}, but {n} "
-                f"were requested.",
-                available=position,
-                requested=n,
-            )
-        return calendar[position - n]
+        return bar_before_on(
+            lambda _target: self._calendar(), date, n, self.class_name, self._stores_text
+        )
 
     def bar_after(
         self, date: "str | datetime.date | pd.Timestamp", n: int
@@ -1032,17 +1179,7 @@ class BaseDataset(Component, ABC):
         >>> ds.bar_after("2024-02-27", 5)  # the store ends on 2024-02-29
         Timestamp('2024-02-29 00:00:00')
         """
-        if n < 0:
-            raise ValueError(
-                f"{self.class_name}.bar_after(): n must be non-negative, "
-                f"got {n}."
-            )
-        target = pd.Timestamp(date)
-        calendar = self._calendar()
-        following = len(calendar) - int(calendar.searchsorted(target, side="right"))
-        if n == 0 or following == 0:
-            return target
-        return calendar[len(calendar) - following + min(n, following) - 1]
+        return bar_after_on(lambda _target: self._calendar(), date, n, self.class_name)
 
     def _calendar(self) -> pd.DatetimeIndex:
         """Return the sorted timestamps requests are answered on."""
