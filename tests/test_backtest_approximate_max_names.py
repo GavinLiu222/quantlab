@@ -1,10 +1,12 @@
-"""The approximate backtest under ``max_names`` (#329, long-short #330): a local solve of the name-count cap.
+"""The approximate backtest under ``max_names`` (#329, long-short #330, #363): a local solve of the name-count cap.
 
-The approximate backtest projects each gradient step onto the sparse
-feasible set (the names whose zeroing costs most kept, the projection run
-again on them), without momentum, so every decided book holds at most
-``max_names`` names; it is a local optimum, compared with ``run()``'s exact
-mixed-integer solve. On the mean-variance store of
+The approximate backtest starts each bar from its uncapped solution,
+projects each gradient step onto the sparse feasible set (the names whose
+zeroing costs most kept, the projection run again on them), without
+momentum, then swaps one name at a time while that lowers the objective, so
+every decided book holds at most ``max_names`` names; it is a local
+optimum, compared with ``run()``'s exact mixed-integer solve. On the
+mean-variance store of
 ``test_backtest_approximate``:
 
 - every decided bar holds at most ``max_names`` names, fully invested under
@@ -18,17 +20,23 @@ mixed-integer solve. On the mean-variance store of
   where the uncapped books hold more;
 - against ``run()`` solved by MOSEK on the same predictions (skipped
   without a licensed mixed-integer solver): the mean name overlap at least
-  80% and the value within the bound below; without a turnover penalty or
+  95% and the value within the bound below; without a turnover penalty or
   ``candidate_top_k`` each bar's objective reads no holdings, and its median
   relative gap to the exact book's is at most 5% (#326's bars); long-short,
-  the names (on the same side) and the value to the same bounds.
+  the names (on the same side) and the value to their own, looser bounds;
+- one bar of the kernel (#363) where every name sits at its cap (the
+  acceptance's 20 x 5%): against MOSEK, from cash and along a held path, the
+  objective within the bound below; from cash, the names are chosen with
+  their risk, not the best by ``mu``.
 """
 
+import cvxpy as cp
 import numpy as np
 import pytest
 import xarray as xr
 
 from quantlab.portfolio.decision_inputs import DecisionInputs
+from quantlab.portfolio.predefined.approximate._support.mean_variance_kernels import _solve_bar
 from quantlab.runs.backtest_run import BacktestRun
 from tests.test_backtest_approximate import (
     SYMBOLS,
@@ -44,14 +52,18 @@ NAMES = 5
 CAP = 0.25
 #: Uncapped, the books hold 7 to 11 names.
 RISK_AVERSION = 20.0
-#: The mean share of the run's names the approximate book holds too, over the decided bars.
-OVERLAP_BOUND = 0.8
+#: The mean share of the run's names the approximate book holds too, over the decided bars:
+#: long-only measured 100% in every case since #363 (88 to 98% before it), long-short 94 to 96%.
+OVERLAP_BOUND = 0.95
+LONG_SHORT_OVERLAP_BOUND = 0.8
 #: The median relative objective gap to the run's, on bars whose objective reads no holdings
-#: (#326's bar; measured 0 on this store).
+#: (#326's bar; measured 0 on this store, 7e-4 on the worst bar, 7% before #363).
 OBJECTIVE_BOUND = 5e-2
-#: The value's relative gap to the run's over the 68-bar window: a different name for a few
-#: bars compounds (measured 1.5e-2 to 5.1e-2 over the three cases).
-VALUE_BOUND = 6e-2
+#: The value's relative gap to the run's over the 68-bar window: long-only measured 1e-4 to
+#: 3e-4 since #363 (1.5e-2 to 5.1e-2 before it); long-short 5.7e-3 to 2.1e-2, a different name
+#: for a few bars compounding.
+VALUE_BOUND = 5e-3
+LONG_SHORT_VALUE_BOUND = 6e-2
 
 #: Long-short: 6 names at a 25% cap, where the uncapped books hold 8 to 14.
 LONG_SHORT_NAMES = 6
@@ -199,9 +211,9 @@ def test_the_names_and_value_are_within_the_bounds_of_the_exact_run(exact_case):
 def test_long_short_names_and_value_are_within_the_bounds_of_the_exact_run(exact_long_short_case):
     result, account = exact_long_short_case
 
-    assert _overlap(result, account, LONG_SHORT_NAMES).mean() >= OVERLAP_BOUND
+    assert _overlap(result, account, LONG_SHORT_NAMES).mean() >= LONG_SHORT_OVERLAP_BOUND
     run_value = result.simulation.value.values / result.simulation.value.values[0]
-    np.testing.assert_allclose(account.value.values, run_value, rtol=VALUE_BOUND, atol=0)
+    np.testing.assert_allclose(account.value.values, run_value, rtol=LONG_SHORT_VALUE_BOUND, atol=0)
 
 
 def _objective(rule, context, weights) -> float:
@@ -264,3 +276,89 @@ def test_zero_risk_books_under_a_name_cap_are_on_their_budget(mvo_store, predict
         np.testing.assert_allclose(weights, uncapped.decided_weights.values, atol=1e-12)
     else:
         assert (_names(uncapped.decided_weights) > NAMES).any()
+
+
+#: One bar of the kernel (#363): 60 candidates on 5 factors, 12 names at their 1/12 cap, so the
+#: book is the choice of names alone (the acceptance's 20 x 5%), where a plain descent from cash
+#: kept the names of its first gradient step, the best by mu.
+KERNEL_NAMES = 12
+KERNEL_CAP = 1.0 / KERNEL_NAMES
+KERNEL_SIZE = (60, 5)
+KERNEL_RISK_AVERSION = 20.0
+KERNEL_PENALTY = 2e-4
+#: The approximate book's objective above the exact one's, relative to the exact book's risk term
+#: (measured 0 on every bar, the same names; 0.48 to 2.2 before #363, 3 to 8 of the 12 names).
+KERNEL_OBJECTIVE_BOUND = 1e-2
+#: The bars of the forward path, each from the book before it.
+KERNEL_BARS = 5
+
+
+def _kernel_problem(seed=0):
+    """A bar's ``(ut, specific, bound)``; mu draws ``0.0122 * vol * z``, Grinold's."""
+    rng = np.random.default_rng(seed)
+    m, k = KERNEL_SIZE
+    ut = rng.normal(0.0, 0.006, (k, m))
+    specific = rng.uniform(0.01, 0.04, m) ** 2
+    sigma = ut.T @ ut + np.diag(specific)
+    return rng, ut, specific, sigma, float(np.linalg.eigvalsh(sigma).max())
+
+
+def _kernel_solve(mu, ut, specific, bound, anchor, penalty=KERNEL_PENALTY):
+    m = mu.shape[0]
+    settings = (KERNEL_RISK_AVERSION, penalty, True, 1.0, 1e-5, 20_000, KERNEL_NAMES)
+    out = np.empty(m)
+    iterations = _solve_bar(mu, np.full(m, KERNEL_CAP), ut, specific, bound, anchor, anchor, settings, out)
+    return out, iterations
+
+
+def _kernel_objective(w, mu, sigma, anchor, penalty=KERNEL_PENALTY):
+    return float(-mu @ w + KERNEL_RISK_AVERSION / 2 * w @ sigma @ w + penalty * np.abs(w - anchor).sum())
+
+
+def _kernel_exact(mu, sigma, anchor):
+    w, z = cp.Variable(mu.shape[0]), cp.Variable(mu.shape[0], boolean=True)
+    root = np.linalg.cholesky(sigma)
+    objective = -mu @ w + KERNEL_RISK_AVERSION / 2 * cp.sum_squares(root.T @ w) + KERNEL_PENALTY * cp.norm1(w - anchor)
+    constraints = [cp.sum(w) == 1, w >= 0, w <= KERNEL_CAP * z, cp.sum(z) <= KERNEL_NAMES]
+    cp.Problem(cp.Minimize(objective), constraints).solve(solver=SOLVER, mosek_params={"MSK_DPAR_MIO_TOL_REL_GAP": 1e-4})
+    return np.asarray(w.value)
+
+
+@needs_solver
+def test_the_kernel_books_are_within_the_bound_of_the_exact_ones_from_cash_and_held():
+    rng, ut, specific, sigma, bound = _kernel_problem()
+    vol = np.sqrt(np.diag(sigma))
+    z = rng.normal(size=vol.shape[0])
+    anchor = np.zeros(vol.shape[0])
+    for _ in range(KERNEL_BARS):
+        mu = 0.0122 * vol * z
+        found, iterations = _kernel_solve(mu, ut, specific, bound, anchor)
+        exact = _kernel_exact(mu, sigma, anchor)
+
+        assert iterations > 0
+        assert (found > 1e-9).sum() <= KERNEL_NAMES
+        np.testing.assert_allclose(found.sum(), 1.0, atol=1e-9)
+        risk = KERNEL_RISK_AVERSION / 2 * exact @ sigma @ exact
+        gap = _kernel_objective(found, mu, sigma, anchor) - _kernel_objective(exact, mu, sigma, anchor)
+        assert gap <= KERNEL_OBJECTIVE_BOUND * risk
+        anchor = found
+        z = 0.7 * z + 0.3 * rng.normal(size=z.shape[0])
+
+
+def test_from_cash_the_kernel_chooses_names_with_their_risk():
+    # The 12 best predictions are the 12 riskiest names: the best names by mu are not the best book.
+    _, ut, specific, sigma, bound = _kernel_problem(seed=1)
+    vol = np.sqrt(np.diag(sigma))
+    order = np.argsort(-vol)
+    mu = np.empty(vol.shape[0])
+    mu[order] = 0.0122 * vol[order] * np.linspace(1.5, -1.5, vol.shape[0])
+    cash = np.zeros(vol.shape[0])
+    found, _ = _kernel_solve(mu, ut, specific, bound, cash, penalty=0.0)
+    by_mu = np.zeros(vol.shape[0])
+    by_mu[np.argsort(-mu)[:KERNEL_NAMES]] = KERNEL_CAP
+
+    # Measured 2 of the 12 after #363, all 12 before it.
+    held = set(np.flatnonzero(found > 1e-9))
+    assert len(held & set(np.flatnonzero(by_mu))) < KERNEL_NAMES
+    assert found @ sigma @ found < by_mu @ sigma @ by_mu
+    assert _kernel_objective(found, mu, sigma, cash, 0.0) < _kernel_objective(by_mu, mu, sigma, cash, 0.0)

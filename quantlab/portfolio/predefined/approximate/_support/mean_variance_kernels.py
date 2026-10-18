@@ -25,9 +25,10 @@ trial step). The prox is the capped simplex (long-only) or ``{sum(w) = 0,
 holdings; both are found by safeguarded Newton steps on their multipliers.
 With a name-count cap the prox keeps the names whose zeroing costs it
 most (long and short names counted together) and the momentum is off
-(``_solve_bar``). A bar stops when its gradient-mapping residual is at most
-``tolerance`` times the largest entry of its starting gradient, or after
-``max_iterations``.
+(``_descend``); the bar starts from its uncapped solution and ends with a
+swap search (``_solve_bar``, #363). A bar stops when its gradient-mapping
+residual is at most ``tolerance`` times the largest entry of its starting
+gradient, or after ``max_iterations``.
 
 The parallel driver uses numba's thread pool: ``numba.set_num_threads(n)``
 or ``NUMBA_NUM_THREADS`` caps it (on the training server, keep it within the
@@ -359,12 +360,146 @@ def _objective(mu, weights, covariance_weights, risk_aversion):
 
 
 @njit(cache=True)
+def _full_objective(mu, weights, covariance_weights, anchor, risk_aversion, penalty):
+    """The bar's objective with its turnover penalty: ``_objective`` plus ``penalty * |w - anchor|_1``."""
+    value = _objective(mu, weights, covariance_weights, risk_aversion)
+    for i in range(mu.shape[0]):
+        value += penalty * abs(weights[i] - anchor[i])
+    return value
+
+
+@njit(cache=True)
+def _best_swap(mu, cap, ut, diagonal, weights, product, anchor, risk_aversion, penalty):
+    """The transfer of one held name's whole weight to one unheld candidate that lowers the objective most.
+
+    Moving ``d = w_i`` from ``i`` to ``j`` keeps the budget, the gross and
+    the name count, and changes the objective by ``d (mu_i - mu_j) +
+    risk_aversion (d ((Sigma w)_j - (Sigma w)_i) + d^2 / 2 (Sigma_ii +
+    Sigma_jj - 2 Sigma_ij)) + penalty (|a_i| - |d - a_i| + |d - a_j| -
+    |a_j|)``, ``Sigma_ij`` the factor part ``u_i' u_j`` (``product`` is
+    ``Sigma w``, ``diagonal`` the variances). Returns ``(change, i, j)``,
+    ``i`` -1 when no candidate can take a held weight.
+    """
+    m = mu.shape[0]
+    k = ut.shape[0]
+    best = 0.0
+    best_i = -1
+    best_j = -1
+    for i in range(m):
+        d = weights[i]
+        if d == 0.0:
+            continue
+        out_of_i = penalty * (abs(anchor[i]) - abs(d - anchor[i]))
+        for j in range(m):
+            if weights[j] != 0.0 or cap[j] < abs(d):
+                continue
+            cross = 0.0
+            for f in range(k):
+                cross += ut[f, i] * ut[f, j]
+            change = (
+                d * (mu[i] - mu[j])
+                + risk_aversion * (d * (product[j] - product[i]) + 0.5 * d * d * (diagonal[i] + diagonal[j] - 2.0 * cross))
+                + out_of_i
+                + penalty * (abs(d - anchor[j]) - abs(anchor[j]))
+            )
+            if best_i < 0 or change < best:
+                best = change
+                best_i = i
+                best_j = j
+    return best, best_i, best_j
+
+
+@njit(cache=True)
 def _solve_bar(mu, cap, ut, specific, bound, start, anchor, settings, out):
     """One bar's weights into ``out`` from ``start``; returns the iterations, negative when it stopped unconverged.
 
     ``bound`` is the curvature bound on the budget's tangent space;
     ``settings`` is ``(risk_aversion, penalty, long_only, gross, tolerance,
     max_iterations, max_names)``, ``max_names`` 0 for no name-count cap.
+
+    Without ``max_names`` this is ``_descend``. With it, a local search
+    (#363):
+
+    1. the bar's problem is solved first without the cap, from ``start``,
+       and the sparse descent starts from that book, so the first names are
+       chosen with their risk, not by ``mu`` alone; a ``start`` holding
+       names (the holdings) is descended from too, and the lower of the two
+       books, turnover penalty included, kept;
+    2. then the best single swap (``_best_swap``: one held name's weight to
+       one unheld candidate) is taken while it lowers the objective, each
+       swapped book descended again and the lower of the two kept, for at
+       most ``2 * max_names`` swaps.
+
+    The iterations are every descent's; negative when a kept book's descent
+    stopped unconverged.
+    """
+    risk_aversion, penalty, long_only, gross, tolerance, max_iterations, max_names = settings
+    if max_names <= 0:
+        return _descend(mu, cap, ut, specific, bound, start, anchor, settings, out)
+    m = mu.shape[0]
+    k = ut.shape[0]
+    load = np.empty(k)
+    uncapped = (risk_aversion, penalty, long_only, gross, tolerance, max_iterations, 0)
+    continuous = np.empty(m)
+    found = _descend(mu, cap, ut, specific, bound, start, anchor, uncapped, continuous)
+    total = abs(found)
+    found = _descend(mu, cap, ut, specific, bound, continuous, anchor, settings, out)
+    total += abs(found)
+    converged = found > 0
+    product = np.empty(m)
+    _covariance_times(ut, specific, out, load, product)
+    value = _full_objective(mu, out, product, anchor, risk_aversion, penalty)
+    holds = False
+    for i in range(m):
+        if start[i] != 0.0:
+            holds = True
+            break
+    trial = np.empty(m)
+    trial_product = np.empty(m)
+    if holds:
+        found = _descend(mu, cap, ut, specific, bound, start, anchor, settings, trial)
+        total += abs(found)
+        _covariance_times(ut, specific, trial, load, trial_product)
+        trial_value = _full_objective(mu, trial, trial_product, anchor, risk_aversion, penalty)
+        if trial_value < value:
+            out[:] = trial
+            product[:] = trial_product
+            value = trial_value
+            converged = found > 0
+
+    diagonal = np.empty(m)
+    for i in range(m):
+        acc = specific[i]
+        for f in range(k):
+            acc += ut[f, i] * ut[f, i]
+        diagonal[i] = acc
+    swapped = np.empty(m)
+    for _ in range(2 * max_names):
+        change, i, j = _best_swap(mu, cap, ut, diagonal, out, product, anchor, risk_aversion, penalty)
+        if i < 0 or not change < -1e-12 * max(abs(value), 1e-300):
+            break
+        swapped[:] = out
+        swapped[j] = swapped[i]
+        swapped[i] = 0.0
+        found = _descend(mu, cap, ut, specific, bound, swapped, anchor, settings, trial)
+        total += abs(found)
+        _covariance_times(ut, specific, trial, load, trial_product)
+        trial_value = _full_objective(mu, trial, trial_product, anchor, risk_aversion, penalty)
+        if trial_value < value + change:
+            out[:] = trial
+            product[:] = trial_product
+            value = trial_value
+            converged = found > 0
+        else:
+            out[:] = swapped
+            _covariance_times(ut, specific, out, load, product)
+            value = _full_objective(mu, out, product, anchor, risk_aversion, penalty)
+    return total if converged else -total
+
+
+@njit(cache=True)
+def _descend(mu, cap, ut, specific, bound, start, anchor, settings, out):
+    """One descent of a bar into ``out`` from ``start``; returns the iterations, negative when it stopped unconverged.
 
     With ``max_names`` every prox is the sparse one, the first
     iterate is a projected gradient step from ``start`` (so a start of
@@ -567,7 +702,7 @@ def _solve_independent_bar(b, problem, rule, stopping, weights, iterations):
         return
     row = np.empty(m)
     settings = (risk_aversion, 0.0, long_only, gross, tolerance, max_iterations, max_names)
-    # Under a cap from cash, whose first step ranks the names by mu; otherwise from the caps.
+    # Under a cap from cash (``_solve_bar`` solves it uncapped first); otherwise from the caps.
     start = no_holdings if max_names > 0 else cap
     iterations[b] = _solve_bar(mu[b], cap, ut[b], specific[b], bound[b], start, no_holdings, settings, row)
     weights[b] = row

@@ -59,7 +59,7 @@ _MEAN_VARIANCE_FIELDS = {
     "exposure_factors": IGNORED,
     "exposure_bounds": DEFAULT,
     "solver": IGNORED,
-    # Solved locally, by projected gradient on the sparse set.
+    # Solved locally: projected gradient on the sparse set from the uncapped book, then a swap search.
     "max_names": SUPPORTED,
     # A mixed-integer solver's gap; the approximate backtest solves no mixed-integer program.
     "mip_gap": IGNORED,

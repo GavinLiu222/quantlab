@@ -244,10 +244,12 @@ def decide(
     0``, ``|w|_1 <= 1``, ``|w| <= weight_cap``.
 
     With ``max_names`` every bar's book holds at most that many names, long
-    and short counted together: each projection keeps the names whose
-    zeroing costs it most and projects again on them, the first step ranks
-    the names by the gradient at the start (the holdings, or cash for bars
-    solved at once), and the steps have no momentum. That is a local
+    and short counted together: each bar is first solved without the cap,
+    and the capped descent starts from that book (and from the holdings,
+    the better book kept); each projection keeps the names whose zeroing
+    costs it most and projects again on them, the steps have no momentum,
+    and a swap search then moves one held name's weight to an unheld
+    candidate while that lowers the objective (#363). That is a local
     optimum of the mixed-integer program a backtest run solves exactly.
 
     With a ``turnover_penalty`` or ``candidate_top_k`` the bars are solved
