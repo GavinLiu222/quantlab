@@ -5,7 +5,8 @@ directory (``QUANTLAB_KUNQUANT_CACHE``), keyed by the graph, its compiler
 options, the C++ compiler and the KunQuant installation. Here the C++ step
 (``_compile_sources``) is counted: the same graph built twice compiles once,
 in the same process and from a fresh process cache; a changed graph or
-option compiles again; an entry left unfinished or damaged on disk is
+option compiles again, and so does a changed parameter of any quantlab
+operator (``kunquant_ts``, ``kunquant_cs``); an entry left unfinished or damaged on disk is
 compiled again rather than loaded; and the outputs are the same whether
 the cache is used or not.
 """
@@ -14,10 +15,11 @@ import numpy as np
 import pytest
 from KunQuant.Driver import KunCompilerConfig
 from KunQuant.jit import cfake
-from KunQuant.Op import Builder, Input, Output
+from KunQuant.Op import Builder, Input, OpBase, Output
 from KunQuant.Stage import Function
 
 import quantlab.factor.kunquant_compile as kunquant_compile
+from quantlab.factor import kunquant_cs, kunquant_ts
 from quantlab.factor.kunquant import BATCH_OPTIONS, run_batch_graph
 from quantlab.factor.kunquant_compile import CACHE_ENV, compile_graphs, graph_key
 
@@ -125,3 +127,108 @@ def test_an_empty_cache_variable_writes_nothing(compiles, monkeypatch, tmp_path)
     monkeypatch.setenv(CACHE_ENV, "")
     compile_graphs(_entry(), "Scaled")
     assert not (tmp_path / "cache").exists()
+
+
+# Each quantlab operator built twice, the second time with one parameter
+# changed: the parameter is in the op's attributes, so in ``str(Function)``
+# and the key. ``x, y, w, u, s, i, e`` are inputs (value, second value,
+# weight, universe, size, industry, eligible).
+_EW = ("EWSum", "EWMean", "EWVar", "EWCov", "EWBeta", "EWAlpha", "EWResidualStd")
+
+
+def _ew(name: str, window: int, half_life: float):
+    op = getattr(kunquant_ts, name)
+    if name in ("EWSum", "EWMean", "EWVar"):
+        return lambda x, y, *_: op(x, window, half_life)
+    return lambda x, y, *_: op(y, x, window, half_life)
+
+
+_CHANGED_PARAMETER = {
+    "WindowedZScore window": (
+        lambda x, *_: kunquant_ts.WindowedZScore(x, 20),
+        lambda x, *_: kunquant_ts.WindowedZScore(x, 21),
+    ),
+    **{f"{name} window": (_ew(name, 60, 20.0), _ew(name, 61, 20.0)) for name in _EW},
+    **{f"{name} half_life": (_ew(name, 60, 20.0), _ew(name, 60, 21.0)) for name in _EW},
+    "CMRA months": (lambda x, *_: kunquant_ts.CMRA(x, 12, 21), lambda x, *_: kunquant_ts.CMRA(x, 11, 21)),
+    "CMRA month_length": (lambda x, *_: kunquant_ts.CMRA(x, 12, 21), lambda x, *_: kunquant_ts.CMRA(x, 12, 20)),
+    **{
+        f"{name} {bound}": (
+            lambda x, *_, op=getattr(kunquant_cs, name): op(x, 0.01, 0.99),
+            lambda x, *_, op=getattr(kunquant_cs, name), bound=bound: op(
+                x, 0.02 if bound == "lower" else 0.01, 0.98 if bound == "upper" else 0.99
+            ),
+        )
+        for name in ("CrossSectionalWinsorize", "CrossSectionalTrim")
+        for bound in ("lower", "upper")
+    },
+    "RenormalizedCombine weights": (
+        lambda x, y, *_: kunquant_cs.RenormalizedCombine([x, y], [0.75, 0.25]),
+        lambda x, y, *_: kunquant_cs.RenormalizedCombine([x, y], [0.7, 0.3]),
+    ),
+    "CrossSectionalTopN n": (
+        lambda x, *_: kunquant_cs.CrossSectionalTopN(x, 100),
+        lambda x, *_: kunquant_cs.CrossSectionalTopN(x, 50),
+    ),
+    "CrossSectionalSigmaClip data_error": (
+        lambda x, y, w, u, *_: kunquant_cs.CrossSectionalSigmaClip(x, u, 10.0, 3.0),
+        lambda x, y, w, u, *_: kunquant_cs.CrossSectionalSigmaClip(x, u, 9.0, 3.0),
+    ),
+    "CrossSectionalSigmaClip clip": (
+        lambda x, y, w, u, *_: kunquant_cs.CrossSectionalSigmaClip(x, u, 10.0, 3.0),
+        lambda x, y, w, u, *_: kunquant_cs.CrossSectionalSigmaClip(x, u, 10.0, 2.5),
+    ),
+    **{
+        f"CrossSectionalNeutralize {flag}": (
+            lambda x, y, w, u, s, i, e: kunquant_cs.CrossSectionalNeutralize(x, s, i),
+            lambda x, y, w, u, s, i, e, flag=flag: kunquant_cs.CrossSectionalNeutralize(x, s, i, **{flag: False}),
+        )
+        for flag in ("use_industry", "use_size")
+    },
+    **{
+        f"CrossSectionalIndustrySizeFill {flag}": (
+            lambda x, y, w, u, s, i, e: kunquant_cs.CrossSectionalIndustrySizeFill(x, s, i, w, u, e),
+            lambda x, y, w, u, s, i, e, flag=flag: kunquant_cs.CrossSectionalIndustrySizeFill(
+                x, s, i, w, u, e, **{flag: False}
+            ),
+        )
+        for flag in ("use_industry", "use_size")
+    },
+}
+
+#: quantlab operators whose only arguments are other ops.
+_WITHOUT_PARAMETERS = {
+    "CrossSectionalZScore",
+    "CrossSectionalWeightedMean",
+    "CapWeightedStandardize",
+    "CrossSectionalWLSResidual",
+}
+
+
+def _operator_key(make) -> str:
+    b = Builder()
+    with b:
+        Output(make(*(Input(name) for name in "xywusie")), "out")
+    config = KunCompilerConfig(input_layout="TS", output_layout="TS", options=dict(BATCH_OPTIONS))
+    return graph_key([("Op", Function(b.ops), config)], "Op", cfake.CppCompilerConfig())
+
+
+@pytest.mark.parametrize("case", sorted(_CHANGED_PARAMETER))
+def test_a_changed_operator_parameter_has_its_own_key(case: str) -> None:
+    before, after = _CHANGED_PARAMETER[case]
+    assert _operator_key(before) == _operator_key(before)  # rebuilt, same graph
+    assert _operator_key(after) != _operator_key(before)
+
+
+def test_every_quantlab_operator_has_a_key_case() -> None:
+    operators = {
+        name
+        for module in (kunquant_ts, kunquant_cs)
+        for name, value in vars(module).items()
+        if isinstance(value, type)
+        and issubclass(value, OpBase)
+        and value.__module__ == module.__name__
+        and not name.startswith("_")
+    }
+    covered = {case.split()[0] for case in _CHANGED_PARAMETER} | _WITHOUT_PARAMETERS
+    assert operators - covered == set(), "add a case to _CHANGED_PARAMETER for each new operator parameter"

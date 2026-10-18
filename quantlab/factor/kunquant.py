@@ -138,7 +138,8 @@ def run_batch_graph(
 
     Examples
     --------
-    >>> with Builder() as b:
+    >>> b = Builder()
+    >>> with b:
     ...     Output(Input("x") * 2.0, "y")
     >>> run_batch_graph("Double", Function(b.ops), {"x": x}, times, symbols, 2)["y"].shape
     (3, 8)
