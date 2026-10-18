@@ -190,10 +190,28 @@ def test_samples_are_qlibs_cells_shuffled_and_the_last_training_batch_dropped(tm
     assert isinstance(dataset, SymbolSequenceDataset)
     train = head._dataloader(dataset, training=True)
     evaluation = head._dataloader(dataset, training=False)
-    assert (train.batch_size, train.drop_last) == (16, True)
-    assert (evaluation.batch_size, evaluation.drop_last) == (16, False)
+    assert (train.sampler.batch_size, train.sampler.drop_last, train.sampler.shuffle) == (16, True, True)
+    assert (evaluation.sampler.batch_size, evaluation.sampler.drop_last, evaluation.sampler.shuffle) == (16, False, False)
     assert len(train) == len(dataset) // 16
     assert len(evaluation) == -(-len(dataset) // 16)
+
+
+def test_a_batch_is_gathered_whole_and_matches_the_collated_cells(tmp_path):
+    features = _features()
+    head = _model(tmp_path, features, _label_of(features), cls=LSTMRegressor, hyperparameters=SMALL)
+    panel = head._training_panel()
+    head._fill_target(panel, np.arange(10), training=True)
+    dataset = head._dataset(panel, np.arange(10), training=True)
+    batches = list(head._dataloader(dataset, training=True))
+    seen = torch.cat([batch.where[0] * 1000 + batch.where[1] for batch in batches])
+    assert len(seen) == len(dataset) // 16 * 16 and len(set(seen.tolist())) == len(seen)
+    first = batches[0]
+    collated = torch.utils.data.default_collate(
+        [dataset[int(i)] for i in torch.nonzero(
+            (dataset.times[:, None] == first.where[0]) & (dataset.symbols[:, None] == first.where[1]))[:, 0]])
+    order = torch.argsort(first.where[0] * 1000 + first.where[1])
+    torch.testing.assert_close(first.x[order], collated.x, equal_nan=True)
+    torch.testing.assert_close(first.y[order], collated.y)
 
 
 def test_a_training_set_smaller_than_a_batch_keeps_its_batch(tmp_path):

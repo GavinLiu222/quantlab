@@ -13,7 +13,8 @@ Two datasets ship:
   symbol present at that bar with its last ``window_bars`` bars.
 - ``SymbolSequenceDataset``, Qlib style: one item per ``(bar, symbol)``
   cell, the symbol's last ``window_bars`` bars as ``[N, F]``, batched by the
-  default collation to ``[B, N, F]``.
+  default collation to ``[B, N, F]``, or gathered a whole batch at a time by
+  ``batch_loader``.
 
 ``prefetch`` readies a loader's next batches on the model's device in a
 background thread, so gathering and copying the next batch overlaps the
@@ -29,7 +30,7 @@ from typing import NamedTuple
 
 import numpy as np
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import DataLoader, Dataset, Sampler
 
 from quantlab.model.collected_panel import FEATURE_DTYPE
 
@@ -477,7 +478,9 @@ class SymbolSequenceDataset(Dataset):
     samples, ``x`` shaped ``[B, 1, F]``.
 
     Batch it with a ``batch_size`` (Qlib uses 800); ``batch_size=None``
-    would feed single cells.
+    would feed single cells. ``batch_loader`` over ``IndexBatches`` is
+    faster: it gathers each batch whole, where the default collation splits
+    the gathered block into items and stacks them back.
 
     Parameters
     ----------
@@ -544,8 +547,20 @@ class SymbolSequenceDataset(Dataset):
             y_raw=panel.y_raw[t, s], where=(t, s),
         )
 
-    def __getitem__(self, i: int) -> Batch:
-        """Return cell ``i`` as a ``Batch`` with ``x`` shaped ``[N, F]``."""
+    def __getitem__(self, i) -> Batch:
+        """Return cell ``i`` as a ``Batch`` with ``x`` shaped ``[N, F]``, or a batch of cells.
+
+        Given a tensor, array or list of positions instead of one, the cells
+        are gathered with one indexing call and returned as one batched
+        ``Batch`` (``x [B, N, F]``), which is what ``batch_loader`` feeds.
+
+        Examples
+        --------
+        >>> tuple(dataset[torch.tensor([0, 3])].x.shape)
+        (2, 2, 1)
+        """
+        if isinstance(i, (torch.Tensor, np.ndarray, list, tuple)):
+            return self._gather(i)
         return self.__getitems__([i])[0]
 
     def __getitems__(self, indices) -> list[Batch]:
@@ -567,3 +582,98 @@ class SymbolSequenceDataset(Dataset):
                 batch.x, batch.y, batch.mask, batch.y_raw, *batch.where
             )
         ]
+
+
+class IndexBatches(Sampler):
+    """Batches of dataset positions, each an int64 tensor, for a dataset that gathers a batch at once.
+
+    Each pass draws a fresh order: positions in order, shuffled
+    (``torch.randperm``), or ``num_samples`` drawn with replacement
+    (``torch.randint``), from ``generator``; consecutive ``batch_size``
+    positions form a batch, and ``drop_last`` drops a last batch shorter
+    than ``batch_size``.
+
+    Parameters
+    ----------
+    size : int
+        Number of items in the dataset.
+    batch_size : int
+        Positions per batch; at least 1.
+    shuffle : bool, default False
+        Draw a new random order every pass.
+    drop_last : bool, default False
+        Drop a last incomplete batch.
+    replacement : bool, default False
+        Draw ``num_samples`` positions with replacement (implies shuffling).
+    num_samples : int, optional
+        Positions drawn per pass with replacement; ``size`` when unset.
+    generator : torch.Generator, optional
+        Source of the random order.
+
+    Raises
+    ------
+    ValueError
+        If ``batch_size`` is below 1.
+
+    Examples
+    --------
+    >>> [b.tolist() for b in IndexBatches(5, 2)]
+    [[0, 1], [2, 3], [4]]
+    >>> len(IndexBatches(5, 2, drop_last=True))
+    2
+    """
+
+    def __init__(self, size: int, batch_size: int, *, shuffle: bool = False, drop_last: bool = False,
+                 replacement: bool = False, num_samples: int | None = None,
+                 generator: torch.Generator | None = None):
+        """Build the sampler; see the class docstring for parameters."""
+        if batch_size < 1:
+            raise ValueError(f"batch_size must be at least 1, got {batch_size}")
+        self.size = int(size)
+        self.batch_size = int(batch_size)
+        self.shuffle = bool(shuffle)
+        self.drop_last = bool(drop_last)
+        self.replacement = bool(replacement)
+        self.num_samples = self.size if num_samples is None else int(num_samples)
+        self.generator = generator
+
+    def _count(self) -> int:
+        """Positions drawn per pass."""
+        return self.num_samples if self.replacement else self.size
+
+    def __len__(self) -> int:
+        """Batches per pass."""
+        count = self._count()
+        return count // self.batch_size if self.drop_last else -(-count // self.batch_size)
+
+    def __iter__(self) -> Iterator[torch.Tensor]:
+        """Yield each batch's positions."""
+        if self.replacement:
+            order = torch.randint(self.size, (self.num_samples,), generator=self.generator)
+        elif self.shuffle:
+            order = torch.randperm(self.size, generator=self.generator)
+        else:
+            order = torch.arange(self.size)
+        for start in range(0, len(order), self.batch_size):
+            chunk = order[start : start + self.batch_size]
+            if self.drop_last and len(chunk) < self.batch_size:
+                return
+            yield chunk
+
+
+def batch_loader(dataset: Dataset, sampler: IndexBatches, *, num_workers: int = 0,
+                 pin_memory: bool = False) -> DataLoader:
+    """A ``DataLoader`` that hands each batch of positions to ``dataset[positions]`` whole.
+
+    The dataset gathers the batch itself (as ``SymbolSequenceDataset``
+    does), so nothing is split into items and collated back: the loader
+    runs with ``batch_size=None`` over ``sampler``'s batches.
+
+    Examples
+    --------
+    >>> loader = batch_loader(dataset, IndexBatches(len(dataset), 3))
+    >>> tuple(next(iter(loader)).x.shape)
+    (3, 2, 1)
+    """
+    return DataLoader(dataset, batch_size=None, sampler=sampler, num_workers=num_workers,
+                      pin_memory=pin_memory, persistent_workers=bool(num_workers))

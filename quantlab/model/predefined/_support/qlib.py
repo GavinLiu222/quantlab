@@ -21,7 +21,7 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 
 from quantlab.model.library_model import TRAINING_TARGETS, LibraryModel
-from quantlab.model.torch_data import SymbolSequenceDataset, TrainingPanel
+from quantlab.model.torch_data import IndexBatches, SymbolSequenceDataset, TrainingPanel, batch_loader
 from quantlab.model.torch_model import TorchModel
 from quantlab.model.torch_training import cs_rank_norm, masked_mse
 
@@ -109,27 +109,31 @@ class QlibSequenceHead(TorchModel):
     def _dataloader(self, dataset: Dataset, training: bool) -> DataLoader:
         """Batches of ``batch_size`` cells, shuffled and the last one dropped in training.
 
+        Each batch is gathered whole (``batch_loader`` over ``IndexBatches``).
         A training set smaller than one batch keeps its only batch, so a
         tiny fit still takes a step.
 
         Examples
         --------
         >>> loader = head._dataloader(dataset, training=True)
-        >>> loader.batch_size, loader.drop_last
+        >>> loader.sampler.batch_size, loader.sampler.drop_last
         (4, True)
         """
-        loader = super()._dataloader(dataset, training)  # its workers, generator and pinning
         batch_size = int(self._setting("batch_size"))
-        return DataLoader(
-            dataset,
-            batch_size=batch_size,
-            shuffle=training and len(dataset) > 0,
-            num_workers=loader.num_workers,
-            generator=loader.generator,
-            drop_last=training and len(dataset) > batch_size,
-            pin_memory=loader.pin_memory,
-            persistent_workers=loader.persistent_workers,
+        sampler = IndexBatches(
+            len(dataset), batch_size, shuffle=training,
+            drop_last=training and len(dataset) > batch_size, generator=self._generator(),
         )
+        return self._batch_loader(dataset, sampler)
+
+    def _generator(self) -> torch.Generator:
+        """A generator seeded with ``config.random_seed``, as the default loader's."""
+        return torch.Generator().manual_seed(self.config.random_seed)
+
+    def _batch_loader(self, dataset: Dataset, sampler: IndexBatches) -> DataLoader:
+        """``batch_loader`` with the default loader's workers and pinning."""
+        loader = super()._dataloader(dataset, training=False)
+        return batch_loader(dataset, sampler, num_workers=loader.num_workers, pin_memory=loader.pin_memory)
 
     def _init_optim(self, model: torch.nn.Module):
         """Adam at ``lr`` with ``weight_decay``."""

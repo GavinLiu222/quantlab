@@ -9,9 +9,10 @@ of rows drawn with replacement, a validation pass every ``eval_steps`` steps,
 
 import torch
 from torch import nn
-from torch.utils.data import DataLoader, Dataset, RandomSampler
+from torch.utils.data import DataLoader, Dataset
 
 from quantlab.model.predefined._support.qlib import QlibSequenceHead
+from quantlab.model.torch_data import IndexBatches
 
 
 class MLPNet(nn.Module):
@@ -146,17 +147,12 @@ class MLPRegressor(QlibSequenceHead):
         """
         if not training or len(dataset) == 0:
             return super()._dataloader(dataset, training)
-        loader = super()._dataloader(dataset, training)
         batch_size = int(self._setting("batch_size"))
-        sampler = RandomSampler(
-            dataset, replacement=True,
-            num_samples=int(self._setting("eval_steps")) * batch_size,
-            generator=loader.generator,
+        sampler = IndexBatches(
+            len(dataset), batch_size, replacement=True,
+            num_samples=int(self._setting("eval_steps")) * batch_size, generator=self._generator(),
         )
-        return DataLoader(
-            dataset, batch_size=batch_size, sampler=sampler, num_workers=loader.num_workers,
-            pin_memory=loader.pin_memory, persistent_workers=loader.persistent_workers,
-        )
+        return self._batch_loader(dataset, sampler)
 
     def _on_fit_start(self) -> None:
         """Reset the stopping state and start Qlib's ``ReduceLROnPlateau``."""

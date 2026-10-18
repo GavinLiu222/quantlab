@@ -27,8 +27,10 @@ from torch.utils.data import DataLoader
 from quantlab.model.torch_data import (
     Batch,
     CrossSectionDataset,
+    IndexBatches,
     SymbolSequenceDataset,
     TrainingPanel,
+    batch_loader,
 )
 
 T, S, F, L = 6, 4, 2, 1
@@ -219,3 +221,36 @@ def test_present_is_computed_bar_block_by_bar_block_as_on_the_whole_array(monkey
     panel = TrainingPanel.from_arrays(x, timestamps=np.arange(11), symbols=np.arange(5))
 
     assert panel.present.numpy().tolist() == np.isfinite(x).any(axis=-1).tolist()
+
+
+# ---------------------------------------------------------------------------
+# IndexBatches and batch_loader
+# ---------------------------------------------------------------------------
+
+
+def test_index_batches_cover_every_position_once_per_pass_in_batches():
+    sampler = IndexBatches(10, 4, shuffle=True, generator=torch.Generator().manual_seed(0))
+    first, second = [torch.cat(list(sampler)).tolist() for _ in range(2)]
+    assert sorted(first) == list(range(10)) == sorted(second) and first != second
+    assert [len(b) for b in sampler] == [4, 4, 2] and len(sampler) == 3
+    dropping = IndexBatches(10, 4, drop_last=True)
+    assert [b.tolist() for b in dropping] == [[0, 1, 2, 3], [4, 5, 6, 7]] and len(dropping) == 2
+
+
+def test_index_batches_with_replacement_draw_num_samples():
+    sampler = IndexBatches(3, 4, replacement=True, num_samples=10, generator=torch.Generator().manual_seed(1))
+    drawn = torch.cat(list(sampler))
+    assert len(drawn) == 10 and set(drawn.tolist()) <= {0, 1, 2} and len(sampler) == 3
+
+
+def test_batch_loader_gathers_the_same_cells_as_the_default_collation():
+    x = np.arange(24.0).reshape(4, 3, 2)
+    x[0, 1] = np.nan
+    panel = TrainingPanel.from_arrays(x, timestamps=np.arange(4), symbols=np.arange(3))
+    dataset = SymbolSequenceDataset(panel, bars=[1, 2, 3], window_bars=2, training=False)
+    gathered = list(batch_loader(dataset, IndexBatches(len(dataset), 4)))
+    collated = list(DataLoader(dataset, batch_size=4))
+    assert len(gathered) == len(collated)
+    for a, b in zip(gathered, collated):
+        torch.testing.assert_close(a.x, b.x, equal_nan=True)
+        assert torch.equal(a.where[0], b.where[0]) and torch.equal(a.where[1], b.where[1])
