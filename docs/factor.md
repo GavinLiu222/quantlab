@@ -339,6 +339,40 @@ Frozen({'timestamp': 2, 'symbol': 2})
 Frozen({'symbol': 2, 'timestamp': 2})
 ```
 
+A factor answers for its own bars, the *factor calendar*, through `calendar(start, end)`, `bar_before(date, n)` and `bar_after(date, n)`, with the signatures, rules and errors of the dataset methods of the same names (ADR 0051). A factor that is not resampled answers with its dataset's calendar. A resampled factor answers with its resampled bars: `calendar` is the dataset's bars over the range bucketed with the dataset's `resample_labels`, each bar once, labelled as the resampled panel labels them; `bar_before` and `bar_after` move by those bars, so a daily factor computed from minute bars moves by trading days, and `InsufficientHistoryError.available` counts them. The factor's own `warmup_bars` is still counted on its dataset's calendar, since it says how much input to read. Only timestamps are read.
+
+```python
+>>> minute.calendar("2024-01-02", "2024-01-03")
+DatetimeIndex(['2024-01-02 00:00:00', '2024-01-02 00:01:00',
+               '2024-01-02 00:02:00', '2024-01-02 00:03:00',
+               '2024-01-03 00:00:00', '2024-01-03 00:01:00',
+               '2024-01-03 00:02:00', '2024-01-03 00:03:00'],
+              dtype='datetime64[ns]', freq=None)
+>>> daily.calendar("2024-01-02", "2024-01-03")
+DatetimeIndex(['2024-01-02', '2024-01-03'], dtype='datetime64[ns]', freq=None)
+>>> minute.bar_before("2024-01-03", 1), daily.bar_before("2024-01-03", 1)
+(Timestamp('2024-01-02 00:03:00'), Timestamp('2024-01-02 00:00:00'))
+>>> minute.bar_after("2024-01-02", 1), daily.bar_after("2024-01-02", 1)
+(Timestamp('2024-01-02 00:01:00'), Timestamp('2024-01-03 00:00:00'))
+>>> daily.bar_after("2024-01-02", 5)  # fewer bars follow: the last one
+Timestamp('2024-01-03 00:00:00')
+>>> minute.bar_before("2024-01-03", 2)
+Timestamp('2024-01-02 00:02:00')
+>>> daily.bar_before("2024-01-03", 2)
+Traceback (most recent call last):
+quantlab.dataset.base.InsufficientHistoryError: Momentum.bar_before(): only 1 bar(s) exist before '2024-01-03' in data/minute_klines.zarr resampled to '1d', but 2 were requested.
+```
+
+A wrapper answers with the calendar of the factor it wraps, never with its own dataset's: a `RosterFactor`, `MembershipMaskedFactor` or `StartClippedFactor` over `daily` gives the daily bars although its `config.dataset` is the minute dataset, as do `IntradayAverage` and `IntradayComposite` over a resampled `IntradayStats`, and `NeutralizedFactor` answers with the neutralized factor's bars, not its exposures dataset's. A factor over a merged dataset answers with the union calendar.
+
+```python
+>>> view = RosterFactor(RosterConfig(factor=daily, roster=SpotKlineDataset(minute_config)))
+>>> view.calendar("2024-01-02", "2024-01-03")
+DatetimeIndex(['2024-01-02', '2024-01-03'], dtype='datetime64[ns]', freq=None)
+>>> len(view.config.dataset.calendar("2024-01-02", "2024-01-03"))
+8
+```
+
 To compute a factor on already-resampled bars instead, resample the dataset and give the factor the resampled dataset.
 
 ### Compute a label
@@ -520,6 +554,7 @@ A factor view (`quantlab.factor.view.FactorView`) wraps another factor and reads
 | `store_path` | `None`: a view keeps no store of its own |
 | `store_uses()` | the wrapped factor's store, `reads`, the view as its handle |
 | `store_range()` | the wrapped factor's: the store `read` reads |
+| `calendar`, `bar_before`, `bar_after` | the wrapped factor's: a view's panel is on the wrapped factor's bars, not on its dataset's (ADR 0051) |
 | `owns_store()` | `False`: only the owner writes a store (ADR 0029) |
 | `stored_symbols()`, `output_symbols()` | the wrapped factor's, those the view keeps |
 | `read`, `compute` | the wrapped factor's, on the kept symbols, then changed by the view |

@@ -60,8 +60,10 @@ from quantlab.utils.resample import (
 class InsufficientHistoryError(ValueError):
     """Fewer bars exist before a date than were asked for.
 
-    Raised by ``BaseDataset.bar_before``. ``available`` and ``requested``
-    let a caller report the shortfall, ``requested - available``, in bars.
+    Raised by ``BaseDataset.bar_before`` and by ``Factor.bar_before``
+    (``quantlab.factor.base``), which counts a factor's own bars.
+    ``available`` and ``requested`` let a caller report the shortfall,
+    ``requested - available``, in bars.
 
     Examples
     --------

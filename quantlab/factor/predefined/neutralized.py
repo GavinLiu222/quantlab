@@ -16,6 +16,7 @@ industry) from its own ``dataset`` on the same bars, never earlier ones.
 """
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 from KunQuant.Driver import KunCompilerConfig
 from KunQuant.Op import Builder, Input, Output
@@ -109,6 +110,43 @@ class NeutralizedFactor(Factor):
         True
         """
         return self.config.factor.output_symbols()
+
+    def calendar(self, start, end) -> pd.DatetimeIndex:
+        """Return the wrapped factor's bars from ``start`` to ``end``, both inclusive.
+
+        The neutralized panel is on the wrapped factor's bars, not on the
+        exposures dataset's; see ``Factor.calendar``.
+
+        Examples
+        --------
+        >>> neutral.calendar("2020-01-01", "2020-12-31").equals(alpha158.calendar("2020-01-01", "2020-12-31"))
+        True
+        """
+        return self.config.factor.calendar(start, end)
+
+    def bar_before(self, date, n: int) -> pd.Timestamp:
+        """Return the bar ``n`` bars before ``date`` on the wrapped factor's calendar.
+
+        See ``Factor.bar_before`` for the rules and errors.
+
+        Examples
+        --------
+        >>> neutral.bar_before("2020-01-06", 1) == alpha158.bar_before("2020-01-06", 1)
+        True
+        """
+        return self.config.factor.bar_before(date, n)
+
+    def bar_after(self, date, n: int) -> pd.Timestamp:
+        """Return the bar ``n`` bars after ``date`` on the wrapped factor's calendar.
+
+        See ``Factor.bar_after`` for the rules.
+
+        Examples
+        --------
+        >>> neutral.bar_after("2020-01-03", 1) == alpha158.bar_after("2020-01-03", 1)
+        True
+        """
+        return self.config.factor.bar_after(date, n)
 
     def keep_compiled(self):
         """Keep the wrapped factor's compiled graph inside the block.

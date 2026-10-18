@@ -18,6 +18,13 @@ Rolling operators need history before the first bar they report. That extra
 history is the *warm-up*. ``compute(start, end)`` reads ``config.warmup_bars``
 bars before ``start``, counted on the input dataset's own calendar, and trims
 them off again.
+
+A factor's output is not always on its dataset's bars: a factor made with
+``Factor.resample`` is on the resampled bars. The *factor calendar*, the
+bars of the output panel, is what ``calendar``, ``bar_before`` and
+``bar_after`` answer on (ADR 0051); a consumer counting bars of a factor
+(a model's warm-up, a label's lookahead) counts on them, never on
+``config.dataset``, whose calendar only the factor's own warm-up reads.
 """
 
 import contextlib
@@ -31,6 +38,7 @@ from pathlib import Path
 
 from typing import TYPE_CHECKING, Literal, Self
 
+import numpy as np
 import pandas as pd
 import xarray as xr
 
@@ -56,6 +64,12 @@ from quantlab.utils.resample import (
 
 if TYPE_CHECKING:
     from quantlab.analysis.factor_report import FactorAnalysis
+
+#: The ends of the range a resampled factor's ``bar_before`` and
+#: ``bar_after`` read their dataset's calendar over: before any market data
+#: and after any, inside what a nanosecond timestamp can hold.
+_EARLIEST = pd.Timestamp("1700-01-01")
+_LATEST = pd.Timestamp("2200-01-01")
 
 
 def _as_one_dataset(dataset):
@@ -427,6 +441,192 @@ class Factor(Component, ABC):
         20
         """
         return self.config.warmup_bars
+
+    def calendar(
+        self,
+        start: "str | datetime.date | pd.Timestamp",
+        end: "str | datetime.date | pd.Timestamp",
+    ) -> pd.DatetimeIndex:
+        """Return the factor's bars from ``start`` to ``end``, both inclusive, timestamps only.
+
+        The *factor calendar*: the bars of the factor's output panel, which
+        ``bar_before`` and ``bar_after`` count on (ADR 0051). A factor that
+        is not resampled answers with its dataset's calendar
+        (``BaseDataset.calendar``). A factor made with ``resample`` answers
+        with its resampled bars: the dataset's bars over the range, bucketed
+        the way the dataset cuts them (``BaseDataset.resample_labels``) and
+        labelled as the resampled panel labels them. Only timestamps are
+        read, so a ``DataRecorder`` records nothing.
+
+        Parameters
+        ----------
+        start, end : str, datetime.date or pd.Timestamp
+            The range. A date-only ``end`` includes every bar of that day.
+
+        Returns
+        -------
+        pd.DatetimeIndex
+            The sorted bar timestamps in the range.
+
+        Raises
+        ------
+        ValueError
+            If ``start`` is after ``end``.
+
+        Examples
+        --------
+        A momentum on one-minute bars, and the same factor resampled to
+        daily (five business days of four minute bars each):
+
+        >>> minute.calendar("2024-01-04", "2024-01-05")
+        DatetimeIndex(['2024-01-04 09:30:00', '2024-01-04 09:31:00',
+                       '2024-01-04 09:32:00', '2024-01-04 09:33:00',
+                       '2024-01-05 09:30:00', '2024-01-05 09:31:00',
+                       '2024-01-05 09:32:00', '2024-01-05 09:33:00'],
+                      dtype='datetime64[ns]', freq=None)
+        >>> daily = minute.resample("1d", "last")
+        >>> daily.calendar("2024-01-04", "2024-01-08")  # Thursday to Monday
+        DatetimeIndex(['2024-01-04', '2024-01-05', '2024-01-08'], dtype='datetime64[ns]', freq=None)
+        """
+        if self.config.resample_freq is None:
+            return self.config.dataset.calendar(start, end)
+        first, last = check_range(start, end, f"{self.class_name}.calendar()")
+        bars = self._resampled_bars(first, last)
+        return bars[(bars >= first) & (bars <= last)]
+
+    def bar_before(
+        self, date: "str | datetime.date | pd.Timestamp", n: int
+    ) -> pd.Timestamp:
+        """Return the bar ``n`` bars before ``date`` on the factor calendar.
+
+        The bars before ``date`` are those stamped strictly earlier;
+        ``n=1`` is the last of them and ``n=0`` returns ``date`` itself,
+        as ``BaseDataset.bar_before`` does. A factor that is not resampled
+        answers with its dataset's; a resampled factor counts its resampled
+        bars (``calendar``), so a daily factor computed from minute bars
+        moves by trading days. Only timestamps are read.
+
+        Parameters
+        ----------
+        date : str, datetime.date or pd.Timestamp
+            The date to count back from.
+        n : int
+            How many bars to count back; non-negative.
+
+        Returns
+        -------
+        pd.Timestamp
+            The timestamp of that bar.
+
+        Raises
+        ------
+        ValueError
+            If ``n`` is negative.
+        InsufficientHistoryError
+            If fewer than ``n`` bars exist before ``date``; a subclass of
+            ``ValueError`` carrying ``available`` and ``requested``, both
+            in the factor's bars.
+
+        Examples
+        --------
+        >>> daily = minute.resample("1d", "last")  # five business days from 2024-01-02
+        >>> daily.bar_before("2024-01-08", 1)  # Monday: the bar before is Friday
+        Timestamp('2024-01-05 00:00:00')
+        >>> daily.bar_before("2024-01-03", 3)
+        Traceback (most recent call last):
+        quantlab.dataset.base.InsufficientHistoryError: Momentum.bar_before(): only 1 bar(s) exist before '2024-01-03' in the panel held in memory resampled to '1d', but 3 were requested.
+        """
+        if self.config.resample_freq is None:
+            return self.config.dataset.bar_before(date, n)
+        if n < 0:
+            raise ValueError(
+                f"{self.class_name}.bar_before(): n must be non-negative, "
+                f"got {n}."
+            )
+        target = pd.Timestamp(date)
+        if n == 0:
+            return target
+        calendar = self._resampled_bars(_EARLIEST, target)
+        position = int(calendar.searchsorted(target, side="left"))
+        if position < n:
+            raise InsufficientHistoryError(
+                f"{self.class_name}.bar_before(): only {position} bar(s) "
+                f"exist before {date!r} in {self._stores_text()} resampled "
+                f"to {self.config.resample_freq!r}, but {n} were requested.",
+                available=position,
+                requested=n,
+            )
+        return calendar[position - n]
+
+    def bar_after(
+        self, date: "str | datetime.date | pd.Timestamp", n: int
+    ) -> pd.Timestamp:
+        """Return the bar ``n`` bars after ``date`` on the factor calendar, or the last bar there is.
+
+        The forward counterpart of ``bar_before``, with
+        ``BaseDataset.bar_after``'s rules: the bars after ``date`` are those
+        stamped strictly later, ``n=1`` is the first of them, ``n=0``
+        returns ``date`` itself, and when fewer than ``n`` bars follow the
+        calendar's last bar is returned, ``date`` itself when none follow,
+        so the result is never before ``date``. A resampled factor counts
+        its resampled bars. Only timestamps are read.
+
+        Parameters
+        ----------
+        date : str, datetime.date or pd.Timestamp
+            The date to count forward from.
+        n : int
+            How many bars to count forward; non-negative.
+
+        Returns
+        -------
+        pd.Timestamp
+            The timestamp of that bar.
+
+        Raises
+        ------
+        ValueError
+            If ``n`` is negative.
+
+        Examples
+        --------
+        >>> daily = minute.resample("1d", "last")  # five business days from 2024-01-02
+        >>> daily.bar_after("2024-01-05", 1)  # Friday: the bar after is Monday
+        Timestamp('2024-01-08 00:00:00')
+        >>> daily.bar_after("2024-01-04", 10)  # the bars end on 2024-01-08
+        Timestamp('2024-01-08 00:00:00')
+        """
+        if self.config.resample_freq is None:
+            return self.config.dataset.bar_after(date, n)
+        if n < 0:
+            raise ValueError(
+                f"{self.class_name}.bar_after(): n must be non-negative, "
+                f"got {n}."
+            )
+        target = pd.Timestamp(date)
+        calendar = self._resampled_bars(target, _LATEST)
+        following = len(calendar) - int(calendar.searchsorted(target, side="right"))
+        if n == 0 or following == 0:
+            return target
+        return calendar[len(calendar) - following + min(n, following) - 1]
+
+    def _resampled_bars(self, first: pd.Timestamp, last: pd.Timestamp) -> pd.DatetimeIndex:
+        """Return the resampled bars the dataset's bars around ``[first, last]`` fall into.
+
+        The dataset's bars from ``resample_padding`` before ``first`` to as
+        much after ``last`` are read (timestamps only) and bucketed with the
+        dataset's ``resample_labels``, as ``resample_panel`` labels them;
+        the sorted distinct labels are returned. A label may lie outside
+        the range asked for; the callers cut or count what they need.
+        """
+        dataset, freq = self.config.dataset, self.config.resample_freq
+        pad = resample_padding(freq)
+        source = dataset.calendar(max(first - pad, _EARLIEST), min(last + pad, _LATEST))
+        return pd.DatetimeIndex(np.unique(dataset.resample_labels(source.values, freq)))
+
+    def _stores_text(self) -> str:
+        """Return the dataset's stores, joined, for error messages."""
+        return " + ".join(self.config.dataset.stores()) or "the panel held in memory"
 
     def compute(
         self,

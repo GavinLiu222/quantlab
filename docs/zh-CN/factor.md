@@ -339,6 +339,40 @@ Frozen({'timestamp': 2, 'symbol': 2})
 Frozen({'symbol': 2, 'timestamp': 2})
 ```
 
+因子通过 `calendar(start, end)`、`bar_before(date, n)` 和 `bar_after(date, n)` 回答自己的 bar，即*因子日历*；签名、规则和错误都与 dataset 上同名方法一致（ADR 0051）。未重采样的因子用其 dataset 的日历回答。重采样后的因子用重采样后的 bar 回答：`calendar` 是区间内 dataset 的 bar 按 dataset 的 `resample_labels` 归入的 bar，每根只出现一次，标记方式与重采样面板相同；`bar_before` 和 `bar_after` 按这些 bar 移动，所以由分钟 bar 算出的日频因子按交易日移动，`InsufficientHistoryError.available` 也按日计数。因子自己的 `warmup_bars` 仍按其 dataset 的日历计数，因为它说的是要读多少输入。只读时间戳。
+
+```python
+>>> minute.calendar("2024-01-02", "2024-01-03")
+DatetimeIndex(['2024-01-02 00:00:00', '2024-01-02 00:01:00',
+               '2024-01-02 00:02:00', '2024-01-02 00:03:00',
+               '2024-01-03 00:00:00', '2024-01-03 00:01:00',
+               '2024-01-03 00:02:00', '2024-01-03 00:03:00'],
+              dtype='datetime64[ns]', freq=None)
+>>> daily.calendar("2024-01-02", "2024-01-03")
+DatetimeIndex(['2024-01-02', '2024-01-03'], dtype='datetime64[ns]', freq=None)
+>>> minute.bar_before("2024-01-03", 1), daily.bar_before("2024-01-03", 1)
+(Timestamp('2024-01-02 00:03:00'), Timestamp('2024-01-02 00:00:00'))
+>>> minute.bar_after("2024-01-02", 1), daily.bar_after("2024-01-02", 1)
+(Timestamp('2024-01-02 00:01:00'), Timestamp('2024-01-03 00:00:00'))
+>>> daily.bar_after("2024-01-02", 5)  # 后面不够这么多 bar：返回最后一根
+Timestamp('2024-01-03 00:00:00')
+>>> minute.bar_before("2024-01-03", 2)
+Timestamp('2024-01-02 00:02:00')
+>>> daily.bar_before("2024-01-03", 2)
+Traceback (most recent call last):
+quantlab.dataset.base.InsufficientHistoryError: Momentum.bar_before(): only 1 bar(s) exist before '2024-01-03' in data/minute_klines.zarr resampled to '1d', but 2 were requested.
+```
+
+包装类用被包装因子的日历回答，而不是自己 dataset 的：套在 `daily` 外面的 `RosterFactor`、`MembershipMaskedFactor` 或 `StartClippedFactor` 给出日频 bar，尽管它的 `config.dataset` 是分钟数据集；套在重采样 `IntradayStats` 外面的 `IntradayAverage` 和 `IntradayComposite` 同样；`NeutralizedFactor` 用被中性化因子的 bar 回答，而不是其暴露数据集的。合并数据集上的因子用并集日历回答。
+
+```python
+>>> view = RosterFactor(RosterConfig(factor=daily, roster=SpotKlineDataset(minute_config)))
+>>> view.calendar("2024-01-02", "2024-01-03")
+DatetimeIndex(['2024-01-02', '2024-01-03'], dtype='datetime64[ns]', freq=None)
+>>> len(view.config.dataset.calendar("2024-01-02", "2024-01-03"))
+8
+```
+
 如果想在已经重采样的 bar 上计算因子，先对 dataset 做重采样，再把重采样后的 dataset 交给因子。
 
 ### 计算标签
@@ -520,6 +554,7 @@ alpha158_neutral = NeutralizedFactor(NeutralizedConfig(
 | `store_path` | `None`：视图没有自己的存储 |
 | `store_uses()` | 被包装因子的存储，`reads`，handle 是视图自己 |
 | `store_range()` | 被包装因子的，即 `read` 读取的存储 |
+| `calendar`、`bar_before`、`bar_after` | 被包装因子的：视图的面板在被包装因子的 bar 上，而不是在其 dataset 的 bar 上（ADR 0051） |
 | `owns_store()` | `False`：只有拥有者写存储（ADR 0029） |
 | `stored_symbols()`、`output_symbols()` | 被包装因子的标的中视图保留的那些 |
 | `read`、`compute` | 被包装因子在保留标的上的结果，再经视图变换 |

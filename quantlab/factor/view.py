@@ -34,6 +34,9 @@ class FactorView(Factor):
     ``store_path``         ``None``: a view has no store of its own
     ``store_uses()``       the wrapped factor's store, this view its handle
     ``store_range()``      the wrapped factor's
+    ``calendar``           the wrapped factor's (its output bars, ADR 0051)
+    ``bar_before``         the wrapped factor's
+    ``bar_after``          the wrapped factor's
     ``owns_store()``       ``False``: a view has no store of its own
     ``stored_symbols()``   the wrapped factor's, cut by ``_kept_symbols``
     ``output_symbols()``   the wrapped factor's, cut by ``_kept_symbols``
@@ -187,6 +190,45 @@ class FactorView(Factor):
         True
         """
         return self.config.factor.store_range()
+
+    def calendar(self, start, end) -> pd.DatetimeIndex:
+        """Return the wrapped factor's bars from ``start`` to ``end``, both inclusive.
+
+        A view's panel is on the wrapped factor's bars, so its calendar is
+        the wrapped factor's (``Factor.calendar``), not its dataset's: a
+        view of a resampled factor answers with the resampled bars.
+
+        Examples
+        --------
+        >>> view.calendar("2024-01-04", "2024-01-08").equals(
+        ...     view.config.factor.calendar("2024-01-04", "2024-01-08"))
+        True
+        """
+        return self.config.factor.calendar(start, end)
+
+    def bar_before(self, date, n: int) -> pd.Timestamp:
+        """Return the bar ``n`` bars before ``date`` on the wrapped factor's calendar.
+
+        See ``Factor.bar_before`` for the rules and errors.
+
+        Examples
+        --------
+        >>> view.bar_before("2024-01-08", 1) == view.config.factor.bar_before("2024-01-08", 1)
+        True
+        """
+        return self.config.factor.bar_before(date, n)
+
+    def bar_after(self, date, n: int) -> pd.Timestamp:
+        """Return the bar ``n`` bars after ``date`` on the wrapped factor's calendar.
+
+        See ``Factor.bar_after`` for the rules.
+
+        Examples
+        --------
+        >>> view.bar_after("2024-01-05", 1) == view.config.factor.bar_after("2024-01-05", 1)
+        True
+        """
+        return self.config.factor.bar_after(date, n)
 
     def stored_symbols(self) -> list:
         """Return the symbols ``read`` can return: the wrapped factor's, those the view keeps.

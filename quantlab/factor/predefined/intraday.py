@@ -609,6 +609,44 @@ class IntradayAverage(Factor):
         """
         return self.config.factor.output_symbols()
 
+    def calendar(self, start, end) -> pd.DatetimeIndex:
+        """Return the wrapped factor's bars from ``start`` to ``end``, both inclusive.
+
+        The average is on the wrapped factor's bars (the daily bars of a
+        resampled ``IntradayStats``), not on the minute bars of the dataset
+        it holds; see ``Factor.calendar``.
+
+        Examples
+        --------
+        >>> monthly.calendar("2024-03-01", "2024-03-29").equals(daily.calendar("2024-03-01", "2024-03-29"))
+        True
+        """
+        return self.config.factor.calendar(start, end)
+
+    def bar_before(self, date, n: int) -> pd.Timestamp:
+        """Return the bar ``n`` bars before ``date`` on the wrapped factor's calendar.
+
+        See ``Factor.bar_before`` for the rules and errors.
+
+        Examples
+        --------
+        >>> monthly.bar_before("2024-03-29", 1) == daily.bar_before("2024-03-29", 1)
+        True
+        """
+        return self.config.factor.bar_before(date, n)
+
+    def bar_after(self, date, n: int) -> pd.Timestamp:
+        """Return the bar ``n`` bars after ``date`` on the wrapped factor's calendar.
+
+        See ``Factor.bar_after`` for the rules.
+
+        Examples
+        --------
+        >>> monthly.bar_after("2024-03-01", 1) == daily.bar_after("2024-03-01", 1)
+        True
+        """
+        return self.config.factor.bar_after(date, n)
+
     def _sources(self) -> dict[str, str]:
         """Return ``{output: wrapped output}`` for the outputs asked for."""
         suffix = f"_{self.config.window}d"
@@ -815,6 +853,44 @@ class IntradayComposite(Factor):
         True
         """
         return self.config.factor.output_symbols()
+
+    def calendar(self, start, end) -> pd.DatetimeIndex:
+        """Return the wrapped factor's bars from ``start`` to ``end``, both inclusive.
+
+        The composites are on the wrapped factor's bars (the daily bars of
+        a resampled ``IntradayStats``), not on the minute bars of the
+        dataset it holds; see ``Factor.calendar``.
+
+        Examples
+        --------
+        >>> signals.calendar("2024-03-01", "2024-03-29").equals(daily.calendar("2024-03-01", "2024-03-29"))
+        True
+        """
+        return self.config.factor.calendar(start, end)
+
+    def bar_before(self, date, n: int) -> pd.Timestamp:
+        """Return the bar ``n`` bars before ``date`` on the wrapped factor's calendar.
+
+        See ``Factor.bar_before`` for the rules and errors.
+
+        Examples
+        --------
+        >>> signals.bar_before("2024-03-29", 1) == daily.bar_before("2024-03-29", 1)
+        True
+        """
+        return self.config.factor.bar_before(date, n)
+
+    def bar_after(self, date, n: int) -> pd.Timestamp:
+        """Return the bar ``n`` bars after ``date`` on the wrapped factor's calendar.
+
+        See ``Factor.bar_after`` for the rules.
+
+        Examples
+        --------
+        >>> signals.bar_after("2024-03-01", 1) == daily.bar_after("2024-03-01", 1)
+        True
+        """
+        return self.config.factor.bar_after(date, n)
 
     def compute(self, start, end) -> xr.Dataset:
         """Combine the wrapped store's statistics from ``start`` to ``end``, both inclusive.

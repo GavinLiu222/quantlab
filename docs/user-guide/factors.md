@@ -41,6 +41,17 @@ The config fields shared by both backends live on
 The config says what is computed, not when. The date range is an argument
 of `compute`, `build` and `read`.
 
+A factor's calendar is the bars of its output panel, which is not always
+its dataset's bars: a factor made with `resample` (a daily factor computed
+from one-minute bars, say) is on the resampled bars. `calendar(start, end)`,
+`bar_before(date, n)` and `bar_after(date, n)` answer on the factor's own
+bars, with the same rules as the dataset methods of the same names, and a
+wrapper (`RosterFactor`, `MembershipMaskedFactor`, `NeutralizedFactor`, ...)
+answers with the factor it wraps. `warmup_bars` alone counts on the
+dataset's calendar, because it says how much input to read. The factor
+reference (`docs/factor.md`, "Resample a factor onto coarser bars") shows
+the three methods on a minute factor and its daily resample.
+
 ## Choosing a backend
 
 quantlab has two factor backends. Both produce the same kind of panel, so a
