@@ -638,7 +638,10 @@ WindowMLPHead_total.pth 0.277 0.261
 A five-bar window needs four bars of history before the first bar, so
 `collect()` asks the factor for features from 2022-01-04, four bars before
 `start_date` on the dataset's calendar; the labels still start on
-2022-01-10. A backtest's feature request does the same. The head's loss here
+2022-01-10. A backtest's feature request does the same. With several factors,
+every factor starts at the earliest of their counted starts, so a daily factor
+computed from one-minute bars, whose dataset counts the warm-up in minutes,
+still gets its four daily bars. The head's loss here
 is the MSE on the ranked target over the symbols with a label; a symbol without a label
 still feeds the other symbols' predictions when the network looks across
 symbols. Features are clipped to ±3 and missing values become 0.

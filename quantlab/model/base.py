@@ -513,10 +513,10 @@ class BaseModel(Component, ABC):
         Each factor's panel up to ``end`` (by default the model's
         ``end_date``) is read from its store or computed, according to
         ``config.factor_data_strategy``. It starts ``warmup_bars`` bars
-        before ``start`` (by default the model's ``start_date``), counted on
-        the factor's own dataset calendar (see ``_feature_start``), so the
-        panel may begin before ``start``. Each factor's panel is cast to
-        ``FEATURE_DTYPE`` before the merge.
+        before ``start`` (by default the model's ``start_date``), counted as
+        ``_feature_starts`` counts them, so the panel may begin before
+        ``start``. Each factor's panel is cast to ``FEATURE_DTYPE`` before
+        the merge.
 
         Raises
         ------
@@ -526,13 +526,34 @@ class BaseModel(Component, ABC):
         start = self.config.start_date if start is None else start
         end = self.config.end_date if end is None else end
         strategy = self.config.factor_data_strategy
+        factors = self.config.factors
         panels = [
-            as_feature_dtype(self._request_panel(
-                factor, strategy, self._feature_start(factor, strategy, start), end
-            ))
-            for factor in self.config.factors
+            as_feature_dtype(self._request_panel(factor, strategy, first, end))
+            for factor, first in zip(factors, self._feature_starts(strategy, start))
         ]
         return xr.combine_by_coords(panels)  # type: ignore
+
+    def _feature_starts(self, strategy: str, start) -> list:
+        """Return the bar each factor's panel is requested from, in ``config.factors`` order.
+
+        Each factor's warm-up is counted on its own dataset (``_feature_start``),
+        and every factor then starts at the earliest of those starts: a
+        factor's panel can be on coarser bars than its dataset (a daily
+        factor computed from one-minute bars counts its warm-up in minutes),
+        and the model's windows run over the bars of every panel. Under
+        ``"read"`` no factor starts before its store does.
+        """
+        factors = self.config.factors
+        if self.warmup_bars == 0:
+            return [start] * len(factors)
+        earliest = min(self._feature_start(factor, strategy, start) for factor in factors)
+        if strategy != "read":
+            return [earliest] * len(factors)
+        stored = [factor.store_range() for factor in factors]
+        return [
+            earliest if span is None else max(earliest, pd.Timestamp(span[0]))
+            for span in stored
+        ]
 
     def _feature_start(self, factor, strategy: str, start):
         """Return ``start`` moved ``warmup_bars`` bars back on ``factor``'s dataset.
@@ -540,7 +561,9 @@ class BaseModel(Component, ABC):
         With fewer bars before ``start`` in the dataset, or, under
         ``"read"``, in the factor's store, the request starts at the earliest
         one there is and a ``UserWarning`` states the shortfall; the first
-        windows then hold zero rows for the missing history.
+        windows then hold zero rows for the missing history. The model
+        requests every factor from the earliest of these
+        (``_feature_starts``).
         """
         bars = self.warmup_bars
         if bars == 0:
@@ -849,7 +872,7 @@ class BaseModel(Component, ABC):
         """Predict every bar from ``start`` to ``end`` from freshly requested features.
 
         Each factor is asked for its panel from ``warmup_bars`` bars before
-        ``start`` (counted on its own dataset calendar) to ``end``, by
+        ``start`` (counted as ``_feature_starts`` counts them) to ``end``, by
         ``config.factor_data_strategy``; the panel goes through
         ``predict_panel`` and the result is cut to ``start``..``end``. No
         config is changed. The model must be trained or loaded.

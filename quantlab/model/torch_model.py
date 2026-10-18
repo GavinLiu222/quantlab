@@ -98,8 +98,10 @@ class TorchModel(TrainingTargetMixin, BaseModel):
     for the other keys the base reads.
 
     The model's warm-up is N - 1 bars: every feature request, in training
-    and in a backtest, starts that many bars earlier on each factor's
-    dataset calendar, so the first requested bar has a full window.
+    and in a backtest, starts that many bars earlier, counted on each
+    factor's dataset calendar, and every factor starts at the earliest of
+    those bars (a daily factor computed from one-minute bars would
+    otherwise count minutes), so the first requested bar has a full window.
 
     Examples
     --------
