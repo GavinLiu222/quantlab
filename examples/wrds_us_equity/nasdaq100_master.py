@@ -210,7 +210,7 @@ def compute_factors() -> None:
     factors, labels = factors_and_label()
     for factor in factors:
         store_folder(Path(factor.config.file_path), f"{type(factor).__name__} factor panel.")
-        factor.build(factor.config.dataset.bar_before(START, WINDOW_BARS - 1), END)
+        factor.build(factor.bar_before(START, WINDOW_BARS - 1), END)
         logger.info(f"{type(factor).__name__} -> {factor.config.file_path}")
     for label in labels:
         # A label is stored as the factor it shifts forward.

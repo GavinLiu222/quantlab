@@ -123,8 +123,8 @@ def test_a_resampled_factors_calendar_is_the_resampled_bars(resampled):
     assert resampled.calendar("2024-01-02", "2024-01-08").tolist() == DAYS.tolist()
     assert resampled.calendar("2024-01-03", "2024-01-05").tolist() == DAYS[1:4].tolist()
     assert resampled.calendar("2024-01-06", "2024-01-07").tolist() == []
-    # The dataset itself still answers in minutes.
-    assert len(resampled.config.dataset.calendar("2024-01-02", "2024-01-08")) == 5 * BARS_PER_DAY
+    # The minute dataset it reads still answers in minutes.
+    assert len(_frame(_minutes()).calendar("2024-01-02", "2024-01-08")) == 5 * BARS_PER_DAY
 
 
 def test_a_resampled_factors_bar_before_moves_by_days(resampled):
