@@ -31,6 +31,7 @@ from quantlab.model.config import PredictorViewConfig
 from quantlab.model.view import PredictorView
 from quantlab.runs.record import record_read
 from quantlab.runs.backtest_run import BacktestRun
+from quantlab.runs.trained_run import TrainedRun
 
 
 @dataclasses.dataclass(frozen=True)
@@ -138,14 +139,12 @@ class RecordedPredictor(PredictorView):
                 f"loaded checkpoint predicted in {self.run_dir}"
             )
         run, _ = self._record()
+        # A unit loads from its directory, its run.json or its checkpoint file:
+        # compare the trained units the paths open, not the paths.
+        loaded = TrainedRun.open(self._checkpoint)
         units = run.folds if run.kind == "run_cv" else (run,)
         for unit in units:
-            trained = unit.trained_run()
-            if (
-                trained is not None
-                and trained.checkpoint is not None
-                and Path(trained.checkpoint).resolve() == self._checkpoint
-            ):
+            if unit.trained_run() == loaded:
                 return unit.window
         raise ValueError(
             f"{type(self).__name__}: {self.run_dir} holds no prediction of checkpoint "

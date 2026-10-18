@@ -204,3 +204,30 @@ def test_train_mode_rebuild_retrains_and_reproduces_the_run(tmp_path):
 
     _assert_same_result(first, again)
     assert again.metrics["trained_checkpoint"] != first.metrics["trained_checkpoint"]
+
+
+@pytest.mark.parametrize("given", ["directory", "run.json"])
+def test_a_recorded_predictor_replays_a_load_mode_ensemble_run(tmp_path, given):
+    """A load-mode run whose checkpoint names the ensemble's directory (as a
+    ModelEnsemble fold is loaded) or its run.json is replayed from its record."""
+    from quantlab.model.predefined.recorded import RecordedPredictor
+
+    dataset_config, bars = _setup(tmp_path)
+    trained = _ensemble(tmp_path / "trained", dataset_config, bars)
+    checkpoint = Path(trained.collect().train())
+    checkpoint = checkpoint.parent if given == "directory" else checkpoint
+    recorded = _backtester(
+        tmp_path, dataset_config, _ensemble(tmp_path / "rec", dataset_config, bars), bars,
+        name="recorded", checkpoint=checkpoint,
+    ).run()
+    replay_model = RecordedPredictor(
+        _ensemble(tmp_path / "replay_model", dataset_config, bars), recorded.run_dir
+    )
+
+    replay = _backtester(
+        tmp_path, dataset_config, replay_model, bars, name="replay", checkpoint=checkpoint
+    ).run()
+
+    xr.testing.assert_identical(replay.predictions, recorded.predictions)
+    xr.testing.assert_identical(replay.weights, recorded.weights)
+    np.testing.assert_array_equal(replay.simulation.value.values, recorded.simulation.value.values)
