@@ -68,6 +68,13 @@ stages:
       - extend: {store: factors/market/beta_spy_neutral, allow_failure: true}
       # The next-bar open-to-open return of the whole market, read as MembershipMaskedLabel on a universe.
       - extend: {store: labels/market/ret_1, allow_failure: true}
+      # Literature characteristics on the whole market read from Sharadar's tables alone: fundamentals,
+      # 13F and insiders (FundamentalAlpha), and daily anomalies from SEP, ACTIONS and EVENTS
+      # (DailyAnomalyAlpha), each with its neutralized store; research only, so a failure holds nothing.
+      - extend: {store: factors/market/fundamental_alpha, allow_failure: true}
+      - extend: {store: factors/market/fundamental_alpha_neutral, allow_failure: true}
+      - extend: {store: factors/market/daily_anomaly, allow_failure: true}
+      - extend: {store: factors/market/daily_anomaly_neutral, allow_failure: true}
   - name: universe
     steps:
       - update: universe/us3000/membership_estu
@@ -144,3 +151,11 @@ stages:
       - extend: {store: factors/market/intraday_stats_20d_neutral, allow_failure: true}
       - extend: {store: factors/market/intraday_signals, allow_failure: true}
       - extend: {store: factors/market/intraday_low_corr, allow_failure: true}
+      - extend: {store: factors/market/intraday_vol_liquidity, allow_failure: true}
+      # Each 10-K's business and risk-factor sections against the filer's report a year before
+      # (MassiveTenKChangesDataset), from the raw stage's REST pull of 10k_sections.
+      - update: {store: market/massive/massive_10k_changes_1d, allow_failure: true}
+      # Short-selling, news and 8-K event characteristics (AlternativeAlpha) and their neutralized
+      # store: they read the news, short interest and short volume panels above, so they run here.
+      - extend: {store: factors/market/alternative_alpha, allow_failure: true}
+      - extend: {store: factors/market/alternative_alpha_neutral, allow_failure: true}
