@@ -25,7 +25,11 @@ every symbol of a bar at once.
 
 A resampled factor is chunked on its source bars, in chunks no finer than
 its resampled bars, so every chunk holds whole resampled bars: a minute
-factor's daily store is built a month at a time.
+factor's daily store is built a month at a time. Its output is sized on
+the factor calendar (``Factor.calendar``, ADR 0051): the panel ``compute``
+fills is allocated on the factor's own bars, daily for a minute-to-daily
+factor, while the chunks and their peak are counted on the dataset's bars
+the factor reads.
 
 With ``workers`` above 1 the chunks are computed in that many worker
 processes at once, each rebuilding the factor from its own config, and
@@ -247,6 +251,7 @@ class ChunkedBuilder:
         >>> ChunkedBuilder(momentum).plan("2024-01-01", "2024-03-31")[0] is None  # fits whole
         True
         """
+        # The bars the factor reads, not its calendar: chunks and their peak are input-side.
         bars = self.factor.config.dataset.calendar(start, end)
         if not len(bars):
             return self.granularity, []
@@ -276,9 +281,10 @@ class ChunkedBuilder:
     def compute(self, start, end) -> xr.Dataset:
         """Compute the factor from ``start`` to ``end``, a chunk at a time if needed.
 
-        The panel is allocated once and each chunk is written into it, so
-        only one chunk's computation is in memory beside it. Nothing is
-        written to the store.
+        The panel is allocated once, on the factor's own bars
+        (``Factor.calendar``), and each chunk is written into it, so only
+        one chunk's computation is in memory beside it. Nothing is written
+        to the store.
 
         Parameters
         ----------
@@ -297,8 +303,8 @@ class ChunkedBuilder:
         {'timestamp': 82, 'symbol': 3}
         """
         factor = self.factor
-        bars = factor.config.dataset.calendar(start, end)
-        output = self._output_bars(bars) * self._symbol_count() * factor.cell_bytes()[1]
+        bars = factor.calendar(start, end)  # the output's bars: the factor calendar (ADR 0051)
+        output = len(bars) * self._symbol_count() * factor.cell_bytes()[1]
         if output > memory_budget():
             raise MemoryError(
                 f"{self.class_name}.compute(): the output of {factor.class_name} from "
@@ -310,15 +316,6 @@ class ChunkedBuilder:
         if len(chunks) <= 1:
             return factor.compute(start, end)
         ranges = self._ranges(start, end, chunks)
-        if factor.config.resample_freq is not None:
-            # A resampled chunk is small: its bars are not the dataset's, so join them.
-            pieces = list(self._pieces(ranges, chunks))
-            if any(not piece["symbol"].equals(pieces[0]["symbol"]) for piece in pieces):
-                raise ValueError(
-                    f"{self.class_name}.compute(): the chunks of {factor.class_name} are on "
-                    f"different symbols; chunks cannot be joined."
-                )
-            return xr.concat(pieces, dim="timestamp")
         panel = None
         for (first, last), piece in zip(ranges, self._pieces(ranges, chunks)):
             if panel is None:
@@ -327,7 +324,7 @@ class ChunkedBuilder:
             if (rows < 0).any() or not piece["symbol"].equals(panel["symbol"]):
                 raise ValueError(
                     f"{self.class_name}.compute(): the chunk from {first} to {last} "
-                    f"is not on the dataset's bars and symbols; chunks cannot be joined."
+                    f"is not on the factor's bars and symbols; chunks cannot be joined."
                 )
             for name in panel.data_vars:
                 panel[name].values[rows] = piece[name].values
@@ -464,7 +461,7 @@ class ChunkedBuilder:
         if wanted <= 1:
             return 1
         self._worker_config()  # refuse a factor no worker could rebuild, before sizing it
-        bars = self.factor.config.dataset.calendar(chunks[0][0], chunks[-1][1])
+        bars = self.factor.config.dataset.calendar(chunks[0][0], chunks[-1][1])  # input-side, as in plan
         fit = max(int(memory_budget() // max(self._peak_bytes(self._longest(bars, chunks)), 1)), 1)
         if fit < wanted:
             logger.warning(
@@ -535,13 +532,6 @@ class ChunkedBuilder:
                 f"equal factor, so workers cannot compute it; use workers=1."
             )
         return config
-
-    def _output_bars(self, bars: pd.DatetimeIndex) -> int:
-        """Return how many bars the factor outputs over the dataset ``bars``."""
-        freq = self.factor.config.resample_freq
-        if freq is None or not len(bars):
-            return len(bars)
-        return len(np.unique(self.factor.config.dataset.resample_labels(bars.values, freq)))
 
     def _chunks(self, bars: pd.DatetimeIndex, granularity: str) -> list:
         """Return the ``(first, last)`` bars of the ``granularity`` chunks of ``bars``."""

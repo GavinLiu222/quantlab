@@ -17,6 +17,7 @@ The prices here are 91 daily bars over January to March 2024, so a
 import dataclasses
 
 import numpy as np
+import pandas as pd
 import pytest
 import xarray as xr
 import KunQuant.ops as op
@@ -285,6 +286,35 @@ def test_a_resampled_factor_computes_in_chunks(tmp_path, hourly):
 def test_chunks_finer_than_the_resampled_bars_are_refused(tmp_path, hourly):
     with pytest.raises(ValueError, match="finer than"):
         ChunkedBuilder(_daily(hourly, tmp_path / "c.zarr"), granularity="hour")
+
+
+def test_a_resampled_compute_is_sized_on_the_factor_calendar(tmp_path, hourly, monkeypatch):
+    daily = _daily(hourly, tmp_path / "c.zarr")
+    _, cell = daily.cell_bytes()
+    days, hours = len(daily.calendar(_START, _END)), len(hourly.calendar(_START, _END))
+    assert (days, hours) == (91, 91 * 24)
+    builder = ChunkedBuilder(daily, granularity="month")
+
+    # Room for the 91 daily bars of the output, not for one more.
+    monkeypatch.setattr(chunked_module, "memory_budget", lambda: days * len(_SYMBOLS) * cell)
+    panel = builder.compute(_START, _END)
+    assert pd.DatetimeIndex(panel["timestamp"].values).equals(daily.calendar(_START, _END))
+
+    monkeypatch.setattr(chunked_module, "memory_budget", lambda: days * len(_SYMBOLS) * cell - 1)
+    with pytest.raises(MemoryError, match=rf"{days * len(_SYMBOLS) * cell:,} bytes"):
+        builder.compute(_START, _END)
+    # The hourly bars the factor reads, the old unit, would have fitted neither.
+    assert hours * len(_SYMBOLS) * cell > days * len(_SYMBOLS) * cell
+
+
+def test_a_resampled_build_stores_the_factor_calendar(tmp_path, hourly):
+    daily = _daily(hourly, tmp_path / "c.zarr")
+
+    ChunkedBuilder(daily, granularity="month").build(_START, _END)
+
+    stored = pd.DatetimeIndex(_stored(daily)["timestamp"].values)
+    assert stored.equals(daily.calendar(_START, _END))
+    assert len(stored) == 91
 
 
 # --- chunks computed in parallel worker processes ------------------------------
