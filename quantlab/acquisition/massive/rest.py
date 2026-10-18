@@ -7,7 +7,7 @@ asks for ``<date_field>.gte`` the day after the endpoint's watermark (less
 ``overlap_days``), sorted by the date field ascending, follows every
 ``next_url``, writes each page as the vendor returned it and moves the
 watermark after each page; the endpoint's own filters go in ``params``.
-A new endpoint is one more entry of ``ENDPOINTS`` (docs/massive.md, "REST
+A new endpoint is one more entry of ``ENDPOINTS`` (docs/user-guide/massive.md, "REST
 pulls").
 
 Examples

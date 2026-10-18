@@ -10,13 +10,13 @@
 | Nasdaq-100 | `nasdaq100_xgb.py`、`nasdaq100_xgb_td.py`、`nasdaq100_realmlp.py`、`nasdaq100_gats.py`、`nasdaq100_master.py` | `nasdaq100_factor_analysis.py` |
 | CRSP 全市场 | `market_xgb.py`、`market_xgb_td.py`、`market_realmlp.py`、`market_gats.py`、`market_master.py` | `market_factor_analysis.py`、`market_residual_momentum.py` |
 
-`sp500_realmlp_seed_ensemble.py` 就是把 `sp500_realmlp.py` 的模型包进 `SeedEnsemble`：`SEEDS` 里每个种子训练一个 RealMLP，预测按每根 bar 的截面 z-score 取平均，由回测自己训练（`model_mode="train"`）；见 [docs/model.md](../../docs/model.md) 的“平均多个种子”一节。
+`sp500_realmlp_seed_ensemble.py` 就是把 `sp500_realmlp.py` 的模型包进 `SeedEnsemble`：`SEEDS` 里每个种子训练一个 RealMLP，预测按每根 bar 的截面 z-score 取平均，由回测自己训练（`model_mode="train"`）；见 [docs/user-guide/models.md](../../docs/user-guide/models.md) 的“平均多个种子”一节。
 
-`sp500_xgb_mvo.py` 是指数增强 pipeline：训练两个 XGBoost 模型，一个预测 5 根 bar 的 `Return` 标签，一个预测 5 根 bar 的 `Volatility` 标签，组成一个 `ModelEnsemble`，回测时在当天的指数成分股上用 `MeanVarianceOptimizer` 代替 TopN，与 SPY 对比：Grinold 预期收益、预测波动率夹 Ledoit-Wolf 相关性、换手惩罚，候选池 200 个标的；见 [docs/portfolio.md](../../docs/portfolio.md)。
+`sp500_xgb_mvo.py` 是指数增强 pipeline：训练两个 XGBoost 模型，一个预测 5 根 bar 的 `Return` 标签，一个预测 5 根 bar 的 `Volatility` 标签，组成一个 `ModelEnsemble`，回测时在当天的指数成分股上用 `MeanVarianceOptimizer` 代替 TopN，与 SPY 对比：Grinold 预期收益、预测波动率夹 Ledoit-Wolf 相关性、换手惩罚，候选池 200 个标的；见 [docs/user-guide/portfolio.md](../../docs/user-guide/portfolio.md)。
 
-`nasdaq100_xgb.py` 用 20 bar 的标签、`training_target="cs_rank"` 和浅而强正则的树训练：这是在纳指 100 上用 walk-forward 选出、并经 2023-2024 holdout 确认的配置（rank IC 约 0.016）。其他 XGBoost 示例保留库的默认设置：S&P 500 上同一配置没有信号。见 [docs/model.md](../../docs/model.md) 的“美股示例的一套经过检验的配置”。
+`nasdaq100_xgb.py` 用 20 bar 的标签、`training_target="cs_rank"` 和浅而强正则的树训练：这是在纳指 100 上用 walk-forward 选出、并经 2023-2024 holdout 确认的配置（rank IC 约 0.016）。其他 XGBoost 示例保留库的默认设置：S&P 500 上同一配置没有信号。见 [docs/user-guide/models.md](../../docs/user-guide/models.md) 的“美股示例的一套经过检验的配置”。
 
-模型分别是 `XGBoostRegressor`（`xgb.train`，原生早停）、`XGBTDRegressor`（pytabkit 调优默认参数的 XGBoost）、`RealMLPRegressor`（pytabkit 调优默认参数的 MLP），以及两个在每个 bar 的股票截面上学习的 torch 模型：`GATsRegressor`（Qlib 的 GATs：先用 LSTM 读每只股票最近 20 根 bar，再在当根 bar 的股票之间做注意力）和 `MASTERRegressor`（MASTER：SPY、QQQ、IWM 的市场特征对股票特征做门控，再在每只股票最近 8 根 bar 之内和当根 bar 的股票之间做注意力）；[docs/model.md](../../docs/model.md) 的“在截面上训练 GATs”和“用市场特征训练 MASTER”两节分别介绍了它们。每个模型 pipeline 都跑同样的五步：
+模型分别是 `XGBoostRegressor`（`xgb.train`，原生早停）、`XGBTDRegressor`（pytabkit 调优默认参数的 XGBoost）、`RealMLPRegressor`（pytabkit 调优默认参数的 MLP），以及两个在每个 bar 的股票截面上学习的 torch 模型：`GATsRegressor`（Qlib 的 GATs：先用 LSTM 读每只股票最近 20 根 bar，再在当根 bar 的股票之间做注意力）和 `MASTERRegressor`（MASTER：SPY、QQQ、IWM 的市场特征对股票特征做门控，再在每只股票最近 8 根 bar 之内和当根 bar 的股票之间做注意力）；[docs/user-guide/models.md](../../docs/user-guide/models.md) 的“在截面上训练 GATs”和“用市场特征训练 MASTER”两节分别介绍了它们。每个模型 pipeline 都跑同样的五步：
 
 1. **数据读取**：读取已转换的 CRSP 数据仓库及其成分股面板，写出派生仓库 `prices`。
 2. **因子计算**：在复权价格上计算 `Alpha101Stock` 和 `Alpha158Stock`，用 `build(START, END)` 写成 Zarr 仓库。torch pipeline 从 `START` 之前 `WINDOW_BARS - 1` 根 bar 开始构建，让第一根训练 bar 就有完整的窗口；MASTER pipeline 还会加上 `MarketFeatures`：SPY、QQQ、IWM 各 21 个特征，当天有数据的每只股票取值相同。
@@ -28,7 +28,7 @@
 
 ## 前置条件
 
-先用 WRDS 账户下载并转换所需指数的成分股数据（一次即可，见 [docs/wrds_crsp.md](../../docs/wrds_crsp.md)）：
+先用 WRDS 账户下载并转换所需指数的成分股数据（一次即可，见 [docs/user-guide/wrds.md](../../docs/user-guide/wrds.md)）：
 
 ```bash
 export WRDS_USERNAME=<your-wrds-username>   # 密码放在 ~/.pgpass
@@ -60,7 +60,7 @@ uv run python scripts/fama_french.py --download-dir data/downloads
 
 每个仓库放在自己的文件夹里（`<目录>/<stem>/<stem>.zarr`），旁边有一份简短的 `README.md`。每次 `index.py` 运行写出两个仓库：`market/wrds/wrds_crsp_<index>_1d/`（窗口内曾经是成分股的所有 PERMNO 的价格）和 `universe/wrds/wrds_crsp_<index>_membership/`（每日的 `is_member`），其中 `<index>` 为 `sp500` 或 `nasdaq100`。`market.py` 写出 `market/wrds/wrds_crsp_market_1d/`（全市场脚本直接读它）和 `universe/wrds/wrds_crsp_market_membership/`（上市面板，全市场脚本用不到）。`etf.py` 写出 `market/wrds/wrds_crsp_spy_1d/`、`market/wrds/wrds_crsp_qqq_1d/` 和 `market/wrds/wrds_crsp_iwm_1d/`；缺少其中任何一个时，MASTER pipeline 会停下并提示需要运行的命令。pipeline 从同一个数据根目录读取它们（`QUANTLAB_DATA_DIR`、仓库旁的 `data/`，或每个脚本顶部的 `DATA_ROOT`）。
 
-KunQuant 需要编译因子计算图，因此需要 C++ 编译器。模型脚本在 macOS 上会自动设置 `OMP_NUM_THREADS=1`（xgboost 与 torch 同进程）。有 CUDA GPU 时所有模型 pipeline 都会在 GPU 上训练（默认不会用 Apple MPS）；torch pipeline 的训练面板不超过 GPU 空闲显存的一半时也放在 GPU 上（超参数里的 `panel_device`、`panel_dtype`，见 [docs/model.md](../../docs/model.md)）。
+KunQuant 需要编译因子计算图，因此需要 C++ 编译器。模型脚本在 macOS 上会自动设置 `OMP_NUM_THREADS=1`（xgboost 与 torch 同进程）。有 CUDA GPU 时所有模型 pipeline 都会在 GPU 上训练（默认不会用 Apple MPS）；torch pipeline 的训练面板不超过 GPU 空闲显存的一半时也放在 GPU 上（超参数里的 `panel_device`、`panel_dtype`，见 [docs/user-guide/models.md](../../docs/user-guide/models.md)）。
 
 模型 pipeline 通过 `TRACKER = WandbTracker(mode="online")` 记录到 Weights & Biases，模型 config 和回测 config 都写明了它：先运行一次 `wandb login`；或者把 mode 设为 `"offline"`（写到本地 `wandb/`，之后用 `wandb sync` 上传）或 `"disabled"`。换用其他 tracker（如 `MlflowTracker`）或不记录（`NullTracker()`）也是改这一处。
 
@@ -133,7 +133,7 @@ analysis/alpha101/, analysis/alpha158/, analysis/residual_momentum/
 
 `report.html` 会在组合净值旁画出基准净值，并增加超额收益和超额回撤两行。pipeline 的日志行会打印核心数字。在 `backtest()` 里传 `benchmark_dataset=None` 可跳过对比。
 
-回测的运行目录通过 `quantlab.runs.backtest_run.BacktestRun` 读取，`BacktestRun.open(run_dir).rebuild_backtester()` 可重建它以便重跑，见 [docs/backtest.md](../../docs/backtest.md)。
+回测的运行目录通过 `quantlab.runs.backtest_run.BacktestRun` 读取，`BacktestRun.open(run_dir).rebuild_backtester()` 可重建它以便重跑，见 [docs/user-guide/backtesting.md](../../docs/user-guide/backtesting.md)。
 
 ## 股票池的处理
 

@@ -167,7 +167,7 @@ cannot place is left out and counted in `massive_short_volume_1d.zarr.unplaced.j
 `quantlab.dataset.massive.short_volume.MassiveShortVolumeDataset` from
 `downloads/massive/rest/short_volume`, `market/massive/massive_ticker_map` and Sharadar's SEP
 and TICKERS; first built by `scripts/massive/short_volume.py`, then appended day by day by the
-daily data update. docs/massive.md, "Short volume". Licensed data: personal use.
+daily data update. docs/user-guide/massive.md, "Short volume". Licensed data: personal use.
 """
 
     #: The module's ``VARIABLES``.

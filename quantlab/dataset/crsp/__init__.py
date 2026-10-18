@@ -49,7 +49,7 @@ delisting return is applied exactly once: CRSP already puts it on the
 delisting day's row, so nothing adds ``stkdelists.delret`` on top. A
 *security filter* keeps only the security types asked for (for example
 common stock) and writes a report of what it dropped next to the store.
-See ``docs/wrds_crsp.md``.
+See ``docs/user-guide/wrds.md``.
 """
 
 from __future__ import annotations

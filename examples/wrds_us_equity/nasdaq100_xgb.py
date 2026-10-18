@@ -91,7 +91,7 @@ START, END = "2012-01-01", "2024-12-31"
 TRAIN_START, TRAIN_END = "2012-01-01", "2019-12-31"
 TEST_START, TEST_END = "2020-01-01", "2024-12-31"
 #: Label horizon in bars: open-to-open return from t+1 to t+1+HORIZON. 20 is
-#: the span a walk-forward selection on 2012-2022 chose (see docs/model.md).
+#: the span a walk-forward selection on 2012-2022 chose (see docs/user-guide/models.md).
 HORIZON = 20
 #: Columns the alpha libraries read; ``ret`` is kept for the label's dataset.
 ALPHA_COLUMNS = ("adjOpen", "adjHigh", "adjLow", "adjClose", "adjVolume")

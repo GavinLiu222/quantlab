@@ -144,7 +144,7 @@ a record it cannot place is left out and counted in
 `downloads/massive/rest/short_interest`, `market/massive/massive_ticker_map` and Sharadar's SEP
 and TICKERS, from the Ticker map's first day; first built by
 `scripts/massive/short_interest.py`, then appended day by day by the daily data update.
-docs/massive.md, "Short interest". Licensed data: personal use.
+docs/user-guide/massive.md, "Short interest". Licensed data: personal use.
 """
 
     #: The module's ``VARIABLES``.

@@ -7,7 +7,7 @@ indexed by ``timestamp`` and ``symbol``). Concrete implementations live in
 ``quantlab.backend.zarr`` (``XrBackend``) and ``quantlab.backend.parquet``
 (``PlBackend``).
 The contract assumes no particular schema, so a backend can be swapped
-without touching the layers above it. See ``docs/backend.md``.
+without touching the layers above it. See ``docs/user-guide/datasets.md``.
 """
 
 from abc import ABC, abstractmethod

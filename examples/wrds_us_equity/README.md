@@ -10,13 +10,13 @@ One self-contained script per universe and model, plus one factor analysis per u
 | Nasdaq-100 | `nasdaq100_xgb.py`, `nasdaq100_xgb_td.py`, `nasdaq100_realmlp.py`, `nasdaq100_gats.py`, `nasdaq100_master.py` | `nasdaq100_factor_analysis.py` |
 | CRSP market | `market_xgb.py`, `market_xgb_td.py`, `market_realmlp.py`, `market_gats.py`, `market_master.py` | `market_factor_analysis.py`, `market_residual_momentum.py` |
 
-`sp500_realmlp_seed_ensemble.py` is `sp500_realmlp.py` with the head wrapped in a `SeedEnsemble`: one RealMLP per seed in `SEEDS`, predictions averaged as per-bar cross-sectional z-scores, trained by the backtest itself (`model_mode="train"`); see "Average several seeds" in [docs/model.md](../../docs/model.md).
+`sp500_realmlp_seed_ensemble.py` is `sp500_realmlp.py` with the head wrapped in a `SeedEnsemble`: one RealMLP per seed in `SEEDS`, predictions averaged as per-bar cross-sectional z-scores, trained by the backtest itself (`model_mode="train"`); see "Average several seeds" in [docs/user-guide/models.md](../../docs/user-guide/models.md).
 
-`sp500_xgb_mvo.py` is an enhanced-index pipeline: it trains two XGBoost models, one on the 5-bar `Return` label and one on the 5-bar `Volatility` label, as one `ModelEnsemble`, and backtests them over the day's index members with the `MeanVarianceOptimizer` instead of TopN, against SPY: Grinold expected returns, predicted volatilities around Ledoit-Wolf correlations, a turnover penalty and a pool of 200 candidates; see [docs/portfolio.md](../../docs/portfolio.md).
+`sp500_xgb_mvo.py` is an enhanced-index pipeline: it trains two XGBoost models, one on the 5-bar `Return` label and one on the 5-bar `Volatility` label, as one `ModelEnsemble`, and backtests them over the day's index members with the `MeanVarianceOptimizer` instead of TopN, against SPY: Grinold expected returns, predicted volatilities around Ledoit-Wolf correlations, a turnover penalty and a pool of 200 candidates; see [docs/user-guide/portfolio.md](../../docs/user-guide/portfolio.md).
 
-`nasdaq100_xgb.py` trains on a 20-bar label with `training_target="cs_rank"` and shallow, strongly regularised trees, the configuration a walk-forward selection on the Nasdaq-100 chose and a 2023-2024 holdout confirmed (a rank IC of about 0.016). The other XGBoost examples keep the library defaults: on the S&P 500 the same configuration showed no signal. See "A tested configuration for the US equity examples" in [docs/model.md](../../docs/model.md).
+`nasdaq100_xgb.py` trains on a 20-bar label with `training_target="cs_rank"` and shallow, strongly regularised trees, the configuration a walk-forward selection on the Nasdaq-100 chose and a 2023-2024 holdout confirmed (a rank IC of about 0.016). The other XGBoost examples keep the library defaults: on the S&P 500 the same configuration showed no signal. See "A tested configuration for the US equity examples" in [docs/user-guide/models.md](../../docs/user-guide/models.md).
 
-The heads are `XGBoostRegressor` (`xgb.train`, native early stopping), `XGBTDRegressor` (pytabkit tuned-default XGBoost), `RealMLPRegressor` (pytabkit tuned-default MLP), and two torch heads that learn on each bar's cross-section of stocks: `GATsRegressor` (Qlib's GATs: an LSTM over each stock's last 20 bars, then attention across the bar's stocks) and `MASTERRegressor` (MASTER: SPY, QQQ and IWM market features gate the stock features, then attention over each stock's last 8 bars and across the bar's stocks); [docs/model.md](../../docs/model.md) describes both under "Train GATs on the cross-section" and "Train MASTER with market features". Every model pipeline runs the same five steps:
+The heads are `XGBoostRegressor` (`xgb.train`, native early stopping), `XGBTDRegressor` (pytabkit tuned-default XGBoost), `RealMLPRegressor` (pytabkit tuned-default MLP), and two torch heads that learn on each bar's cross-section of stocks: `GATsRegressor` (Qlib's GATs: an LSTM over each stock's last 20 bars, then attention across the bar's stocks) and `MASTERRegressor` (MASTER: SPY, QQQ and IWM market features gate the stock features, then attention over each stock's last 8 bars and across the bar's stocks); [docs/user-guide/models.md](../../docs/user-guide/models.md) describes both under "Train GATs on the cross-section" and "Train MASTER with market features". Every model pipeline runs the same five steps:
 
 1. **Data**: read the converted CRSP store and its membership panel, then write the derived `prices` store.
 2. **Factors**: `Alpha101Stock` and `Alpha158Stock` on adjusted prices, written to Zarr stores with `build(START, END)`. The torch pipelines build them from `WINDOW_BARS - 1` bars before `START`, so the first training bar has a full window, and the MASTER pipelines add `MarketFeatures`, 21 features of each of SPY, QQQ and IWM, the same for every stock with a bar.
@@ -28,7 +28,7 @@ The market scripts skip step 1: the market store already holds only common stock
 
 ## Prerequisites
 
-Download and convert the roster of the index you want once (this needs a WRDS account; see [docs/wrds_crsp.md](../../docs/wrds_crsp.md)):
+Download and convert the roster of the index you want once (this needs a WRDS account; see [docs/user-guide/wrds.md](../../docs/user-guide/wrds.md)):
 
 ```bash
 export WRDS_USERNAME=<your-wrds-username>   # password in ~/.pgpass
@@ -60,7 +60,7 @@ writes `data/downloads/fama_french/ff3_daily.csv`, where `FAMA_FRENCH_CSV` at th
 
 Every store sits in its own folder, `<folder>/<stem>/<stem>.zarr`, beside a short `README.md`. Each `index.py` run writes two stores: `market/wrds/wrds_crsp_<index>_1d/` (prices of every PERMNO that was a member at some point in the window) and `universe/wrds/wrds_crsp_<index>_membership/` (`is_member` per day), with `<index>` = `sp500` or `nasdaq100`. `market.py` writes `market/wrds/wrds_crsp_market_1d/`, which the market scripts read directly, and `universe/wrds/wrds_crsp_market_membership/`, the listing panel, which they do not need. `etf.py` writes `market/wrds/wrds_crsp_spy_1d/`, `market/wrds/wrds_crsp_qqq_1d/` and `market/wrds/wrds_crsp_iwm_1d/`; a MASTER pipeline stops with a message naming the command when one of the three is missing. The pipeline reads them from the same data root (`QUANTLAB_DATA_DIR`, or `data/` beside the repository, or `DATA_ROOT` at the top of each script).
 
-KunQuant compiles the factor graphs, so a C++ compiler is required. The model scripts set `OMP_NUM_THREADS=1` on macOS themselves (xgboost and torch in one process). All model pipelines train on a CUDA GPU when one is available (never on Apple MPS by default), and the torch pipelines keep the training panel on it when the panel takes at most half the free GPU memory (`panel_device`, `panel_dtype` in the hyperparameters; see [docs/model.md](../../docs/model.md)).
+KunQuant compiles the factor graphs, so a C++ compiler is required. The model scripts set `OMP_NUM_THREADS=1` on macOS themselves (xgboost and torch in one process). All model pipelines train on a CUDA GPU when one is available (never on Apple MPS by default), and the torch pipelines keep the training panel on it when the panel takes at most half the free GPU memory (`panel_device`, `panel_dtype` in the hyperparameters; see [docs/user-guide/models.md](../../docs/user-guide/models.md)).
 
 The model pipelines track to Weights & Biases through `TRACKER = WandbTracker(mode="online")`, named in both the model and the backtest config: run `wandb login` once, or set the mode to `"offline"` (runs are written to `wandb/` and uploaded later with `wandb sync`) or `"disabled"`. Another tracker, such as `MlflowTracker`, or none (`NullTracker()`) is chosen the same way.
 
@@ -133,7 +133,7 @@ With a benchmark (the default), the backtest also buys and holds the ETF from th
 
 `report.html` draws the benchmark NAV beside the portfolio's and adds excess-return and excess-drawdown rows; The pipeline log line prints the headline numbers. Pass `benchmark_dataset=None` in `backtest()` to skip the comparison.
 
-A backtest run directory is read through `quantlab.runs.backtest_run.BacktestRun`, and `BacktestRun.open(run_dir).rebuild_backtester()` rebuilds it for a re-run; see [docs/backtest.md](../../docs/backtest.md).
+A backtest run directory is read through `quantlab.runs.backtest_run.BacktestRun`, and `BacktestRun.open(run_dir).rebuild_backtester()` rebuilds it for a re-run; see [docs/user-guide/backtesting.md](../../docs/user-guide/backtesting.md).
 
 ## How the universe is handled
 

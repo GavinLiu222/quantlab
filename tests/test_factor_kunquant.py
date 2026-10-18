@@ -306,7 +306,7 @@ So a mismatch here almost always means someone "aligned" a US-equity class with
 its crypto-spot sibling (or the reverse), silently imposing the wrong
 normalization on a factor set. If the change really is intended, it is a
 change to a USER DECISION: update the four class docstrings and
-`docs/factor.md` (both languages) first, and only then this literal.
+`docs/user-guide/factors.md` (both languages) first, and only then this literal.
 """.strip()
 
 

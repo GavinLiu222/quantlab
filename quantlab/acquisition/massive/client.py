@@ -44,7 +44,7 @@ of a date range, oldest first, with several files in flight, and records a
 watermark per data type, so an interrupted run resumes where it stopped.
 One file is fetched at a time, with all ``streams``, while up to
 ``files - 1`` earlier ones are being verified: decoding a day of trades
-takes a core about twice as long as fetching it (``docs/massive.md`` lists
+takes a core about twice as long as fetching it (``docs/user-guide/massive.md`` lists
 the measured rates).
 
 Examples

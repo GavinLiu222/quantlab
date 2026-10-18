@@ -19,8 +19,8 @@ quantlab 是一个用于量化股票研究的 Python 后端。它用一条流水
 把价格整理成干净的面板，计算因子和标签，训练预测未来收益的模型，把预测转换成目标权重，再对其回测。
 每个阶段都由一个小的配置对象驱动，所以任何一次运行都可以保存、重建并完全复现。
 
-- **文档：** [docs/README.md](docs/README.md)（英文），[docs/zh-CN/README.md](docs/zh-CN/README.md)（中文）
-- **使用自己的 DataFrame：** [docs/zh-CN/api.md](docs/zh-CN/api.md)（中文），[docs/api.md](docs/api.md)（英文）
+- **文档：** [docs/index.md](docs/index.md)（英文），[docs/index.md](docs/index.md)（中文）
+- **使用自己的 DataFrame：** [docs/user-guide/frame-api.md](docs/user-guide/frame-api.md)（中文），[docs/user-guide/frame-api.md](docs/user-guide/frame-api.md)（英文）
 - **示例：** [examples/](examples/README.md)
 - **源代码：** https://github.com/ZhaorongDai/quantlab
 - **问题反馈：** https://github.com/ZhaorongDai/quantlab/issues
@@ -248,12 +248,11 @@ quantlab 只从环境变量读取凭证。凭证不会通过命令行传入，�
 
 ## 文档
 
-[英文文档](docs/README.md)分为三部分：*入门*介绍安装和快速上手；*用户指南*为流水线的每个阶段各写一页，
-包括数据源、WRDS、数据集、股票池、因子、模型、组合构建和回测；*开发者指南*介绍如何添加自己的数据源、数据集、
-存储后端、因子、模型或回测规则，并解释让长时间任务可以安全中断的机制。部分页面有[中文版](docs/zh-CN/README.md)。
+文档（英文）发布在 <https://zhaorongdai.github.io/quantlab/>：*入门*介绍安装和快速上手；*用户指南*为流水线的每个阶段各写一页；
+*API 参考*由文档字符串生成；*开发者指南*介绍如何扩展每一层以及底层机制。
 
 如果你的数据已经在 pandas 或 polars 的 DataFrame 里，只想用其中一项能力（因子、未来收益、因子报告或回测），
-而不想使用本项目的存储和配置，请从 [Frame API 指南](docs/zh-CN/api.md)（`quantlab.api`）开始。
+而不想使用本项目的存储和配置，请从 [Frame API 指南](https://zhaorongdai.github.io/quantlab/user-guide/frame-api.html)（`quantlab.api`）开始。
 
 每个公开的类和函数都有 [numpydoc](https://numpydoc.readthedocs.io/en/latest/format.html) 格式的文档字符串，
 可以在 Python 中用 `help()` 查看。

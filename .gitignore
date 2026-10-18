@@ -255,6 +255,8 @@ experiments/
 # Research notes stay local; qlib-gats-master.md is cited by code and docs
 docs/research/*
 !docs/research/qlib-gats-master.md
+docs/_build/
+docs/reference/generated/
 
 # Local scripts and run configs (the server keeps its own copies)
 /scripts/

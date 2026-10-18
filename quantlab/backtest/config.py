@@ -34,7 +34,7 @@ class BacktestConfig:
 
     Selection parameters are not here but on subclasses such as
     ``CrossSectionBacktestConfig``, so a time-series backtester does not carry
-    cross-sectional fields. See ``docs/backtest.md``.
+    cross-sectional fields. See ``docs/user-guide/backtesting.md``.
 
     Examples
     --------
@@ -271,7 +271,7 @@ class ApproximateBacktestConfig(FrozenConfig):
     not here: it comes to ``run`` with its own unchanged config, so a rule
     chosen by a sweep goes to a backtest run as it is. Execution is reduced
     to one cost on traded weight; the rest of what is kept and given up is
-    in ``docs/backtest.md``.
+    in ``docs/user-guide/backtesting.md``.
 
     Examples
     --------

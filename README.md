@@ -21,8 +21,8 @@ factors and labels, train a model that predicts future returns, turn the predict
 target weights, and backtest them. Every stage is driven by a small configuration object, so
 any run can be saved, rebuilt and repeated exactly.
 
-- **Documentation:** [docs/README.md](https://github.com/ZhaorongDai/quantlab/blob/main/docs/README.md)
-- **Using your own DataFrames:** [docs/api.md](https://github.com/ZhaorongDai/quantlab/blob/main/docs/api.md)
+- **Documentation:** [docs/index.md](https://github.com/ZhaorongDai/quantlab/blob/main/docs/index.md)
+- **Using your own DataFrames:** [docs/user-guide/frame-api.md](https://github.com/ZhaorongDai/quantlab/blob/main/docs/user-guide/frame-api.md)
 - **Examples:** [examples/](https://github.com/ZhaorongDai/quantlab/blob/main/examples/README.md)
 - **Source code:** https://github.com/ZhaorongDai/quantlab
 - **Bug reports:** https://github.com/ZhaorongDai/quantlab/issues
@@ -276,20 +276,19 @@ how to resume an interrupted download.
 
 ## Documentation
 
-The [documentation](https://github.com/ZhaorongDai/quantlab/blob/main/docs/README.md) is organised in three parts. *Getting started* covers
-installation and the quick start. The *user guide* has one page per pipeline stage: data
-sources, WRDS, datasets, universes, factors, models, portfolio construction and backtesting.
-The *developer guide* shows how to add your own data source, dataset, storage backend,
-factor, model or backtest rule, and explains the machinery that makes long jobs safe to
-interrupt.
+The documentation is published at <https://zhaorongdai.github.io/quantlab/>. *Getting started* covers installation and the
+quick start. The *user guide* has one page per pipeline stage, from data sources and datasets
+through factors, models and portfolios to backtesting and daily operation. The *API reference*
+is generated from the docstrings. The *developer guide* shows how to extend each layer and
+explains the machinery underneath.
 
 If you already hold your data in pandas or polars DataFrames and want one capability, such
 as factors, forward returns, a factor report or a backtest, without the project's stores
-and configurations, start with the [frame API guide](https://github.com/ZhaorongDai/quantlab/blob/main/docs/api.md) (`quantlab.api`).
+and configurations, start with the [frame API guide](https://zhaorongdai.github.io/quantlab/user-guide/frame-api.html) (`quantlab.api`).
 
-Every public class and function also has a docstring in the
-[numpydoc](https://numpydoc.readthedocs.io/en/latest/format.html) format, readable with
-`help()` in Python.
+Every public class and function has a docstring in the
+[numpydoc](https://numpydoc.readthedocs.io/en/latest/format.html) format; the
+[API reference](https://zhaorongdai.github.io/quantlab/reference/index.html) renders them, and `help()` reads them in Python.
 
 ## Testing
 

@@ -8,7 +8,7 @@ chosen here by the rule's exact class (its import path, so neither a rule
 module nor an implementation is imported before it is used). A subclass may
 decide differently and is refused, as is any other rule. Each rule's config
 is read through a field table: a field is supported, ignored (listed as given
-up in ``docs/backtest.md``), or must keep its default; a field the table does
+up in ``docs/user-guide/backtesting.md``), or must keep its default; a field the table does
 not know is refused unless it is at its default, so a field added to a rule's
 config later is never silently approximated. A rule's covariance estimator is
 chosen and read the same way, and ``estimate_all`` answers for it with every
@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 
 #: A field the approximate backtest reads.
 SUPPORTED = "supported"
-#: A field the approximate backtest gives up on (``docs/backtest.md``).
+#: A field the approximate backtest gives up on (``docs/user-guide/backtesting.md``).
 IGNORED = "ignored"
 #: A field the approximate backtest refuses unless it keeps its default.
 DEFAULT = "default"

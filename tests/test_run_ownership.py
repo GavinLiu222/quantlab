@@ -47,7 +47,6 @@ _RUN_FILES = (
 #: ``config.json`` into its own output directory, not a run.
 ALLOWED = {
     "quantlab/analysis/factor_report.py": '(out / "config.json")',
-    "docs/factor.md": '"data/analysis/',
 }
 _NAMES_A_RUN_FILE = "names a run file"
 _WALK_UP = "walks up two directory levels"

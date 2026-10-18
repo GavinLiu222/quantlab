@@ -233,7 +233,7 @@ cannot place is left out and counted in `massive_news_1d.zarr.unplaced.json`. Th
 `quantlab.dataset.massive.news.MassiveNewsDataset` from `downloads/massive/rest/news`,
 `market/massive/massive_ticker_map` and Sharadar's SEP and TICKERS, from the Ticker map's first
 day; first built by `scripts/massive/news.py`, then appended day by day by the daily data
-update. docs/massive.md, "News". Licensed data: personal use.
+update. docs/user-guide/massive.md, "News". Licensed data: personal use.
 """
 
     #: The module's ``VARIABLES``.

@@ -9,7 +9,7 @@ corruption checks that raw ``to_zarr(mode="a")`` does not perform, and the
 grown between runs. It implements ``DataBackend`` from
 ``quantlab.backend.base``; the lazy Parquet counterpart for long-format
 reference tables is ``quantlab.backend.parquet.PlBackend``. See
-``docs/backend.md`` and ``docs/chunking.md``.
+``docs/user-guide/datasets.md`` and ``docs/user-guide/datasets.md``.
 """
 
 import glob

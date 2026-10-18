@@ -14,7 +14,7 @@ but the covariance:
 
 Each backtest also attributes its holdings' returns and risk to the USE4
 factors (``risk_model``; see "Attribute returns and risk to factors" in
-docs/backtest.md). Then, for each backtest's holdings on every rebalance
+docs/user-guide/backtesting.md). Then, for each backtest's holdings on every rebalance
 bar, the volatility both risk models forecast for the next ``HORIZON``
 bars against the return the holdings made over them
 (``quantlab.risk.bias.bias_statistics``), and the two backtests' returns,

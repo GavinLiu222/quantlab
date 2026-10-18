@@ -3,7 +3,7 @@
 ``PlBackend`` holds a ``polars.LazyFrame`` and persists it as Parquet. It is used
 for reference tables that are tabular rather than panel shaped (the universe
 catalog in ``quantlab.universe``), and implements ``DataBackend`` from
-``quantlab.backend.base``; see ``docs/backend.md``.
+``quantlab.backend.base``; see ``docs/user-guide/datasets.md``.
 """
 
 from pathlib import Path

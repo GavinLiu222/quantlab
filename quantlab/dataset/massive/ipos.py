@@ -167,7 +167,7 @@ cannot place, or not in USD, is left out and counted in `massive_ipos_1d.zarr.un
 Built by `quantlab.dataset.massive.ipos.MassiveIpoDataset` from `downloads/massive/rest/ipos`,
 `market/massive/massive_ticker_map` and Sharadar's SEP and TICKERS, from the Ticker map's first
 day; first built by `scripts/massive/ipos.py`, then appended day by day by the daily data
-update. docs/massive.md, "IPOs". Licensed data: personal use.
+update. docs/user-guide/massive.md, "IPOs". Licensed data: personal use.
 """
 
     #: The module's ``VARIABLES``.

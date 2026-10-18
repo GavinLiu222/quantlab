@@ -1,6 +1,6 @@
 # Sharadar US-equity pipeline: Sharadar daily -> Alpha101/Alpha158 -> XGBoost -> backtest
 
-`sp500_xgb.py` is the pipeline of [`wrds_us_equity/sp500_xgb.py`](../wrds_us_equity/sp500_xgb.py) with every input read from a Sharadar store ([docs/sharadar.md](../../docs/sharadar.md)): the point-in-time S&P 500 from Sharadar's SP500 table, prices on the permaticker axis, and SPY from the fund prices as the benchmark. It reads no WRDS store and imports only quantlab, so it can be copied out and edited on its own.
+`sp500_xgb.py` is the pipeline of [`wrds_us_equity/sp500_xgb.py`](../wrds_us_equity/sp500_xgb.py) with every input read from a Sharadar store ([docs/user-guide/sharadar.md](../../docs/user-guide/sharadar.md)): the point-in-time S&P 500 from Sharadar's SP500 table, prices on the permaticker axis, and SPY from the fund prices as the benchmark. It reads no WRDS store and imports only quantlab, so it can be copied out and edited on its own.
 
 The steps, settings and outputs are those of the WRDS script; see [its README](../wrds_us_equity/README.md). As there, the label is computed on the unmasked `sharadar_sp500_1d.zarr` (every bar of every permaticker ever a member) and wrapped in `MembershipMaskedLabel`, so a sample exists where the stock is an S&P 500 member at t, whatever its membership later. What differs:
 
@@ -16,7 +16,7 @@ The steps, settings and outputs are those of the WRDS script; see [its README](.
 
 ## Prerequisites
 
-Download every table and build the stores once (this needs a Sharadar subscription; see [docs/sharadar.md](../../docs/sharadar.md)):
+Download every table and build the stores once (this needs a Sharadar subscription; see [docs/user-guide/sharadar.md](../../docs/user-guide/sharadar.md)):
 
 ```bash
 export SHARADAR_API_KEY=<your-sharadar-key>
@@ -38,7 +38,7 @@ or run the `# %%` cells one at a time. Every step is a function (`prepare_stores
 
 ## Barra style exposures
 
-`barra_style.py` builds `BarraStyle`, the Barra USE4-style exposures (12 styles, 20 descriptors, the industry code and the estimation-universe mask), for every Sharadar common stock over 2000-2026, prints each style's coverage of the estimation universe and writes a factor report of the styles against the 21-bar forward return. It reads the SEP, DAILY, SF1 ART, fiscal-year history, industry and share-class stores that `scripts/sharadar/download.py` builds, and downloads FRED's 3-month T-bill rate (no key) itself. The exposures go to `<data root>/factors/market/barra_style/barra_style.zarr` (with `coverage.json` and the report's `analysis/` beside it), the report's label to `<data root>/labels/market/ret_21/`, the rate to `<data root>/market/fred/fred_dtb3_1d/`. See [Style factors](../../docs/developer-guide/style-factors.md).
+`barra_style.py` builds `BarraStyle`, the Barra USE4-style exposures (12 styles, 20 descriptors, the industry code and the estimation-universe mask), for every Sharadar common stock over 2000-2026, prints each style's coverage of the estimation universe and writes a factor report of the styles against the 21-bar forward return. It reads the SEP, DAILY, SF1 ART, fiscal-year history, industry and share-class stores that `scripts/sharadar/download.py` builds, and downloads FRED's 3-month T-bill rate (no key) itself. The exposures go to `<data root>/factors/market/barra_style/barra_style.zarr` (with `coverage.json` and the report's `analysis/` beside it), the report's label to `<data root>/labels/market/ret_21/`, the rate to `<data root>/market/fred/fred_dtb3_1d/`. See [Style factors](../../docs/dev/style-factors.md).
 
 ```bash
 QUANTLAB_DATA_DIR=/data/quantlab uv run python examples/sharadar_us_equity/barra_style.py
@@ -56,11 +56,11 @@ QUANTLAB_DATA_DIR=/data/quantlab uv run python examples/sharadar_us_equity/risk_
 
 On the training server the whole script takes about 25 minutes: the regression store 2.6 minutes, the estimate store 19.5 minutes in 32 processes (mostly the eigenfactor simulations), the bias statistics about 3 minutes.
 
-See [Factor risk model](../../docs/developer-guide/risk-model.md) for the method and the numbers.
+See [Factor risk model](../../docs/dev/risk-model.md) for the method and the numbers.
 
 ## Mean-variance: Ledoit-Wolf against the factor risk model
 
-`sp500_xgb_mvo.py` trains the XGBoost return model of `sp500_xgb.py` (it shares that script's factors and `ret_5` label) and backtests it twice over 2020-2024 with the same `MeanVarianceOptimizer` (Grinold expected return, `ic=0.02`, risk aversion 10, turnover penalty, 2% weight cap, long only, rebalanced every 5 bars), once with `LedoitWolfEstimator` (126 one-bar returns) and once with `FactorRiskStoreEstimator` reading the estimate store of `risk_model.py`. The backtest reads the `BarraStyle` exposures from their store through the risk model, and passes `Use4RiskModel` as its `risk_model`, so each run attributes its returns and risk to the USE4 factors (the `factor_attribution` block of `metrics.json`, `factor_attribution.zarr` and the report's Factor attribution tab; see [Attribute returns and risk to factors](../../docs/backtest.md#attribute-returns-and-risk-to-factors)). It then takes each backtest's holdings on every rebalance bar, forecasts their volatility over the next 5 bars with both covariance estimators (`LedoitWolfEstimator` and `FactorRiskStoreEstimator`) and compares the forecasts with the return the holdings made (`bias_statistics`). The two backtests' statistics, their whole-window factor attribution and the forecasts are printed and written to `backtests/xgb_mvo_comparison.json`, the value curves and forecast volatilities plotted in `backtests/xgb_mvo_comparison.png`. It needs the stores of `barra_style.py` and `risk_model.py`.
+`sp500_xgb_mvo.py` trains the XGBoost return model of `sp500_xgb.py` (it shares that script's factors and `ret_5` label) and backtests it twice over 2020-2024 with the same `MeanVarianceOptimizer` (Grinold expected return, `ic=0.02`, risk aversion 10, turnover penalty, 2% weight cap, long only, rebalanced every 5 bars), once with `LedoitWolfEstimator` (126 one-bar returns) and once with `FactorRiskStoreEstimator` reading the estimate store of `risk_model.py`. The backtest reads the `BarraStyle` exposures from their store through the risk model, and passes `Use4RiskModel` as its `risk_model`, so each run attributes its returns and risk to the USE4 factors (the `factor_attribution` block of `metrics.json`, `factor_attribution.zarr` and the report's Factor attribution tab; see [Attribute returns and risk to factors](../../docs/user-guide/backtesting.md#attribute-returns-and-risk-to-factors)). It then takes each backtest's holdings on every rebalance bar, forecasts their volatility over the next 5 bars with both covariance estimators (`LedoitWolfEstimator` and `FactorRiskStoreEstimator`) and compares the forecasts with the return the holdings made (`bias_statistics`). The two backtests' statistics, their whole-window factor attribution and the forecasts are printed and written to `backtests/xgb_mvo_comparison.json`, the value curves and forecast volatilities plotted in `backtests/xgb_mvo_comparison.png`. It needs the stores of `barra_style.py` and `risk_model.py`.
 
 ```bash
 QUANTLAB_DATA_DIR=/data/quantlab uv run python examples/sharadar_us_equity/sp500_xgb_mvo.py

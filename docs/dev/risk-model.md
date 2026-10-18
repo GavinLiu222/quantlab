@@ -95,7 +95,7 @@ not exposed to a factor without a covariance at the bar (`covered_factors`).
 A portfolio rule reads it through `FactorRiskStoreEstimator`, which builds
 it from the bar's estimate row and exposures that the decision inputs put in
 the context (see
-[Portfolio construction](../portfolio.md#factor-form-reading-a-factor-risk-model)),
+[Portfolio construction](../user-guide/portfolio.md)),
 and factor attribution and the random portfolios of the bias statistics
 build it too. `forecast_window(timestamps)` reads, for consecutive bars,
 each bar's factor and specific returns beside the forecast inputs of the
@@ -196,7 +196,7 @@ Each stock's specific risk is built in four steps ([M] §5):
    m|)`, `q = 0.1`. On the Sharadar history a larger `q` flattened the
    21-bar bias statistics across forecast-volatility deciles but worsened
    the one-bar ones and the random active portfolios', so USE4's value
-   stands (#203).
+   stands.
 4. **Volatility regime adjustment** ([M] §5.3): times `lambda_S`, the same
    construction as `lambda_F` over the cap-weighted cross-sectional bias
    statistics of the estimation universe's specific returns. It is stored
@@ -244,7 +244,7 @@ departures:
   listings, since blending worsened the specific bias statistics on the
   Sharadar history. USE4's structural values ran low for those stocks:
   their 21-bar bias statistic was 1.36 with outcomes of more than 100% in
-  one bar left out. Three changes bring it to 1.09 (#203):
+  one bar left out. Three changes bring it to 1.09:
   - fit on every stock with a time series;
   - a history-length regressor, the main gain;
   - `E_0` estimated each bar by smearing (Duan, 1983), where replications
@@ -316,7 +316,7 @@ monthly (`h = 21`).
 `examples/sharadar_us_equity/risk_model.py` on the training server, on the
 2026-10-05 Sharadar pull, the exposures of `barra_style.py` and FRED's
 DTB3, with every default. The figures and numbers below come from the
-example before it read its prices through `BadPrintMaskedDataset` (#223).
+example before it read its prices through `BadPrintMaskedDataset`.
 The last subsection gives the bias statistics with bad prints masked.
 
 - **Size and cost.** The regression store covers 6,475 bars (2001-01-03
@@ -369,15 +369,15 @@ rolling one-year mean absolute deviation from 1.
   underpredicted. Pooled by forecast-volatility decile, the top decile
   looks heavily underpredicted (about 2.5 over one bar and 3.6 over 21). Ten
   outcomes outside the estimation universe make up most of it: one-bar
-  bad prints such as a close of $0.01 between two of $7 to $9 (#223), and
-  real micro-cap jumps. Within the estimation universe, priced at $5 or
+  bad prints such as a close of \$0.01 between two of \$7 to \$9, and
+  real micro-cap jumps. Within the estimation universe, priced at \$5 or
   more, the top decile is overpredicted (about 0.8 at both horizons), as in USE4.
 
 ![Rolling and whole-range bias statistics over one-bar returns](../assets/risk_model/bias_h1.png)
 
 ![Rolling and whole-range bias statistics over 21-bar returns](../assets/risk_model/bias_h21.png)
 
-**With bad prints masked (#223).** This is the example as it stands. The
+**With bad prints masked.** This is the example as it stands. The
 exposures and the risk model read their prices through
 `BadPrintMaskedDataset`, which flags 535 bars of 321 permatickers.
 
@@ -413,11 +413,9 @@ covariance differs: `LedoitWolfEstimator` over 126 one-bar returns, or
 failed a rebalance. Both backtests also pass `Use4RiskModel` as their
 `risk_model` and attribute their holdings to its factors (see below). On
 the training server the factor-model backtest took 5.5 minutes, most of it
-computing `BarraStyle` over the window (measured before the backtest read
-the exposures from their store, #230), and the Ledoit-Wolf one 3.1
-minutes; the whole script takes 11 minutes. Before factor attribution was
-added, the two took 4.2 and 3.3 minutes, with a 38 GB peak for the
-script.
+computing `BarraStyle` over the window (measured when the backtest still
+computed the exposures instead of reading their store), and the Ledoit-Wolf one 3.1
+minutes; the whole script takes 11 minutes.
 
 | | Ledoit-Wolf | USE4 factor model |
 |---|---|---|
@@ -455,7 +453,7 @@ band, including the one it did not choose.
 
 The factor attribution of the two backtests (the `factor_attribution`
 block of each run's metrics, 2020-2024, annualized log growth; see
-[Attribute returns and risk to factors](../backtest.md#attribute-returns-and-risk-to-factors))
+[Backtesting](../user-guide/backtesting.md))
 says where the return came from. The terms add up to each run's log NAV
 on every bar (largest gap 5e-16), and the model covers at least 98% of the
 held weight on every bar:

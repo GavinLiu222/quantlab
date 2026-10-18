@@ -140,7 +140,7 @@ class NbboDatasetConfig(DatasetConfig):
     conversion maps each raw ``(date, ticker)`` to its PERMNO through the
     CRSP symbology in ``reference_dir``, so the inherited ticker-side
     ``symbols`` field is refused by the dataset's config setter; use
-    ``permnos`` instead. See ``docs/wrds_taq.md``.
+    ``permnos`` instead. See ``docs/user-guide/wrds.md``.
 
     Examples
     --------
@@ -202,7 +202,7 @@ class NbboBarsDatasetConfig(DatasetConfig):
     the conversion refuses a config whose values differ from the settings
     recorded with the raw tier, rather than labelling bars with filters they
     were not built with. The ``symbol`` axis is the PERMNO, as for
-    ``NbboDatasetConfig``. See ``docs/wrds_taq.md``.
+    ``NbboDatasetConfig``. See ``docs/user-guide/wrds.md``.
 
     Examples
     --------
@@ -505,7 +505,7 @@ class CrspDatasetConfig(DatasetConfig):
 
     The panel's ``symbol`` axis is the integer PERMNO, so the inherited
     ticker-side ``symbols`` field is refused by the dataset's config setter;
-    use ``permnos`` instead. See ``docs/wrds_crsp.md``.
+    use ``permnos`` instead. See ``docs/user-guide/wrds.md``.
 
     Examples
     --------

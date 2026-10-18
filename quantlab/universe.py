@@ -19,7 +19,7 @@ change log. ``UniverseCatalog`` merges both into one parquet table with the
 columns ``symbol``, ``category``, ``start_date``, ``end_date`` and
 ``end_date_is_inferred``, and answers point-in-time queries against it.
 
-See ``docs/constituent.md`` for a guide.
+See ``docs/user-guide/universes.md`` for a guide.
 """
 
 from dataclasses import asdict, dataclass

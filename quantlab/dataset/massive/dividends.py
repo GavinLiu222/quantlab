@@ -189,7 +189,7 @@ day; a record it cannot place, or a dividend not in USD, is left out and counted
 `downloads/massive/rest/dividends`, `downloads/massive/rest/splits`,
 `market/massive/massive_ticker_map` and Sharadar's SEP and TICKERS, from the Ticker map's first
 day; first built by `scripts/massive/dividends.py`, then appended day by day by the daily data
-update. docs/massive.md, "Dividends and splits". Licensed data: personal use.
+update. docs/user-guide/massive.md, "Dividends and splits". Licensed data: personal use.
 """
 
     #: The module's ``VARIABLES``.

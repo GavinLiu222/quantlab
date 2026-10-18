@@ -1,232 +1,46 @@
-# Datasets and storage
+# Datasets
 
-A dataset object turns raw vendor files on disk into a *panel*, stores that
-panel as a Zarr store, and hands it to the factor layer. This page explains
-what a dataset does, how it is configured, which datasets ship with quantlab
-and when to use each, how to read and filter a panel, how the two storage
-backends work, how to grow a store as new data arrives, and what the cleaning
-step does and does not do. Read it after
-[Concepts](concepts.md) and before [Factors](factors.md). Downloading the raw
-files is covered in [Data sources](data-sources.md) and, for CRSP and TAQ, in
-[WRDS](wrds.md).
+A dataset turns raw vendor files into a *panel*, stores the panel as Zarr, and answers
+requests for date ranges of it. This page covers the panel, the read interface every
+dataset shares, building and growing a store, the storage backends underneath, and what
+cleaning does. Downloading the raw files is covered in [Data sources](data-sources.md).
 
-Every snippet below comes from the runnable example
-[`examples/build_panel.py`](../../examples/build_panel.py), which builds
-everything from synthetic data in a temporary directory:
+The runnable companion is
+[`examples/build_panel.py`](https://github.com/ZhaorongDai/quantlab/blob/main/examples/build_panel.py),
+which builds everything from synthetic data in a temporary directory; the numbered output
+below comes from it.
 
-```bash
-uv run python examples/build_panel.py
-```
+## The panel
 
-## What a dataset does
-
-A *panel* is an `xarray.Dataset` whose variables (`open`, `close`, `volume`,
-...) are two-dimensional arrays indexed by `timestamp` and `symbol`. It is
-dense: every symbol has a cell on every timestamp, and a cell for which the
-vendor has no observation (a symbol that has not listed yet, a delisted name,
-a trading halt) holds NaN. Every layer of quantlab exchanges data in this
-shape.
+A panel is an {py:class}`xarray.Dataset` whose variables (`open`, `close`, `volume`, ...)
+are two-dimensional arrays on `timestamp` and `symbol`. It is dense: every symbol has a
+cell on every timestamp, and a cell the vendor has no observation for (a symbol not yet
+listed, a delisted name, a halt) holds NaN. Variables keep the vendor's names. Every layer
+of quantlab exchanges data in this shape.
 
 Data moves through three tiers:
 
-1. The *raw tier* is what a downloader wrote: vendor files in their original
-   columns, for example hive-partitioned Parquet shards
-   (`.../tiingo/month=2024-01/part-*.pqt`) or monthly Binance CSV files.
-2. The dataset converts the raw tier into a dense panel in memory. The
-   conversion deduplicates rows, densifies onto the `(timestamp, symbol)`
-   grid and runs the cleaning step.
-3. The panel is saved as a Zarr store, a directory of chunked arrays that
-   xarray reads lazily. Factors, labels and the backtester read this store;
-   they never touch the raw tier.
+1. The *raw tier*: vendor files in their original columns, written by a download.
+2. The dataset converts the raw tier into a panel in memory: it deduplicates rows,
+   densifies onto the `(timestamp, symbol)` grid and runs the cleaning step.
+3. The panel is saved as a Zarr store, a directory of chunked arrays that xarray reads
+   lazily. Factors, labels and backtests read the store, never the raw tier.
 
-Every dataset that converts raw files into a store it owns shares the same
-lifecycle, defined on `quantlab.dataset.raw.RawDataset` (requests such as
-`panel(start, end)` are the read interface of every dataset,
-`quantlab.dataset.base.BaseDataset`; a view or a panel held in memory has no
-build path):
+## Reading a dataset
 
-| Method | What it does |
-|---|---|
-| `from_raw_data()` | Convert the whole configured range from the raw tier into memory. Nothing is written. |
-| `save()` | Narrow the in-memory panel to the config's dates and symbols, then write it, replacing the store. |
-| `get_xarray_dataset()` | Return the in-memory panel built by `from_raw_data()`, with dimensions `(timestamp, symbol)`. |
-| `from_raw_data_chunked()` | Convert and append one time window at a time, resumably. |
-| `update()` | Bring an existing store up to date with the raw tier. |
-| `panel(start, end, symbols=None)` | Return the stored bars from `start` to `end`, both inclusive, opened lazily. |
-| `bar_before(date, n)` | Return the timestamp `n` bars before `date` on the store's own calendar. |
+Every dataset answers the read interface of {py:class}`~quantlab.dataset.base.BaseDataset`:
+`panel(start, end, symbols=None, variables=None)`, `calendar`, `bar_before`, `bar_after`,
+`stored_symbols` and `head`. A *leaf* reads a store of its own or a panel held in memory;
+a *view* reads other datasets and keeps no store
+({py:class}`~quantlab.dataset.roster.RosterDataset`,
+{py:class}`~quantlab.dataset.merged.MergedDataset`,
+{py:class}`~quantlab.dataset.bad_prints.BadPrintMaskedDataset`).
 
-The first five methods are the build path; `from_raw_data` and the chunked
-methods return the dataset itself, so calls chain. `panel` and `bar_before`
-are queries: each call opens the store again, the dataset holds nothing
-afterwards and its config is not changed, so one dataset object can answer
-any number of requests from any number of consumers.
-
-## Configuring a dataset
-
-A market dataset is built from a `quantlab.dataset.config.DatasetConfig`:
-
-```python
-from quantlab.dataset.config import DatasetConfig
-from quantlab.dataset.stock import StockDataset
-
-config = DatasetConfig(
-    raw_data_dir_path="/data/downloads/us_equity/1d/demo/tiingo",
-    zarr_file_path="/data/data/us_equity/1d/demo.zarr",
-    market="us_equity",       # or "crypto_spot"
-    frequency="1d",           # "1d", "1m" or "tick"
-    vendor="tiingo",          # "tiingo", "alpaca" or "wrds"
-    start_date="2024-01-01",  # optional, inclusive; bounds the conversion
-    end_date="2024-12-31",    # optional, inclusive; bounds the conversion
-    symbols=("AAPL", "MSFT"), # optional; None converts every symbol
-)
-dataset = StockDataset(config)
-```
-
-`raw_data_dir_path` is the raw tier and `zarr_file_path` is the store.
-`start_date`, `end_date` and `symbols` bound what the build path
-(`from_raw_data`, `from_raw_data_chunked`, `update`) converts and `save()`
-writes; a request for a range of the store is `panel(start, end, symbols)`,
-which does not use them. `kwargs` holds dataset-specific options, such as
-`{"data_type": "quotes"}` for tick data.
-
-Assigning the config normalises it. `name` is set to the dataset class's
-dotted import path, which lets a saved `config.json` rebuild the same class
-later. A missing `start_date` or `end_date` becomes the open bounds
-`1900-01-01` and `2100-01-01`. Dates must be zero-padded ISO strings
-(`YYYY-MM-DD`): quantlab compares dates as strings throughout, so a value such
-as `"2024-1-2"` is refused with a `ValueError` rather than allowed to compare
-wrongly.
-
-You rarely write paths by hand. The factories in `quantlab.config` derive
-every path from one data root, which is the `QUANTLAB_DATA_DIR` environment
-variable, else a `data/` directory beside the repository in a source checkout
-and `~/.quantlab/data` in an installed package (the WRDS scripts
-take their own `--download-dir` and `--data-dir` instead):
-
-```python
-from quantlab.config import set_data_root, stock_kline_config
-
-set_data_root("/mnt/quant")
-config = stock_kline_config(subdir="us_all", store_name="us_all.zarr", vendor="tiingo")
-config.raw_data_dir_path   # '/mnt/quant/downloads/us_equity/1d/us_all/tiingo'
-config.zarr_file_path      # '/mnt/quant/data/us_equity/1d/us_all.zarr'
-```
-
-Binance spot klines have no factory and no download script; build their
-`DatasetConfig` by hand under the same root. See the module docstring of
-`quantlab.config` for the full layout.
-
-## Available datasets
-
-| Class | Market, frequency | `symbol` axis | Raw tier | Config |
-|---|---|---|---|---|
-| `quantlab.dataset.spot.SpotKlineDataset` | crypto spot, daily | trading pair (`BTCUSDT`) | Binance monthly kline CSVs | `DatasetConfig` |
-| `quantlab.dataset.stock.StockDataset` | US equity, daily or minute | ticker (`AAPL`) | Tiingo or Alpaca Parquet shards | `DatasetConfig` |
-| `quantlab.dataset.crsp.CrspStockDataset` | US equity, daily | integer PERMNO | CRSP daily stock file via WRDS | `CrspDatasetConfig` |
-| `quantlab.dataset.nbbo.NbboPanelDataset` | US equity, bars from ticks | integer PERMNO (raw files are keyed by ticker) | TAQ NBBO quotes via WRDS | `NbboDatasetConfig` |
-
-The index-membership panels described in [Universes](universes.md) are
-datasets too, built from `ConstituentDatasetConfig`.
-
-### Binance spot klines
-
-A *kline* (candlestick) is Binance's name for an OHLCV bar: open, high, low,
-close and volume over a fixed interval. `SpotKlineDataset` stacks the
-header-less monthly CSV files Binance publishes for bulk download into one
-panel; the symbol is taken from each file name. The columns keep Binance's
-Title-Case names (`Open`, `Close`, `Quote asset volume`, ...), and
-`to_kunquant` maps them to the lowercase names the factor engine expects. The
-CSVs are not downloaded by quantlab; `SpotKlineDataset.from_raw_data().save()`
-converts CSVs you already have into the store. Use this dataset for crypto
-research.
-
-### US stocks from Tiingo or Alpaca
-
-`StockDataset` reads the raw tier the Tiingo and Alpaca downloaders write. The
-daily panel carries raw prices (`open`, `high`, `low`, `close`, `volume`),
-split- and dividend-adjusted prices (`adjOpen` ... `adjVolume`), `divCash` and
-`splitFactor`. Raw and adjusted prices answer different questions: adjusted
-prices give correct returns across splits and dividends, raw prices say what a
-stock actually cost on the day, which matters for liquidity rules and fills.
-
-The raw root must end in the vendor's own directory
-(`.../us_all/tiingo`, never `.../us_all`), and every shard carries a `vendor`
-column. Both are checked before any row is used, because two vendors' shards
-under one root would otherwise merge silently into a blended price series.
-Keep one vendor per store. Daily data is partitioned by `month`, minute data
-by session `date`, and tick data (quotes or trades, selected with
-`kwargs={"data_type": ...}`) has no dense-panel form and is not converted.
-
-Tiingo is the natural choice for a long daily history across the whole
-market, delisted names included; Alpaca adds minute bars. Tickers are the
-symbol axis, so a company that changed its ticker appears under whichever
-ticker the vendor files its history under.
-
-### CRSP daily stocks
-
-`CrspStockDataset` builds a panel from the CRSP daily stock file, the academic
-reference for US equities, pulled through a WRDS (Wharton Research Data
-Services) account. Its `symbol` axis is the *PERMNO*, CRSP's permanent integer
-identifier for a security. A PERMNO never changes when a ticker does (FB and
-META are the same PERMNO 13407), so a PERMNO panel is immune to ticker
-renames. The panel carries the same twelve variables as a Tiingo panel, so
-factors and backtests read it unchanged, plus CRSP extras such as `ret`,
-`market_cap`, `shrout` and `is_delisting`.
-
-Because the axis is integer PERMNOs, the ticker-side `symbols` field is
-refused on its config; restrict a conversion with `permnos` instead (and a
-request with `panel(start, end, symbols=[...])` listing integer PERMNOs), and pick
-the security types to keep with `security_filter` (the default,
-`"equity_common"`, drops ADRs, funds, ETFs and units). Period-correct tickers
-are written to a sidecar file next to the store for display; see
-`quantlab.dataset.crsp.tickers.CrspTickerLookup`. Use CRSP when survivorship
-bias and corporate-action accuracy matter most, which is almost always for a
-historical backtest. [WRDS](wrds.md) covers the download and every config
-field.
-
-### NBBO quote bars
-
-The *NBBO* (national best bid and offer) is the highest bid and lowest ask
-across all US exchanges at each moment. `NbboPanelDataset` reads TAQ NBBO
-records pulled through WRDS and resamples each trading session onto regular
-bars of `bar_interval` (`"1s"` to `"30m"`), producing variables such as
-`bid`, `ask`, `mid`, `spread`, `spread_bps` and time-weighted sizes. Session
-times come from the NYSE calendar, so half days are handled. Use it to study
-spreads, liquidity or intraday microstructure. Convert it with
-`from_raw_data_chunked(granularity="day")`: a second-level panel over many
-symbols is large, and one window is held in memory at a time.
-
-## Build a panel
-
-With a raw tier on disk, converting and saving is two calls. The example
-writes January and February 2024 for four symbols, where `DDD` stops trading
-at the end of January and `BBB` has one bad zero close:
-
-```python
-dataset = StockDataset(config).from_raw_data()
-dataset.save()
-panel = dataset.get_xarray_dataset()
-print(dict(panel.sizes))
-print(list(panel.data_vars))
-print(dataset.symbols, pd.Timedelta(dataset.time_interval))
-```
-
-```text
-2. full panel: {'timestamp': 43, 'symbol': 4}
-   variables: ['open', 'high', 'low', 'close', 'volume', 'adjOpen', 'adjHigh', 'adjLow', 'adjClose', 'adjVolume', 'divCash', 'splitFactor', 'anomaly_flag']
-   symbols: ['AAA', 'BBB', 'DDD', 'PNY']
-   bar spacing: 1 days 00:00:00
-```
-
-`time_interval` is the most common gap between timestamps, so weekends do not
-distort it. `num_symbols` and `symbols` describe the built axis.
-
-## Request a date range and symbols
-
-Later sessions request ranges of the store rather than reconverting.
-`panel(start, end, symbols=None)` returns the bars from `start` to `end`,
-both inclusive, and, when `symbols` is given, those symbols in the order
-listed:
+`panel(start, end)` returns the stored bars from `start` to `end`, both inclusive. It
+opens the store lazily on every call, keeps nothing on the dataset and leaves the config
+alone, so one dataset object answers any number of requests. `symbols` and `variables` are
+queries kept in the order given; one the store lacks raises `KeyError` rather than reading
+as an empty column. A date-only `end` includes every bar of that day.
 
 ```python
 narrow = StockDataset(stock_config()).panel(
@@ -246,47 +60,247 @@ timestamp
 2024-02-02  48.61    NaN
 ```
 
-`DDD` stays on the axis after it stops trading; its cells simply become NaN.
-Symbols never disappear from a panel because they have no data in a window.
+`DDD` stays on the axis after it stops trading; its cells become NaN. A symbol never
+disappears from a panel because it has no data in a window.
 
-Four behaviours are worth knowing:
+`bar_before(date, n)` counts `n` bars back from `date` on the store's own calendar, so
+weekends and holidays are skipped rather than counted. It raises
+`InsufficientHistoryError` (`quantlab.dataset.base`), a `ValueError`, when fewer
+than `n` bars exist; factors use it to count their warm-up. `head(n)` returns the first
+`n` rows of the store as a polars `LazyFrame`, which is handy for checking column names.
 
-- The store is opened lazily: no variable is loaded until it is used. A
-  date-only `end` such as `"2024-02-02"` includes every bar of that day. A
-  symbol missing from the store raises `KeyError`.
-- `bar_before(date, n)` counts the store's own timestamps, so weekends and
-  holidays are skipped rather than counted. It raises
-  `InsufficientHistoryError`, a `ValueError`, when fewer than `n` bars exist
-  before `date`. Factors use it to count their warm-up.
-- `save()` narrows first and then replaces the whole store. Saving from a
-  dataset configured for one month leaves a one-month store. To add data to
-  an existing store, use the chunked path below.
-- `head(n)` returns the first `n` rows of the store as a Polars `LazyFrame`
-  without loading or narrowing anything, which is handy for checking column
-  names.
+## Configuring a dataset
 
-`get_lazyframe()` returns the built panel in long format, one row per
-`(timestamp, symbol)`, for code that prefers Polars.
+A market dataset is built from a {py:class}`~quantlab.dataset.config.DatasetConfig`:
+
+```python
+from quantlab.dataset.config import DatasetConfig
+from quantlab.dataset.stock import StockDataset
+
+config = DatasetConfig(
+    raw_data_dir_path="/data/downloads/us_equity/1d/demo/tiingo",
+    zarr_file_path="/data/data/us_equity/1d/demo.zarr",
+    market="us_equity",       # or "crypto_spot"
+    frequency="1d",           # "1d", "1m" or "tick"
+    vendor="tiingo",
+    start_date="2024-01-01",  # optional, inclusive; bounds the conversion
+    end_date="2024-12-31",    # optional, inclusive; bounds the conversion
+    symbols=("AAPL", "MSFT"), # optional; None converts every symbol
+)
+dataset = StockDataset(config)
+```
+
+`raw_data_dir_path` is the raw tier and `zarr_file_path` the store. The dates and
+`symbols` bound what the build path converts and `save()` writes; a request takes its
+range as arguments and ignores them. `kwargs` holds dataset-specific options.
+
+Configs are frozen; make a changed one with `dataclasses.replace`. The dataset keeps a
+normalised copy: `name` is filled in with the class's dotted import path, which is how a
+saved config is rebuilt into the same class, and a missing date becomes `1900-01-01` or
+`2100-01-01`. Dates must be zero-padded ISO strings, because every date comparison in the
+pipeline is a string comparison; `"2024-2-29"` is refused with a `ValueError`.
+
+## Available datasets
+
+| Class | Data | `symbol` axis |
+|---|---|---|
+| {py:class}`~quantlab.dataset.sharadar.stock.SharadarStockDataset` | Sharadar daily stock and fund prices, and the other Sharadar tables (see [Sharadar](sharadar.md)) | permaticker |
+| {py:class}`~quantlab.dataset.massive.trade_bars.MassiveTradeBarDataset` and the Massive panels | Bars from every SIP trade, day aggregates, dividends, short interest, news (see [Massive](massive.md)) | ticker or permaticker |
+| {py:class}`~quantlab.dataset.stock.StockDataset` | Tiingo or Alpaca daily or minute bars | ticker |
+| {py:class}`~quantlab.dataset.fred.FredRateDataset` | A FRED rate series | series id |
+| {py:class}`~quantlab.dataset.spot.SpotKlineDataset` | Binance monthly kline CSVs | trading pair |
+| {py:class}`~quantlab.dataset.crsp.CrspStockDataset`, {py:class}`~quantlab.dataset.nbbo.NbboPanelDataset` | CRSP daily stocks and TAQ NBBO bars (see [WRDS](wrds.md)) | PERMNO |
+
+Index-membership panels are datasets too; see [Universes](universes.md).
+
+`StockDataset` carries raw prices (`open` ... `volume`), split- and dividend-adjusted
+prices (`adjOpen` ... `adjVolume`), `divCash` and `splitFactor`. Adjusted prices give
+correct returns across corporate actions; raw prices say what a stock cost on the day,
+which matters for liquidity rules and fills. Its raw root must end in the vendor's own
+directory (`.../us_all/tiingo`) and every shard carries a `vendor` column; both are checked
+so that two vendors' shards never blend into one price series. Keep one vendor per store.
+
+## Building a store
+
+With a raw tier on disk, converting and saving is two calls. The example writes January
+and February 2024 for four symbols, where `DDD` stops trading at the end of January and
+`BBB` has one bad zero close:
+
+```python
+dataset = StockDataset(config).from_raw_data()
+dataset.save()
+panel = dataset.get_xarray_dataset()
+print(dict(panel.sizes))
+print(list(panel.data_vars))
+print(dataset.symbols, pd.Timedelta(dataset.time_interval))
+```
+
+```text
+2. full panel: {'timestamp': 43, 'symbol': 4}
+   variables: ['open', 'high', 'low', 'close', 'volume', 'adjOpen', 'adjHigh', 'adjLow', 'adjClose', 'adjVolume', 'divCash', 'splitFactor', 'anomaly_flag']
+   symbols: ['AAA', 'BBB', 'DDD', 'PNY']
+   bar spacing: 1 days 00:00:00
+```
+
+`from_raw_data()` converts the whole configured range in memory and
+`get_xarray_dataset()` returns it. `save()` narrows it to the config's dates and symbols
+and replaces the store, so saving from a dataset configured for one month leaves a
+one-month store. `time_interval` is the most common gap between timestamps, so weekends
+do not distort it. Only datasets that convert raw files into a store they own
+({py:class}`~quantlab.dataset.raw.RawDataset` and
+{py:class}`~quantlab.dataset.raw.RawMarketDataset`) have these build methods.
+
+## Chunked conversion
+
+`from_raw_data()` holds the whole range in memory, which suits a few years of daily data
+and not a market-wide minute history. `from_raw_data_chunked(granularity=...)` converts
+one time window at a time (`"year"`, `"quarter"`, `"month"`, `"day"` or `"hour"`) and
+appends each to the store, so peak memory scales with the window:
+
+```python
+dataset = StockDataset(config).from_raw_data_chunked(granularity="month")
+result = dataset.last_chunk_result
+```
+
+Window edges are timestamps present in the raw data, never calendar period ends. Before
+the first window the dataset scans the raw tier once to fix the *pinned symbol axis*, the
+ordered list of symbols over the whole range, and builds every window on it; a symbol with
+no rows in a window is an all-NaN column, which keeps every append aligned. Each completed
+window is recorded in a ledger beside the store, `<store>.chunks.json`. A run that crashes
+or is cancelled resumes by skipping the windows the ledger lists. The outcome is a
+{py:class}`~quantlab.dataset.raw.ConversionResult` on `last_chunk_result`:
+
+```text
+5. first chunked run: planned 2 written 2 skipped 0 rows 43
+   second run (nothing new): written 0 skipped 2 resumed True
+```
+
+The result equals the store a single whole-range `from_raw_data()` would write.
+`reporter=` and `cancel=` work as for downloads (see
+[Data sources](data-sources.md#progress-and-cancelling)); the windows written so far stay
+in the store.
+
+### Updating a store
+
+When new raw data lands, `update()` brings the store up to date. In the example, March
+arrives together with a new listing, `EEE`:
+
+```python
+updated = StockDataset(config).update(granularity="month")
+```
+
+```text
+   update after March: written 1 skipped 2
+   store now: {'timestamp': 64, 'symbol': 5} symbols ['AAA', 'BBB', 'DDD', 'EEE', 'PNY']
+   EEE closes observed before March: 0
+```
+
+Only the March window was converted. When the symbol axis grows, `on_new_listing` of
+`from_raw_data_chunked` decides what happens:
+
+- `"refuse"` (the default) stops with an error and changes nothing.
+- `"widen"` appends the new symbols at the end of the store's axis, NaN over its history,
+  without rewriting stored chunks. Right for genuine new listings.
+- `"rebuild"` reconverts every window from the raw tier, which recovers history the raw
+  tier already had for the new symbols. A failed or cancelled rebuild restores the
+  original store.
+
+`update()` chooses for you: it asks the raw tier whether the added symbols have rows
+inside the store's existing range, widens if none do (as for `EEE`) and rebuilds if some
+do. A stored symbol that disappeared from the raw tier is refused, since both other
+strategies would lose data. The choice is logged before it runs.
+
+```{warning}
+A window is recorded with the last timestamp it held, so a period converted while
+incomplete cannot be extended later: the append is refused and the store left unchanged.
+Convert complete periods only, by setting `end_date` to a period end and moving it forward
+as periods finish, or delete the store and its `.chunks.json` and convert again.
+```
+
+`StockDataset`, `CrspStockDataset` and `NbboPanelDataset` push each window into their
+Parquet scan and are memory-bounded. `SpotKlineDataset` reconverts the whole range for
+every window, so chunking bounds the size of each write, not the memory used.
+
+## Views and in-memory datasets
+
+**Rosters.** {py:class}`RosterDataset(dataset, roster) <quantlab.dataset.roster.RosterDataset>`
+reads a market-wide store on the symbols of a roster store (for example a membership
+panel) instead of keeping a copy cut to the roster. It is a drop-in replacement for the
+wrapped dataset: calendar, variables and KunQuant export are the wrapped dataset's.
+
+```python
+>>> prices = RosterDataset(sep, membership)   # text symbol axes: sep '101'..'505'; membership '202', '404', '909'
+>>> prices.stored_symbols()
+['202', '404']
+>>> prices.panel("2024-01-03", "2024-01-04")["adjClose"].to_pandas()
+symbol        202    404
+timestamp
+2024-01-03  106.0  108.0
+2024-01-04  111.0  113.0
+```
+
+Roster symbols the store lacks are left out and counted in a log line. Factors on a roster
+are read through {py:class}`~quantlab.factor.predefined.roster.RosterFactor`; see
+[Universes](universes.md#reading-whole-market-data-on-a-roster).
+
+**Resampling.** `resample(freq, how)` returns a copy whose `panel()` and `bar_before()`
+answer on coarser bars, for example minute bars into daily bars. `how` names one method
+per variable (`first`, `last`, `max`, `min`, `sum`, `mean`, `count`) or one for every
+variable; NaN cells are skipped.
+
+```python
+>>> minute = SpotKlineDataset(config)
+>>> daily = minute.resample("1d", {"Open": "first", "Close": "last", "Volume": "sum"})
+>>> daily.panel("2024-01-02", "2024-01-03")["Close"].to_pandas()
+symbol      AAAUSDT  BBBUSDT
+timestamp                   
+2024-01-02      4.0     40.0
+2024-01-03      8.0     80.0
+>>> daily.bar_before("2024-01-03", 1), minute.bar_before("2024-01-03", 1)
+(Timestamp('2024-01-02 00:00:00'), Timestamp('2024-01-02 00:03:00'))
+```
+
+Bars are cut on the UTC clock and labelled at their start; `NbboPanelDataset` cuts by
+NYSE session instead, so its daily bars line up with daily stores. `save()` on a resampled
+dataset writes a store beside the source, `<name>_resample_<freq>.zarr`, which later reads
+with the same `resample_freq` open instead of resampling again. That store is a cache:
+rebuilding the source does not refresh it.
+
+**Your own data.** {py:class}`~quantlab.dataset.memory.FrameDataset` holds a panel handed
+over at construction, from a long-format pandas or polars frame or an xarray panel, with
+no raw files and no store. Anything that accepts a dataset accepts it.
+
+```python
+>>> import pandas as pd
+>>> from quantlab.dataset.memory import FrameDataset
+>>> frame = pd.DataFrame({
+...     "date": pd.to_datetime(["2024-01-02", "2024-01-02", "2024-01-03"]),
+...     "ticker": ["AAA", "BBB", "AAA"],
+...     "px": [10.0, 20.0, 11.0],
+... })
+>>> mem = FrameDataset(frame, columns={"date": "timestamp", "ticker": "symbol", "px": "close"})
+>>> mem.panel("2024-01-02", "2024-01-03")["close"].to_pandas()
+symbol       AAA   BBB
+timestamp
+2024-01-02  10.0  20.0
+2024-01-03  11.0   NaN
+```
+
+A missing `(timestamp, symbol)` pair becomes NaN; a repeated pair raises. Name the
+variables as the factor reading them expects (`adjClose` and so on for
+`Alpha158Stock`). A `FrameDataset` has no build path and refuses stream-mode factors;
+`to_zarr(path)` writes it to a new store.
 
 ## Storage backends
 
-A dataset delegates persistence to a *backend*, the object that knows how
-data is stored, as opposed to what it means. Both backends live in
-`quantlab.backend` and implement the `quantlab.backend.base.DataBackend`
-interface (`read`, `write`, `to_internal`, `filter_by_date`,
-`filter_by_symbol`, `get_xarray_dataset`, `get_lazyframe`, `head`).
+A dataset delegates persistence to a *backend*, which knows how data is stored rather than
+what it means. Both backends implement {py:class}`~quantlab.backend.base.DataBackend`.
 
-`XrBackend` holds an `xarray.Dataset` and stores it as Zarr. Every dataset,
-factor and model owns one as `data_backend`. `read(path)` opens the store
-lazily again on every call and caches nothing. Beyond `read` and `write` it
-provides `append`, which extends a store along the time axis after checking
-that the new window cannot corrupt it (same symbol axis, same variables, no
-overlap with stored timestamps, no NaN written into an integer variable), and
-the `widen_*` methods used when a store gains symbols or variables.
-
-`PlBackend` holds a Polars `LazyFrame` and stores it as a Parquet file. It is
-used for long-format reference tables such as the universe catalog, where one
-row per record is the natural shape.
+| | {py:class}`~quantlab.backend.zarr.XrBackend` | {py:class}`~quantlab.backend.parquet.PlBackend` |
+|---|---|---|
+| Medium | Zarr directory | one Parquet file |
+| Holds | `xarray.Dataset` | `polars.LazyFrame` |
+| Used for | panels: prices, factors, weights | long-format reference tables such as the universe catalog |
 
 ```python
 from quantlab.backend.parquet import PlBackend
@@ -303,114 +317,61 @@ table.filter_by_symbol("symbol", ("AAA", "BBB"))
 as_panel = table.get_xarray_dataset(["timestamp", "symbol"])
 ```
 
-### The `get_xarray_dataset(indexes)` shape contract
+`read` opens the store again on every call and caches nothing. The filters narrow the held
+data in place. `get_xarray_dataset(indexes)` returns the data on exactly the dimensions
+named, in that order, dropping variables laid out on other dimensions; asking for a
+dimension the data lacks raises. `PlBackend` requires `indexes`, the columns that become
+dimensions. A dataset's own `get_xarray_dataset()` always returns `(timestamp, symbol)`.
 
-`get_xarray_dataset(indexes)` returns the data indexed by exactly the
-dimensions named in `indexes`, in that order. Variables laid out on any other
-dimension are dropped, dimensions no longer used are dropped with their
-coordinates, and the result is transposed onto the requested order. Asking
-for a dimension the data does not have raises `ValueError`. Passing `None`
-returns the held object unchanged, with no shape request. For `PlBackend` the
-argument is required and names the columns that become dimensions.
+### Appending to a store
 
-```python
-backend.get_xarray_dataset(["timestamp", "symbol"])["close"].dims
-backend.get_xarray_dataset(["symbol", "timestamp"])["close"].dims
-backend.get_xarray_dataset(["timestamp"])
-```
+`XrBackend.append` creates a store on its first call and extends it along `timestamp`
+afterwards. It refuses, before writing anything, a window that would corrupt the store: one
+that overlaps stored timestamps, carries other symbols or variables, or would write NaN
+into an integer variable. `append` never overwrites; to recompute a range a store holds,
+build the full panel and `write` it, which replaces the directory.
 
-```text
-4. XrBackend dims, (timestamp, symbol): ('timestamp', 'symbol')
-   XrBackend dims, (symbol, timestamp): ('symbol', 'timestamp')
-   indexes=['timestamp'] keeps {'timestamp': 43} and variables []
-   PlBackend round trip: {'timestamp': 2, 'symbol': 2} ['close', 'volume']
-```
-
-Code that consumes a panel should always ask for the shape it needs. The
-dataset's own `get_xarray_dataset()` does this for you and always returns
-`(timestamp, symbol)`.
-
-## Append new data and convert large histories
-
-`from_raw_data()` materialises the whole date range in memory at once, which
-is fine for a few years of daily data on a few thousand symbols and not fine
-for a full-market minute history. `from_raw_data_chunked()` converts one time
-window at a time and appends each to the store, so peak memory scales with
-the window:
+`widen_and_append` is the explicit way to append a window with new symbols or variables:
+new symbols go at the end of the symbol axis (no stored chunk is rewritten), new variables
+are backfilled with NaN, and then the ordinary checks run. When nothing changed it is a
+plain `append`, so it is cheap on every refresh.
 
 ```python
-dataset = StockDataset(config).from_raw_data_chunked(granularity="month")
-result = dataset.last_chunk_result
+>>> new = window(["2024-01-08"], ["CCC", "AAA", "ABC"], 20, volume=100.0)
+>>> XrBackend().to_internal(new).widen_and_append("data/grow.zarr")
+XrBackend()
+>>> stored = xr.open_zarr("data/grow.zarr")
+>>> stored["symbol"].values.tolist(), sorted(stored.data_vars)
+(['AAA', 'BBB', 'ABC', 'CCC'], ['close', 'volume'])
+>>> stored["close"].to_pandas()
+symbol       AAA   BBB   ABC   CCC
+timestamp                         
+2024-01-02   0.0   1.0   NaN   NaN
+2024-01-03   2.0   3.0   NaN   NaN
+2024-01-04  10.0  11.0   NaN   NaN
+2024-01-05  12.0  13.0   NaN   NaN
+2024-01-08  21.0   NaN  22.0  20.0
 ```
 
-`granularity` is one of `"year"`, `"quarter"`, `"month"`, `"day"` or
-`"hour"`. Before the first window, the dataset scans the raw tier once to fix
-the *pinned symbol axis*, the full ordered list of symbols over the whole
-range, and densifies every window onto it, so all windows line up column by
-column. Each completed window is recorded in a *ledger*, a JSON file next to
-the store (`<store>.chunks.json`). A run that crashes or is cancelled resumes
-by skipping the windows the ledger already lists. The run's outcome is
-published as a `ConversionResult` on `last_chunk_result`:
+No computation depends on a store's symbol order: everything that combines panels aligns
+them by label.
 
-```text
-5. first chunked run: planned 2 written 2 skipped 0 rows 43
-   second run (nothing new): written 0 skipped 2 resumed True
-```
+{py:class}`~quantlab.backend.ranged.RangedStore` writes a store from a function computing
+the rows of a date range and records the covered range beside it in `<store>.range.json`.
+`build(start, end)` replaces the store, `extend(end)` appends the rows after the recorded
+end, `rewind(end)` cuts it back, and `check_covers(start, end)` refuses a read outside the
+range. Factor stores and risk-model stores are kept this way.
 
-When new raw data lands, `update()` brings the store up to date. In the
-example, March arrives together with a new listing, `EEE`:
+## Cleaning
 
-```python
-updated = StockDataset(config).update(granularity="month")
-```
+Cleaning reports problems; it never repairs them. Nothing fills, interpolates or corrects
+a value, so everything in a panel was observed by the vendor.
 
-```text
-   update after March: written 1 skipped 2
-   store now: {'timestamp': 64, 'symbol': 5} symbols ['AAA', 'BBB', 'DDD', 'EEE', 'PNY']
-   EEE closes observed before March: 0
-```
-
-Only the March window was converted. Because the symbol axis grew, the store
-had to be reconciled first, and `from_raw_data_chunked` offers three
-strategies through `on_new_listing`:
-
-- `"refuse"` (the default) stops with an error that explains the choice.
-- `"widen"` adds the new symbols to the existing store as NaN over its
-  history. This is right for genuine new listings, which had no history.
-- `"rebuild"` sets the store aside and reconverts every window from the raw
-  tier, which recovers real history for symbols the raw tier already had. A
-  failed or cancelled rebuild restores the original store.
-
-`update()` chooses for you: it asks the raw tier whether the added symbols
-have any rows inside the store's existing time range. None means new
-listings, so it widens (as it did for `EEE` above); some means it rebuilds. A
-symbol that disappeared from the raw tier resolves to `"refuse"`, since both
-other strategies would lose data. The decision is logged before it runs.
-
-The WRDS scripts convert after downloading with the default granularity and
-strategy; `quantlab.acquisition.registry.convert` exposes `granularity` and
-`on_new_listing`. See [Data sources](data-sources.md).
-
-`SpotKlineDataset` supports the chunked path but reconverts the whole range
-for every window, so it bounds the size of each write, not the memory used.
-`StockDataset`, `CrspStockDataset` and `NbboPanelDataset` push the window into
-their Parquet scan and are memory-bounded.
-
-## Data cleaning
-
-Cleaning in quantlab reports problems; it never repairs them. Nothing fills,
-interpolates or corrects a value, so everything in a panel was observed by
-the vendor. The rules live in `quantlab.dataset._support.cleaning`:
-
-- Before densifying, `dedup_raw_frame` drops duplicate `(timestamp, symbol)`
-  rows, keeping the last one. Overlapping downloads produce such duplicates,
-  and a later file more often carries corrected data.
-- After densifying, `clean_market_data` checks that the OHLCV columns exist
-  (a missing column raises), warns about unexpected nulls, and adds a boolean
-  `anomaly_flag` variable. A cell is flagged when a price is zero or negative,
-  or when `close` moves by more than 50% in one bar. The check reads the
-  lowercase price columns, so on a Binance panel (Title-Case columns) the
-  flag is present but always `False`.
+- Before densifying, duplicate `(timestamp, symbol)` rows are dropped, keeping the last,
+  because a later vendor file more often carries a correction.
+- After densifying, the OHLCV columns must exist (a missing one raises), unexpected nulls
+  are logged, and a boolean `anomaly_flag` variable marks cells where a price is zero or
+  negative or `close` moves by more than 50% in one bar.
 
 In the example, the bad zero close of `BBB` is flagged and left as it is:
 
@@ -419,38 +380,22 @@ WARNING: flag_anomalies: flagged 1 anomalous (timestamp, symbol) data point(s) (
    anomaly_flag cells: [(Timestamp('2024-01-16 00:00:00'), 'BBB')]
 ```
 
-Decide downstream what a flagged cell means for your research, for example by
-masking it before computing factors. For one-bar vendor errors there is a
-ready mask. `BadPrintMaskedDataset` (`quantlab.dataset.bad_prints`) merges
-datasets like `MergedDataset` and sets the prices of a bad print to NaN. A
-bad print is a move of more than 5 times on ordinary volume, judged only from
-the bar and the 40 bars before it, so a live feed and a backtest agree; an
-open more than 5 times away from both its bar's close and the close before
-is masked on its own, the rest of the bar kept. Pass
-it to a consumer in place of the merged dataset. See
-[Sharadar daily stocks](../sharadar.md). Two details apply to chunked
-conversions: cleaning runs per window, so a jump that straddles a window
-boundary is not flagged (a warning says how many boundaries were involved),
-and integer variables are promoted to float64 so that later windows can hold
-NaN. Panels that are not OHLCV bars use their own validators:
-`clean_membership_panel` for index membership and `clean_nbbo_panel` for
-NBBO bars.
+Chunked conversion cleans one window at a time, so a jump across a window boundary is not
+flagged, and integer variables are stored as float64 so that later windows can hold NaN.
+Panels that are not price bars (membership, NBBO) use their own validators.
+
+For one-bar vendor errors there is a ready mask:
+{py:class}`~quantlab.dataset.bad_prints.BadPrintMaskedDataset` merges datasets like
+`MergedDataset` and sets the prices of a bad print to NaN. A bad print is a move of more
+than 5 times on ordinary volume, judged only from the bar and the 40 bars before it, so a
+live feed and a backtest agree. Pass it to a consumer in place of the merged dataset;
+backtests use it for fill and valuation prices.
 
 ## Export to KunQuant
 
-Besides the panel itself, market datasets have one exit.
-`to_kunquant(data_columns, panel)` returns contiguous float32
-`[time, symbol]` arrays of a panel returned by `panel(start, end)`, the
-input format of the KunQuant factor engine; the factor layer calls it for
-you (see [Factors](factors.md)).
+`to_kunquant(data_columns, panel)` returns contiguous float32 `[time, symbol]` arrays of a
+panel, the input format of the KunQuant factor engine. The factor layer calls it for you;
+see [Factors](factors.md).
 
-## See also
-
-- [Universes](universes.md): restrict a panel to point-in-time index members
-  or to liquid, tradeable symbols.
-- [Data sources](data-sources.md) and [WRDS](wrds.md): produce the raw tier.
-- [Extending quantlab](../developer-guide/extending.md): write a dataset for a
-  new vendor by implementing `_raw_data_to_xr`.
-- The docstrings of `quantlab.dataset.base.BaseDataset`, `quantlab.dataset.raw.RawDataset`,
-  `quantlab.backend.zarr.XrBackend` and `quantlab.dataset._support.ledger.ChunkLedger` for
-  every parameter.
+Writing a dataset or a backend for a new source is covered in
+[Extending quantlab](../dev/extending.md).

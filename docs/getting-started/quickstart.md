@@ -1,50 +1,24 @@
 # Quickstart
 
-This page is a ten-minute tour of the whole quantlab pipeline on synthetic data. You will
-write a small price panel to disk, compute a set of factors and a forward-return label, train
-an XGBoost model to predict that return, backtest a strategy that buys the stocks with the
-highest predictions, and inspect what the backtest wrote. Nothing needs the network, a
-credential or a GPU. Read it after [installation](installation.md); the ideas it touches are
-explained in more depth in [concepts](../user-guide/concepts.md).
-
-The code below is taken from `examples/quickstart.py`, which you can run in one go:
+This tour runs the whole pipeline on synthetic data: write a price panel, define factors and
+a forward-return label, train an XGBoost model, backtest a top-N strategy on its predictions,
+read the run directory and rebuild the run from it. It needs no network, credential or GPU.
+The code is taken from `examples/quickstart.py`; every output below is that script's.
 
 ```bash
 uv run python examples/quickstart.py
 ```
 
-It takes about half a minute on a laptop CPU, most of it spent compiling the factor graph. All
-output shown on this page is real output of that script.
-
-## Before you import anything
-
-One environment variable has to be set before PyTorch or XGBoost is imported, so it comes
-first in the script:
-
-```python
-import os
-import sys
-
-if sys.platform == "darwin":
-    os.environ.setdefault("OMP_NUM_THREADS", "1")
-```
-
-`OMP_NUM_THREADS=1` avoids the macOS OpenMP
-clash between PyTorch and XGBoost described in [installation](installation.md).
+It takes about half a minute, mostly compiling the factor graph. In the snippets, `root` is
+the temporary directory the script works in. The script first sets `OMP_NUM_THREADS=1` on
+macOS (see [installation](installation.md#macos-pytorch-and-xgboost-in-one-process)).
 
 ## Step 1: write a price panel
 
-quantlab passes data between its stages as an `xarray.Dataset` whose variables all sit on
-the two dimensions `timestamp` and `symbol`. Such a dataset is called a panel: one row per
-bar (a bar is one period's open, high, low, close and volume), one column per stock, and one
-variable per field. Panels are stored on disk as Zarr, a chunked array format that xarray
-reads and writes natively.
-
-Normally a panel is converted from files downloaded from a data vendor. Here we fabricate a
-random walk for 16 symbols over 400 business days, with the same variable names the Tiingo
-converter produces. `adjClose` and its siblings are prices adjusted for splits and dividends;
-`close` and its siblings are the unadjusted prices (identical here, as nothing splits). In the
-snippets on this page, `root` is the temporary directory the script works in.
+Stages exchange *panels*: an `xarray.Dataset` whose variables all sit on
+`(timestamp, symbol)`, stored as Zarr. The script fabricates a random walk for 16 symbols
+over 400 business days, with the variable names the Tiingo converter produces (`adj*` are
+split- and dividend-adjusted prices, the others unadjusted).
 
 ```python
 import numpy as np
@@ -70,8 +44,8 @@ panel = xr.Dataset(
 panel.to_zarr(root / "data" / "stock.zarr", mode="w")
 ```
 
-A dataset object is how the rest of the pipeline reaches that store. It is built from a
-config dataclass, `DatasetConfig`, that says where the store lives and what it holds:
+A dataset object, built from a {py:class}`~quantlab.dataset.config.DatasetConfig`, is how
+the rest of the pipeline reads the store:
 
 ```python
 from quantlab.dataset.stock import StockDataset
@@ -92,28 +66,20 @@ print("Price panel:", dict(panel.sizes), "variables:", list(panel.data_vars))
 Price panel: {'timestamp': 400, 'symbol': 16} variables: ['adjClose', 'adjHigh', 'adjLow', 'adjOpen', 'adjVolume', 'close', 'high', 'low', 'open', 'volume']
 ```
 
-`raw_data_dir_path` points at a directory that does not exist: it is only used when
-converting raw downloads, and the Zarr store already exists. `panel(start, end)` returns the
-stored bars from `start` to `end`, both inclusive, opened lazily; the range here covers the
-whole store. The dataset holds nothing afterwards and its config is not changed, so one
-dataset object can answer any number of requests.
+`raw_data_dir_path` is used only when converting raw downloads, so it need not exist.
+`panel(start, end)` opens the stored bars from `start` to `end` inclusive, lazily, and leaves
+the dataset and its config unchanged.
 
 ## Step 2: define factors and a label
 
-A factor is a number computed for every `(timestamp, symbol)` cell from data available at
-that time, for example a 20-day return or a volatility. A label is the quantity a model learns
-to predict, here the return over the next five bars. A factor is a subclass of
-`quantlab.factor.base.Factor`; a label is a factor shifted forward in time by
-`quantlab.label.forward.Forward`. Both produce a panel.
-
-We use two ready-made classes. `Alpha158Stock` computes the Alpha158 feature library (169
-columns in this build: candlestick shapes, lagged prices, rolling returns, volatilities and
-volume statistics) from adjusted prices. `Return` is the forward open-to-open return: the
-value at bar t is `adjOpen[t + 6] / adjOpen[t + 1] - 1` for `n_forward_periods=5`, which is
-what a position entered at the next bar's open and held five bars earns. It is a `Forward`
-label with `span=5` (the bars it accumulates over) and `delay=1` (a signal at bar t fills at
-bar t + 1), so its value at t reads `lookahead_bars()` = 6 bars ahead. Both are computed by
-KunQuant, a library that compiles a declarative graph of operators to native code.
+A factor is a value per `(timestamp, symbol)` computed from data available at that time; a
+label is the quantity a model learns to predict, a factor shifted forward by
+{py:class}`~quantlab.label.forward.Forward`.
+{py:class}`~quantlab.factor.predefined.alpha158.Alpha158Stock` computes the Alpha158 library
+(169 columns). {py:class}`~quantlab.label.predefined.fret.Return` with
+`n_forward_periods=5` is `adjOpen[t + 6] / adjOpen[t + 1] - 1`: a position entered at the
+next bar's open (`delay=1`) and held five bars (`span=5`), so its value at t reads
+`lookahead_bars()` = 6 bars ahead. Both are compiled by KunQuant.
 
 ```python
 import dataclasses
@@ -145,23 +111,17 @@ label = Return(
 )
 ```
 
-`warmup_bars` is a warm-up period in bars. A rolling feature such as a 60-bar moving
-average has no value until 60 bars of history exist, so asked for a date range with
-`compute(start, end)`, the factor reads `warmup_bars` bars before `start`, counted on the
-dataset's own calendar, and trims them off afterwards. The config holds no dates: the range
-is always an argument. `mode="batch"` compiles the graph for a whole date range at once;
-`"stream"` would compile it for bar-by-bar updates. `file_path` is where `build(start, end)`
-would write the factor values; this example computes them in memory and never builds a store.
+A factor config holds no dates. Asked for `compute(start, end)`, the factor also reads
+`warmup_bars` bars before `start` on the dataset's calendar and trims them off. `mode="batch"`
+compiles for a whole range (`"stream"` compiles for bar-by-bar updates). `file_path` is where
+`build(start, end)` would write; this example computes in memory.
 
 ## Step 3: train a model
 
-A model takes a list of factors and a list of labels. `XGBoostRegressor` is a
-gradient-boosted tree model configured with `ModelConfig`. The dates split the model's data in
-time: it trains on bars 0 to 249, holding the last 20 % of that span (`val_size=0.2`) out for
-early stopping, and is evaluated on bars 250 to 299. Keeping the test period strictly after
-the training period is what makes the evaluation honest; a random split would let the model
-see the future. At every split boundary the model also drops the last six bars (the label's
-lookahead) of the earlier segment, so no label it fits on reads a bar of the later segment:
+{py:class}`~quantlab.model.predefined.xgb.XGBoostRegressor` takes the factors and labels
+through a {py:class}`~quantlab.model.config.ModelConfig`. It trains on bars 0 to 249, with
+the last 20 % held out for early stopping (`val_size=0.2`), and is tested on bars 250 to 299.
+At every split boundary it drops the label's six lookahead bars from the earlier segment, so
 the last label it trains on reads bar 249.
 
 ```python
@@ -196,11 +156,9 @@ print(f"{len(features)} features, e.g. {features[:4]}; labels: {model.get_label_
 169 features, e.g. ['KMID', 'KLEN', 'KMID2', 'KUP']; labels: ['ret_5']
 ```
 
-`factor_data_strategy="cal"` tells the model to compute the factors over its
-`start_date`..`end_date` now; `"read"` would read that range from the Zarr stores a previous
-`build()` wrote. `collect()` gathers every factor and
-label into one panel, and `train()` fits the model and returns the path of the checkpoint it
-wrote:
+`factor_data_strategy="cal"` computes the factors now; `"read"` reads them from stores a
+previous `build()` wrote. `collect()` gathers factors and labels into one panel and
+{py:meth}`~quantlab.model.base.BaseModel.train` fits and returns the checkpoint path:
 
 ```python
 model.collect()
@@ -215,22 +173,18 @@ Collected panel: {'timestamp': 300, 'symbol': 16} 170 variables
 Checkpoint: models/XGBoostRegressor_trial_20260927_212057_563434/XGBoostRegressor_total.joblib
 ```
 
-Each call to `train()` creates a new timestamped trial directory, so earlier checkpoints are
-never overwritten. Next to the `.joblib` checkpoint sit a `config.json` recording the model,
-its factors and labels, and a `run.json` with the training windows, the metrics and the
-hyperparameters XGBoost actually used, which `quantlab.runs.trained_run.TrainedRun` reads back. The training and test
-metrics also go to the config's `tracker`, which by default sends them nowhere
-(see [experiment tracking](installation.md#experiment-tracking)). Walk-forward cross-validation
-through `train_cv()` is covered in [models](../user-guide/models.md).
+Each `train()` writes a new timestamped trial directory beside earlier ones, holding the
+checkpoint and the model's recipe and training record, read back by
+{py:class}`~quantlab.runs.trained_run.TrainedRun`. Walk-forward training with `train_cv()` is
+in [models](../user-guide/models.md).
 
 ## Step 4: backtest the model
 
-A backtest replays the model over a period and simulates trading its predictions.
-`USEquityCrossectionSelectStockVectorBt` implements a cross-sectional strategy: every
-`rebalance_periods` bars its `constructor`, here a `TopNConstructor`, ranks all symbols by
-their predicted return and holds the `top_n` best in equal weights. Orders decided at the close of bar t are filled at the open of bar t+1,
-so the strategy never trades on a price it could not have seen. The simulation itself is done
-by vectorbt.
+{py:class}`~quantlab.backtest.predefined.us_equity.USEquityCrossectionSelectStockVectorBt`
+asks its constructor for weights every `rebalance_periods` bars;
+{py:class}`~quantlab.portfolio.predefined.top_n.TopNConstructor` holds the `top_n` symbols
+with the highest predictions in equal weights. Orders decided at bar t's close fill at bar
+t+1's open; vectorbt simulates them.
 
 ```python
 from quantlab.backtest.predefined.us_equity import USEquityCrossectionSelectStockVectorBt
@@ -254,24 +208,18 @@ backtester = USEquityCrossectionSelectStockVectorBt(
 result = backtester.run()
 ```
 
-With `model_mode="load"` the backtester builds the model from its config and restores the
-trained booster from `checkpoint`; `model_mode="train"` would train it first. It then
-computes the factors over the backtest window, each reading its own `warmup_bars` earlier
-bars to warm up,
-predicts, turns the predictions into target weights and simulates them. Fees and slippage
-default to 5 basis points each, and the portfolio starts with 1,000,000 in cash.
-
-The backtester counts the bars from `train_start` up to the bar the last fitted label reads
-as in-sample and reports them separately (results on data the model was fitted to are
-optimistic by construction). Here that is bar 249, so this window, from bar 260, has none. The
-backtest also checks that the label's `delay` equals the engine's fill delay, one bar for
-vectorbt, so the model learns the return the backtest trades.
+`model_mode="load"` restores the booster from `checkpoint` (`"train"` trains first). The
+backtester computes the factors over its window with their warm-up, predicts, builds weights
+and simulates, with 5 bp fees and 5 bp slippage on 1,000,000 of starting cash. Bars up to the
+last one the fitted labels read (bar 249 here) count as in-sample and are reported apart; this
+window has none. It also checks that the label's `delay` equals the engine's one-bar fill
+delay.
 
 ## Step 5: look at the results
 
-`run()` returns a `BacktestResult` holding the predictions, the target weights, the
-simulation and the metrics, and it writes all of them to a new run directory under
-`output_dir`, which `BacktestRun` reads back:
+`run()` returns a {py:class}`~quantlab.backtest.base.BacktestResult` and writes a new run
+directory under `output_dir`, read back by
+{py:class}`~quantlab.runs.backtest_run.BacktestRun`:
 
 ```python
 from quantlab.runs.backtest_run import BacktestRun
@@ -290,15 +238,10 @@ Predictions: ['ret_5'] {'timestamp': 140, 'symbol': 16}
 First rebalance: {'S03': 0.25, 'S07': 0.25, 'S08': 0.25, 'S09': 0.25}
 ```
 
-The predictions are themselves a panel, one variable per label. The weights panel holds the
-target fraction of the portfolio for every symbol on rebalance bars (here the four chosen
-symbols get 25 % each and the rest 0) and NaN on the bars in between, meaning "no change".
-The run directory also holds `report.html`, an interactive equity-curve report you can open in
-a browser.
-
-The metrics come in groups: `whole` for the whole window, `in_sample` and `out_of_sample` for
-the parts that do and do not overlap the model's training data, plus the date ranges of each
-part and some notes on how the numbers are computed:
+Predictions are a panel with one variable per label. Weights hold target fractions on
+rebalance bars and NaN ("no change") in between. The run directory also holds `report.html`,
+an interactive report. Metrics are grouped into `whole`, `in_sample` and `out_of_sample`,
+with their ranges and notes:
 
 ```python
 whole = result.metrics["whole"]
@@ -318,16 +261,12 @@ In-sample range: None
 Out-of-sample ranges: [('2023-01-02', '2023-07-14')]
 ```
 
-Do not read anything into these numbers: the prices are a random walk, so any profit is luck.
-The point is the shape of the output.
+The prices are a random walk, so the numbers mean nothing; only the shape of the output does.
 
 ## Step 6: reproduce the run from its directory
 
-Every object in the run was built from a config dataclass, and the run directory keeps them
-all as its recipe, nested: the backtester's parameters, the price dataset, the model with its
-factors and labels, and the checkpoint. Each entry names the class that built it by its dotted
-import path. `rebuild_backtester()` reconstructs the backtester from the recipe, so the run can
-be repeated without the script that created it:
+The run directory keeps every config of the run as a nested recipe, each entry naming its
+class by import path. `rebuild_backtester()` reconstructs the backtester without the script:
 
 ```python
 rebuilt = run.rebuild_backtester()
@@ -340,19 +279,13 @@ print("Rebuilt from its run directory, same equity curve:", same)
 Rebuilt from its run directory, same equity curve: True
 ```
 
-The re-run also compares the data it reads against the fingerprints recorded in the first
-run (a hash of every request for price and factor inputs) and warns if the underlying data has
-changed; the rebuild warns as well when the code of a component or a library version changed.
+The re-run compares the data it reads with the fingerprints the first run recorded and warns
+if the data, a component's code or a library version changed.
 
 ## Where to go next
 
-- [Concepts](../user-guide/concepts.md) explains the stages, panels, configs and run
-  directories used above.
-- [Data sources](../user-guide/data-sources.md) and [datasets](../user-guide/datasets.md)
-  replace the synthetic panel with real downloads.
-- [Factors](../user-guide/factors.md) shows how to write your own factor with KunQuant or
-  Polars.
-- [Models](../user-guide/models.md) covers the other model heads and walk-forward
-  cross-validation.
-- [Backtesting](../user-guide/backtesting.md) covers long/short books, cross-validated
-  backtests and the report.
+- [Concepts](../user-guide/concepts.md): stages, panels, configs and run directories.
+- [Data sources](../user-guide/data-sources.md) and [datasets](../user-guide/datasets.md):
+  real data instead of the synthetic panel.
+- [Factors](../user-guide/factors.md), [models](../user-guide/models.md) and
+  [backtesting](../user-guide/backtesting.md): each stage in depth.

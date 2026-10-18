@@ -132,7 +132,7 @@ not list refuses the build. Built by
 `market/massive/massive_ticker_map` and Sharadar's SEP and TICKERS, from the later of the Ticker
 map's first day and 2020-01-01 (Massive's disclosures start in 2020-01); first built by
 `scripts/massive/disclosures.py`, then appended day by day by the daily data update.
-docs/massive.md, "8-K disclosures". Licensed data: personal use.
+docs/user-guide/massive.md, "8-K disclosures". Licensed data: personal use.
 """
 
     def _on_config_installed(self) -> None:
