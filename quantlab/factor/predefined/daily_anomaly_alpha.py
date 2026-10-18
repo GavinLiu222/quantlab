@@ -1,8 +1,8 @@
 """Twenty daily equity anomalies from mechanisms the other factor bundles do not cover, in one KunQuant graph.
 
 Each output is one published mechanism, computed from the daily SEP bars,
-DAILY's market cap, the 8-K items of Sharadar EVENTS, Sharadar ACTIONS'
-spin-offs and SPAC mergers and the SF2 insider gifts, and signed so the
+DAILY's market cap, the 8-K items of Sharadar EVENTS and the acquisitions
+and SPAC mergers of Sharadar ACTIONS, and signed so the
 source paper expects a higher value to predict a higher return. Windows,
 return frequencies and signs are the papers'; none was tuned.
 
@@ -14,6 +14,8 @@ output                         formula                                          
                                (an announcement expected in the next 21 bars), else 0            Barber et al. (2013)
 ``earnings_delay``             -1 if last year's announcement date plus 252 bars has passed      Johnson and So (2018)
                                within 21 bars and no item 2.02 came in the last 42, else 0
+``earnings_early``             1 for 63 bars after an item 2.02 that comes 5 to 21 bars before   Chambers and Penman (1984);
+                               last year's date (the last 5 bars, last year's 231-247 bars ago)  Johnson and So (2018)
 ``dividend_month``             1 if a dividend went ex 231-251 or 42-62 bars ago, else 0         Hartzmark and Solomon (2013)
 ``return_seasonality``         mean 21-bar return over the same 21 bars of the last 5 years      Heston and Sadka (2008)
 ``lockup_expiry``              -1 from 104 to 129 bars after a stock's first price (the          Field and Hanka (2001)
@@ -30,8 +32,6 @@ output                         formula                                          
 ``news_drift_gap``             sum of the returns on 8-K bars less that on the others, 63 bars   Chan (2003)
 ``earnings_volume``            log abnormal volume of the 3 bars to the one after an item 2.02,  Lerman, Livnat and Mendenhall
                                against the 63 bars before, the last 63 bars' announcement        (2008)
-``insider_gift``               minus the bars with an insider gift of shares (SF2 code G), 252   Yermack (2009); Avci, Schipani
-                               bars: insiders time gifts at peaks for the tax deduction          and Seyhun (2016)
 *Corporate actions*
 ``split_signal``               forward splits less reverse splits, 252 bars                      Ikenberry, Rankine and Stice
                                                                                                  (1996); Desai and Jain (1997)
@@ -42,8 +42,8 @@ output                         formula                                          
                                                                                                  (1995)
 ``debt_issuance_8k``           minus the 8-K item 2.03 (new direct financial obligation)         Spiess and Affleck-Graves (1999)
                                filings, 252 bars
-``spinoff``                    1 for 756 bars after a spin-off, on the parent and on the         Cusatis, Miles and Woolridge
-                               spun-off security, else 0                                         (1993)
+``acquisition_payment``        acquisitions paid in cash less those paid in stock (or stock and  Loughran and Vijh (1997)
+                               cash), on the acquirer, 1260 bars
 ``despac``                     -1 for 756 bars after the security's SPAC merger, else 0          Klausner, Ohlrogge and Ruan
                                                                                                  (2022); Gahng, Ritter and Zhang
                                                                                                  (2023)
@@ -60,11 +60,14 @@ market cap (for a 21-bar return, the market's 21-bar return weighted by the
 cap 21 bars before; the 21-bar returns overlap, one per bar). Turnover ``V``
 is ``adjClose * adjVolume / marketcap``. An 8-K bar of ``news_drift_gap`` is
 one on which, or on the bar after which, an item 1.01, 2.01, 2.02, 5.02,
-7.01 or 8.01 filing is available.
+7.01 or 8.01 filing is available. An acquisition is placed on the acquirer
+from the acquired company's ACTIONS row, which names the acquirer
+(``acquisition_counterparty``) and what its holders received
+(``acquirer_payments``).
 
 Windowed statistics skip missing bars and need 80% of their window (the
 downside beta 50 down bars); a statistic short of that is NaN. Event flags
-(and the action and gift flags) are 0 on a priced bar without one and NaN
+(and the action flags) are 0 on a priced bar without one and NaN
 before their source's first one (``fundamental_alpha.fill_flows``). ``dividend_change`` and
 ``dividend_initiation`` carry their state from the first bar of the read
 window, so ``warmup_bars`` (``WARMUP_BARS``) must cover the longest window
@@ -80,11 +83,10 @@ Frazzini and Lamont (2007); Barber, De George, Lehavy and Trueman (2013);
 Johnson and So (2018); Hartzmark and Solomon (2013); Heston and Sadka
 (2008); Field and Hanka (2001); Harvey and Siddique (2000); Ang, Chen and
 Xing (2006); Da, Gurun and Warachka (2014); Akbas, Boehmer, Jiang and Koch
-(2022); Chan (2003); Lerman, Livnat and Mendenhall (2008); Yermack (2009);
-Avci, Schipani and Seyhun (2016); Ikenberry, Rankine and Stice (1996); Desai
+(2022); Chan (2003); Lerman, Livnat and Mendenhall (2008); Chambers and
+Penman (1984); Ikenberry, Rankine and Stice (1996); Desai
 and Jain (1997); Asquith and Mullins (1983); Michaely, Thaler and Womack
-(1995); Spiess and Affleck-Graves (1999); Cusatis, Miles and Woolridge
-(1993); Klausner, Ohlrogge and Ruan (2022); Gahng, Ritter and Zhang (2023);
+(1995); Spiess and Affleck-Graves (1999); Loughran and Vijh (1997); Klausner, Ohlrogge and Ruan (2022); Gahng, Ritter and Zhang (2023);
 Ritter (1991); Loughran and Ritter (1995); Chordia, Subrahmanyam and
 Anshuman (2001).
 """
@@ -123,9 +125,11 @@ from quantlab.factor.predefined.fundamental_alpha import fill_flows
 
 #: 8-K items read as news by ``news_drift_gap``: 1.01, 2.01, 2.02, 5.02, 7.01, 8.01.
 NEWS_EVENTS = ("event_11", "event_21", "event_22", "event_52", "event_71", "event_81")
-#: Corporate actions (ACTIONS) and insider gifts (SF2) the graph reads.
-ACTION_COLUMNS = ("spinoff_side", "spac_merger", "net_shares_G")
-#: Data columns the graph reads: SEP, DAILY's market cap, the 8-K items, the actions and the gifts.
+#: ACTIONS columns read: the acquired company's rows (side, consideration, acquirer) and SPAC mergers.
+ACTION_COLUMNS = ("acquisition_side", "acquisition_consideration", "acquisition_counterparty", "spac_merger")
+#: Derived input: +1 per cash and -1 per stock-paid acquisition, on the acquirer's effective date.
+ACQUIRER_PAYMENT = "acquirer_payment"
+#: Data columns the panel provides: SEP, DAILY's market cap, the 8-K items and the actions.
 DAILY_ANOMALY_COLUMNS = (
     "adjOpen", "adjClose", "adjVolume", "divCash", "splitFactor", "marketcap", *NEWS_EVENTS, "event_23",
     *ACTION_COLUMNS,
@@ -134,10 +138,10 @@ DAILY_ANOMALY_COLUMNS = (
 EVENT_COLUMNS = (*NEWS_EVENTS, "event_23")
 #: The outputs, in order.
 DAILY_ANOMALY_OUTPUTS = (
-    "earnings_month", "earnings_delay", "dividend_month", "return_seasonality", "lockup_expiry",
+    "earnings_month", "earnings_delay", "earnings_early", "dividend_month", "return_seasonality", "lockup_expiry",
     "coskewness", "downside_beta_gap",
-    "frog_in_pan", "daytime_reversal", "news_drift_gap", "earnings_volume", "insider_gift",
-    "split_signal", "dividend_change", "dividend_initiation", "debt_issuance_8k", "spinoff", "despac",
+    "frog_in_pan", "daytime_reversal", "news_drift_gap", "earnings_volume",
+    "split_signal", "dividend_change", "dividend_initiation", "debt_issuance_8k", "acquisition_payment", "despac",
     "listing_age", "turnover_volatility",
 )
 YEAR, QUARTER, MONTH, WEEK = 252, 63, 21, 5
@@ -208,14 +212,41 @@ def _event_count(flag: OpBase, window: int, back: int) -> OpBase:
     return BackRef(total, back) if back else total
 
 
+def acquirer_payments(side: np.ndarray, consideration: np.ndarray, counterparty: np.ndarray,
+                      symbols: np.ndarray) -> np.ndarray:
+    """Place each acquisition on its acquirer: +1 if paid in cash, -1 if in stock or stock and cash.
+
+    ACTIONS records the payment on the acquired company's row (``side`` 1 or
+    3), with the acquirer's permaticker in ``counterparty``; the result puts
+    it on the acquirer's column on the same bar, 0 elsewhere. An acquirer
+    outside ``symbols`` or another consideration is left out.
+
+    Examples
+    --------
+    >>> side = np.array([[1.0, np.nan], [np.nan, np.nan]])
+    >>> acquirer_payments(side, np.array([[2.0, np.nan], [np.nan] * 2]), np.array([[20.0, np.nan], [np.nan] * 2]),
+    ...                   np.array([10, 20])).tolist()
+    [[0.0, -1.0], [0.0, 0.0]]
+    """
+    out = np.zeros(side.shape)
+    # Permatickers, as integers or as their decimal strings.
+    column = {str(symbol): k for k, symbol in enumerate(symbols)}
+    rows, cols = np.nonzero(np.isin(side, (1.0, 3.0)) & np.isfinite(counterparty))
+    for t, j in zip(rows, cols):
+        target = column.get(str(int(counterparty[t, j])))
+        kind = consideration[t, j]
+        if target is not None and kind in (1.0, 2.0, 3.0):
+            out[t, target] += 1.0 if kind == 1.0 else -1.0
+    return out
+
+
 class DailyAnomalyAlpha(FactorKunQuant):
     """Compute the twenty daily calendar, risk-shape, behavioural, corporate-action and liquidity anomalies.
 
     The panel merges SEP (adjusted open, close and volume, the cash dividend
     and the split factor), DAILY (market cap) and
     Sharadar EVENTS (``EVENT_COLUMNS``: ``NEWS_EVENTS`` and item 2.03),
-    ACTIONS (``spinoff_side``, ``spac_merger``) and SF2 (``net_shares_G``),
-    and ``data_columns`` must be
+    and ACTIONS (``ACTION_COLUMNS``), and ``data_columns`` must be
     ``DAILY_ANOMALY_COLUMNS``. ``kwargs={"ranked": True}`` makes every
     output its cross-sectional percentile rank, the input
     ``NeutralizedFactor`` should wrap.
@@ -297,6 +328,11 @@ class DailyAnomalyAlpha(FactorKunQuant):
             passed = _event_count(BackRef(results, YEAR), MONTH, 0) > 0.5
             silent = WindowedSum(results, 2 * MONTH) < 0.5
             out["earnings_delay"] = 0.0 - _flag(And(passed, silent), WindowedSum(results, 2 * MONTH) + close * 0.0)
+            # Early: an announcement in the last 5 bars while last year's was 5 to 21 bars later in the year.
+            recent_news = WindowedSum(results, WEEK) > 0.5
+            later_last_year = _event_count(results, 17, YEAR - MONTH) > 0.5
+            early = _flag(And(recent_news, later_last_year), WindowedSum(results, WEEK) + close * 0.0)
+            out["earnings_early"] = _flag(WindowedSum(early, QUARTER) > 0.5, WindowedSum(early, QUARTER))
             paid = _flag(_zero(dividend) > 0.0, close)
             out["dividend_month"] = expected(paid)
 
@@ -363,8 +399,6 @@ class DailyAnomalyAlpha(FactorKunQuant):
             abnormal = Log(_ratio(WindowedSum(volume, 3), 3.0 * normal))
             measured = Select(announced, abnormal, _nan())
             out["earnings_volume"] = _mean(measured, QUARTER, 1)
-            gift = Input("net_shares_G")
-            out["insider_gift"] = 0.0 - WindowedSum(_flag(gift < 0.0, gift), YEAR)
 
             # Corporate actions.
             factor = Select(split > 0.0, split, ConstantOp(1.0))
@@ -391,9 +425,7 @@ class DailyAnomalyAlpha(FactorKunQuant):
             out["dividend_initiation"] = _flag(new_initiated < float(YEAR), close)
 
             out["debt_issuance_8k"] = 0.0 - WindowedSum(debt, YEAR)
-            spun = Input("spinoff_side")
-            out["spinoff"] = _flag(WindowedSum(_flag(spun > 0.0, spun), THREE_YEARS) > 0.5,
-                                   WindowedSum(spun, THREE_YEARS) + close * 0.0)
+            out["acquisition_payment"] = WindowedSum(Input(ACQUIRER_PAYMENT), FIVE_YEARS)
             merged = Input("spac_merger")
             out["despac"] = 0.0 - _flag(WindowedSum(merged, THREE_YEARS) > 0.5,
                                         WindowedSum(merged, THREE_YEARS) + close * 0.0)
@@ -411,20 +443,24 @@ class DailyAnomalyAlpha(FactorKunQuant):
     def _kunquant_inputs(
         self, inputs: xr.Dataset
     ) -> tuple[dict[str, np.ndarray], np.ndarray, np.ndarray]:
-        """Export the panel as float64 and fill the 8-K, action and gift flags with 0 on priced bars."""
+        """Export the panel as float64, place each acquisition on its acquirer and fill the flags with 0 on priced bars."""
         panel = self.config.dataset.to_shared_names(inputs).sortby(["timestamp", "symbol"])
         arrays = {
             column: np.ascontiguousarray(
                 panel[column].transpose("timestamp", "symbol").astype(np.float64).to_numpy())
             for column in self.config.data_columns
         }
+        symbols = panel["symbol"].values
+        arrays[ACQUIRER_PAYMENT] = acquirer_payments(
+            arrays.pop("acquisition_side"), arrays.pop("acquisition_consideration"),
+            arrays.pop("acquisition_counterparty"), symbols)
         priced = np.isfinite(arrays["adjClose"])
         # Each source starts on its own first event.
-        for group in (EVENT_COLUMNS, ("spinoff_side",), ("spac_merger",), ("net_shares_G",)):
+        for group in (EVENT_COLUMNS, (ACQUIRER_PAYMENT,), ("spac_merger",)):
             fill_flows(arrays, group, priced)
-        for column in (*EVENT_COLUMNS, *ACTION_COLUMNS):
+        for column in (*EVENT_COLUMNS, ACQUIRER_PAYMENT, "spac_merger"):
             arrays[column] = arrays[column].astype(np.float64)
-        return arrays, panel["symbol"].values, panel["timestamp"].values
+        return arrays, symbols, panel["timestamp"].values
 
     def _make(self):
         """Compile the batch graph in double precision."""
@@ -439,4 +475,4 @@ class DailyAnomalyAlpha(FactorKunQuant):
         return compile_graphs([(module_name, self._get_factor_func(), compiler)], module_name)
 
 
-__all__ = ["DAILY_ANOMALY_COLUMNS", "DAILY_ANOMALY_OUTPUTS", "WARMUP_BARS", "DailyAnomalyAlpha"]
+__all__ = ["DAILY_ANOMALY_COLUMNS", "DAILY_ANOMALY_OUTPUTS", "WARMUP_BARS", "DailyAnomalyAlpha", "acquirer_payments"]

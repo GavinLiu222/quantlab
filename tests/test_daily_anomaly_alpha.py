@@ -3,8 +3,9 @@
 The panel is 16 symbols over 1,400 business days (more than the 1,260-bar
 long-term reversal): random adjusted prices, opens, volumes and market caps,
 quarterly dividends with a raise and a 2-for-1 split, a dividend
-initiation, a reverse split, sparse 8-K items, spin-offs, SPAC mergers and
-insider gifts (each source starting on its own bar). Symbol 5 has a four-bar hole, symbol 9 is delisted from bar
+initiation, a reverse split, sparse 8-K items, acquisitions (with an
+acquirer outside the panel) and SPAC mergers (each source starting on its
+own bar). Symbol 5 has a four-bar hole, symbol 9 is delisted from bar
 1,300, symbol 12 lists on bar 1,200 and the 8-K items start on bar 30.
 """
 
@@ -24,7 +25,7 @@ from quantlab.factor.predefined.daily_anomaly_alpha import (
 
 DAYS = pd.bdate_range("2019-01-01", periods=1400)
 START, END = DAYS[0].strftime("%Y-%m-%d"), DAYS[-1].strftime("%Y-%m-%d")
-SYMBOLS = [f"s{i:02d}" for i in range(16)]
+SYMBOLS = [str(100 + i) for i in range(16)]
 EVENTS = (*NEWS_EVENTS, "event_23")
 
 
@@ -53,12 +54,14 @@ def _panel() -> xr.Dataset:
         rate = 0.016 if name == "event_22" else 0.01
         data[name] = (rng.random(shape) < rate).astype(float)
         data[name][:30] = np.nan
-    data["spinoff_side"] = np.where(rng.random(shape) < 0.002, rng.choice([1.0, 2.0], size=shape), np.nan)
-    data["spinoff_side"][:100] = np.nan
+    acquired = rng.random(shape) < 0.002
+    acquired[:5] = False
+    data["acquisition_side"] = np.where(acquired, 1.0, np.nan)
+    data["acquisition_consideration"] = np.where(acquired, rng.choice([1.0, 2.0, 3.0], size=shape), np.nan)
+    # Acquirers among the symbols, and one outside them (99), which is left out.
+    data["acquisition_counterparty"] = np.where(acquired, rng.choice([*range(100, 116), 99], size=shape), np.nan)
     data["spac_merger"] = (rng.random(shape) < 0.002).astype(float)
     data["spac_merger"][:200] = 0.0
-    data["net_shares_G"] = np.where(rng.random(shape) < 0.02, -rng.lognormal(7, 1, size=shape), np.nan)
-    data["net_shares_G"][:300] = np.nan
     for s in range(16):  # quarterly results at a fixed phase, so the calendar outputs fire
         data["event_22"][30 + 3 * s::63, s] = 1.0
     for name, x in data.items():
@@ -114,13 +117,20 @@ def _flag(condition: pd.DataFrame, carrier: pd.DataFrame) -> pd.DataFrame:
 
 def _reference(panel) -> dict[str, pd.DataFrame]:
     p = {name: panel[name].to_pandas() for name in DAILY_ANOMALY_COLUMNS}
+    payment = np.zeros(p["adjClose"].shape)
+    side, kind, buyer = (p[n].to_numpy() for n in ("acquisition_side", "acquisition_consideration",
+                                                    "acquisition_counterparty"))
+    for t, j in zip(*np.nonzero(side == 1.0)):
+        if 100 <= buyer[t, j] < 116:
+            payment[t, int(buyer[t, j]) - 100] += 1.0 if kind[t, j] == 1.0 else -1.0
+    p["acquirer_payment"] = pd.DataFrame(payment, index=p["adjClose"].index, columns=p["adjClose"].columns)
     c, o, v, cap = p["adjClose"], p["adjOpen"], p["adjVolume"], p["marketcap"]
     priced = np.isfinite(c)
     ev = {name: p[name].where(priced) for name in EVENTS}  # fill_flows: 0 on priced bars once started
     for name in EVENTS:
         ev[name] = ev[name].fillna(0).where(priced)
         ev[name].iloc[:30] = np.nan
-    for name in ("spinoff_side", "spac_merger", "net_shares_G"):  # each from its own first event
+    for name in ("acquirer_payment", "spac_merger"):  # each from its own first event
         flow = p[name].where(priced).fillna(0).where(priced)
         first = int(np.argmax((flow.abs().sum(axis=1) > 0).to_numpy()))
         flow.iloc[:first] = np.nan
@@ -138,6 +148,10 @@ def _reference(panel) -> dict[str, pd.DataFrame]:
     passed = ev["event_22"].shift(252).rolling(21).sum() > 0.5
     recent = ev["event_22"].rolling(42).sum()
     out["earnings_delay"] = -_flag(passed & (recent < 0.5), recent + c * 0)
+    last5 = ev["event_22"].rolling(5).sum()
+    later = ev["event_22"].rolling(17).sum().shift(231) > 0.5
+    early = _flag((last5 > 0.5) & later, last5 + c * 0)
+    out["earnings_early"] = _flag(early.rolling(63).sum() > 0.5, early.rolling(63).sum())
     paid = _flag(p["divCash"].fillna(0) > 0, c)
     out["dividend_month"] = expected(paid)
 
@@ -189,8 +203,7 @@ def _reference(panel) -> dict[str, pd.DataFrame]:
     normal = _mean(v, 63).shift(3)
     abnormal = np.log((v.rolling(3).sum() / (3 * normal)).where(3 * normal > 1e-12))
     out["earnings_volume"] = _mean(abnormal.where(announced), 63, 1)
-    gift = ev["net_shares_G"]
-    out["insider_gift"] = -_flag(gift < 0, gift).rolling(252).sum()
+
 
     split = p["splitFactor"]
     direction = np.where(split > 1.0001, 1.0, np.where(split < 0.9999, -1.0, 0.0))
@@ -215,8 +228,7 @@ def _reference(panel) -> dict[str, pd.DataFrame]:
     out["dividend_change"] = pd.DataFrame(change, index=c.index, columns=c.columns).where(priced)
     out["dividend_initiation"] = pd.DataFrame(initiation, index=c.index, columns=c.columns).where(priced)
     out["debt_issuance_8k"] = -ev["event_23"].rolling(252).sum()
-    spun = ev["spinoff_side"]
-    out["spinoff"] = _flag(_flag(spun > 0, spun).rolling(756).sum() > 0.5, spun.rolling(756).sum() + c * 0)
+    out["acquisition_payment"] = ev["acquirer_payment"].rolling(1260).sum()
     merged = ev["spac_merger"]
     out["despac"] = -_flag(merged.rolling(756).sum() > 0.5, merged.rolling(756).sum() + c * 0)
 
@@ -241,10 +253,11 @@ def test_every_output_matches_its_formula(panel, outputs, name):
 
 def test_the_calendar_and_action_outputs_fire(outputs):
     for name in ("earnings_month", "dividend_month", "split_signal", "dividend_change", "lockup_expiry",
-                 "dividend_initiation", "spinoff", "despac", "insider_gift"):
+                 "dividend_initiation", "acquisition_payment", "despac", "earnings_early"):
         assert np.nanmax(np.abs(outputs[name].values)) > 0, name
+    assert outputs["acquisition_payment"].min() < 0 < outputs["acquisition_payment"].max()
     # Symbol 3's dividend halves at its 2-for-1 split: per pre-split share it is unchanged.
-    change = outputs["dividend_change"].sel(symbol="s03").to_series()
+    change = outputs["dividend_change"].sel(symbol="103").to_series()
     assert np.allclose(change.iloc[720:900].dropna(), 0.0)
 
 
