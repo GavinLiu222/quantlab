@@ -1,7 +1,8 @@
 """Twenty daily equity anomalies from mechanisms the other factor bundles do not cover, in one KunQuant graph.
 
 Each output is one published mechanism, computed from the daily SEP bars,
-DAILY's market cap and the 8-K items of Sharadar EVENTS, and signed so the
+DAILY's market cap, the 8-K items of Sharadar EVENTS, Sharadar ACTIONS'
+spin-offs and SPAC mergers and the SF2 insider gifts, and signed so the
 source paper expects a higher value to predict a higher return. Windows,
 return frequencies and signs are the papers'; none was tuned.
 
@@ -15,11 +16,6 @@ output                         formula                                          
                                within 21 bars and no item 2.02 came in the last 42, else 0
 ``dividend_month``             1 if a dividend went ex 231-251 or 42-62 bars ago, else 0         Hartzmark and Solomon (2013)
 ``return_seasonality``         mean 21-bar return over the same 21 bars of the last 5 years      Heston and Sadka (2008)
-``weekday_seasonality``        mean open-to-open return on the weekday the label's return falls  Keloharju, Linnainmaa and
-                               on, 3 to 50 weeks back (the bars 5k - 2 back), less the mean      Nyberg (2016)
-                               open-to-open return over those weeks
-``tax_loss_rebound``           minus the 252-bar return where negative, 0 for a gain, from       Roll (1983); Grinblatt and
-                               December 15 to January 31; NaN on the other bars                  Moskowitz (2004)
 ``lockup_expiry``              -1 from 104 to 129 bars after a stock's first price (the          Field and Hanka (2001)
                                180-day IPO lock-up ends near bar 124), else 0
 *Systematic risk beyond the linear beta*
@@ -34,8 +30,8 @@ output                         formula                                          
 ``news_drift_gap``             sum of the returns on 8-K bars less that on the others, 63 bars   Chan (2003)
 ``earnings_volume``            log abnormal volume of the 3 bars to the one after an item 2.02,  Lerman, Livnat and Mendenhall
                                against the 63 bars before, the last 63 bars' announcement        (2008)
-``nominal_price``              log of the unadjusted close: low-priced stocks are overpriced     Birru and Wang (2016);
-                               by investors who overestimate their upside                        Kumar (2009)
+``insider_gift``               minus the bars with an insider gift of shares (SF2 code G), 252   Yermack (2009); Avci, Schipani
+                               bars: insiders time gifts at peaks for the tax deduction          and Seyhun (2016)
 *Corporate actions*
 ``split_signal``               forward splits less reverse splits, 252 bars                      Ikenberry, Rankine and Stice
                                                                                                  (1996); Desai and Jain (1997)
@@ -46,6 +42,11 @@ output                         formula                                          
                                                                                                  (1995)
 ``debt_issuance_8k``           minus the 8-K item 2.03 (new direct financial obligation)         Spiess and Affleck-Graves (1999)
                                filings, 252 bars
+``spinoff``                    1 for 756 bars after a spin-off, on the parent and on the         Cusatis, Miles and Woolridge
+                               spun-off security, else 0                                         (1993)
+``despac``                     -1 for 756 bars after the security's SPAC merger, else 0          Klausner, Ohlrogge and Ruan
+                                                                                                 (2022); Gahng, Ritter and Zhang
+                                                                                                 (2023)
 *Life cycle and liquidity over time*
 ``listing_age``                bars with a price in the last 756 over 756: a stock listed less   Ritter (1991); Loughran and
                                than three years ago scores below 1                               Ritter (1995)
@@ -59,16 +60,12 @@ market cap (for a 21-bar return, the market's 21-bar return weighted by the
 cap 21 bars before; the 21-bar returns overlap, one per bar). Turnover ``V``
 is ``adjClose * adjVolume / marketcap``. An 8-K bar of ``news_drift_gap`` is
 one on which, or on the bar after which, an item 1.01, 2.01, 2.02, 5.02,
-7.01 or 8.01 filing is available. ``weekday_seasonality`` is aligned with
-the open-to-open label of quantlab's ``Return``: the return from the open of
-bar ``t + 1`` to that of ``t + 2`` is the open-to-open return ``t + 2``, so
-the same weekday is ``5k - 2`` bars back. The tax season comes from each
-bar's date (``TAX_SEASON``).
+7.01 or 8.01 filing is available.
 
 Windowed statistics skip missing bars and need 80% of their window (the
 downside beta 50 down bars); a statistic short of that is NaN. Event flags
-are 0 on a priced bar without a filing and NaN before EVENTS starts
-(``fundamental_alpha.fill_flows``). ``dividend_change`` and
+(and the action and gift flags) are 0 on a priced bar without one and NaN
+before their source's first one (``fundamental_alpha.fill_flows``). ``dividend_change`` and
 ``dividend_initiation`` carry their state from the first bar of the read
 window, so ``warmup_bars`` (``WARMUP_BARS``) must cover the longest window
 and the 504-bar dividend gap.
@@ -81,14 +78,15 @@ References
 ----------
 Frazzini and Lamont (2007); Barber, De George, Lehavy and Trueman (2013);
 Johnson and So (2018); Hartzmark and Solomon (2013); Heston and Sadka
-(2008); Keloharju, Linnainmaa and Nyberg (2016); Roll (1983); Grinblatt and
-Moskowitz (2004); Field and Hanka (2001); Harvey and Siddique (2000); Ang,
-Chen and Xing (2006); Da, Gurun and Warachka (2014); Akbas, Boehmer, Jiang
-and Koch (2022); Chan (2003); Lerman, Livnat and Mendenhall (2008); Birru
-and Wang (2016); Kumar (2009); Ikenberry, Rankine and Stice (1996); Desai
+(2008); Field and Hanka (2001); Harvey and Siddique (2000); Ang, Chen and
+Xing (2006); Da, Gurun and Warachka (2014); Akbas, Boehmer, Jiang and Koch
+(2022); Chan (2003); Lerman, Livnat and Mendenhall (2008); Yermack (2009);
+Avci, Schipani and Seyhun (2016); Ikenberry, Rankine and Stice (1996); Desai
 and Jain (1997); Asquith and Mullins (1983); Michaely, Thaler and Womack
-(1995); Spiess and Affleck-Graves (1999); Ritter (1991); Loughran and Ritter
-(1995); Chordia, Subrahmanyam and Anshuman (2001).
+(1995); Spiess and Affleck-Graves (1999); Cusatis, Miles and Woolridge
+(1993); Klausner, Ohlrogge and Ruan (2022); Gahng, Ritter and Zhang (2023);
+Ritter (1991); Loughran and Ritter (1995); Chordia, Subrahmanyam and
+Anshuman (2001).
 """
 
 from __future__ import annotations
@@ -97,7 +95,6 @@ import math
 import platform
 
 import numpy as np
-import pandas as pd
 import xarray as xr
 from KunQuant.Driver import KunCompilerConfig
 from KunQuant.Op import Builder, ConstantOp, Input, OpBase, Output, Rank
@@ -108,7 +105,6 @@ from KunQuant.ops import (
     Equals,
     Log,
     Max,
-    Min,
     Not,
     Or,
     Select,
@@ -127,33 +123,31 @@ from quantlab.factor.predefined.fundamental_alpha import fill_flows
 
 #: 8-K items read as news by ``news_drift_gap``: 1.01, 2.01, 2.02, 5.02, 7.01, 8.01.
 NEWS_EVENTS = ("event_11", "event_21", "event_22", "event_52", "event_71", "event_81")
-#: Data columns the graph reads: SEP (with the unadjusted close), DAILY's market cap and the 8-K items.
+#: Corporate actions (ACTIONS) and insider gifts (SF2) the graph reads.
+ACTION_COLUMNS = ("spinoff_side", "spac_merger", "net_shares_G")
+#: Data columns the graph reads: SEP, DAILY's market cap, the 8-K items, the actions and the gifts.
 DAILY_ANOMALY_COLUMNS = (
-    "adjOpen", "adjClose", "adjVolume", "close", "divCash", "splitFactor", "marketcap", *NEWS_EVENTS, "event_23",
+    "adjOpen", "adjClose", "adjVolume", "divCash", "splitFactor", "marketcap", *NEWS_EVENTS, "event_23",
+    *ACTION_COLUMNS,
 )
-#: Derived input: 1 from December 15 to January 31, NaN on the other bars.
-TAX_SEASON = "tax_season"
 #: The 8-K flags, filled with 0 on priced bars.
 EVENT_COLUMNS = (*NEWS_EVENTS, "event_23")
 #: The outputs, in order.
 DAILY_ANOMALY_OUTPUTS = (
-    "earnings_month", "earnings_delay", "dividend_month", "return_seasonality", "weekday_seasonality",
-    "tax_loss_rebound", "lockup_expiry",
+    "earnings_month", "earnings_delay", "dividend_month", "return_seasonality", "lockup_expiry",
     "coskewness", "downside_beta_gap",
-    "frog_in_pan", "daytime_reversal", "news_drift_gap", "earnings_volume", "nominal_price",
-    "split_signal", "dividend_change", "dividend_initiation", "debt_issuance_8k",
+    "frog_in_pan", "daytime_reversal", "news_drift_gap", "earnings_volume", "insider_gift",
+    "split_signal", "dividend_change", "dividend_initiation", "debt_issuance_8k", "spinoff", "despac",
     "listing_age", "turnover_volatility",
 )
 YEAR, QUARTER, MONTH, WEEK = 252, 63, 21, 5
 SEASONAL_YEARS = 5
 #: Sixty months: the coskewness window.
 FIVE_YEARS = 5 * YEAR
-#: Three years: the listing-age window.
+#: Three years: the listing-age, spin-off and de-SPAC windows.
 THREE_YEARS = 3 * YEAR
 #: Bars without a dividend before one counts as an initiation.
 INITIATION_GAP = 2 * YEAR
-#: The same-weekday lags of ``weekday_seasonality``, in weeks.
-WEEKDAY_WEEKS = range(3, 51)
 #: Bars a build should warm up: 60 months of 21-bar returns (coskewness) and the 5-year seasonal lags.
 WARMUP_BARS = FIVE_YEARS + MONTH
 #: Smallest share of a window's bars a windowed statistic needs.
@@ -217,10 +211,11 @@ def _event_count(flag: OpBase, window: int, back: int) -> OpBase:
 class DailyAnomalyAlpha(FactorKunQuant):
     """Compute the twenty daily calendar, risk-shape, behavioural, corporate-action and liquidity anomalies.
 
-    The panel merges SEP (adjusted open, close and volume, the unadjusted
-    close, the cash dividend and the split factor), DAILY (market cap) and
-    Sharadar EVENTS (``EVENT_COLUMNS``: ``NEWS_EVENTS`` and item 2.03), and
-    ``data_columns`` must be
+    The panel merges SEP (adjusted open, close and volume, the cash dividend
+    and the split factor), DAILY (market cap) and
+    Sharadar EVENTS (``EVENT_COLUMNS``: ``NEWS_EVENTS`` and item 2.03),
+    ACTIONS (``spinoff_side``, ``spac_merger``) and SF2 (``net_shares_G``),
+    and ``data_columns`` must be
     ``DAILY_ANOMALY_COLUMNS``. ``kwargs={"ranked": True}`` makes every
     output its cross-sectional percentile rank, the input
     ``NeutralizedFactor`` should wrap.
@@ -312,21 +307,6 @@ class DailyAnomalyAlpha(FactorKunQuant):
                 total, count = total + _zero(value), count + _present(value)
             out["return_seasonality"] = Select(count >= 3.0, total / Max(count, ConstantOp(1.0)), _nan()) + close * 0.0
 
-            # The label's open-to-open return is the one of bar t + 2: its weekday was the bars 5k - 2 back, k
-            # weeks; shorter lags hold the short-term reversal.
-            open_return = open_ / BackRef(open_, 1) - 1.0
-            same = [BackRef(open_return, WEEK * k - 2) for k in WEEKDAY_WEEKS]
-            total, count = _zero(same[0]), _present(same[0])
-            for value in same[1:]:
-                total, count = total + _zero(value), count + _present(value)
-            least = math.ceil(MIN_SHARE * len(WEEKDAY_WEEKS))
-            same_mean = Select(count >= float(least), total / Max(count, ConstantOp(1.0)), _nan())
-            first, last_lag = WEEK * WEEKDAY_WEEKS[0] - 2, WEEK * WEEKDAY_WEEKS[-1] - 2
-            out["weekday_seasonality"] = same_mean - BackRef(_mean(open_return, last_lag - first + 1), first)
-
-            year_return = close / BackRef(close, YEAR) - 1.0
-            out["tax_loss_rebound"] = (0.0 - Min(year_return, ConstantOp(0.0)) + year_return * 0.0) * Input(TAX_SEASON)
-
             age = WindowedSum(_present(close), 140)
             out["lockup_expiry"] = 0.0 - _flag(And(age >= 104.0, age <= 129.0), close)
 
@@ -383,7 +363,8 @@ class DailyAnomalyAlpha(FactorKunQuant):
             abnormal = Log(_ratio(WindowedSum(volume, 3), 3.0 * normal))
             measured = Select(announced, abnormal, _nan())
             out["earnings_volume"] = _mean(measured, QUARTER, 1)
-            out["nominal_price"] = Log(Input("close"))
+            gift = Input("net_shares_G")
+            out["insider_gift"] = 0.0 - WindowedSum(_flag(gift < 0.0, gift), YEAR)
 
             # Corporate actions.
             factor = Select(split > 0.0, split, ConstantOp(1.0))
@@ -410,6 +391,12 @@ class DailyAnomalyAlpha(FactorKunQuant):
             out["dividend_initiation"] = _flag(new_initiated < float(YEAR), close)
 
             out["debt_issuance_8k"] = 0.0 - WindowedSum(debt, YEAR)
+            spun = Input("spinoff_side")
+            out["spinoff"] = _flag(WindowedSum(_flag(spun > 0.0, spun), THREE_YEARS) > 0.5,
+                                   WindowedSum(spun, THREE_YEARS) + close * 0.0)
+            merged = Input("spac_merger")
+            out["despac"] = 0.0 - _flag(WindowedSum(merged, THREE_YEARS) > 0.5,
+                                        WindowedSum(merged, THREE_YEARS) + close * 0.0)
 
             # Life cycle and liquidity over time.
             out["listing_age"] = WindowedSum(_present(close), THREE_YEARS) / float(THREE_YEARS) + close * 0.0
@@ -424,7 +411,7 @@ class DailyAnomalyAlpha(FactorKunQuant):
     def _kunquant_inputs(
         self, inputs: xr.Dataset
     ) -> tuple[dict[str, np.ndarray], np.ndarray, np.ndarray]:
-        """Export the panel as float64, fill the 8-K flags with 0 on priced bars and add the tax season."""
+        """Export the panel as float64 and fill the 8-K, action and gift flags with 0 on priced bars."""
         panel = self.config.dataset.to_shared_names(inputs).sortby(["timestamp", "symbol"])
         arrays = {
             column: np.ascontiguousarray(
@@ -432,13 +419,11 @@ class DailyAnomalyAlpha(FactorKunQuant):
             for column in self.config.data_columns
         }
         priced = np.isfinite(arrays["adjClose"])
-        fill_flows(arrays, EVENT_COLUMNS, priced)
-        for column in EVENT_COLUMNS:
+        # Each source starts on its own first event.
+        for group in (EVENT_COLUMNS, ("spinoff_side",), ("spac_merger",), ("net_shares_G",)):
+            fill_flows(arrays, group, priced)
+        for column in (*EVENT_COLUMNS, *ACTION_COLUMNS):
             arrays[column] = arrays[column].astype(np.float64)
-        timestamps = pd.DatetimeIndex(panel["timestamp"].values)
-        season = ((timestamps.month == 12) & (timestamps.day >= 15)) | (timestamps.month == 1)
-        arrays[TAX_SEASON] = np.ascontiguousarray(np.broadcast_to(
-            np.where(season, 1.0, np.nan)[:, None], arrays["adjClose"].shape))
         return arrays, panel["symbol"].values, panel["timestamp"].values
 
     def _make(self):

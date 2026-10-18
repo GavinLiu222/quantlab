@@ -3,7 +3,8 @@
 The panel is 16 symbols over 1,400 business days (more than the 1,260-bar
 long-term reversal): random adjusted prices, opens, volumes and market caps,
 quarterly dividends with a raise and a 2-for-1 split, a dividend
-initiation, a reverse split, and sparse 8-K items. Symbol 5 has a four-bar hole, symbol 9 is delisted from bar
+initiation, a reverse split, sparse 8-K items, spin-offs, SPAC mergers and
+insider gifts (each source starting on its own bar). Symbol 5 has a four-bar hole, symbol 9 is delisted from bar
 1,300, symbol 12 lists on bar 1,200 and the 8-K items start on bar 30.
 """
 
@@ -36,7 +37,6 @@ def _panel() -> xr.Dataset:
                                     + rng.normal(0, 0.015, size=shape)).cumsum(axis=0))
     data["adjOpen"] = data["adjClose"] * np.exp(rng.normal(0, 0.008, size=shape))
     data["adjVolume"] = rng.lognormal(12, 0.5, size=shape)
-    data["close"] = data["adjClose"] * rng.uniform(0.2, 5.0, size=(1, 16))
     data["marketcap"] = data["adjClose"] * rng.uniform(1e7, 1e8, size=(1, 16))
     data["splitFactor"] = np.ones(shape)
     data["splitFactor"][700, 3] = 2.0
@@ -53,6 +53,12 @@ def _panel() -> xr.Dataset:
         rate = 0.016 if name == "event_22" else 0.01
         data[name] = (rng.random(shape) < rate).astype(float)
         data[name][:30] = np.nan
+    data["spinoff_side"] = np.where(rng.random(shape) < 0.002, rng.choice([1.0, 2.0], size=shape), np.nan)
+    data["spinoff_side"][:100] = np.nan
+    data["spac_merger"] = (rng.random(shape) < 0.002).astype(float)
+    data["spac_merger"][:200] = 0.0
+    data["net_shares_G"] = np.where(rng.random(shape) < 0.02, -rng.lognormal(7, 1, size=shape), np.nan)
+    data["net_shares_G"][:300] = np.nan
     for s in range(16):  # quarterly results at a fixed phase, so the calendar outputs fire
         data["event_22"][30 + 3 * s::63, s] = 1.0
     for name, x in data.items():
@@ -114,6 +120,11 @@ def _reference(panel) -> dict[str, pd.DataFrame]:
     for name in EVENTS:
         ev[name] = ev[name].fillna(0).where(priced)
         ev[name].iloc[:30] = np.nan
+    for name in ("spinoff_side", "spac_merger", "net_shares_G"):  # each from its own first event
+        flow = p[name].where(priced).fillna(0).where(priced)
+        first = int(np.argmax((flow.abs().sum(axis=1) > 0).to_numpy()))
+        flow.iloc[:first] = np.nan
+        ev[name] = flow
     r = c / c.shift(1) - 1
     m = _cs_mean(r, cap.shift(1))
     turnover = c * v / cap
@@ -135,17 +146,6 @@ def _reference(panel) -> dict[str, pd.DataFrame]:
     total = sum(x.fillna(0) for x in past)
     count = sum(np.isfinite(x).astype(float) for x in past)
     out["return_seasonality"] = (total / count.clip(lower=1)).where(count >= 3).where(priced)
-    oo = o / o.shift(1) - 1
-    same = [oo.shift(5 * k - 2) for k in range(3, 51)]
-    total = sum(x.fillna(0) for x in same)
-    count = sum(np.isfinite(x).astype(float) for x in same)
-    same_mean = (total / count.clip(lower=1)).where(count >= 39)
-    out["weekday_seasonality"] = same_mean - _mean(oo, 236).shift(13)
-    year = c / c.shift(252) - 1
-    days = pd.DatetimeIndex(c.index)
-    season = ((days.month == 12) & (days.day >= 15)) | (days.month == 1)
-    out["tax_loss_rebound"] = (-year.clip(upper=0)).where(np.isfinite(year)).where(
-        pd.Series(season, index=c.index), axis=0)
     age = priced.astype(float).rolling(140).sum()
     out["lockup_expiry"] = -_flag((age >= 104) & (age <= 129), c)
 
@@ -189,7 +189,8 @@ def _reference(panel) -> dict[str, pd.DataFrame]:
     normal = _mean(v, 63).shift(3)
     abnormal = np.log((v.rolling(3).sum() / (3 * normal)).where(3 * normal > 1e-12))
     out["earnings_volume"] = _mean(abnormal.where(announced), 63, 1)
-    out["nominal_price"] = np.log(p["close"])
+    gift = ev["net_shares_G"]
+    out["insider_gift"] = -_flag(gift < 0, gift).rolling(252).sum()
 
     split = p["splitFactor"]
     direction = np.where(split > 1.0001, 1.0, np.where(split < 0.9999, -1.0, 0.0))
@@ -214,6 +215,10 @@ def _reference(panel) -> dict[str, pd.DataFrame]:
     out["dividend_change"] = pd.DataFrame(change, index=c.index, columns=c.columns).where(priced)
     out["dividend_initiation"] = pd.DataFrame(initiation, index=c.index, columns=c.columns).where(priced)
     out["debt_issuance_8k"] = -ev["event_23"].rolling(252).sum()
+    spun = ev["spinoff_side"]
+    out["spinoff"] = _flag(_flag(spun > 0, spun).rolling(756).sum() > 0.5, spun.rolling(756).sum() + c * 0)
+    merged = ev["spac_merger"]
+    out["despac"] = -_flag(merged.rolling(756).sum() > 0.5, merged.rolling(756).sum() + c * 0)
 
     out["listing_age"] = (priced.astype(float).rolling(756).sum() / 756).where(priced)
     mt = _mean(turnover, 252)
@@ -236,7 +241,7 @@ def test_every_output_matches_its_formula(panel, outputs, name):
 
 def test_the_calendar_and_action_outputs_fire(outputs):
     for name in ("earnings_month", "dividend_month", "split_signal", "dividend_change", "lockup_expiry",
-                 "dividend_initiation", "tax_loss_rebound"):
+                 "dividend_initiation", "spinoff", "despac", "insider_gift"):
         assert np.nanmax(np.abs(outputs[name].values)) > 0, name
     # Symbol 3's dividend halves at its 2-for-1 split: per pre-split share it is unchanged.
     change = outputs["dividend_change"].sel(symbol="s03").to_series()
