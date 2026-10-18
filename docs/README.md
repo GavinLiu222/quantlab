@@ -1,7 +1,5 @@
 # quantlab documentation
 
-English | [简体中文](zh-CN/README.md)
-
 quantlab is a configuration-driven backend for quantitative equity research: it downloads
 market data, turns it into panels, computes factors, trains return models and backtests the
 resulting portfolios. This documentation is organised in three parts. If you are new, read
@@ -103,8 +101,6 @@ working on.
 | [Portfolio construction](portfolio.md) | Rules from predictions to weights: top-n, mean-variance optimisation, covariance estimators, expected return models and spans |
 | [Daily data update](data_update.md) | The scheduled script that brings every shared store up to the latest bar: raw downloads, Zarr stores, factors, risk model |
 | [Live prediction](live.md) | The daily job that extends a run's stores to the last closed bar and appends its prediction to a live prediction store |
-
-A Chinese translation of the topic pages is in [zh-CN](zh-CN/README.md).
 
 ## Examples and API reference
 

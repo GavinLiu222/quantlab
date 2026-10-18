@@ -1,7 +1,5 @@
 # Page ledger
 
-English | [简体中文](zh-CN/pageledger.md)
-
 Some vendors answer a request for many symbols as a chain of pages, each page carrying an opaque token that names the next one. A full-market download issues thousands of such batches, and each batch can span dozens of pages. `PageLedger` is a small JSON file, one per batch, that records which pages have been written, which token comes next, and which parquet files hold each page. After a crash the [acquisition](acquisition.md) engine reads the ledger and continues from the middle of the batch, without re-requesting finished pages and without writing any row twice.
 
 The ledger is used by the `SymbolBatchAcquisition` base class; a vendor client does not call it directly.

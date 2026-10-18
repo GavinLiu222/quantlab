@@ -48,7 +48,6 @@ _RUN_FILES = (
 ALLOWED = {
     "quantlab/analysis/factor_report.py": '(out / "config.json")',
     "docs/factor.md": '"data/analysis/',
-    "docs/zh-CN/factor.md": '"data/analysis/',
 }
 _NAMES_A_RUN_FILE = "names a run file"
 _WALK_UP = "walks up two directory levels"

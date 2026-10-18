@@ -1,7 +1,5 @@
 # Chunking
 
-English | [简体中文](zh-CN/chunking.md)
-
 Chunked conversion turns a large date range of raw files into a Zarr store one time window at a time. Each window is converted to a dense `(timestamp, symbol)` panel, appended to the store, and recorded in a small JSON ledger, so peak memory is bounded by the window rather than the whole range and an interrupted run resumes at the first window that was not written. It is available on every dataset that converts raw files into a store it owns, through `RawDataset.from_raw_data_chunked()` and `RawDataset.update()` (`quantlab.dataset.raw`); a view or a panel held in memory has no build path.
 
 ## Prerequisites

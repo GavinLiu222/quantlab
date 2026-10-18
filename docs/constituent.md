@@ -1,7 +1,5 @@
 # Point-in-time index membership (constituent)
 
-English | [简体中文](zh-CN/constituent.md)
-
 An index constituent panel records which symbols belonged to an index on each date. It is stored like any other quantlab dataset: an `xarray.Dataset` on `(timestamp, symbol)` with a single boolean variable, `is_member`, saved as Zarr. Because membership is stored as dated intervals rather than as a current list, a name that was removed from an index years ago is still present in the panel for the dates on which it was a member.
 
 The module `quantlab.universe` holds the symbol-universe catalog (a parquet table of symbol, category and interval) together with the fetchers that build it. `quantlab.dataset.raw` turns an interval table into the panel (`IndexConstituentDataset`, a raw dataset with the shared build path). `quantlab.dataset.constituent` binds concrete indexes to it.

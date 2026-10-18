@@ -1,7 +1,5 @@
 # Data source registry
 
-English | [简体中文](zh-CN/registry.md)
-
 The registry is the catalogue of every place quantlab can download market data from. Each source (Alpaca, FRED, Massive, Sharadar, Tiingo, WRDS) is described once: which environment variables hold its credentials, which market, frequency and data type it serves, and how its raw tier is downloaded. `refresh_raw_tier()` keeps a vendor's raw tier current from its watermarks, `download_symbols()` downloads an explicit roster over an explicit window for a symbol-batched vendor, and `convert()` turns a raw tier into Zarr; none of them needs a vendor class named. `SourceInspector` reports what is already on disk without needing any credential.
 
 ## Prerequisites

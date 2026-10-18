@@ -1,7 +1,5 @@
 # Frame API
 
-English | [简体中文](zh-CN/api.md)
-
 `quantlab.api` is for callers who already hold market data in a pandas or polars DataFrame and want one quantlab capability, such as the Alpha158 factors, a forward-return label, a factor report or a backtest of their own signal, without writing a Zarr store, building configuration objects or learning the dataset classes. Each function takes a *frame*, a DataFrame in long form with one row per `timestamp` and `symbol`, and returns a frame of the same library. Nothing is written to disk and nothing is sent to an experiment tracker unless you ask for it.
 
 | Function | Takes | Returns |

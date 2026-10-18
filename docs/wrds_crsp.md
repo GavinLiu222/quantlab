@@ -1,7 +1,5 @@
 # CRSP daily stock data (WRDS)
 
-English | [简体中文](zh-CN/wrds_crsp.md)
-
 CRSP (the Center for Research in Security Prices) publishes daily prices, returns and corporate actions for US stocks, including companies that were later delisted. quantlab downloads that table from WRDS, keyed by a permanent security identifier (PERMNO), and converts it into the same `(timestamp, symbol)` Zarr panel that the Tiingo stock data produces, so factors, models and backtests read it unchanged.
 
 Three tiers sit on disk. The raw tier holds the rows exactly as CRSP serves them. The reference tier holds small lookup tables (security history, delistings, index membership). The store is the converted Zarr panel, and it can be rebuilt from the other two without a network connection.

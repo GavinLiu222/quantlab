@@ -1,7 +1,5 @@
 # Dataset
 
-English | [简体中文](zh-CN/dataset.md)
-
 A dataset converts the raw files a vendor delivers into the panel that every later stage of quantlab consumes: an `xarray.Dataset` indexed by `(timestamp, symbol)`, stored as Zarr. Each market or vendor has one subclass of `RawDataset` or `RawMarketDataset` (`quantlab.dataset.raw`), which own the build path from raw files to a store. Factors, models and backtests read the panel through the read interface every dataset shares (`BaseDataset`, `MarketDataset` in `quantlab.dataset.base`) and never see the raw format.
 
 ## Prerequisites

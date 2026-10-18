@@ -1,7 +1,5 @@
 # Factors
 
-English | [简体中文](zh-CN/factor.md)
-
 A factor turns the `(timestamp, symbol)` panel held by a dataset into a panel of engineered features of the same shape. A label is a factor shifted forward in time, the value a model learns to predict. quantlab has two factor backends: `FactorKunQuant`, which compiles a KunQuant operator graph to native code and runs it in batch or streaming mode, and `FactorPolars`, whose logic is a Polars expression chain and which runs in batch mode only. Both share the base class `Factor`, so the model layer treats them alike.
 
 ## Prerequisites

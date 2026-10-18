@@ -1,7 +1,5 @@
 # Acquisition
 
-English | [简体中文](zh-CN/acquisition.md)
-
 Acquisition is the layer of quantlab that downloads raw vendor data into a local directory of files. This guide covers its symbol-batched family, the vendors queried one batch of symbols at a time over a date window (Tiingo, Alpaca, FRED and the retired WRDS downloads). Sharadar's whole tables and Massive's daily files and REST endpoints are pulled by their own clients and kept current through `quantlab.acquisition.registry.refresh_raw_tier` (see the [registry](registry.md), [Sharadar](sharadar.md) and [Massive](massive.md) guides). In the symbol-batched family a vendor client only describes how to make one request; the base class `SymbolBatchAcquisition` supplies batching, pagination, concurrency, per-symbol failure isolation, resumable progress, request-quota handling and credential scrubbing. The layer writes raw files only. Converting them into the `(timestamp, symbol)` xarray panel is done by the matching dataset class (see the [dataset](dataset.md) guide).
 
 ## Prerequisites

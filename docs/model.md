@@ -1,7 +1,5 @@
 # Return models
 
-English | [简体中文](zh-CN/model.md)
-
 A return model learns to predict a label, usually a forward return or a return rank, from a set of factors. Factors and labels are `xarray.Dataset` panels indexed by `(timestamp, symbol)`, and the prediction has the same shape, so the portfolio and backtest stages can consume it directly. The model layer supplies the shared training lifecycle (data collection, train and test windows, walk-forward cross-validation, checkpoints, early stopping, metrics, experiment tracking); a concrete model head only implements the fitting itself.
 
 ## Prerequisites

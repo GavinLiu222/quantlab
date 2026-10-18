@@ -1,7 +1,5 @@
 # Storage backends
 
-English | [简体中文](zh-CN/backend.md)
-
 A storage backend separates where data is kept from what the data means. Datasets, factors and models each hold a backend object and call the same small set of methods on it, so the storage medium can change without touching the code above it. quantlab ships two data backends: `XrBackend`, which keeps an `xarray.Dataset` in memory and stores it as a Zarr directory, and `PlBackend`, which keeps a `polars.LazyFrame` and stores it as a Parquet file.
 
 ## The basics

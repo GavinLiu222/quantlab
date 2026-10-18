@@ -1,7 +1,5 @@
 # Portfolio construction
 
-English | [简体中文](zh-CN/portfolio.md)
-
 Portfolio construction is the step between a model and a backtest. On every rebalance bar it takes the model's predictions for that bar and the weights currently held, and returns the weights to hold after the bar. The backtest then trades those weights.
 
 Every rule derives from `PortfolioConstructor` (`quantlab/portfolio/base.py`). Three rules ship in `quantlab/portfolio/predefined/`:
