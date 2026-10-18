@@ -80,10 +80,15 @@ def _minute_panel() -> xr.Dataset:
     )
 
 
-def _reference(panel: xr.Dataset, day: str, symbol: int, previous_close: float) -> dict:
-    """Every output of one session and symbol, from plain numpy."""
+def _reference(panel: xr.Dataset, day: str, symbol: int, previous_close: float, bars: int | None = None) -> dict:
+    """Every output of one session and symbol, from plain numpy.
+
+    With ``bars``, of the session's first ``bars`` bars only: the value at its bar ``bars - 1``.
+    """
     session = pd.DatetimeIndex(panel["timestamp"].values).normalize() == pd.Timestamp(day)
-    get = lambda name: panel[name].values[session, symbol]  # noqa: E731
+    length = int(session.sum())
+    bars = length if bars is None else bars
+    get = lambda name: panel[name].values[session, symbol][:bars]  # noqa: E731
     close = pd.Series(get("close"))
     first = close.first_valid_index()
     price = close.ffill().to_numpy()[first:]
@@ -92,7 +97,8 @@ def _reference(panel: xr.Dataset, day: str, symbol: int, previous_close: float) 
     volume = get("volume")
     n = len(r)
     rv = (r**2).sum()
-    left = np.arange(len(volume))[::-1][first:]
+    left_all = length - 1 - np.arange(bars)
+    left = left_all[first:]
     position = np.arange(len(volume))[first:]
     continuous = volume.sum()
     full_price = close.ffill().to_numpy()
@@ -113,7 +119,7 @@ def _reference(panel: xr.Dataset, day: str, symbol: int, previous_close: float) 
         "corr_rv": np.corrcoef(r, volume[first:])[0, 1],
         "corr_pv": np.corrcoef(full_price[both], volume[both])[0, 1],
         "volume_cv": volume.std() / volume.mean(),
-        "volume_close30": volume[-30:].sum() / continuous,
+        "volume_close30": volume[left_all < 30].sum() / continuous,
         "auction_share": get("close_auction_volume").sum() / (continuous + get("close_auction_volume").sum()),
         "offexchange_share": get("offexchange_volume").sum() / continuous,
         "amihud": 1e6 * np.abs(r).sum() / get("dollar_volume").sum(),
@@ -152,18 +158,53 @@ def test_one_value_per_session(daily):
     assert pd.DatetimeIndex(daily["timestamp"].values).strftime("%Y-%m-%d").tolist() == list(DAYS[1:])
 
 
-@pytest.mark.parametrize("day", DAYS[1:])
-@pytest.mark.parametrize("symbol", [0, 5])
-def test_outputs_match_numpy(panel, daily, day, symbol):
+def _previous_close(panel: xr.Dataset, day: str, symbol: int) -> float:
+    """The official close of the session before ``day``: its auction, else its last trade."""
     previous = DAYS[DAYS.index(day) - 1]
     before = pd.DatetimeIndex(panel["timestamp"].values).normalize() == pd.Timestamp(previous)
     previous_close = panel["close_auction_price"].values[before, symbol][-1]
     if np.isnan(previous_close):
         previous_close = pd.Series(panel["close"].values[before, symbol]).ffill().iloc[-1]
-    expected = _reference(panel, day, symbol, previous_close)
+    return previous_close
+
+
+@pytest.mark.parametrize("day", DAYS[1:])
+@pytest.mark.parametrize("symbol", [0, 5])
+def test_outputs_match_numpy(panel, daily, day, symbol):
+    expected = _reference(panel, day, symbol, _previous_close(panel, day, symbol))
     got = daily.sel(timestamp=day).isel(symbol=symbol)
     for name in INTRADAY_OUTPUTS:
         assert float(got[name]) == pytest.approx(expected[name], rel=2e-4, abs=1e-4), name
+
+
+@pytest.fixture(scope="module")
+def minutes(panel) -> xr.Dataset:
+    stats = IntradayStats(FactorConfig(
+        warmup_bars=390, dataset=FrameDataset(panel), mode="batch",
+        data_columns=INTRADAY_COLUMNS, njobs=2,
+    ))
+    stamps = pd.DatetimeIndex(panel["timestamp"].values)
+    return stats.compute(stamps[stamps.normalize() == pd.Timestamp(DAYS[1])][0], stamps[-1])
+
+
+# Bar 374 of a full day is inside the last 30 bars; the 29th is a half day.
+@pytest.mark.parametrize("day, bars", [(DAYS[1], 120), (DAYS[2], 375), (DAYS[3], 150)])
+@pytest.mark.parametrize("symbol", [0, 5])
+def test_every_bar_holds_the_session_so_far(panel, minutes, day, bars, symbol):
+    expected = _reference(panel, day, symbol, _previous_close(panel, day, symbol), bars=bars)
+    stamps = pd.DatetimeIndex(minutes["timestamp"].values)
+    got = minutes.isel(timestamp=np.flatnonzero(stamps.normalize() == pd.Timestamp(day))[bars - 1], symbol=symbol)
+    for name in INTRADAY_OUTPUTS:
+        assert float(got[name]) == pytest.approx(expected[name], rel=2e-4, abs=1e-4), name
+
+
+def test_refuses_a_session_longer_than_session_bars(panel):
+    stats = IntradayStats(FactorConfig(
+        warmup_bars=390, dataset=FrameDataset(panel), mode="batch",
+        data_columns=INTRADAY_COLUMNS, njobs=2, kwargs={"session_bars": 300},
+    ))
+    with pytest.raises(ValueError, match="longer than session_bars"):
+        stats.resample("1d", "last").compute(DAYS[1], DAYS[2])
 
 
 def test_short_session_is_nan(panel):

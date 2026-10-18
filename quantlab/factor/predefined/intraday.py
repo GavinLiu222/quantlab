@@ -20,9 +20,12 @@ Both are KunQuant graphs. KunQuant has no notion of a session, so
 prices before the graph runs (``_kunquant_inputs``): the bar's position in
 its session and the bars left to its close, the last trade price at or
 before the bar, and the reference price a bar's return is measured from.
-The session statistics are sums over a window of ``session_bars`` bars that
-keep only the bars of the current session (``_session_sums``), so a half
-day sums its own 210 bars and nothing of the day before.
+The session statistics are running sums that restart at each session's
+first bar (``_session_sums``), so a half day sums its own 210 bars and
+nothing of the day before, and each bar costs the same whatever its
+position in the session. A correlation's second moments come from the same
+running sums (``sum xy - sum x sum y / n``), the price taken from the
+session's first trade so its sums stay small in float32.
 
 The minute return of bar t is ``log(p_t / p_{t-1})``, ``p`` the last trade
 price at or before a bar's end within the session, carried over bars
@@ -83,27 +86,18 @@ from dataclasses import dataclass, fields
 import numpy as np
 import pandas as pd
 import xarray as xr
-from KunQuant.Op import (
-    Builder,
-    ConstantOp,
-    ForeachBackWindow,
-    Input,
-    IterValue,
-    OpBase,
-    Output,
-    Rank,
-    WindowedTempOutput,
-    WindowLoopIndex,
-)
+from KunQuant.Op import Builder, ConstantOp, Input, OpBase, Output, Rank
 from KunQuant.ops import (
     Abs,
+    Accumulator,
     BackRef,
+    Equals,
     LessEqual,
     LessThan,
     Log,
     Max,
-    ReduceAdd,
     Select,
+    SetAccumulator,
     SetInfOrNanToValue,
     Sqrt,
     WindowedSum,
@@ -176,8 +170,9 @@ class IntradayParameters:
     Parameters
     ----------
     session_bars : int, default 390
-        Bars of the longest session (390 one-minute bars, 09:30-16:00); the
-        window every session statistic is summed over.
+        Bars of the longest session (390 one-minute bars, 09:30-16:00); a
+        longer session is refused, and the first ``session_bars - 1`` bars
+        computed are NaN.
     edge_bars : int, default 30
         Bars of the opening and closing part of the session in
         ``ret_open30``, ``ret_close30`` and ``volume_close30``.
@@ -312,28 +307,21 @@ def _present(value: OpBase) -> OpBase:
     return _zero_if_missing(value * 0.0 + 1.0)
 
 
-def _session_sums(
-    sources: list[OpBase], position: OpBase, window: int, terms
-) -> list[OpBase]:
-    """Return one sum per term over the current session's bars up to the current one.
+def _session_sums(terms: list[OpBase], position: OpBase, name: str) -> list[OpBase]:
+    """Return the running sum of each term over the current session's bars up to the current one.
 
-    One loop runs over the trailing ``window`` bars; a bar ``age`` bars back
-    is in the current session when ``age <= position`` (the current bar's
-    position in its session). ``terms(values, age)`` receives the loop's
-    value of each source and the bar's age, and returns the per-bar terms;
-    a NaN or infinite term adds 0.
+    Each sum restarts at the session's first bar (``position`` 0); a NaN or
+    infinite term adds 0. The sums are KunQuant accumulators named
+    ``<name>_<k>``, carried over the whole time axis.
     """
-    windowed = [WindowedTempOutput(source, window) for source in sources]
-    loop = ForeachBackWindow(windowed[0], window, *windowed[1:])
-    with loop:
-        values = [IterValue(loop, source) for source in windowed]
-        age = (WindowLoopIndex(loop) - float(window - 1)) * -1.0
-        in_session = LessEqual(age, position)
-        per_bar = [
-            Select(in_session, _zero_if_missing(term), ConstantOp(0.0))
-            for term in terms(values, age)
-        ]
-    return [ReduceAdd(term) for term in per_bar]
+    first = LessEqual(position, ConstantOp(0.0))
+    sums = []
+    for k, term in enumerate(terms):
+        value = _zero_if_missing(term)
+        total = Accumulator(value, f"{name}_{k}", is_whole_time_required=True)
+        always = Equals(value, value)  # the value is finite
+        sums.append(SetAccumulator(total, always, Select(first, value, total + value)))
+    return sums
 
 
 def _log1p(x: OpBase) -> OpBase:
@@ -361,7 +349,7 @@ class IntradayStats(FactorKunQuant):
     Massive Trade bars, read as securities through
     ``PermatickerTradeBarDataset``); ``data_columns`` must be exactly
     those. ``warmup_bars`` must cover one session (``session_bars``) so the
-    first requested session's window and prior close are filled. Batch
+    first requested session and its prior close are filled. Batch
     mode only: the session inputs are computed from a whole panel.
 
     Parameters
@@ -418,7 +406,14 @@ class IntradayStats(FactorKunQuant):
         return INTRADAY_OUTPUTS
 
     def _kunquant_inputs(self, inputs: xr.Dataset) -> tuple[dict[str, np.ndarray], np.ndarray, np.ndarray]:
-        """Export ``data_columns`` and add the session inputs (``session_inputs``)."""
+        """Export ``data_columns`` and add the session inputs (``session_inputs``).
+
+        Raises
+        ------
+        ValueError
+            If a session has more than ``session_bars`` bars: its sums would
+            depend on the bar the computation starts on.
+        """
         arrays, symbols, timestamps = super()._kunquant_inputs(inputs)
         session = np.asarray(self.config.dataset.resample_labels(np.asarray(timestamps), "1d"))
         arrays.update(
@@ -429,10 +424,17 @@ class IntradayStats(FactorKunQuant):
                 arrays["close_auction_price"].astype(np.float64),
             )
         )
+        session_bars = self._parameters().session_bars
+        longest = int(arrays[SESSION_POSITION][:, 0].max(initial=-1)) + 1
+        if longest > session_bars:
+            raise ValueError(
+                f"{self.class_name}: a session of {longest} bars is longer than session_bars "
+                f"({session_bars}); set session_bars to the longest session."
+            )
         return arrays, symbols, timestamps
 
     def _get_factor_func(self) -> Function:
-        """Build the graph: two session loops, then the outputs."""
+        """Build the graph: the session sums, then the outputs."""
         params = self._parameters()
         window, edge = params.session_bars, float(params.edge_bars)
         wanted = set(self.config.factor_names)
@@ -450,49 +452,42 @@ class IntradayStats(FactorKunQuant):
             ret = _log1p((price - reference) / reference)
             lagged = BackRef(ret, 1)
 
-            def first_terms(values, age):
-                r, r_lag, v, pos, bars_left, b, s, d, n, off, auction, p, c = values
-                both = LessThan(age, position)  # the bar before is in the session too
-                close_part = LessThan(bars_left, ConstantOp(edge))
-                r2 = r * r
-                return [
-                    _present(r), r, r2, r2 * r, r2 * r2,
-                    Select(LessThan(r, ConstantOp(0.0)), r2, ConstantOp(0.0)),
-                    Select(both, Abs(r) * Abs(r_lag), ConstantOp(0.0)),
-                    Select(both, r * r_lag, ConstantOp(0.0)),
-                    Select(LessThan(pos, ConstantOp(edge)), r, ConstantOp(0.0)),
-                    Select(close_part, r, ConstantOp(0.0)),
-                    Abs(r), v, v * v, Select(close_part, v, ConstantOp(0.0)),
-                    b, s, d, n, off, auction,
-                    _present(v), _present(r) * _present(v), _present(p) * _present(v),
-                    r * _present(v), v * _present(r), p * _present(v), v * _present(p),
-                    _present(c),
-                ]
-
+            both = LessThan(ConstantOp(0.0), position)  # the bar before is in the session too
+            close_part = LessThan(left, ConstantOp(edge))
+            r, v, p = ret, volume, price
+            shifted = price - first_price
+            r2 = r * r
             (
                 count, s1, s2, s3, s4, s2_neg, bipower, cross, r_open, r_close,
                 abs_sum, v_sum, v_sq, v_close, buy_sum, sell_sum, dollar_sum, trade_sum,
                 off_sum, auction_sum, v_count, rv_count, pv_count, r_sum_rv, v_sum_rv,
-                p_sum_pv, v_sum_pv, traded,
+                p_sum_pv, v_sum_pv, traded, rv_rv, rv_rr, rv_vv, pv_pv, pv_pp, pv_vv,
             ) = _session_sums(
-                [ret, lagged, volume, position, left, buy, sell, dollar, trades,
-                 offexchange, auction_volume, price, close],
-                position, window, first_terms,
+                [
+                    _present(r), r, r2, r2 * r, r2 * r2,
+                    Select(LessThan(r, ConstantOp(0.0)), r2, ConstantOp(0.0)),
+                    Select(both, Abs(r) * Abs(lagged), ConstantOp(0.0)),
+                    Select(both, r * lagged, ConstantOp(0.0)),
+                    Select(LessThan(position, ConstantOp(edge)), r, ConstantOp(0.0)),
+                    Select(close_part, r, ConstantOp(0.0)),
+                    Abs(r), v, v * v, Select(close_part, v, ConstantOp(0.0)),
+                    buy, sell, dollar, trades, offexchange, auction_volume,
+                    _present(v), _present(r) * _present(v), _present(p) * _present(v),
+                    r * _present(v), v * _present(r), shifted * _present(v), v * _present(p),
+                    _present(close),
+                    # Each pair over the bars where both of its values exist.
+                    r * v, r2 * _present(v), v * v * _present(r),
+                    shifted * v, shifted * shifted * _present(v), v * v * _present(p),
+                ],
+                position, "session_sum",
             )
 
-            mean_r, mean_vr = r_sum_rv / rv_count, v_sum_rv / rv_count
-            mean_p, mean_vp = p_sum_pv / pv_count, v_sum_pv / pv_count
-
-            def second_terms(values, age):
-                r, v, p = values
-                # Each pair over the bars where both of its values exist.
-                dr, dvr = r - mean_r + v * 0.0, v - mean_vr + r * 0.0
-                dp, dvp = p - mean_p + v * 0.0, v - mean_vp + p * 0.0
-                return [dr * dvr, dr * dr, dvr * dvr, dp * dvp, dp * dp, dvp * dvp]
-
-            rv_xy, rv_xx, rv_yy, pv_xy, pv_xx, pv_yy = _session_sums(
-                [ret, volume, price], position, window, second_terms
-            )
+            rv_xy = rv_rv - r_sum_rv * v_sum_rv / rv_count
+            rv_xx = rv_rr - r_sum_rv * r_sum_rv / rv_count
+            rv_yy = rv_vv - v_sum_rv * v_sum_rv / rv_count
+            pv_xy = pv_pv - p_sum_pv * v_sum_pv / pv_count
+            pv_xx = pv_pp - p_sum_pv * p_sum_pv / pv_count
+            pv_yy = pv_vv - v_sum_pv * v_sum_pv / pv_count
 
             enough = LessEqual(ConstantOp(float(params.min_returns)), traded)
             nan = ConstantOp("nan")

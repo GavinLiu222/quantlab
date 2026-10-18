@@ -621,7 +621,7 @@ index_weight = MembershipCapWeight(MembershipCapWeightConfig(dataset=daily, memb
 
 `IntradayStats`（`quantlab.factor.predefined.intraday`）计算每个交易日一分钟 bar 的日内统计量，输入是 permaticker 轴上的 Massive Trade bars（`MappedTradeBarDataset` 或 `PermatickerTradeBarDataset`，见 [massive.md](../massive.md)）。输出包括：已实现波动率、偏度、峰度，signed jump，跳跃在 bipower variation 中的占比，分钟收益自相关；日内、隔夜、开盘和收盘前 30 分钟收益，收盘价相对 VWAP；tick-rule 买卖不平衡，收益-成交量和价格-成交量相关；成交量离散度和尾盘 30 分钟成交占比，收盘竞价占比，场外成交占比，分钟 Amihud 和笔均成交量。每个公式及其文献出处见模块 docstring。在每根 bar 上，各输出是“当日截至此刻”的统计量，所以用 `"last"` 重采样到 `"1d"` 后就是每只股票每天一个值。`data_columns` 必须是 `INTRADAY_COLUMNS`，`warmup_bars` 至少覆盖一个交易日（`session_bars`，390）。`kwargs` 接受 `session_bars`、`edge_bars`（30）和 `min_returns`（有成交的 bar 不少于 60，否则为 NaN）。只支持 batch 模式。
 
-KunQuant 不认交易日，所以因子在图运行之前，先由 bar 时间戳算出几个附加输入：bar 在当日的位置和距收盘的 bar 数、当日内最新成交价、计算该 bar 收益的参考价、当日首笔成交价、前一交易日的官方收盘价。日内求和是在 390 根 bar 的窗口上跑一遍循环，只累加当前交易日的 bar，所以半日市只累加自己的 210 根。分钟收益是最新成交价的 `log(p_t / p_{t-1})`（没有成交的 bar 收益为 0），第一根有成交的 bar 从它的开盘价算起。计算用的是 `log1p` 的级数展开，因为 KunQuant 的 float32 `Log` 有约 1e-6 的绝对误差，和平静时一分钟的收益同一量级。
+KunQuant 不认交易日，所以因子在图运行之前，先由 bar 时间戳算出几个附加输入：bar 在当日的位置和距收盘的 bar 数、当日内最新成交价、计算该 bar 收益的参考价、当日首笔成交价、前一交易日的官方收盘价。日内求和是在每个交易日第一根 bar 重新开始的累计和，所以半日市只累加自己的 210 根，每根 bar 的计算量相同；相关系数的二阶矩也由这些累计和得到，价格先减去当日首笔成交价。超过 `session_bars` 根 bar 的交易日会被拒绝。分钟收益是最新成交价的 `log(p_t / p_{t-1})`（没有成交的 bar 收益为 0），第一根有成交的 bar 从它的开盘价算起。计算用的是 `log1p` 的级数展开，因为 KunQuant 的 float32 `Log` 有约 1e-6 的绝对误差，和平静时一分钟的收益同一量级。
 
 `IntradayAverage` 对一个已存储因子的每个输出取最近 `window` 根 bar 的均值（`IntradayAverageConfig`：`factor`、`window` 20、`min_count` 10）。它读取被包装因子的 store，所以这个 store 必须先在相应区间上建好。十年分钟数据的日线 store 由分块构建（`ChunkedBuilder`）按月构建，多个月并行计算：
 
