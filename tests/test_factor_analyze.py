@@ -459,6 +459,21 @@ def test_output_dir_with_several_pairs_draws_every_figure_in_parallel(oracle_and
     assert result.pairs["oracle_neg__fwd_1"].summary["ic_mean"] == pytest.approx(-1.0)
 
 
+def test_analyze_without_plot_writes_the_tables_and_no_figure(spot_kline_zarr, tmp_path):
+    dataset_config = spot_kline_zarr(symbols=[f"S{i}USDT" for i in range(10)])
+    factor = Momentum(_polars_config(dataset_config, tmp_path, "mom", kwargs={"n": 5}))
+    label = _ForwardReturn(_polars_config(dataset_config, tmp_path, "fwd"))
+    out = tmp_path / "report" / "momentum"
+
+    drawn = factor.analyze(*ALL, frets=[label])
+    result = factor.analyze(*ALL, frets=[label], output_dir=str(out), plot=False)
+
+    assert list(drawn.figures) == ["momentum_5__fwd_1"]
+    assert result.figures == {}
+    assert sorted(p.name for p in out.iterdir()) == sorted(EXPECTED_FILES)
+    assert result.pairs["momentum_5__fwd_1"].summary == drawn.pairs["momentum_5__fwd_1"].summary
+
+
 def test_output_dir_without_plot_writes_the_tables_and_no_figure(tmp_path):
     rng = np.random.default_rng(3)
     T, S = 40, 16

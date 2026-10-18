@@ -1303,6 +1303,7 @@ class Factor(Component, ABC):
         output_dir: str | None = None,
         quantiles: int = 5,
         data_strategy: Literal["cal", "read"] = "cal",
+        plot: bool = True,
     ) -> "FactorAnalysis":
         """Report how well this factor predicts forward returns, alphalens style.
 
@@ -1315,7 +1316,7 @@ class Factor(Component, ABC):
         analysis (mean forward return per factor quantile, top-minus-bottom
         spread, cumulative returns) and the turnover analysis (quantile
         turnover, lag-1 factor rank autocorrelation), and draws one
-        composite matplotlib figure.
+        composite matplotlib figure unless ``plot`` is False.
 
         The factor and every fret are asked for their panels from ``start``
         to ``end``: computed from their inputs with ``compute(start, end)``
@@ -1343,13 +1344,17 @@ class Factor(Component, ABC):
             ``factor_correlation_pairs.csv``, ``factor_clusters.csv`` and
             ``factor_correlation.png`` when two or more factor variables are
             analyzed. ``config.json`` holds ``{"factor": ..., "frets": [...]}``,
-            each rebuildable with ``rebuild``. When None,
-            nothing is written.
+            each rebuildable with ``rebuild``. With ``plot=False`` no PNG is
+            written. When None, nothing is written.
         quantiles : int, default 5
             Number of equal-count factor buckets per timestamp.
         data_strategy : {"cal", "read"}, default "cal"
             Whether the panels are computed or read from the stores
             ``build`` wrote, for the factor and every fret alike.
+        plot : bool, default True
+            Draw the figures: to PNG files in ``output_dir``, else into
+            ``figures``. False draws none, which is most of the time a
+            report over many factors takes.
 
         Returns
         -------
@@ -1389,6 +1394,12 @@ class Factor(Component, ABC):
         0  momentum_5  ret_1  -0.0279    -0.4301      -0.0014
         >>> sorted(os.listdir("data/analysis/momentum"))
         ['config.json', 'ic.csv', 'momentum_5__ret_1.png', 'monthly_ic.csv', 'quantile_returns.csv', 'summary.csv', 'summary.json', 'turnover.csv']
+        >>> result = factor.analyze(
+        ...     "2024-02-01", "2024-02-29", frets=[fwd], quantiles=4,
+        ...     output_dir="data/analysis/momentum_tables", plot=False,
+        ... )
+        >>> result.figures, sorted(os.listdir("data/analysis/momentum_tables"))
+        ({}, ['config.json', 'ic.csv', 'monthly_ic.csv', 'quantile_returns.csv', 'summary.csv', 'summary.json', 'turnover.csv'])
         """
         if data_strategy not in ("cal", "read"):
             raise ValueError(
@@ -1406,7 +1417,7 @@ class Factor(Component, ABC):
                 return obj.read(start, end)
             return obj.compute(start, end)
 
-        return FactorAnalyzer(quantiles=quantiles).run(
+        return FactorAnalyzer(quantiles=quantiles, plot=plot).run(
             self,
             frets,
             features=request(self),
