@@ -26,9 +26,10 @@ output                         formula                                          
 *Investor behaviour and information diffusion*
 ``frog_in_pan``                ``sign(R) * (%positive - %negative)`` over bars 252..21 back,     Da, Gurun and Warachka (2014)
                                ``R`` that period's return (minus information discreteness)
-``capital_gains_overhang``     ``1 - RP / P``, ``RP`` the turnover-decayed reference price       Grinblatt and Han (2005)
-                               ``RP_t = (1 - V_t) RP_t-1 + V_t P_t``
-``salience``                   minus the salience-weighted return less the mean return, 21 bars  Cosemans and Frehen (2021)
+``vshape_overhang``            root mean square unrealized gain or loss over the price,          An (2016); Grinblatt and Han
+                               ``sqrt(1 - 2 RP / P + Q / P^2)``, ``RP`` and ``Q`` the            (2005)
+                               turnover-decayed mean and second moment of the cost basis
+                               ``RP_t = (1 - V_t) RP_t-1 + V_t P_t``, ``Q`` likewise of ``P^2``
 ``daytime_reversal``           frequency of a negative overnight and positive daytime return     Akbas, Boehmer, Jiang and Koch
                                less that of the opposite, 21 bars                                (2022)
 ``news_drift_gap``             sum of the returns on 8-K bars less that on the others, 63 bars   Chan (2003)
@@ -41,6 +42,9 @@ output                         formula                                          
                                for 252 bars after its ex-date, else 0                            (1995)
 ``debt_issuance_8k``           minus the 8-K item 2.03 (new direct financial obligation)         Spiess and Affleck-Graves (1999)
                                filings, 252 bars
+``late_filing``                minus the notices of a late 10-K or 10-Q (Form 12b-25, EVENTS     Alford, Jones and Zmijewski
+                               code 36), 252 bars                                                (1994); Bartov, DeFond and
+                                                                                                 Konchitchki (2013)
 *Long horizon and liquidity over time*
 ``long_term_reversal``         minus the return from 1260 to 252 bars back                       De Bondt and Thaler (1985)
 ``turnover_volatility``        minus the coefficient of variation of daily turnover, 252 bars    Chordia, Subrahmanyam and
@@ -52,19 +56,20 @@ mean of ``r`` over every symbol of the panel weighted by the previous bar's
 market cap. Turnover ``V`` is ``adjClose * adjVolume / marketcap``. The
 liquidity innovation is minus the change of the market's log illiquidity
 ``log(cap-weighted mean |r| / cap-weighted mean V)`` from its mean over the
-21 bars before. ``salience`` weighs each bar by ``|r - e| / (|r| + |e| +
-0.1)``, ``e`` the equal-weighted market return (proportional weights rather
-than the paper's rank weights). An 8-K bar of ``news_drift_gap`` is one on
+21 bars before. ``vshape_overhang`` measures how far the price is from the
+cost basis in either direction: the V-shaped disposition effect makes
+holders sell both extreme winners and extreme losers, which depresses those
+prices (An 2016; symmetric here, the paper weighs gains more). An 8-K bar of ``news_drift_gap`` is one on
 which, or on the bar after which, an item 1.01, 2.01, 2.02, 5.02, 7.01 or
 8.01 filing is available.
 
 Windowed statistics skip missing bars and need 80% of their window (the
 downside beta 50 down bars); a statistic short of that is NaN. Event flags
 are 0 on a priced bar without a filing and NaN before EVENTS starts
-(``fundamental_alpha.fill_flows``). ``capital_gains_overhang`` and
+(``fundamental_alpha.fill_flows``). ``vshape_overhang`` and
 ``dividend_change`` carry their state from the first bar of the read
 window, so ``warmup_bars`` (``WARMUP_BARS``) must cover the longest window
-and the reference price's memory.
+and the cost basis's memory.
 
 The market and the ranks are taken over every symbol of the panel, so build
 it on the whole market and read it on a roster. The factor is batch only;
@@ -76,11 +81,12 @@ Frazzini and Lamont (2007); Barber, De George, Lehavy and Trueman (2013);
 Johnson and So (2018); Hartzmark and Solomon (2013); Heston and Sadka
 (2008); Field and Hanka (2001); Harvey and Siddique (2000); Ang, Chen and
 Xing (2006); Pastor and Stambaugh (2003); Acharya and Pedersen (2005); Hou
-and Moskowitz (2005); Da, Gurun and Warachka (2014); Grinblatt and Han
-(2005); Cosemans and Frehen (2021); Akbas, Boehmer, Jiang and Koch (2022);
+and Moskowitz (2005); Da, Gurun and Warachka (2014); An (2016); Grinblatt
+and Han (2005); Akbas, Boehmer, Jiang and Koch (2022);
 Chan (2003); Lerman, Livnat and Mendenhall (2008); Ikenberry, Rankine and
 Stice (1996); Desai and Jain (1997); Michaely, Thaler and Womack (1995);
-Spiess and Affleck-Graves (1999); De Bondt and Thaler (1985); Chordia,
+Spiess and Affleck-Graves (1999); Alford, Jones and Zmijewski (1994);
+Bartov, DeFond and Konchitchki (2013); De Bondt and Thaler (1985); Chordia,
 Subrahmanyam and Anshuman (2001).
 """
 
@@ -113,28 +119,30 @@ from KunQuant.ops import (
 from KunQuant.Stage import Function
 
 from quantlab.factor.kunquant import BATCH_OPTIONS, FactorKunQuant
-from quantlab.factor.kunquant_cs import CrossSectionalWeightedMean
 from quantlab.factor.kunquant_compile import compile_graphs
+from quantlab.factor.kunquant_cs import CrossSectionalWeightedMean
 from quantlab.factor.predefined.fundamental_alpha import fill_flows
 
 #: 8-K items read as news by ``news_drift_gap``: 1.01, 2.01, 2.02, 5.02, 7.01, 8.01.
 NEWS_EVENTS = ("event_11", "event_21", "event_22", "event_52", "event_71", "event_81")
 #: Data columns the graph reads: SEP, DAILY's market cap and the 8-K items.
 DAILY_ANOMALY_COLUMNS = (
-    "adjOpen", "adjClose", "adjVolume", "divCash", "splitFactor", "marketcap", *NEWS_EVENTS, "event_23",
+    "adjOpen", "adjClose", "adjVolume", "divCash", "splitFactor", "marketcap", *NEWS_EVENTS, "event_23", "event_36",
 )
+#: The 8-K and filing-notice flags, filled with 0 on priced bars.
+EVENT_COLUMNS = (*NEWS_EVENTS, "event_23", "event_36")
 #: The outputs, in order.
 DAILY_ANOMALY_OUTPUTS = (
     "earnings_month", "earnings_delay", "dividend_month", "return_seasonality", "lockup_expiry",
     "coskewness", "downside_beta_gap", "liquidity_beta", "price_delay",
-    "frog_in_pan", "capital_gains_overhang", "salience", "daytime_reversal", "news_drift_gap", "earnings_volume",
-    "split_signal", "dividend_change", "debt_issuance_8k",
+    "frog_in_pan", "vshape_overhang", "daytime_reversal", "news_drift_gap", "earnings_volume",
+    "split_signal", "dividend_change", "debt_issuance_8k", "late_filing",
     "long_term_reversal", "turnover_volatility",
 )
 YEAR, QUARTER, MONTH = 252, 63, 21
 SEASONAL_YEARS = 5
 LONG_REVERSAL = 5 * YEAR
-#: Bars a build should warm up: the seasonal lags (5 years and a month) and the reference price's memory.
+#: Bars a build should warm up: the seasonal lags (5 years and a month) and the cost basis's memory.
 WARMUP_BARS = SEASONAL_YEARS * YEAR + MONTH
 #: Smallest share of a window's bars a windowed statistic needs.
 MIN_SHARE = 0.8
@@ -199,7 +207,8 @@ class DailyAnomalyAlpha(FactorKunQuant):
 
     The panel merges SEP (adjusted open, close and volume, the cash
     dividend and the split factor), DAILY (market cap) and Sharadar EVENTS
-    (``NEWS_EVENTS`` and item 2.03), and ``data_columns`` must be
+    (``EVENT_COLUMNS``: ``NEWS_EVENTS``, item 2.03 and the late-filing
+    notice, code 36), and ``data_columns`` must be
     ``DAILY_ANOMALY_COLUMNS``. ``kwargs={"ranked": True}`` makes every
     output its cross-sectional percentile rank, the input
     ``NeutralizedFactor`` should wrap.
@@ -262,7 +271,7 @@ class DailyAnomalyAlpha(FactorKunQuant):
         with builder:
             open_, close, volume = Input("adjOpen"), Input("adjClose"), Input("adjVolume")
             dividend, split, cap = Input("divCash"), Input("splitFactor"), Input("marketcap")
-            results, debt = Input("event_22"), Input("event_23")
+            results, debt, late = Input("event_22"), Input("event_23"), Input("event_36")
             news_items = [Input(name) for name in NEWS_EVENTS]
             always = Equals(ConstantOp(0.0), ConstantOp(0.0))
 
@@ -324,19 +333,21 @@ class DailyAnomalyAlpha(FactorKunQuant):
             negative = BackRef(_mean(falls, gap), MONTH)
             out["frog_in_pan"] = Sign(prior) * (positive - negative)
 
+            # The cost basis: each bar a share V of the float trades at P and replaces older holdings.
             share = Min(turnover, ConstantOp(1.0))
-            reference = Accumulator(close, "cgo_reference", is_whole_time_required=True, init_val="nan")
             step = share * close
-            started = Equals(reference, reference)
-            updated = SetAccumulator(
-                reference, Equals(step, step),
-                Select(started, (1.0 - share) * reference + step, close),
-            )
-            out["capital_gains_overhang"] = 1.0 - _ratio(updated, close)
+            moving = Equals(step, step)
 
-            ew = CrossSectionalWeightedMean(r, r * 0.0 + 1.0)
-            weight = Abs(r - ew) / (Abs(r) + Abs(ew) + 0.1)
-            out["salience"] = 0.0 - (_ratio(_mean(weight * r, MONTH), _mean(weight, MONTH)) - _mean(r, MONTH))
+            def cost_moment(value: OpBase, name: str) -> OpBase:
+                state = Accumulator(value, name, is_whole_time_required=True, init_val="nan")
+                started = Equals(state, state)
+                return SetAccumulator(state, moving, Select(started, (1.0 - share) * state + share * value, value))
+
+            mean_cost = cost_moment(close, "cost_mean")
+            second_cost = cost_moment(close * close, "cost_second")
+            spread = 1.0 - 2.0 * _ratio(mean_cost, close) + _ratio(second_cost, close * close)
+            # Max(NaN, 0) is 0 in KunQuant: carry the NaN of a bar without a price.
+            out["vshape_overhang"] = Sqrt(Max(spread, ConstantOp(0.0))) + spread * 0.0
 
             overnight = open_ / BackRef(close, 1) - 1.0
             daytime = close / open_ - 1.0
@@ -380,12 +391,13 @@ class DailyAnomalyAlpha(FactorKunQuant):
             out["dividend_change"] = Select(recent, change, ConstantOp(0.0)) + close * 0.0
 
             out["debt_issuance_8k"] = 0.0 - WindowedSum(debt, YEAR)
+            out["late_filing"] = 0.0 - WindowedSum(late, YEAR)
 
             # Long horizon and liquidity over time.
             out["long_term_reversal"] = 0.0 - (BackRef(close, YEAR) / BackRef(close, LONG_REVERSAL) - 1.0)
             mean_turnover = _mean(turnover, YEAR)
-            spread = Sqrt(Max(_mean(turnover * turnover, YEAR) - mean_turnover * mean_turnover, ConstantOp(0.0)))
-            out["turnover_volatility"] = 0.0 - _ratio(spread, mean_turnover)
+            dispersion = Sqrt(Max(_mean(turnover * turnover, YEAR) - mean_turnover * mean_turnover, ConstantOp(0.0)))
+            out["turnover_volatility"] = 0.0 - _ratio(dispersion, mean_turnover)
 
             for name in wanted:
                 Output(Rank(out[name]) if self._ranked() else out[name] * 1.0, name)
@@ -402,8 +414,8 @@ class DailyAnomalyAlpha(FactorKunQuant):
             for column in self.config.data_columns
         }
         priced = np.isfinite(arrays["adjClose"])
-        fill_flows(arrays, (*NEWS_EVENTS, "event_23"), priced)
-        for column in (*NEWS_EVENTS, "event_23"):
+        fill_flows(arrays, EVENT_COLUMNS, priced)
+        for column in EVENT_COLUMNS:
             arrays[column] = arrays[column].astype(np.float64)
         return arrays, panel["symbol"].values, panel["timestamp"].values
 

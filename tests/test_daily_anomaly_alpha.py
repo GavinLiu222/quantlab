@@ -3,7 +3,7 @@
 The panel is 16 symbols over 1,400 business days (more than the 1,260-bar
 long-term reversal): random adjusted prices, opens, volumes and market caps,
 quarterly dividends with a raise and a 2-for-1 split, a reverse split, and
-sparse 8-K items. Symbol 5 has a four-bar hole, symbol 9 is delisted from bar
+sparse 8-K items and late-filing notices. Symbol 5 has a four-bar hole, symbol 9 is delisted from bar
 1,300, symbol 12 lists on bar 1,200 and the 8-K items start on bar 30.
 """
 
@@ -24,7 +24,7 @@ from quantlab.factor.predefined.daily_anomaly_alpha import (
 DAYS = pd.bdate_range("2019-01-01", periods=1400)
 START, END = DAYS[0].strftime("%Y-%m-%d"), DAYS[-1].strftime("%Y-%m-%d")
 SYMBOLS = [f"s{i:02d}" for i in range(16)]
-EVENTS = (*NEWS_EVENTS, "event_23")
+EVENTS = (*NEWS_EVENTS, "event_23", "event_36")
 
 
 def _panel() -> xr.Dataset:
@@ -36,7 +36,7 @@ def _panel() -> xr.Dataset:
                                     + rng.normal(0, 0.015, size=shape)).cumsum(axis=0))
     data["adjOpen"] = data["adjClose"] * np.exp(rng.normal(0, 0.008, size=shape))
     data["adjVolume"] = rng.lognormal(12, 0.5, size=shape)
-    data["marketcap"] = data["adjClose"] * rng.uniform(1e5, 1e6, size=(1, 16))
+    data["marketcap"] = data["adjClose"] * rng.uniform(1e7, 1e8, size=(1, 16))
     data["splitFactor"] = np.ones(shape)
     data["splitFactor"][700, 3] = 2.0
     data["splitFactor"][900, 4] = 0.25
@@ -156,20 +156,18 @@ def _reference(panel) -> dict[str, pd.DataFrame]:
 
     share = turnover.clip(upper=1.0).to_numpy()
     price = c.to_numpy()
-    rp = np.full(price.shape, np.nan)
-    state = np.full(price.shape[1], np.nan)
-    for t in range(len(price)):
-        step = share[t] * price[t]
-        ok = np.isfinite(step)
-        new = np.where(np.isfinite(state), (1 - share[t]) * state + step, price[t])
-        state = np.where(ok, new, state)
-        rp[t] = state
-    rp = pd.DataFrame(rp, index=c.index, columns=c.columns)
-    out["capital_gains_overhang"] = 1 - (rp / c).where(c > 1e-12)
-
-    ew = _cs_mean(r, r * 0 + 1)
-    weight = (r - ew).abs() / (r.abs() + ew.abs() + 0.1)
-    out["salience"] = -(_mean(weight * r, 21) / _mean(weight, 21) - _mean(r, 21))
+    moments = []
+    for value in (price, price ** 2):
+        state = np.full(price.shape[1], np.nan)
+        path = np.full(price.shape, np.nan)
+        for t in range(len(price)):
+            ok = np.isfinite(share[t] * price[t])
+            new = np.where(np.isfinite(state), (1 - share[t]) * state + share[t] * value[t], value[t])
+            state = np.where(ok, new, state)
+            path[t] = state
+        moments.append(pd.DataFrame(path, index=c.index, columns=c.columns))
+    spread = 1 - 2 * moments[0] / c + moments[1] / c ** 2
+    out["vshape_overhang"] = np.sqrt(spread.clip(lower=0))
 
     overnight, daytime = o / c.shift(1) - 1, c / o - 1
     pair = overnight + daytime * 0
@@ -205,6 +203,7 @@ def _reference(panel) -> dict[str, pd.DataFrame]:
             change[t] = np.where((since < 252) & (previous > 0), np.log(last / previous), 0.0)
     out["dividend_change"] = pd.DataFrame(change, index=c.index, columns=c.columns).where(priced)
     out["debt_issuance_8k"] = -ev["event_23"].rolling(252).sum()
+    out["late_filing"] = -ev["event_36"].rolling(252).sum()
 
     out["long_term_reversal"] = -(c.shift(252) / c.shift(1260) - 1)
     mt = _mean(turnover, 252)
@@ -226,7 +225,8 @@ def test_every_output_matches_its_formula(panel, outputs, name):
 
 
 def test_the_calendar_and_action_outputs_fire(outputs):
-    for name in ("earnings_month", "dividend_month", "split_signal", "dividend_change", "lockup_expiry"):
+    for name in ("earnings_month", "dividend_month", "split_signal", "dividend_change", "lockup_expiry",
+                 "late_filing"):
         assert np.nanmax(np.abs(outputs[name].values)) > 0, name
     # Symbol 3's dividend halves at its 2-for-1 split: per pre-split share it is unchanged.
     change = outputs["dividend_change"].sel(symbol="s03").to_series()
