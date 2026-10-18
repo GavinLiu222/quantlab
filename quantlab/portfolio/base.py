@@ -823,6 +823,12 @@ class CovarianceEstimator(_Configured, ABC):
     #: estimator that does not, when it is constructed.
     takes_volatility: bool = True
 
+    #: Whether one symbol's estimate depends on the other symbols the context
+    #: holds (Ledoit-Wolf's shrinkage is estimated over all of them): a run
+    #: whose rule holds such an estimator keeps its whole price axis
+    #: (``PortfolioConstructor.keeps_every_symbol``).
+    pools_symbols: bool = False
+
     def declared_inputs(self) -> InputDeclaration:
         """What ``estimate`` reads from a context: its return window, its risk model.
 
@@ -1016,6 +1022,21 @@ class PortfolioConstructor(_Configured, ABC):
         ()
         """
         return ()
+
+    def keeps_every_symbol(self) -> bool:
+        """Whether a run keeps every symbol of its price axis rather than those it decides on.
+
+        True when a decision reads symbols beyond those with a prediction
+        and those of ``axis_factors``, as a covariance estimated over every
+        symbol the context holds does (``CovarianceEstimator.pools_symbols``).
+        False by default.
+
+        Examples
+        --------
+        >>> rule.keeps_every_symbol()
+        False
+        """
+        return False
 
     def ranking_label(self, names: Sequence[str]) -> str:
         """Return the predicted label the rule ranks the symbols by.

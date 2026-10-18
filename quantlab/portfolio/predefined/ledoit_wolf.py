@@ -106,6 +106,9 @@ class LedoitWolfEstimator(CovarianceEstimator):
                 f"max_stale_bars must be >= 0, got {config.max_stale_bars}"
             )
 
+    #: The shrinkage is estimated over every covered symbol of the context.
+    pools_symbols = True
+
     def declared_inputs(self) -> InputDeclaration:
         """A ``lookback_bars`` return window from ``lookback_bars + 1 + max_stale_bars`` prices.
 

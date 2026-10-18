@@ -521,6 +521,16 @@ class MeanVarianceOptimizer(PortfolioConstructor):
                 f"mip_gap is passed to {sorted(_MIP_GAP_OPTIONS)} only, not to {config.solver!r}"
             )
 
+    def keeps_every_symbol(self) -> bool:
+        """Whether the covariance estimator pools the symbols (``CovarianceEstimator.pools_symbols``).
+
+        Examples
+        --------
+        >>> rule.keeps_every_symbol()  # a Ledoit-Wolf estimator  # doctest: +SKIP
+        True
+        """
+        return self.config.covariance.pools_symbols
+
     def declared_inputs(self) -> InputDeclaration:
         """The covariance estimator's declaration, merged with the ``exposure_factors``.
 

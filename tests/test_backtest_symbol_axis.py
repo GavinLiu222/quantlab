@@ -7,6 +7,9 @@ What is locked here, and what turns it red:
   its weights, value, settlements and ``metrics.json`` equal those of the
   same run on the whole price axis, for a top-n rule and a mean-variance one
   (an estimator that prices each symbol alone, so the axis cannot move it).
+- A rule whose covariance estimator pools the symbols (Ledoit-Wolf's
+  shrinkage is estimated over every symbol the context holds) keeps the
+  whole price axis, so its estimate is the whole-axis one.
 - A rule that reads symbols it has no prediction for through a declared
   factor (an active-risk benchmark's weights) keeps those symbols too, and
   equals the whole-axis run.
@@ -33,12 +36,14 @@ from quantlab.portfolio.base import CovarianceEstimate, CovarianceEstimator
 from quantlab.portfolio.config import (
     ActiveRiskConfig,
     GrinoldExpectedReturnConfig,
+    LedoitWolfEstimatorConfig,
     MeanVarianceConfig,
     TopNConfig,
 )
 from quantlab.portfolio.decision_inputs import DecisionInputs
 from quantlab.portfolio.predefined.active_risk import ActiveRiskOptimizer
 from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
+from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
 from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
 from quantlab.portfolio.predefined.top_n import TopNConstructor
 from quantlab.runs.backtest_run import BacktestRun
@@ -165,6 +170,31 @@ def test_a_run_keeps_only_the_predicted_symbols_and_equals_the_whole_axis_run(st
     whole = USEquityCrossectionSelectStockVectorBt(_config(store, constructor(), f"{rule}_whole")).run()
     assert whole.weights.sizes["symbol"] == len(SYMBOLS) + len(EXTRA)
     _assert_same_run(cut, whole, SYMBOLS)
+
+
+def _ledoit_wolf_mean_variance():
+    return MeanVarianceOptimizer(MeanVarianceConfig(
+        expected_return_label="fwd_ret_1",
+        covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=10)),
+        expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
+        risk_aversion=5.0,
+        weight_cap=0.4,
+    ))
+
+
+def test_a_ledoit_wolf_rule_keeps_the_whole_price_axis(store, monkeypatch):
+    """Ledoit-Wolf's shrinkage is estimated over every symbol the context holds,
+    so a run keeps the whole axis and its estimate is the whole-axis one."""
+    cut = USEquityCrossectionSelectStockVectorBt(
+        _config(store, _ledoit_wolf_mean_variance(), "lw_cut")
+    ).run()
+
+    assert cut.weights.symbol.values.tolist() == SYMBOLS + EXTRA
+    _every_symbol(monkeypatch)
+    whole = USEquityCrossectionSelectStockVectorBt(
+        _config(store, _ledoit_wolf_mean_variance(), "lw_whole")
+    ).run()
+    _assert_same_run(cut, whole, SYMBOLS + EXTRA)
 
 
 def _active(bars):

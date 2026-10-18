@@ -705,9 +705,9 @@ class DecisionInputs:
         the panel's first bar to its last (those factors computed once over
         the range, with their own warm-up). A run drops the other symbols
         from its axis: the rule never holds them, and none of its inputs
-        read them. A covariance estimated from the context's symbols
-        together (``LedoitWolfEstimator``'s shrinkage) is estimated over the
-        symbols kept.
+        read them. A rule that keeps every symbol (``keeps_every_symbol``:
+        a covariance estimated from the context's symbols together, such as
+        ``LedoitWolfEstimator``'s shrinkage) keeps them all.
 
         Parameters
         ----------
@@ -731,6 +731,8 @@ class DecisionInputs:
         """
         predictions = predictions.transpose(*_DIMS)
         symbols = predictions.symbol.values
+        if self.constructor.keeps_every_symbol():
+            return np.ones(len(symbols), dtype=bool)
         keep = np.zeros(len(symbols), dtype=bool)
         for name in predictions.data_vars:
             keep |= np.isfinite(np.asarray(predictions[name].values, dtype=np.float64)).any(axis=0)
