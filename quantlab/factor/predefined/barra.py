@@ -80,6 +80,7 @@ A halted stock loses its exposures on its halt days.
 from __future__ import annotations
 
 import platform
+import warnings
 from dataclasses import dataclass, fields
 
 import numpy as np
@@ -100,6 +101,7 @@ from KunQuant.ops import (
 )
 from KunQuant.Stage import Function
 
+from quantlab.dataset.base import InsufficientHistoryError
 from quantlab.factor.config import FactorConfig
 from quantlab.factor.kunquant import BATCH_OPTIONS, FactorKunQuant
 from quantlab.factor.kunquant_cs import (
@@ -134,13 +136,6 @@ OWN_CAP = "_own_cap"
 
 #: The regression weights an orthogonalization may use, by config name.
 ORTHOGONALIZATION_WEIGHTINGS = ("sqrt_cap", "cap", "equal")
-
-
-#: Bars of history ``BarraStyleParameters.warmup_bars`` adds beyond the longest
-#: window: on the Sharadar and FRED stores the first exposure computed from
-#: exactly 1 + RSTR's window and lag differed from the whole computation, and
-#: from one bar more it did not (#252, measured 2026-10-12).
-WARMUP_MARGIN_BARS = 5
 
 
 @dataclass(frozen=True)
@@ -324,7 +319,7 @@ class BarraStyleParameters:
     >>> len(params.panel_columns)
     32
     >>> params.warmup_bars
-    531
+    526
     """
 
     price_column: str = "adjClose"
@@ -494,19 +489,18 @@ class BarraStyleParameters:
 
     @property
     def warmup_bars(self) -> int:
-        """Bars of history the first exposure needs: the longest window plus one return, plus a margin.
+        """Bars of history the first exposure needs: the longest window plus one return.
 
-        The longest is RSTR's, its window plus its lag. The margin of
-        ``WARMUP_MARGIN_BARS`` covers an exposure computed from exactly that
-        history differing from the whole computation on the Sharadar and FRED
-        stores (#252). Set ``FactorConfig.warmup_bars`` to at least this.
+        The longest is RSTR's, its window plus its lag. Set
+        ``FactorConfig.warmup_bars`` to at least this; with
+        ``risk_free_symbol`` the factor counts them in bars with a price.
 
         Examples
         --------
         >>> BarraStyleParameters().warmup_bars
-        531
+        526
         """
-        return 1 + WARMUP_MARGIN_BARS + max(
+        return 1 + max(
             self.beta_window,
             self.momentum_window + self.momentum_lag,
             self.dastd_window,
@@ -615,6 +609,12 @@ def _present(value: OpBase) -> OpBase:
     return SetInfOrNanToValue(value * 0.0 + 1.0, 0.0)
 
 
+def _priced_bars(panel: xr.Dataset, params: BarraStyleParameters) -> xr.DataArray:
+    """Return, per bar, whether a symbol other than ``risk_free_symbol`` has a price."""
+    prices = panel[params.price_column].drop_sel(symbol=[params.risk_free_symbol], errors="ignore")
+    return prices.notnull().any("symbol")
+
+
 def _broadcast_risk_free(panel: xr.Dataset, params: BarraStyleParameters) -> xr.Dataset:
     """Return ``panel`` with the rate of ``risk_free_symbol`` on every other symbol.
 
@@ -636,8 +636,7 @@ def _broadcast_risk_free(panel: xr.Dataset, params: BarraStyleParameters) -> xr.
     rate = panel[params.risk_free_column].sel(symbol=symbol, drop=True).ffill("timestamp")
     others = panel.drop_sel(symbol=[symbol])
     others = others.assign_coords(symbol=np.asarray(others["symbol"].values.tolist()))
-    traded = others[params.price_column].notnull().any("symbol")
-    others = others.sel(timestamp=traded)
+    others = others.sel(timestamp=_priced_bars(panel, params))
     return others.assign(
         {params.risk_free_column: rate.sel(timestamp=others["timestamp"]).broadcast_like(
             others[params.price_column]
@@ -866,7 +865,11 @@ class BarraStyle(FactorKunQuant):
         ``mode`` must be ``"batch"``, ``data_columns`` must name exactly
         ``BarraStyleParameters.panel_columns``, ``factor_names`` may pick any
         subset of the outputs, and ``warmup_bars`` should be at least
-        ``BarraStyleParameters.warmup_bars`` (531 by default).
+        ``BarraStyleParameters.warmup_bars`` (526 by default). With
+        ``risk_free_symbol`` the warm-up is counted in bars where some
+        symbol has a price: a date only the rate has (FRED's DTB3 has one
+        on 2025-01-09, when NYSE was closed) is dropped before the graph
+        runs, so it does not count.
 
     Raises
     ------
@@ -882,7 +885,7 @@ class BarraStyle(FactorKunQuant):
     ``risk_free`` variable on the same symbols.
 
     >>> factor = BarraStyle(FactorConfig(
-    ...     warmup_bars=531,
+    ...     warmup_bars=526,
     ...     dataset=[prices, daily, risk_free],
     ...     mode="batch",
     ...     data_columns=("adjClose", "marketcap", "risk_free", "close", "volume",
@@ -933,6 +936,44 @@ class BarraStyle(FactorKunQuant):
     def _parameters(self) -> BarraStyleParameters:
         """Return the validated parameters for the current config."""
         return BarraStyleParameters.from_config(self.config)
+
+    def _warm_start(self, first: pd.Timestamp, start) -> pd.Timestamp:
+        """Return the bar ``warmup_bars`` bars with a price before ``first``.
+
+        Without ``risk_free_symbol`` every bar of the dataset counts. With
+        it, ``_broadcast_risk_free`` keeps only the bars where another
+        symbol has a price (``_priced_bars``), so the count goes back until
+        it holds ``warmup_bars`` of those (#252), or to the dataset's first
+        bar, warning with the shortfall.
+        """
+        params = self._parameters()
+        if params.risk_free_symbol is None:
+            return super()._warm_start(first, start)
+        dataset = self.config.dataset
+        needed = self.warmup_bars
+        source_start, priced = first, 0
+        while priced < needed:
+            try:
+                earlier = dataset.bar_before(source_start, needed - priced)
+            except InsufficientHistoryError as exc:
+                if not exc.available:
+                    warnings.warn(
+                        f"{self.class_name}.compute(): {needed} warm-up bar(s) with a "
+                        f"price are needed before {start!r} but {dataset.class_name} holds "
+                        f"only {priced}; the first bars are short by {needed - priced} "
+                        f"bar(s) of warm-up.",
+                        UserWarning,
+                        stacklevel=4,
+                    )
+                    return source_start
+                earlier = dataset.bar_before(source_start, exc.available)
+            last = dataset.bar_before(source_start, 1)
+            panel = dataset.to_shared_names(dataset.panel(
+                earlier, last, variables=dataset.own_names([params.price_column])
+            ))
+            priced += int(_priced_bars(panel, params).sum())
+            source_start = earlier
+        return source_start
 
     def _get_factor_names(self) -> tuple[str, ...]:
         """Return every output."""

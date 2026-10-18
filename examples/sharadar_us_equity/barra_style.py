@@ -63,7 +63,7 @@ WORK = DATA_ROOT / "factors" / "market" / "barra_style"
 #: The factor report's forward-return labels (whole market).
 LABELS = DATA_ROOT / "labels" / "market"
 
-#: The exposures' range, both inclusive; the warm-up (531 bars) is read
+#: The exposures' range, both inclusive; the warm-up (526 bars with a price) is read
 #: before START as far as SEP holds it: START, SEP's 527th bar (SEP starts on
 #: 1997-12-31), is the first with RSTR's whole window.
 #: DAILY's market cap starts on 1998-12-01.

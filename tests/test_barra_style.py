@@ -763,7 +763,7 @@ def test_defaults_are_use4_where_published() -> None:
     assert (params.imputation_regressors, params.imputation_weighting) == (("industry", "size"), "sqrt_cap")
     assert (params.min_growth_years, params.dividend_min_observations) == (3, 126)
     assert len(_STYLES) == 12
-    assert params.warmup_bars == 531
+    assert params.warmup_bars == 526
 
 
 def test_equal_weighting_orthogonalizes_with_equal_weights(tmp_path) -> None:
