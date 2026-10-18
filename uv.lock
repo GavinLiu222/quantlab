@@ -1438,15 +1438,15 @@ wheels = [
 
 [[package]]
 name = "kunquant"
-version = "0.1.11"
+version = "0.1.12"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/22/9f/84b43de1eeb03a9607d9a78fd713cfe3e113489f065945a6b62de6af4b03/kunquant-0.1.11-cp312-abi3-macosx_14_0_universal2.whl", hash = "sha256:9b7d85af5ffbebd011f16f4493b49b03049b51f0dc9be065532d5538b9b2c384", size = 228034, upload-time = "2026-05-29T12:23:24.592Z" },
-    { url = "https://files.pythonhosted.org/packages/97/dd/f1aec9bd5ad69a07e515ecbe75f752d541d772502693d020c43c266833b3/kunquant-0.1.11-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:7fd991d4a7148cc30d9ef72719151c52de7aea200071f2511f33a2ee2c2a70b7", size = 266016, upload-time = "2026-05-29T12:23:24.318Z" },
-    { url = "https://files.pythonhosted.org/packages/81/c9/abbe721afdc9adb5b1d47499431cb716e83f1e445cac33cc149182a5a15c/kunquant-0.1.11-cp312-abi3-win_amd64.whl", hash = "sha256:f1281819b6ac4eecb8639a722dce5faa3c130f60f39c41de0816acd2dca1fb94", size = 509200, upload-time = "2026-05-29T12:23:28.028Z" },
+    { url = "https://files.pythonhosted.org/packages/fb/97/f9712d4257aca4aee67664884a12502d691b4405553051354fe52b0315d7/kunquant-0.1.12-cp312-abi3-macosx_14_0_universal2.whl", hash = "sha256:9dcf1f76f465218b6754c48f3c768084966480e3d32fed474d5dd6aa4fafec7a", size = 228038, upload-time = "2026-10-09T14:52:22.402Z" },
+    { url = "https://files.pythonhosted.org/packages/85/5b/2982c61885d85c24e7fa79a161b437441e6e569d0dd0a9a57e65c20ada75/kunquant-0.1.12-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:f5c1b5d0d4a157dbb7ca807340c59b5a4f38e998e1a726a45de853c3053965c6", size = 266040, upload-time = "2026-10-09T14:52:20.617Z" },
+    { url = "https://files.pythonhosted.org/packages/fb/f2/844cbdad841cf8f941fb41126b95ea82cbd1571d071884beb174b1f0396e/kunquant-0.1.12-cp312-abi3-win_amd64.whl", hash = "sha256:5b06223cb7a31f0a37fc599b15adcdfca4f11958d5acf16f815a1a762caed0ba", size = 509255, upload-time = "2026-10-09T14:52:29.64Z" },
 ]
 
 [[package]]
@@ -3163,7 +3163,7 @@ requires-dist = [
     { name = "cvxpy", marker = "extra == 'optimize'", specifier = ">=1.9.3" },
     { name = "exchange-calendars", specifier = ">=4.13.2" },
     { name = "joblib", specifier = ">=1.6.0" },
-    { name = "kunquant", specifier = ">=0.1.11" },
+    { name = "kunquant", specifier = ">=0.1.12" },
     { name = "lightgbm", marker = "extra == 'all'", specifier = ">=4.6.0" },
     { name = "lightgbm", marker = "extra == 'gbdt'", specifier = ">=4.6.0" },
     { name = "loguru", specifier = ">=0.7.3" },
