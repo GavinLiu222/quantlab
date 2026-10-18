@@ -10,7 +10,8 @@ never built.
   rule on each bar's return window and staleness
   (``DecisionPanel.return_windows``, ``staleness``) and
   ``sklearn.covariance.ledoit_wolf``'s shrinkage computed for all bars at
-  once, in Woodbury form (``a I + U U'``).
+  once, in Woodbury form (``a I + U U'``, the per-bar estimator's own
+  ``shrunk_low_rank``).
 - ``factor_risk`` (``FactorRiskStoreEstimator``): the factor risk model's
   ``exposure_matrix`` of every bar's exposures (one call), the estimate
   rows' factor covariance and specific risks, with a coverage rule simpler
@@ -23,6 +24,7 @@ import xarray as xr
 
 from quantlab.portfolio.approximate import LowRankCovariance
 from quantlab.portfolio.base import DecisionPanel
+from quantlab.portfolio.predefined.ledoit_wolf import shrunk_low_rank
 
 #: Window values one batch of the Ledoit-Wolf estimate holds at most (about 128 MB each array).
 _BATCH_VALUES = 1 << 24
@@ -61,7 +63,7 @@ def ledoit_wolf(config, panel: DecisionPanel, volatility: np.ndarray | None = No
         if volatility is not None:
             ok &= np.isfinite(volatility[part]) & (volatility[part] > 0)
         covered[part] = ok
-        shift[part], exposures[part] = _batched_ledoit_wolf(window, ok)
+        shift[part], exposures[part] = shrunk_low_rank(window, ok)
     low_rank = LowRankCovariance(
         covered=covered,
         exposures=exposures,
@@ -69,38 +71,6 @@ def ledoit_wolf(config, panel: DecisionPanel, volatility: np.ndarray | None = No
         specific_variance=np.where(covered, shift[:, None], 0.0),
     )
     return low_rank if volatility is None else low_rank.with_volatility(volatility)
-
-
-def _batched_ledoit_wolf(window: np.ndarray, covered: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Return ``(a, U)`` with ``a I + U U'`` each bar's Ledoit-Wolf estimate over its covered symbols.
-
-    ``window`` is ``[bars, n, symbols]``, finite where ``covered``
-    (``[bars, symbols]``). ``sklearn.covariance.ledoit_wolf`` term for term,
-    on the demeaned window ``X`` (``[n, p]`` per bar): the sample
-    covariance ``X'X / n``, its mean variance ``mu``, and the shrinkage
-    ``min(beta, delta) / delta``; one covered symbol gets no shrinkage, as
-    sklearn's own special case. ``U`` is ``X' sqrt((1 - shrinkage) / n)``,
-    zero on the uncovered symbols.
-    """
-    n = window.shape[1]
-    inside = covered[:, None, :]
-    X = np.where(inside, window, 0.0)
-    X = np.where(inside, X - X.mean(axis=1, keepdims=True), 0.0)
-    p = covered.sum(axis=1).astype(np.float64)
-    squared = X**2
-    trace = squared.sum(axis=(1, 2)) / n
-    with np.errstate(divide="ignore", invalid="ignore"):
-        mu = np.where(p > 0, trace / p, 0.0)
-        gram = X @ np.swapaxes(X, 1, 2)  # [bars, n, n]
-        delta_ = (gram**2).sum(axis=(1, 2)) / n**2
-        beta_ = (squared.sum(axis=2) ** 2).sum(axis=1)
-        beta = (beta_ / n - delta_) / (p * n)
-        delta = (delta_ - 2.0 * mu * trace + p * mu**2) / p
-        beta = np.minimum(beta, delta)
-        shrinkage = np.where((p > 1) & (beta != 0) & (delta != 0), beta / delta, 0.0)
-    shift = shrinkage * mu
-    exposures = np.swapaxes(X, 1, 2) * np.sqrt((1.0 - shrinkage) / n)[:, None, None]
-    return shift, exposures
 
 
 def factor_risk(config, panel: DecisionPanel, volatility: np.ndarray | None = None) -> LowRankCovariance:

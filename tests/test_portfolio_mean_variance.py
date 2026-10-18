@@ -33,7 +33,7 @@ import xarray as xr
 from quantlab.portfolio.config import GrinoldExpectedReturnConfig, RawExpectedReturnConfig
 from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn, RawExpectedReturn
 from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig
-from quantlab.portfolio.base import PortfolioConstructionError, PortfolioContext
+from quantlab.portfolio.base import CovarianceEstimate, PortfolioConstructionError, PortfolioContext
 from quantlab.runs.prediction_panel import LabelSpec
 from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
 from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
@@ -293,7 +293,7 @@ class _NanRisk(LedoitWolfEstimator):
         estimate = super().estimate(context, volatility)
         covariance = estimate.covariance.copy()
         covariance[0, 1] = covariance[1, 0] = np.nan
-        return type(estimate)(symbols=estimate.symbols, covariance=covariance)
+        return CovarianceEstimate(symbols=estimate.symbols, covariance=covariance)
 
 
 def test_non_finite_problem_data_is_a_construction_error_not_a_crash():

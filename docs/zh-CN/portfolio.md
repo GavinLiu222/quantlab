@@ -415,7 +415,7 @@ array([0.6, 0.4, 0. , 0. ])
 
 ### 暴露约束
 
-`exposure_bounds` 把组合对某个因子的暴露限制在两个界之间：对 `exposure_factors` 中每个被点名的输出 `x`，要求 `lower <= sum_i w_i * x_i <= upper`，被锁持仓的暴露也计入（没有暴露值的被锁标的会让这根 bar 失败，因为组合的暴露此时未知）。规则把这些 `exposure_factors` 声明为它的因子（`declared_inputs()`），所以回测会在窗口内计算它们，并把每根 bar 的取值放进 `context.factors`。没有暴露值的候选标的不分配权重；如果它当前已持有，就被平掉，并记在该 bar 的 `closed_without_exposure` 事件里。协方差估计器所用因子风险模型的因子（`factor_names` 之一）也可以直接约束，不必声明因子：它的暴露由预测自己给出，即 `forecast.factor_exposure(name, symbols)`：`B` 的那一列，预测未覆盖的标的没有暴露值；该因子在这根 bar 上没有协方差、因而不在预测中时为 0。Ledoit-Wolf 这样的稠密估计没有风险因子。以因子风险模型为协方差时，`exposure_bounds={"style_beta": (-0.1, 0.1)}` 把组合的 USE4 Beta 暴露控制在市值加权估计域的水平（即 0）附近，行业因子也能这样约束。被约束的名字如果既是 `exposure_factors` 的输出又是风险模型的因子，会被拒绝。候选标的无法满足的界会让这根 bar 无解，回测会保持原持仓（见[在回测中](#在回测中)）。约束满足到求解器的精度：`"CLARABEL"` 约 1e-9，`"OSQP"` 约 1e-5。
+`exposure_bounds` 把组合对某个因子的暴露限制在两个界之间：对 `exposure_factors` 中每个被点名的输出 `x`，要求 `lower <= sum_i w_i * x_i <= upper`，被锁持仓的暴露也计入（没有暴露值的被锁标的会让这根 bar 失败，因为组合的暴露此时未知）。规则把这些 `exposure_factors` 声明为它的因子（`declared_inputs()`），所以回测会在窗口内计算它们，并把每根 bar 的取值放进 `context.factors`。没有暴露值的候选标的不分配权重；如果它当前已持有，就被平掉，并记在该 bar 的 `closed_without_exposure` 事件里。协方差估计器所用因子风险模型的因子（`factor_names` 之一）也可以直接约束，不必声明因子：它的暴露由预测自己给出，即 `forecast.factor_exposure(name, symbols)`：`B` 的那一列，预测未覆盖的标的没有暴露值；该因子在这根 bar 上没有协方差、因而不在预测中时为 0。稠密估计和 Ledoit-Wolf 估计都没有风险因子。以因子风险模型为协方差时，`exposure_bounds={"style_beta": (-0.1, 0.1)}` 把组合的 USE4 Beta 暴露控制在市值加权估计域的水平（即 0）附近，行业因子也能这样约束。被约束的名字如果既是 `exposure_factors` 的输出又是风险模型的因子，会被拒绝。候选标的无法满足的界会让这根 bar 无解，回测会保持原持仓（见[在回测中](#在回测中)）。约束满足到求解器的精度：`"CLARABEL"` 约 1e-9，`"OSQP"` 约 1e-5。
 
 最常见的用法是把 beta 控制在 1 附近，让只做多的组合保持和基准相同的市场风险，超额来自选股，而不是来自更低的 beta。`BenchmarkBeta`（见[因子指南](factor.md#基准-beta)）给出每个标的相对一个单标的基准的 beta；`stocks` 为各标的的价格数据集，`vt` 为基准的数据集：
 
@@ -448,11 +448,11 @@ True
 
 ## 协方差估计器
 
-协方差估计器（`CovarianceEstimator`）在一根 bar 上估计单 bar 收益的协方差。它的 `estimate(context, volatility=None)` 返回一个 `ReturnCovariance`（`quantlab.risk.base`）：覆盖的标的、协方差和方差，以及 `scaled`、`subset`、`factor_form()`（稠密估计为 `None`）和 `factor_exposure(name, symbols)`。满足它的两个类型保持分开（ADR 0028）：稠密的 `CovarianceEstimate` 和因子风险模型的 `FactorRiskForecast`。规则只向估计提问，从不区分这两种类型。它不需要训练，也没有 checkpoint。喂给它的预测（例如预测波动率）来自模型，经由预测器传入。它只返回协方差，所以任何需要协方差的规则都能持有它，不限于均值方差优化器。
+协方差估计器（`CovarianceEstimator`）在一根 bar 上估计单 bar 收益的协方差。它的 `estimate(context, volatility=None)` 返回一个 `ReturnCovariance`（`quantlab.risk.base`）：覆盖的标的、协方差和方差，以及 `scaled`、`subset`、`factor_form()`（稠密估计为 `None`）和 `factor_exposure(name, symbols)`。满足它的三个类型保持分开（ADR 0028）：稠密的 `CovarianceEstimate`、低秩的 `LowRankCovarianceEstimate`（`B B' + diag(D)`，没有风险因子）和因子风险模型的 `FactorRiskForecast`。规则只向估计提问，从不区分这些类型。它不需要训练，也没有 checkpoint。喂给它的预测（例如预测波动率）来自模型，经由预测器传入。它只返回协方差，所以任何需要协方差的规则都能持有它，不限于均值方差优化器。
 
 它不是因子风险模型。因子风险模型（`quantlab/risk/`，ADR 0024）在任何回测之前就按每根 bar 一行估计成 store；`FactorRiskStoreEstimator` 是读取这些 store 的协方差估计器。
 
-`LedoitWolfEstimator` 读取最近 `lookback_bars` 个单 bar 收益，用 Ledoit-Wolf 系数把样本协方差向缩放的单位阵收缩（`sklearn.covariance.ledoit_wolf`），这样标的数多于 bar 数时估计仍然良态。然后它把协方差拆成相关性和波动率；传入 `volatility` 时用给定的波动率替换。
+`LedoitWolfEstimator` 读取最近 `lookback_bars` 个单 bar 收益，用 Ledoit-Wolf 系数把样本协方差向缩放的单位阵收缩（`sklearn.covariance.ledoit_wolf`），这样标的数多于 bar 数时估计仍然良态。然后它把协方差拆成相关性和波动率；传入 `volatility` 时用给定的波动率替换。估计是一个 `LowRankCovarianceEstimate`：`lookback_bars` 窗口的收缩协方差等于缩放后的去均值窗口乘以其转置、再加单位阵的倍数，所以它从不构造 `[n, n]` 矩阵（需要时由 `covariance` 构造）。窗口每个 bar 至少对应 `LOW_RANK_MIN_RATIO`（6）只标的时，它的 `factor_form()` 是 `(B, I, D)`，优化器以低秩形式给风险定价；标的更少时稠密风险项解得更快，`factor_form()` 为 `None`。用 CLARABEL 解长仓问题、窗口 252 个 bar 时，3,000 个候选上为 4.5 秒对稠密的 5.6 秒，5,000 个候选上为 14 秒对 22 秒；无论哪种形式，一根 bar 的大部分时间都花在内点法求解上，而不是协方差。
 
 标的只有同时满足以下条件才会被覆盖：
 

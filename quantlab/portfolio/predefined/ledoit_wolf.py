@@ -6,16 +6,18 @@ identity with the Ledoit-Wolf coefficient, so the estimate stays well
 conditioned when there are more symbols than bars. The shrunk covariance is
 split into correlations and volatilities, and the volatilities can be
 replaced by given ones (a model's forecast) before it is put back together.
+It is kept in low-rank form, the scaled window plus a diagonal, never as the
+dense ``[n, n]`` matrix (``shrunk_low_rank``, which the approximate
+backtest's batched estimate shares).
 """
 
 import numpy as np
 import xarray as xr
-from sklearn.covariance import ledoit_wolf
 
 from quantlab.portfolio.base import (
-    CovarianceEstimate,
     CovarianceEstimator,
     InputDeclaration,
+    LowRankCovarianceEstimate,
     PortfolioContext,
 )
 from quantlab.portfolio.config import LedoitWolfEstimatorConfig
@@ -36,8 +38,13 @@ class LedoitWolfEstimator(CovarianceEstimator):
     (``sklearn.covariance.ledoit_wolf``), converted to correlations ``C`` and scaled back
     by volatilities ``D``, the given ones where ``volatility`` is passed (a
     symbol without a finite positive one is left out), else the shrunk
-    covariance's own. It is ``D C D``, of one-bar returns; ``factor_form()``
-    is ``None``.
+    covariance's own. It is ``D C D``, of one-bar returns, returned as a
+    ``LowRankCovarianceEstimate``: the shrunk covariance is ``U U' + a I``
+    with ``U`` the demeaned window scaled by ``sqrt((1 - s) / T)``, so ``D C
+    D`` is ``B B' + diag(D a / sd^2)`` with ``B = D U / sd``, rank
+    ``lookback_bars``, and an optimiser prices risk from ``factor_form()``
+    without the dense matrix once it has ``LOW_RANK_MIN_RATIO`` times as
+    many symbols as bars (``covariance`` builds the matrix on request).
 
     Parameters
     ----------
@@ -120,7 +127,7 @@ class LedoitWolfEstimator(CovarianceEstimator):
 
     def estimate(
         self, context: PortfolioContext, volatility: xr.DataArray | None = None
-    ) -> CovarianceEstimate:
+    ) -> LowRankCovarianceEstimate:
         """Estimate the covariance of one-bar returns from the context's return window.
 
         See the class docstring for the rule and an example.
@@ -136,7 +143,7 @@ class LedoitWolfEstimator(CovarianceEstimator):
 
         Returns
         -------
-        CovarianceEstimate
+        LowRankCovarianceEstimate
             The covariance over the covered symbols, symmetric and positive
             definite.
 
@@ -170,23 +177,61 @@ class LedoitWolfEstimator(CovarianceEstimator):
             covered &= np.isfinite(given) & (given > 0)
         index = np.flatnonzero(covered)
         if index.size == 0:
-            return CovarianceEstimate(symbols=symbols[:0], covariance=np.empty((0, 0)))
-
-        covariance = _shrunk_covariance(
-            window[:, index], None if volatility is None else given[index]
+            return LowRankCovarianceEstimate(
+                symbols=symbols[:0],
+                exposures=np.empty((0, self.config.lookback_bars)),
+                specific_variance=np.empty(0),
+            )
+        window = window[:, index]
+        shift, exposures = shrunk_low_rank(window[None], np.ones((1, index.size), dtype=bool))
+        shift, exposures = float(shift[0]), exposures[0]
+        specific = np.full(index.size, shift)
+        if volatility is not None:
+            # D C D with D the given volatilities: rescale U U' + a I by D / sd.
+            ratio = given[index] / np.sqrt(np.einsum("ij,ij->i", exposures, exposures) + shift)
+            exposures = exposures * ratio[:, None]
+            specific = specific * ratio**2
+        return LowRankCovarianceEstimate(
+            symbols=symbols[index], exposures=exposures, specific_variance=specific
         )
-        return CovarianceEstimate(symbols=symbols[index], covariance=covariance)
 
 
-def _shrunk_covariance(returns: np.ndarray, volatility: np.ndarray | None) -> np.ndarray:
-    """Return ``D C D``: the Ledoit-Wolf shrunk correlations ``C`` of ``returns`` scaled by ``D``.
+def shrunk_low_rank(window: np.ndarray, covered: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Return ``(a, U)`` with ``a I + U U'`` each bar's Ledoit-Wolf estimate over its covered symbols.
 
-    ``returns`` is ``[T, N]``, every value finite and no column constant;
-    ``D`` is ``volatility`` when given (finite and positive), else the
-    shrunk covariance's own volatilities.
+    ``window`` is ``[bars, n, symbols]``, finite where ``covered``
+    (``[bars, symbols]``). ``sklearn.covariance.ledoit_wolf`` term for term,
+    on the demeaned window ``X`` (``[n, p]`` per bar): the sample
+    covariance ``X'X / n``, its mean variance ``mu``, and the shrinkage
+    ``min(beta, delta) / delta``, every sum over ``[p, p]`` taken on the
+    ``[n, n]`` Gram matrix instead; one covered symbol gets no shrinkage, as
+    sklearn's own special case. ``a`` is the shrinkage times ``mu`` and
+    ``U`` is ``X' sqrt((1 - shrinkage) / n)``, zero on the uncovered symbols.
+
+    Examples
+    --------
+    >>> from sklearn.covariance import ledoit_wolf
+    >>> x = np.random.default_rng(0).normal(size=(20, 5))
+    >>> shift, exposures = shrunk_low_rank(x[None], np.ones((1, 5), dtype=bool))
+    >>> bool(np.allclose(exposures[0] @ exposures[0].T + shift[0] * np.eye(5), ledoit_wolf(x)[0]))
+    True
     """
-    shrunk, _ = ledoit_wolf(returns)
-    sd = np.sqrt(np.diag(shrunk))
-    correlation = shrunk / np.outer(sd, sd)
-    scale = sd if volatility is None else volatility
-    return correlation * np.outer(scale, scale)
+    n = window.shape[1]
+    inside = covered[:, None, :]
+    X = np.where(inside, window, 0.0)
+    X = np.where(inside, X - X.mean(axis=1, keepdims=True), 0.0)
+    p = covered.sum(axis=1).astype(np.float64)
+    squared = X**2
+    trace = squared.sum(axis=(1, 2)) / n
+    with np.errstate(divide="ignore", invalid="ignore"):
+        mu = np.where(p > 0, trace / p, 0.0)
+        gram = X @ np.swapaxes(X, 1, 2)  # [bars, n, n]
+        delta_ = (gram**2).sum(axis=(1, 2)) / n**2
+        beta_ = (squared.sum(axis=2) ** 2).sum(axis=1)
+        beta = (beta_ / n - delta_) / (p * n)
+        delta = (delta_ - 2.0 * mu * trace + p * mu**2) / p
+        beta = np.minimum(beta, delta)
+        shrinkage = np.where((p > 1) & (beta != 0) & (delta != 0), beta / delta, 0.0)
+    shift = shrinkage * mu
+    exposures = np.swapaxes(X, 1, 2) * np.sqrt((1.0 - shrinkage) / n)[:, None, None]
+    return shift, exposures

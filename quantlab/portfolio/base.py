@@ -29,7 +29,8 @@ nothing of them. ``DecisionPanel`` is what
 
 A *covariance estimator* (``CovarianceEstimator``) estimates the covariance
 of one-bar returns at a bar, as a ``quantlab.risk.base.ReturnCovariance``
-(the dense ``CovarianceEstimate`` here, for example); a rule that prices
+(the dense ``CovarianceEstimate`` here, or ``LowRankCovarianceEstimate``,
+low rank plus a diagonal, which Ledoit-Wolf returns); a rule that prices
 risk, such as a mean-variance optimiser, holds one. It is not a factor risk
 model (``quantlab.risk``), which is estimated ahead as stores; one estimator,
 ``FactorRiskStoreEstimator``, reads those stores: its estimate is the
@@ -530,7 +531,7 @@ class CovarianceEstimate:
     """A covariance estimator's covariance of returns at one bar, over the symbols it covers.
 
     The dense ``quantlab.risk.base.ReturnCovariance``: it has no factor form
-    and no risk factors.
+    and no risk factors (``LowRankCovarianceEstimate`` is the low-rank one).
 
     Attributes
     ----------
@@ -597,7 +598,7 @@ class CovarianceEstimate:
     def factor_form(self):
         """Return the factor form of the covariance, or ``None`` when it has none.
 
-        A dense estimate such as Ledoit-Wolf has none. A factor risk
+        A dense estimate has none. A factor risk
         model's ``FactorRiskForecast`` returns ``(exposures,
         factor_covariance, specific_variance)``, from which an optimiser
         builds a low-rank risk term instead of the dense one.
@@ -623,6 +624,148 @@ class CovarianceEstimate:
         Examples
         --------
         >>> estimate.factor_exposure("market", np.array(["AAA"]))
+        Traceback (most recent call last):
+        ...
+        ValueError: the covariance estimate has no risk factors, so no exposure to 'market'
+        """
+        raise ValueError(
+            f"the covariance estimate has no risk factors, so no exposure to {name!r}"
+        )
+
+
+#: The fewest symbols per column of ``B`` at which ``LowRankCovarianceEstimate``
+#: offers its factor form; below it the dense risk term solves faster.
+LOW_RANK_MIN_RATIO = 6
+
+
+@dataclass(frozen=True)
+class LowRankCovarianceEstimate:
+    """A covariance estimate ``B B' + diag(D)`` of low rank plus a diagonal, without risk factors.
+
+    A shrunk sample covariance of a ``T``-bar window is one (Ledoit-Wolf:
+    ``B`` the scaled demeaned window, ``k = T`` columns): its
+    ``factor_form()`` is ``(B, I, D)``, so an optimiser prices risk without
+    the dense ``[n, n]`` matrix, when there are enough symbols for that to be
+    faster (``LOW_RANK_MIN_RATIO``). The columns of ``B`` are not risk
+    factors, so ``factor_exposure`` refuses as a dense estimate's does.
+
+    Attributes
+    ----------
+    symbols : np.ndarray
+        The ``n`` symbols covered, the order of ``exposures``' rows and
+        ``specific_variance``.
+    exposures : np.ndarray
+        ``B``, ``[n, k]``.
+    specific_variance : np.ndarray
+        ``D``, ``[n]``.
+
+    Examples
+    --------
+    >>> low_rank = LowRankCovarianceEstimate(
+    ...     symbols=np.array(["AAA", "BBB"]),
+    ...     exposures=np.array([[0.1], [0.05]]),
+    ...     specific_variance=np.array([0.01, 0.02]),
+    ... )
+    >>> low_rank.covariance
+    array([[0.02  , 0.005 ],
+           [0.005 , 0.0225]])
+    >>> low_rank.variance
+    array([0.02  , 0.0225])
+    """
+
+    symbols: np.ndarray
+    exposures: np.ndarray
+    specific_variance: np.ndarray
+
+    @property
+    def covariance(self) -> np.ndarray:
+        """The dense ``[n, n]`` covariance ``B B' + diag(D)``, built on each call.
+
+        Examples
+        --------
+        >>> low_rank.covariance.shape
+        (2, 2)
+        """
+        return self.exposures @ self.exposures.T + np.diag(self.specific_variance)
+
+    @property
+    def variance(self) -> np.ndarray:
+        """Each covered symbol's variance, ``|B_i|^2 + D_i``, without the dense matrix.
+
+        Examples
+        --------
+        >>> low_rank.variance
+        array([0.02  , 0.0225])
+        """
+        return np.einsum("ij,ij->i", self.exposures, self.exposures) + self.specific_variance
+
+    def scaled(self, factor: float) -> Self:
+        """Return the estimate with every entry multiplied by ``factor`` (``B`` by its square root).
+
+        Examples
+        --------
+        >>> low_rank.scaled(5).variance
+        array([0.1   , 0.1125])
+        """
+        return dataclasses.replace(
+            self,
+            exposures=self.exposures * np.sqrt(factor),
+            specific_variance=self.specific_variance * factor,
+        )
+
+    def subset(self, rows: np.ndarray) -> Self:
+        """Return the estimate over the symbols at positions ``rows``, in that order.
+
+        Examples
+        --------
+        >>> low_rank.subset(np.array([1])).variance
+        array([0.0225])
+        """
+        rows = np.asarray(rows, dtype=np.intp)
+        return dataclasses.replace(
+            self,
+            symbols=self.symbols[rows],
+            exposures=self.exposures[rows],
+            specific_variance=self.specific_variance[rows],
+        )
+
+    def factor_form(self) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+        """Return ``(B, I, D)``, the identity as the columns' covariance, when it is the cheaper form.
+
+        An optimiser's low-rank risk term costs about ``n k^2`` and the
+        dense one about ``n^2``: with CLARABEL on a long-only problem,
+        ``k = 252`` took 4.5 s against 5.6 s dense at 3,000 symbols and
+        0.44 s against 0.15 s at 500. The form is returned when ``n >=
+        LOW_RANK_MIN_RATIO * k``, else ``None`` and the optimiser prices
+        the dense ``covariance``.
+
+        Examples
+        --------
+        >>> low_rank.factor_form() is None  # 2 symbols, rank 1: dense is cheaper
+        True
+        >>> wide = LowRankCovarianceEstimate(
+        ...     symbols=np.arange(6), exposures=np.full((6, 1), 0.1),
+        ...     specific_variance=np.full(6, 0.01))
+        >>> exposures, factor_covariance, specific = wide.factor_form()
+        >>> factor_covariance
+        array([[1.]])
+        """
+        n, k = self.exposures.shape
+        if n < LOW_RANK_MIN_RATIO * k:
+            return None
+        return self.exposures, np.eye(k), self.specific_variance
+
+    def factor_exposure(self, name: str, symbols: np.ndarray) -> np.ndarray:
+        """Refuse: the columns of ``B`` are not risk factors.
+
+        Raises
+        ------
+        ValueError
+            Always.
+
+        Examples
+        --------
+        >>> low_rank.factor_exposure("market", np.array(["AAA"]))
         Traceback (most recent call last):
         ...
         ValueError: the covariance estimate has no risk factors, so no exposure to 'market'

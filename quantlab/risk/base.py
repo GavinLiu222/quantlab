@@ -74,10 +74,11 @@ class ReturnCovariance(Protocol):
     """The covariance of one-bar returns at a bar, over the symbols it covers: what a covariance estimator returns.
 
     What a rule holding a covariance estimator may ask of its estimate, whatever
-    the estimator. Two types satisfy it and stay two types (ADR 0028): the dense
-    ``quantlab.portfolio.base.CovarianceEstimate`` (Ledoit-Wolf) and a factor
-    risk model's ``FactorRiskForecast``. A rule asks the estimate and does not
-    tell the types apart.
+    the estimator. Three types satisfy it and stay separate types (ADR 0028):
+    the dense ``quantlab.portfolio.base.CovarianceEstimate``, the low-rank
+    ``quantlab.portfolio.base.LowRankCovarianceEstimate`` (Ledoit-Wolf) and a
+    factor risk model's ``FactorRiskForecast``. A rule asks the estimate and
+    does not tell the types apart.
 
     Attributes
     ----------
