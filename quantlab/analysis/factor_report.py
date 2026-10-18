@@ -606,7 +606,7 @@ class FactorAnalysis:
         table = self.ic_decay_table()
         return table[table["factor"] == factor_name].reset_index(drop=True)
 
-    def save(self, output_dir: str | Path, workers: int | None = None) -> Path:
+    def save(self, output_dir: str | Path, workers: int | None = None, figures: bool = True) -> Path:
         """Write the analysis to ``output_dir``, creating it if needed.
 
         Files written: ``summary.json`` (every scalar metric, per pair),
@@ -623,7 +623,8 @@ class FactorAnalysis:
         every pair figure includes an IC-decay panel. Floats that are NaN or infinite are written to JSON as
         ``null``. Figures held in ``figures`` are saved as they are; when
         none is held, every pair is drawn from its metrics and saved, on
-        ``workers`` processes, without being kept.
+        ``workers`` processes, without being kept. With ``figures=False``
+        no PNG is written, neither a pair's nor the correlation's.
 
         Parameters
         ----------
@@ -632,6 +633,8 @@ class FactorAnalysis:
         workers : int, optional
             Processes that draw the figures; ``None`` uses every CPU the
             process may run on (``os.process_cpu_count``).
+        figures : bool, default True
+            Write the figures; False writes the tables and JSON files only.
 
         Returns
         -------
@@ -643,6 +646,8 @@ class FactorAnalysis:
         >>> out = analysis.save("report")
         >>> sorted(p.name for p in out.iterdir())
         ['config.json', 'ic.csv', 'monthly_ic.csv', 'quantile_returns.csv', 'signal__ret_1.png', 'summary.csv', 'summary.json', 'turnover.csv']
+        >>> sorted(p.name for p in analysis.save("tables", figures=False).iterdir())
+        ['config.json', 'ic.csv', 'monthly_ic.csv', 'quantile_returns.csv', 'summary.csv', 'summary.json', 'turnover.csv']
         """
         out = Path(output_dir)
         out.mkdir(parents=True, exist_ok=True)
@@ -658,23 +663,24 @@ class FactorAnalysis:
         self.turnover_table().to_csv(out / "turnover.csv", index=False)
         if self.has_decay():
             self.ic_decay_table().to_csv(out / "ic_decay.csv", index=False)
-        if self.figures:
+        if figures and self.figures:
             for key, figure in self.figures.items():
                 figure.savefig(out / f"{key}.png", dpi=FIGURE_DPI)
-        elif self.pairs:
+        elif figures and self.pairs:
             self._render_to(out, workers)
         if self.correlation is not None:
-            self._save_correlation(out)
+            self._save_correlation(out, figure=figures)
         return out
 
-    def _save_correlation(self, out: Path) -> None:
-        """Write the correlation tables and figure into ``out``."""
+    def _save_correlation(self, out: Path, figure: bool = True) -> None:
+        """Write the correlation tables into ``out``, and its figure unless ``figure`` is False."""
         corr = self.correlation
         corr.mean.rename_axis("factor").to_csv(out / "factor_correlation.csv")
         corr.pairs_table().to_csv(out / "factor_correlation_pairs.csv", index=False)
         corr.cluster_table().to_csv(out / "factor_clusters.csv", index=False)
-        figure = self.correlation_figure or FactorCorrelationFigure().render(corr)
-        figure.savefig(out / "factor_correlation.png", dpi=CORRELATION_FIGURE_DPI)
+        if figure:
+            drawn = self.correlation_figure or FactorCorrelationFigure().render(corr)
+            drawn.savefig(out / "factor_correlation.png", dpi=CORRELATION_FIGURE_DPI)
 
     def _render_to(self, out: Path, workers: int | None) -> None:
         """Draw and save one PNG per pair, on ``workers`` processes.
@@ -775,7 +781,8 @@ class FactorAnalyzer:
     plot : bool, default True
         Draw figures. With an ``output_dir`` they are drawn on
         ``workers`` processes straight to PNG files and not kept; without
-        one they are held in ``FactorAnalysis.figures``.
+        one they are held in ``FactorAnalysis.figures``. False draws none:
+        an ``output_dir`` then gets the tables and JSON files only.
     workers : int, optional
         Processes that draw the figures of a saved report; ``None`` uses
         every CPU the process may run on (``os.process_cpu_count``, which
@@ -1001,7 +1008,7 @@ class FactorAnalyzer:
             pairs=pairs, figures={}, config=dict(config or {}), correlation=correlation
         )
         if output_dir is not None:
-            analysis.save(output_dir, workers=self.workers if self.plot else 0)
+            analysis.save(output_dir, workers=self.workers, figures=self.plot)
         elif self.plot:
             renderer = FactorReportFigure(rolling_window=self.rolling_window)
             analysis.figures = {

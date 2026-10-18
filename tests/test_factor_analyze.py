@@ -23,7 +23,7 @@ import polars as pl
 import pytest
 import xarray as xr
 
-from quantlab.analysis.factor_report import FactorAnalyzer
+from quantlab.analysis.factor_report import FactorAnalyzer, Fret
 from quantlab.backend.zarr import XrBackend
 from quantlab.factor.config import FactorConfig, PolarsFactorConfig
 from quantlab.label.config import ForwardConfig
@@ -457,3 +457,26 @@ def test_output_dir_with_several_pairs_draws_every_figure_in_parallel(oracle_and
     ]
     assert result.correlation.mean.loc["oracle", "oracle_neg"] == pytest.approx(-1.0)
     assert result.pairs["oracle_neg__fwd_1"].summary["ic_mean"] == pytest.approx(-1.0)
+
+
+def test_output_dir_without_plot_writes_the_tables_and_no_figure(tmp_path):
+    rng = np.random.default_rng(3)
+    T, S = 40, 16
+    coords = {"timestamp": pd.date_range("2024-01-01", periods=T), "symbol": [f"S{i}" for i in range(S)]}
+    r = rng.normal(size=(T, S))
+    features = xr.Dataset(
+        {name: (("timestamp", "symbol"), 0.2 * r + rng.normal(size=(T, S))) for name in ("a", "b")},
+        coords=coords,
+    )
+    labels = xr.Dataset({"ret_1": (("timestamp", "symbol"), r)}, coords=coords)
+    out = tmp_path / "tables"
+
+    analysis = FactorAnalyzer(quantiles=3, plot=False).analyze_panels(
+        features, [Fret(labels)], output_dir=out
+    )
+
+    assert analysis.figures == {}
+    assert list(out.glob("*.png")) == []
+    assert {"summary.json", "summary.csv", "ic.csv", "factor_correlation.csv"} <= {p.name for p in out.iterdir()}
+    drawn = analysis.save(tmp_path / "drawn")
+    assert sorted(p.name for p in drawn.glob("*.png")) == ["a__ret_1.png", "b__ret_1.png", "factor_correlation.png"]

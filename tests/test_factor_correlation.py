@@ -176,10 +176,11 @@ def test_analyze_adds_the_correlation_for_two_or_more_factors(features, tmp_path
     assert one.correlation is None
     assert list(many.correlation.mean.index) != [] and many.correlation.summary["n_factors"] == 5
     out = tmp_path / "report"
-    for name in ("factor_correlation.csv", "factor_correlation_pairs.csv",
-                 "factor_clusters.csv", "factor_correlation.png"):
+    for name in ("factor_correlation.csv", "factor_correlation_pairs.csv", "factor_clusters.csv"):
         assert (out / name).is_file(), name
-    assert (out / "factor_correlation.png").read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    assert not (out / "factor_correlation.png").exists()  # plot=False draws no figure
+    drawn = many.save(tmp_path / "drawn", workers=1)
+    assert (drawn / "factor_correlation.png").read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
     matrix = pd.read_csv(out / "factor_correlation.csv", index_col="factor")
     pd.testing.assert_frame_equal(matrix, many.correlation.mean, check_names=False, atol=1e-12)
     summary = json.loads((out / "summary.json").read_text())
