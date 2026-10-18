@@ -326,6 +326,8 @@ def _update_script():
     from pathlib import Path
 
     path = Path(__file__).resolve().parents[1] / "scripts" / "data_update" / "update.py"
+    if not path.exists():
+        pytest.skip("scripts/ is not tracked; the data update script is only in local checkouts")
     spec = importlib.util.spec_from_file_location("data_update_script", path)
     module = importlib.util.module_from_spec(spec)
     sys.modules.setdefault(spec.name, module)

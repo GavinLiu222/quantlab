@@ -120,7 +120,10 @@ CASES = {"with_owner_roster": dict(view="with_owner", on_roster=True), "alone": 
 
 def _update_script():
     """The data update script, imported from its file (``scripts/`` is not importable)."""
-    spec = importlib.util.spec_from_file_location("data_update_script", REPO / "scripts" / "data_update" / "update.py")
+    path = REPO / "scripts" / "data_update" / "update.py"
+    if not path.exists():
+        pytest.skip("scripts/ is not tracked; the data update script is only in local checkouts")
+    spec = importlib.util.spec_from_file_location("data_update_script", path)
     module = importlib.util.module_from_spec(spec)
     sys.modules.setdefault(spec.name, module)
     spec.loader.exec_module(module)
