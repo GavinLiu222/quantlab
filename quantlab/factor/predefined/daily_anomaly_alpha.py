@@ -1,8 +1,8 @@
 """Twenty daily equity anomalies from mechanisms the other factor bundles do not cover, in one KunQuant graph.
 
 Each output is one published mechanism, computed from the daily SEP bars,
-DAILY's market cap, the 8-K items of Sharadar EVENTS and the acquisitions
-and SPAC mergers of Sharadar ACTIONS, and signed so the
+DAILY's market cap, the 8-K items of Sharadar EVENTS and the acquisitions,
+SPAC mergers and exchange changes of Sharadar ACTIONS, and signed so the
 source paper expects a higher value to predict a higher return. Windows,
 return frequencies and signs are the papers'; none was tuned.
 
@@ -14,8 +14,6 @@ output                         formula                                          
                                (an announcement expected in the next 21 bars), else 0            Barber et al. (2013)
 ``earnings_delay``             -1 if last year's announcement date plus 252 bars has passed      Johnson and So (2018)
                                within 21 bars and no item 2.02 came in the last 42, else 0
-``earnings_early``             1 for 63 bars after an item 2.02 that comes 5 to 21 bars before   Chambers and Penman (1984);
-                               last year's date (the last 5 bars, last year's 231-247 bars ago)  Johnson and So (2018)
 ``dividend_month``             1 if a dividend went ex 231-251 or 42-62 bars ago, else 0         Hartzmark and Solomon (2013)
 ``return_seasonality``         mean 21-bar return over the same 21 bars of the last 5 years      Heston and Sadka (2008)
 ``lockup_expiry``              -1 from 104 to 129 bars after a stock's first price (the          Field and Hanka (2001)
@@ -44,6 +42,8 @@ output                         formula                                          
                                filings, 252 bars
 ``acquisition_payment``        acquisitions paid in cash less those paid in stock (or stock and  Loughran and Vijh (1997)
                                cash), on the acquirer, 1260 bars
+``exchange_switch``            -1 for 756 bars after the security moves to another exchange,     Dharan and Ikenberry (1995)
+                               else 0
 ``despac``                     -1 for 756 bars after the security's SPAC merger, else 0          Klausner, Ohlrogge and Ruan
                                                                                                  (2022); Gahng, Ritter and Zhang
                                                                                                  (2023)
@@ -83,10 +83,10 @@ Frazzini and Lamont (2007); Barber, De George, Lehavy and Trueman (2013);
 Johnson and So (2018); Hartzmark and Solomon (2013); Heston and Sadka
 (2008); Field and Hanka (2001); Harvey and Siddique (2000); Ang, Chen and
 Xing (2006); Da, Gurun and Warachka (2014); Akbas, Boehmer, Jiang and Koch
-(2022); Chan (2003); Lerman, Livnat and Mendenhall (2008); Chambers and
-Penman (1984); Ikenberry, Rankine and Stice (1996); Desai
+(2022); Chan (2003); Lerman, Livnat and Mendenhall (2008); Ikenberry, Rankine and Stice (1996); Desai
 and Jain (1997); Asquith and Mullins (1983); Michaely, Thaler and Womack
-(1995); Spiess and Affleck-Graves (1999); Loughran and Vijh (1997); Klausner, Ohlrogge and Ruan (2022); Gahng, Ritter and Zhang (2023);
+(1995); Spiess and Affleck-Graves (1999); Loughran and Vijh (1997);
+Dharan and Ikenberry (1995); Klausner, Ohlrogge and Ruan (2022); Gahng, Ritter and Zhang (2023);
 Ritter (1991); Loughran and Ritter (1995); Chordia, Subrahmanyam and
 Anshuman (2001).
 """
@@ -125,8 +125,10 @@ from quantlab.factor.predefined.fundamental_alpha import fill_flows
 
 #: 8-K items read as news by ``news_drift_gap``: 1.01, 2.01, 2.02, 5.02, 7.01, 8.01.
 NEWS_EVENTS = ("event_11", "event_21", "event_22", "event_52", "event_71", "event_81")
-#: ACTIONS columns read: the acquired company's rows (side, consideration, acquirer) and SPAC mergers.
-ACTION_COLUMNS = ("acquisition_side", "acquisition_consideration", "acquisition_counterparty", "spac_merger")
+#: ACTIONS columns read: the acquired company's rows (side, consideration, acquirer), exchange changes
+#: and SPAC mergers.
+ACTION_COLUMNS = ("acquisition_side", "acquisition_consideration", "acquisition_counterparty", "exchange_change",
+                  "spac_merger")
 #: Derived input: +1 per cash and -1 per stock-paid acquisition, on the acquirer's effective date.
 ACQUIRER_PAYMENT = "acquirer_payment"
 #: Data columns the panel provides: SEP, DAILY's market cap, the 8-K items and the actions.
@@ -138,17 +140,18 @@ DAILY_ANOMALY_COLUMNS = (
 EVENT_COLUMNS = (*NEWS_EVENTS, "event_23")
 #: The outputs, in order.
 DAILY_ANOMALY_OUTPUTS = (
-    "earnings_month", "earnings_delay", "earnings_early", "dividend_month", "return_seasonality", "lockup_expiry",
+    "earnings_month", "earnings_delay", "dividend_month", "return_seasonality", "lockup_expiry",
     "coskewness", "downside_beta_gap",
     "frog_in_pan", "daytime_reversal", "news_drift_gap", "earnings_volume",
-    "split_signal", "dividend_change", "dividend_initiation", "debt_issuance_8k", "acquisition_payment", "despac",
+    "split_signal", "dividend_change", "dividend_initiation", "debt_issuance_8k", "acquisition_payment", "exchange_switch",
+    "despac",
     "listing_age", "turnover_volatility",
 )
 YEAR, QUARTER, MONTH, WEEK = 252, 63, 21, 5
 SEASONAL_YEARS = 5
 #: Sixty months: the coskewness window.
 FIVE_YEARS = 5 * YEAR
-#: Three years: the listing-age, spin-off and de-SPAC windows.
+#: Three years: the listing-age, exchange-change and de-SPAC windows.
 THREE_YEARS = 3 * YEAR
 #: Bars without a dividend before one counts as an initiation.
 INITIATION_GAP = 2 * YEAR
@@ -328,11 +331,6 @@ class DailyAnomalyAlpha(FactorKunQuant):
             passed = _event_count(BackRef(results, YEAR), MONTH, 0) > 0.5
             silent = WindowedSum(results, 2 * MONTH) < 0.5
             out["earnings_delay"] = 0.0 - _flag(And(passed, silent), WindowedSum(results, 2 * MONTH) + close * 0.0)
-            # Early: an announcement in the last 5 bars while last year's was 5 to 21 bars later in the year.
-            recent_news = WindowedSum(results, WEEK) > 0.5
-            later_last_year = _event_count(results, 17, YEAR - MONTH) > 0.5
-            early = _flag(And(recent_news, later_last_year), WindowedSum(results, WEEK) + close * 0.0)
-            out["earnings_early"] = _flag(WindowedSum(early, QUARTER) > 0.5, WindowedSum(early, QUARTER))
             paid = _flag(_zero(dividend) > 0.0, close)
             out["dividend_month"] = expected(paid)
 
@@ -426,6 +424,9 @@ class DailyAnomalyAlpha(FactorKunQuant):
 
             out["debt_issuance_8k"] = 0.0 - WindowedSum(debt, YEAR)
             out["acquisition_payment"] = WindowedSum(Input(ACQUIRER_PAYMENT), FIVE_YEARS)
+            moved = Input("exchange_change")
+            out["exchange_switch"] = 0.0 - _flag(WindowedSum(moved, THREE_YEARS) > 0.5,
+                                                 WindowedSum(moved, THREE_YEARS) + close * 0.0)
             merged = Input("spac_merger")
             out["despac"] = 0.0 - _flag(WindowedSum(merged, THREE_YEARS) > 0.5,
                                         WindowedSum(merged, THREE_YEARS) + close * 0.0)
@@ -456,9 +457,9 @@ class DailyAnomalyAlpha(FactorKunQuant):
             arrays.pop("acquisition_counterparty"), symbols)
         priced = np.isfinite(arrays["adjClose"])
         # Each source starts on its own first event.
-        for group in (EVENT_COLUMNS, (ACQUIRER_PAYMENT,), ("spac_merger",)):
+        for group in (EVENT_COLUMNS, (ACQUIRER_PAYMENT,), ("exchange_change",), ("spac_merger",)):
             fill_flows(arrays, group, priced)
-        for column in (*EVENT_COLUMNS, ACQUIRER_PAYMENT, "spac_merger"):
+        for column in (*EVENT_COLUMNS, ACQUIRER_PAYMENT, "exchange_change", "spac_merger"):
             arrays[column] = arrays[column].astype(np.float64)
         return arrays, symbols, panel["timestamp"].values
 

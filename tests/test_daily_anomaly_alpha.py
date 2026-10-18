@@ -4,7 +4,7 @@ The panel is 16 symbols over 1,400 business days (more than the 1,260-bar
 long-term reversal): random adjusted prices, opens, volumes and market caps,
 quarterly dividends with a raise and a 2-for-1 split, a dividend
 initiation, a reverse split, sparse 8-K items, acquisitions (with an
-acquirer outside the panel) and SPAC mergers (each source starting on its
+acquirer outside the panel), exchange changes and SPAC mergers (each source starting on its
 own bar). Symbol 5 has a four-bar hole, symbol 9 is delisted from bar
 1,300, symbol 12 lists on bar 1,200 and the 8-K items start on bar 30.
 """
@@ -60,6 +60,8 @@ def _panel() -> xr.Dataset:
     data["acquisition_consideration"] = np.where(acquired, rng.choice([1.0, 2.0, 3.0], size=shape), np.nan)
     # Acquirers among the symbols, and one outside them (99), which is left out.
     data["acquisition_counterparty"] = np.where(acquired, rng.choice([*range(100, 116), 99], size=shape), np.nan)
+    data["exchange_change"] = (rng.random(shape) < 0.002).astype(float)
+    data["exchange_change"][:50] = 0.0
     data["spac_merger"] = (rng.random(shape) < 0.002).astype(float)
     data["spac_merger"][:200] = 0.0
     for s in range(16):  # quarterly results at a fixed phase, so the calendar outputs fire
@@ -130,7 +132,7 @@ def _reference(panel) -> dict[str, pd.DataFrame]:
     for name in EVENTS:
         ev[name] = ev[name].fillna(0).where(priced)
         ev[name].iloc[:30] = np.nan
-    for name in ("acquirer_payment", "spac_merger"):  # each from its own first event
+    for name in ("acquirer_payment", "exchange_change", "spac_merger"):  # each from its own first event
         flow = p[name].where(priced).fillna(0).where(priced)
         first = int(np.argmax((flow.abs().sum(axis=1) > 0).to_numpy()))
         flow.iloc[:first] = np.nan
@@ -148,10 +150,6 @@ def _reference(panel) -> dict[str, pd.DataFrame]:
     passed = ev["event_22"].shift(252).rolling(21).sum() > 0.5
     recent = ev["event_22"].rolling(42).sum()
     out["earnings_delay"] = -_flag(passed & (recent < 0.5), recent + c * 0)
-    last5 = ev["event_22"].rolling(5).sum()
-    later = ev["event_22"].rolling(17).sum().shift(231) > 0.5
-    early = _flag((last5 > 0.5) & later, last5 + c * 0)
-    out["earnings_early"] = _flag(early.rolling(63).sum() > 0.5, early.rolling(63).sum())
     paid = _flag(p["divCash"].fillna(0) > 0, c)
     out["dividend_month"] = expected(paid)
 
@@ -229,6 +227,8 @@ def _reference(panel) -> dict[str, pd.DataFrame]:
     out["dividend_initiation"] = pd.DataFrame(initiation, index=c.index, columns=c.columns).where(priced)
     out["debt_issuance_8k"] = -ev["event_23"].rolling(252).sum()
     out["acquisition_payment"] = ev["acquirer_payment"].rolling(1260).sum()
+    moved = ev["exchange_change"]
+    out["exchange_switch"] = -_flag(moved.rolling(756).sum() > 0.5, moved.rolling(756).sum() + c * 0)
     merged = ev["spac_merger"]
     out["despac"] = -_flag(merged.rolling(756).sum() > 0.5, merged.rolling(756).sum() + c * 0)
 
@@ -253,7 +253,7 @@ def test_every_output_matches_its_formula(panel, outputs, name):
 
 def test_the_calendar_and_action_outputs_fire(outputs):
     for name in ("earnings_month", "dividend_month", "split_signal", "dividend_change", "lockup_expiry",
-                 "dividend_initiation", "acquisition_payment", "despac", "earnings_early"):
+                 "dividend_initiation", "acquisition_payment", "despac", "exchange_switch"):
         assert np.nanmax(np.abs(outputs[name].values)) > 0, name
     assert outputs["acquisition_payment"].min() < 0 < outputs["acquisition_payment"].max()
     # Symbol 3's dividend halves at its 2-for-1 split: per pre-split share it is unchanged.
