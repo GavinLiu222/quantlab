@@ -6,6 +6,7 @@
 </p>
 
 <p align="center">
+  <a href="https://zhaorongdai.github.io/quantlab/"><img alt="Docs" src="https://img.shields.io/badge/docs-online-3776ab"></a>
   <a href="https://pypi.org/project/quantlab-py/"><img alt="PyPI" src="https://img.shields.io/pypi/v/quantlab-py?label=pypi&color=3776ab"></a>
   <a href="https://www.python.org/downloads/"><img alt="Python 3.13+" src="https://img.shields.io/badge/python-3.13%2B-3776ab?logo=python&logoColor=white"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-green"></a>
@@ -19,8 +20,8 @@ quantlab 是一个用于量化股票研究的 Python 后端。它用一条流水
 把价格整理成干净的面板，计算因子和标签，训练预测未来收益的模型，把预测转换成目标权重，再对其回测。
 每个阶段都由一个小的配置对象驱动，所以任何一次运行都可以保存、重建并完全复现。
 
-- **文档：** [docs/index.md](docs/index.md)（英文），[docs/index.md](docs/index.md)（中文）
-- **使用自己的 DataFrame：** [docs/user-guide/frame-api.md](docs/user-guide/frame-api.md)（中文），[docs/user-guide/frame-api.md](docs/user-guide/frame-api.md)（英文）
+- **文档：** <https://zhaorongdai.github.io/quantlab/>（英文）
+- **使用自己的 DataFrame：** [Frame API 指南](https://zhaorongdai.github.io/quantlab/user-guide/frame-api.html)（英文）
 - **示例：** [examples/](examples/README.md)
 - **源代码：** https://github.com/ZhaorongDai/quantlab
 - **问题反馈：** https://github.com/ZhaorongDai/quantlab/issues
@@ -104,7 +105,7 @@ uv sync --all-extras
 macOS 上 xgboost 需要 Homebrew 的 OpenMP 运行库（`brew install libomp`）。
 
 所有模型（神经网络和树模型）在有 CUDA GPU 时使用 GPU，否则使用 CPU。GPU 和 macOS 的注意事项见
-[安装指南](docs/getting-started/installation.md)。
+[安装指南](https://zhaorongdai.github.io/quantlab/getting-started/installation.html)。
 
 ## 用 Yahoo Finance 数据跑一遍流水线
 
@@ -195,7 +196,7 @@ Rebuilt from its run directory, same equity curve: True
 
 ## 更多示例
 
-离线的[快速上手](docs/getting-started/quickstart.md)（英文）用合成价格面板跑同一条流水线，
+离线的[快速上手](https://zhaorongdai.github.io/quantlab/getting-started/quickstart.html)（英文）用合成价格面板跑同一条流水线，
 不需要联网，大约半分钟：
 
 ```bash
@@ -244,7 +245,7 @@ quantlab 只从环境变量读取凭证。凭证不会通过命令行传入，�
 
 下载脚本在 `scripts/wrds/` 和 `scripts/sharadar/` 中，每个脚本都可以用 `--help` 查看参数，例如
 `uv run python scripts/wrds/index.py --help`。Tiingo、Alpaca 和 Binance 只有库接口。
-文件写到哪里、下载中断后如何继续，见[数据源指南](docs/user-guide/data-sources.md)。
+文件写到哪里、下载中断后如何继续，见[数据源指南](https://zhaorongdai.github.io/quantlab/user-guide/data-sources.html)。
 
 ## 文档
 

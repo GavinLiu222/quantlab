@@ -6,6 +6,7 @@
 </p>
 
 <p align="center">
+  <a href="https://zhaorongdai.github.io/quantlab/"><img alt="Docs" src="https://img.shields.io/badge/docs-online-3776ab"></a>
   <a href="https://pypi.org/project/quantlab-py/"><img alt="PyPI" src="https://img.shields.io/pypi/v/quantlab-py?label=pypi&color=3776ab"></a>
   <a href="https://www.python.org/downloads/"><img alt="Python 3.13+" src="https://img.shields.io/badge/python-3.13%2B-3776ab?logo=python&logoColor=white"></a>
   <a href="https://github.com/ZhaorongDai/quantlab/blob/main/LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-green"></a>
@@ -21,8 +22,8 @@ factors and labels, train a model that predicts future returns, turn the predict
 target weights, and backtest them. Every stage is driven by a small configuration object, so
 any run can be saved, rebuilt and repeated exactly.
 
-- **Documentation:** [docs/index.md](https://github.com/ZhaorongDai/quantlab/blob/main/docs/index.md)
-- **Using your own DataFrames:** [docs/user-guide/frame-api.md](https://github.com/ZhaorongDai/quantlab/blob/main/docs/user-guide/frame-api.md)
+- **Documentation:** https://zhaorongdai.github.io/quantlab/
+- **Using your own DataFrames:** [Frame API guide](https://zhaorongdai.github.io/quantlab/user-guide/frame-api.html)
 - **Examples:** [examples/](https://github.com/ZhaorongDai/quantlab/blob/main/examples/README.md)
 - **Source code:** https://github.com/ZhaorongDai/quantlab
 - **Bug reports:** https://github.com/ZhaorongDai/quantlab/issues
@@ -116,7 +117,7 @@ uv sync --all-extras
 On macOS, xgboost needs Homebrew's OpenMP runtime (`brew install libomp`).
 
 All model heads, neural-network and tree models alike, use a CUDA GPU when one is available
-and the CPU otherwise. See the [installation guide](https://github.com/ZhaorongDai/quantlab/blob/main/docs/getting-started/installation.md) for
+and the CPU otherwise. See the [installation guide](https://zhaorongdai.github.io/quantlab/getting-started/installation.html) for
 GPU and macOS notes.
 
 ## A pipeline on Yahoo Finance data
@@ -214,7 +215,7 @@ and reads it on later runs.
 
 ## More examples
 
-The offline [quick start](https://github.com/ZhaorongDai/quantlab/blob/main/docs/getting-started/quickstart.md) builds a synthetic price panel
+The offline [quick start](https://zhaorongdai.github.io/quantlab/getting-started/quickstart.html) builds a synthetic price panel
 and runs the same pipeline with no network access, in about half a minute:
 
 ```bash
@@ -271,7 +272,7 @@ command line and never written to a configuration file or a log.
 The download scripts live in `scripts/wrds/` and `scripts/sharadar/`, and each prints its
 options with `--help`, for example `uv run python scripts/wrds/index.py --help`. Tiingo,
 Alpaca and Binance have library interfaces only. The
-[data sources guide](https://github.com/ZhaorongDai/quantlab/blob/main/docs/user-guide/data-sources.md) explains where files are written and
+[data sources guide](https://zhaorongdai.github.io/quantlab/user-guide/data-sources.html) explains where files are written and
 how to resume an interrupted download.
 
 ## Documentation
