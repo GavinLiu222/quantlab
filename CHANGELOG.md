@@ -4,7 +4,7 @@ quantlab follows [semantic versioning](https://semver.org/). While the version i
 minor release may break the API, the config format or the store layout; there are no
 compatibility shims or config migrations.
 
-## 0.1.0 (2026-10-17)
+## 0.1.0 (2026-10-18)
 
 The first release, published to PyPI as `quantlab-py` and imported as `quantlab`.
 
@@ -17,7 +17,10 @@ contract:
   `xarray` datasets stored as Zarr; point-in-time universes and index membership; causal
   bad-print masking; resampling.
 - **Factors**: KunQuant (batch and streaming) and Polars backends; Alpha158, Alpha101, Barra
-  USE4 style factors, fundamental and intraday factors; neutralization; factor reports.
+  USE4 style factors, fundamental, alternative, daily-anomaly and intraday factors;
+  neutralization; factor reports. Each factor answers for its own calendar, so a daily
+  factor computed from minute bars counts warm-up and lookahead in trading days; compiled
+  KunQuant graphs are cached on disk across processes.
 - **Labels**: forward returns and their variants.
 - **Models**: XGBoost, LightGBM, CatBoost, RealMLP and torch heads (MLP, RNN, TCN,
   Transformer, GATs, MASTER), seed ensembles, walk-forward training.
