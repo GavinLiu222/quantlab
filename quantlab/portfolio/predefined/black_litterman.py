@@ -596,6 +596,16 @@ class BlackLittermanOptimizer(MeanVarianceOptimizer):
         """
         return super().declared_inputs().merged(InputDeclaration(factors=(self.config.market,)))
 
+    def axis_factors(self) -> tuple[str, ...]:
+        """The market's weights: its symbols without a prediction are in the equilibrium portfolio.
+
+        Examples
+        --------
+        >>> rule.axis_factors() == (rule.config.market_weight,)  # doctest: +SKIP
+        True
+        """
+        return (*super().axis_factors(), self.config.market_weight)
+
     def ranking_label(self, names: Sequence[str]) -> str:
         """Return ``expected_return_label``, or without symbol views the first label.
 

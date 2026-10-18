@@ -6,7 +6,8 @@ What is locked here, and what turns it red:
   price dataset: a security that leaves the index keeps its prices, is never
   selected after it left, and the holding it had is sold at the next open
   (an order, not a delisting settlement);
-- a security that is never a member in the window is never selected;
+- a security that is never a member in the window is never predicted, so the
+  run leaves it off its axis and never buys it;
 - the run's prediction panel (``BacktestRun.predictions``) carries the masked predictions;
 - the masked run equals the unmasked one up to the leaving date;
 - the membership panel is fingerprinted, and the run's
@@ -157,8 +158,8 @@ def test_a_leaver_is_not_selected_after_leaving_and_is_sold(scenario):
     assert not any(s["symbol"] == leaver for s in result.simulation.settlements)
     assert not any(r["symbol"] == leaver for r in result.simulation.rejected_orders)
 
-    # Never a member: never selected, never bought.
-    assert (weights[outsider].fillna(0) == 0).all()
+    # Never a member: never predicted, off the run's axis, never bought.
+    assert outsider not in weights.columns
     assert not (orders["symbol"] == outsider).any()
 
 
@@ -173,8 +174,8 @@ def test_the_prediction_panel_carries_the_masked_predictions(scenario):
 
     assert panel.loc[panel.index <= first_held, leaver].notna().all()
     assert panel.loc[panel.index > first_held, leaver].isna().all()
-    assert panel[outsider].isna().all()
-    members = [s for s in panel.columns if s not in (leaver, outsider)]
+    assert outsider not in panel.columns
+    members = [s for s in panel.columns if s != leaver]
     assert panel[members].notna().all().all()
     xr.testing.assert_identical(stored[name], result.predictions[name])
 
@@ -253,9 +254,10 @@ def test_run_cv_masks_every_fold_and_the_stitched_predictions(tmp_path):
     ).run_cv()
 
     assert len(result.folds) > 1
+    # Never a member: no fold predicts it, so the stitched run leaves it off its axis.
     for fold in result.folds:
-        assert fold["predictions"].sel(symbol=outsider).to_array().isnull().all()
+        assert outsider not in fold["predictions"].symbol.values
     stored = BacktestRun.open(result.run_dir).predictions().predictions
-    assert stored.sel(symbol=outsider).to_array().isnull().all()
-    assert stored.drop_sel(symbol=outsider).to_array().notnull().any()
-    assert (result.weights["weight"].sel(symbol=outsider).fillna(0) == 0).all()
+    assert outsider not in stored.symbol.values
+    assert stored.to_array().notnull().any()
+    assert outsider not in result.weights.symbol.values

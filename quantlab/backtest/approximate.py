@@ -302,7 +302,9 @@ class ApproximateBacktest(Component):
         its config's fields and its covariance estimator), before any data
         is read, then the rule is bound to the panel's label specs. The
         predictions are spread over the window's prices (a symbol without
-        one is never picked), the schedule names the decision bars, and each
+        one is never picked) and both are cut to the symbols the rule
+        decides on (``DecisionInputs.decision_symbols``, as a backtest run
+        keeps), the schedule names the decision bars, and each
         chunk of ``chunk_bars`` bars is decided once, in time order, from
         the weights decided before it.
 
@@ -349,8 +351,7 @@ class ApproximateBacktest(Component):
         config, market = self.config, self.MARKET
         prices = self._window_prices()
         timestamps = prices.timestamp.values
-        symbols = prices.symbol.values
-        panel = predictions.predictions.reindex(timestamp=timestamps, symbol=symbols)
+        panel = predictions.predictions.reindex(timestamp=timestamps, symbol=prices.symbol.values)
         inputs = DecisionInputs(
             config.price_dataset,
             constructor,
@@ -359,6 +360,11 @@ class ApproximateBacktest(Component):
             rebalance_periods=config.rebalance_periods,
             anchor=timestamps[0],
         )
+        # Only the symbols the rule decides on, as a backtest run keeps.
+        keep = inputs.decision_symbols(panel)
+        if keep.any() and not keep.all():
+            panel, prices = panel.isel(symbol=keep), prices.isel(symbol=keep)
+        symbols = prices.symbol.values
         scheduled = inputs.panel_scheduled(timestamps)
         decisions = np.flatnonzero(scheduled)
         fill = np.asarray(prices[market.fill_price_column].values, dtype=np.float64)

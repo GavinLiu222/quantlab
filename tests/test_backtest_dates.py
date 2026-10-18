@@ -344,11 +344,12 @@ def test_cal_strategy_predicts_over_the_widened_range_after_training(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# D-06: the universe is every price symbol
+# The run's axis is the symbols the rule decides on (D-06 kept every price
+# symbol; a symbol without a prediction got 0.0 on every rebalance row)
 # --------------------------------------------------------------------------
 
 
-def test_symbol_absent_from_predictions_gets_zero_weight_on_rebalance_rows(tmp_path):
+def test_a_symbol_absent_from_predictions_is_left_off_the_runs_axis(tmp_path):
     dataset_config = write_price_store(tmp_path, n_bars=N_BARS)
     bars = _bars(dataset_config)
     absent = SYMBOLS[-1]
@@ -363,14 +364,11 @@ def test_symbol_absent_from_predictions_gets_zero_weight_on_rebalance_rows(tmp_p
         start_bar=30, end_bar=50, checkpoint=checkpoint,
     ).run()
 
-    assert result.weights.symbol.values.tolist() == SYMBOLS
-    assert np.isnan(result.predictions["fwd_ret_1"].sel(symbol=absent).values).all()
-    weight = result.weights["weight"]
-    rebalance = np.isfinite(weight.values).all(axis=1)
+    assert result.weights.symbol.values.tolist() == SYMBOLS[:-1]
+    assert absent not in result.predictions.symbol.values
+    assert absent not in result.simulation.holdings.symbol.values
+    rebalance = np.isfinite(result.weights["weight"].values).all(axis=1)
     assert rebalance.sum() == 4
-    absent_weight = weight.sel(symbol=absent).values
-    assert (absent_weight[rebalance] == 0.0).all()
-    assert np.isnan(absent_weight[~rebalance]).all()
 
 
 def test_predictions_align_to_price_symbols_by_label_not_position(tmp_path):

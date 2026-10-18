@@ -10,6 +10,7 @@ inherited from ``VectorBtBacktester``. A saved run rebuilds it through
 conventions.
 """
 
+import numpy as np
 import xarray as xr
 
 from quantlab.backtest.approximate import ApproximateBacktest
@@ -114,7 +115,18 @@ class USEquityCrossectionSelectStockVectorBt(VectorBtBacktester):
         simulation settles. Bars the rule failed on are kept for
         ``_signal_metrics``.
         """
-        weights = DecisionInputs(
+        weights = self._decision_inputs(predictions).weights(predictions, delisted=delisted)
+        self._failed_bars = list(weights.attrs.pop("failed_bars", []))
+        self._events = dict(weights.attrs.pop("events", {}))
+        return weights
+
+    def _decision_symbols(self, predictions: xr.Dataset) -> np.ndarray:
+        """Return the symbols the constructor decides on (``DecisionInputs.decision_symbols``)."""
+        return self._decision_inputs(predictions).decision_symbols(predictions)
+
+    def _decision_inputs(self, predictions: xr.Dataset) -> DecisionInputs:
+        """Return the decision inputs of the config's constructor, anchored on the predictions' first bar."""
+        return DecisionInputs(
             self.config.price_dataset,
             self.config.constructor,
             fill_column=self.MARKET.fill_price_column,
@@ -122,10 +134,7 @@ class USEquityCrossectionSelectStockVectorBt(VectorBtBacktester):
             rebalance_periods=self.config.rebalance_periods,
             anchor=predictions.timestamp.values[0],
             execution=self.config.execution,
-        ).weights(predictions, delisted=delisted)
-        self._failed_bars = list(weights.attrs.pop("failed_bars", []))
-        self._events = dict(weights.attrs.pop("events", {}))
-        return weights
+        )
 
     def _signal_metrics(self) -> dict:
         """Report the bars the constructor could not decide, and its events.

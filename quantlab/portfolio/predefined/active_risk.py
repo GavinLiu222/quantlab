@@ -94,6 +94,16 @@ class ActiveRiskOptimizer(MeanVarianceOptimizer):
         """
         return super().declared_inputs().merged(InputDeclaration(factors=(self.config.benchmark,)))
 
+    def axis_factors(self) -> tuple[str, ...]:
+        """The benchmark's weights: its symbols without a prediction are in the reference book.
+
+        Examples
+        --------
+        >>> rule.axis_factors() == (rule.config.benchmark_weight,)  # doctest: +SKIP
+        True
+        """
+        return (*super().axis_factors(), self.config.benchmark_weight)
+
     def reference_weights(self, context: PortfolioContext) -> xr.DataArray:
         """The benchmark's weights at the bar.
 

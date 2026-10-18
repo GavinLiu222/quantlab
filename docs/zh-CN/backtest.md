@@ -245,7 +245,7 @@ ValueError: USEquityCrossectionSelectStockVectorBt: labels[0] Forward ('open_ret
 
 ### 预热
 
-模型的因子需要 `start_date` 之前的历史。回测器按日期范围向每个因子请求窗口：`"cal"` 策略下调用 `compute(start_date, end_date)`，`"read"` 策略下调用 `read(start_date, end_date)`。计算型因子会在 `start_date` 之前读取自身的 `warmup_bars` 根 bar，按其数据集自己的日历计数，而不是按日历天数。因此回测与对同一窗口单独调用 `compute` 得到的因子值相同。数据集中的 bar 不够时，因子从第一根 bar 开始计算，并发出一条给出 bar 缺口数的 `UserWarning`。回测不修改任何数据集、因子或标签的 config，所以价格数据集可以与某个因子的数据集是同一个对象。预测恰好覆盖窗口内的 bar；没有预测的价格标的分数为 NaN，不会被选中。
+模型的因子需要 `start_date` 之前的历史。回测器按日期范围向每个因子请求窗口：`"cal"` 策略下调用 `compute(start_date, end_date)`，`"read"` 策略下调用 `read(start_date, end_date)`。计算型因子会在 `start_date` 之前读取自身的 `warmup_bars` 根 bar，按其数据集自己的日历计数，而不是按日历天数。因此回测与对同一窗口单独调用 `compute` 得到的因子值相同。数据集中的 bar 不够时，因子从第一根 bar 开始计算，并发出一条给出 bar 缺口数的 `UserWarning`。回测不修改任何数据集、因子或标签的 config，所以价格数据集可以与某个因子的数据集是同一个对象。预测恰好覆盖窗口内的 bar；没有预测的价格标的分数为 NaN，不会被选中。之后运行只保留规则据以决策的标的（`DecisionInputs.decision_symbols`）：窗口内某根 bar 上有预测的标的，加上规则通过声明的因子读取、却没有预测的标的（主动风险基准或 Black-Litterman 市场组合的权重，即规则的 `axis_factors`）。权重、模拟、持仓、归因和报告都在这条坐标轴上，因此在全市场价格 store 上跑一次回测的开销只取决于有预测的股票池；所有数字都与在完整坐标轴上得到的相同，只有由全部标的一起估计的协方差例外，例如 `LedoitWolfEstimator` 的收缩强度，现在只在保留的标的上估计。`run_cv()` 保留任何一折有预测的标的，近似回测保留同一条坐标轴。
 
 组合构建规则也有自己的预热：每根 bar 读取最近 `history_bars` 个原始估值价格（见[组合构建](portfolio.md#在回测中)），所以 `DecisionInputs` 会在 `start_date` 之前读取 `history_bars - 1` 根价格 bar，按价格数据集的日历计数；数据集中的 bar 不够时同样发出 `UserWarning`。规则声明的因子（`declared_inputs()`）在窗口上计算，与模型的因子一样各带自己的 `warmup_bars`；规则声明的风险模型的暴露由模型按其 `exposure_data_strategy` 读取或计算。
 
@@ -296,7 +296,7 @@ out_of_sample -5.61 -4.27 13
 | `metrics()` | 与 `result.metrics` 相同的映射，按 JSON 保存的形式：NaN 和无穷大变为 `None`，元组变为列表。每次运行都记录 `execution`（被拒订单和最大目标偏差）。`run()` 和 `run_cv()` 的拼接过程还记录 `portfolio_construction`：`failed_bar_count` 和 `failed_bars`，即组合构建规则无法决定（优化失败或不可行）、回测改为维持原仓位的调仓 bar，以及组合构建规则报告的事件，例如均值-方差优化器的 `closed_without_risk`（因风险模型没有估计而被平仓的持仓），或 top-n 规则的 `tie_at_cutoff`（截断点落在并列分数中间时被排除的并列标的，说明入选是按标的顺序而不是按分数决定的），带 `count`（所有 bar 上的标的总数）和 `bars`，每个 bar 一条记录，记录列出涉及的标的，`tie_at_cutoff` 则只记数量。 |
 | `settlements()` | 退市结算记录。 |
 | `report()`、`log_report(tracking_run)` | HTML 报告的文本；把它附到追踪 run 上。 |
-| `predictions()` | 仅带模型的运行（`run()`、`run_cv()`）才有：组合构建规则读到的预测（在价格坐标轴上）及其标签规格，格式为 `PredictionPanel`；`DecisionInputs.from_run(run_dir)` 凭它在不加载模型的情况下重建该运行的决策输入，包括已绑定的规则（见[组合构建](portfolio.md#不加载模型重建一次运行的决策输入)）。`run_weights()` 的运行为 `None`。 |
+| `predictions()` | 仅带模型的运行（`run()`、`run_cv()`）才有：组合构建规则读到的预测（在价格 bar 和运行决策的标的上）及其标签规格，格式为 `PredictionPanel`；`DecisionInputs.from_run(run_dir)` 凭它在不加载模型的情况下重建该运行的决策输入，包括已绑定的规则（见[组合构建](portfolio.md#不加载模型重建一次运行的决策输入)）。`run_weights()` 的运行为 `None`。 |
 | `folds` | `run_cv()` 运行的各折，每折是一个 kind 为 `"fold"` 的 `BacktestRun`。 |
 | `rebuild(field)`、`rebuild_backtester(**overrides)` | 某个配置字段持有的组件，以及回测器本身（见[重建一次运行](#重建一次运行)）。 |
 

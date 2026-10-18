@@ -1001,6 +1001,22 @@ class PortfolioConstructor(_Configured, ABC):
         """
         return InputDeclaration()
 
+    def axis_factors(self) -> tuple[str, ...]:
+        """The declared factor outputs the rule reads on symbols it has no prediction for.
+
+        A run decides on the symbols with a prediction on some bar of its
+        window, the only ones a rule can buy, plus the symbols with a value
+        of one of these outputs on some bar (``DecisionInputs.decision_symbols``):
+        a benchmark's or the market's weights, which the rule reads on
+        symbols it never holds. None by default.
+
+        Examples
+        --------
+        >>> rule.axis_factors()
+        ()
+        """
+        return ()
+
     def ranking_label(self, names: Sequence[str]) -> str:
         """Return the predicted label the rule ranks the symbols by.
 

@@ -1150,8 +1150,10 @@ class BaseBacktester(Component, ABC):
                         f"{self.class_name}: the concatenated fold predictions do not cover "
                         f"exactly the price bars {first_start}..{last_end}"
                     )
-                stitched_predictions = stitched_predictions.reindex(
-                    symbol=stitched_prices.symbol.values
+                # The symbols any fold decides on stay, so a holding carries across folds.
+                stitched_predictions, stitched_prices = self._on_decision_symbols(
+                    stitched_predictions.reindex(symbol=stitched_prices.symbol.values),
+                    stitched_prices,
                 )
                 for record, bars in zip(records, fold_bars):
                     record["predictions"] = stitched_predictions.sel(timestamp=bars)
@@ -1815,7 +1817,8 @@ class BaseBacktester(Component, ABC):
         The steps of ``run()``: request the factor panels for the window and
         predict, load the prices, reindex
         the predictions onto the price axes (symbols without a prediction
-        become NaN and are never selected), split the window against the
+        become NaN and are never selected) and cut both to the symbols the
+        run decides on (``_decision_symbols``), split the window against the
         fitted training window ``[train_start, train_end]`` plus the labels'
         lookahead, generate and check the weights, simulate, simulate
         the benchmark (when one is configured, on the same bars) and compute
@@ -1841,9 +1844,13 @@ class BaseBacktester(Component, ABC):
         )
 
         # Spread the predictions over every price symbol; a missing symbol is
-        # NaN and therefore never selectable.
-        predictions = predictions.reindex(
-            timestamp=prices.timestamp.values, symbol=prices.symbol.values
+        # NaN and therefore never selectable, so the run then keeps only the
+        # symbols it decides on.
+        predictions, prices = self._on_decision_symbols(
+            predictions.reindex(
+                timestamp=prices.timestamp.values, symbol=prices.symbol.values
+            ),
+            prices,
         )
 
         split = self._window_split(
@@ -2265,6 +2272,27 @@ class BaseBacktester(Component, ABC):
                 f"{self.class_name}: weight row at {self._bar_label(timestamps[idx])} "
                 f"has gross exposure {gross[idx]} > 1"
             )
+
+    def _decision_symbols(self, predictions: xr.Dataset) -> np.ndarray | None:
+        """Return which price symbols the run decides on, or ``None`` for every one.
+
+        ``predictions`` are on the window's price axes. The run keeps the
+        symbols marked here, on every panel it decides, simulates and
+        reports on; the others must be symbols ``_generate_signals`` never
+        holds. ``None`` by default: a backtester whose rule may hold any
+        priced symbol keeps them all.
+        """
+        return None
+
+    def _on_decision_symbols(
+        self, predictions: xr.Dataset, prices: xr.Dataset
+    ) -> tuple[xr.Dataset, xr.Dataset]:
+        """Cut the predictions and prices, on the same axes, to ``_decision_symbols``."""
+        keep = self._decision_symbols(predictions)
+        # A window without any prediction keeps its axis: the rule holds cash on it.
+        if keep is None or keep.all() or not keep.any():
+            return predictions, prices
+        return predictions.isel(symbol=keep), prices.isel(symbol=keep)
 
     def _delisting_marks(self, prices: xr.Dataset) -> xr.DataArray:
         """Return the price dataset's ``delisting_bars`` of ``prices``.

@@ -696,6 +696,65 @@ class DecisionInputs:
         """
         return self._prices(pd.Timestamp(first), pd.Timestamp(last), None, warn=True)
 
+    def decision_symbols(self, predictions: xr.Dataset) -> np.ndarray:
+        """Return which symbols of a prediction panel a run decides on.
+
+        A symbol with a finite prediction of any label on some bar of the
+        panel, the only symbols a rule can buy (and so hold), or with a
+        finite value of one of the rule's ``axis_factors`` on some bar from
+        the panel's first bar to its last (those factors computed once over
+        the range, with their own warm-up). A run drops the other symbols
+        from its axis: the rule never holds them, and none of its inputs
+        read them. A covariance estimated from the context's symbols
+        together (``LedoitWolfEstimator``'s shrinkage) is estimated over the
+        symbols kept.
+
+        Parameters
+        ----------
+        predictions : xr.Dataset
+            One variable per label on ``(timestamp, symbol)``.
+
+        Returns
+        -------
+        np.ndarray
+            Booleans on the panel's ``symbol``.
+
+        Raises
+        ------
+        ValueError
+            If an axis factor is not an output of a declared factor.
+
+        Examples
+        --------
+        >>> inputs.decision_symbols(scores.where(scores.symbol != "CCC"))
+        array([ True,  True, False])
+        """
+        predictions = predictions.transpose(*_DIMS)
+        symbols = predictions.symbol.values
+        keep = np.zeros(len(symbols), dtype=bool)
+        for name in predictions.data_vars:
+            keep |= np.isfinite(np.asarray(predictions[name].values, dtype=np.float64)).any(axis=0)
+        names = list(self.constructor.axis_factors())
+        if not names:
+            return keep
+        first, last = pd.Timestamp(predictions.timestamp.values[0]), pd.Timestamp(predictions.timestamp.values[-1])
+        found = []
+        for factor in self.declared.factors:
+            outputs = [name for name in factor.get_factor_names() if name in names]
+            if not outputs:
+                continue
+            panel = factor.compute(first, last)[outputs].transpose(*_DIMS).reindex(symbol=symbols)
+            for name in outputs:
+                keep |= np.isfinite(np.asarray(panel[name].values, dtype=np.float64)).any(axis=0)
+            found += outputs
+        missing = [name for name in names if name not in found]
+        if missing:
+            raise ValueError(
+                f"{type(self.constructor).__name__} keeps the symbols of factor outputs "
+                f"{missing} that no declared factor computes"
+            )
+        return keep
+
     def weights(self, predictions: xr.Dataset, *, delisted: xr.DataArray | None = None) -> xr.Dataset:
         """Decide every rebalance bar of a prediction panel and return the target weights.
 
