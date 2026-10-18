@@ -52,7 +52,7 @@ TRAIN_PERIODS = 20
 
 
 class Calendar:
-    """The one dataset method a model's warm-up calls: `bar_before`."""
+    """The one calendar method a model's warm-up calls on a factor: `bar_before`."""
 
     def __init__(self, times):
         self.times = pd.DatetimeIndex(times)
@@ -65,8 +65,9 @@ class Calendar:
 
 
 class ArrayPanel:
-    """A stand-in for a factor/label object backed by `[T, S]` arrays, with a
-    dataset calendar so a multi-bar torch window can count its warm-up."""
+    """A stand-in for a factor/label object backed by `[T, S]` arrays, with its
+    own calendar (`bar_before`, as a factor's, ADR 0051) so a multi-bar torch
+    window can count its warm-up."""
 
     def __init__(self, arrays: dict[str, np.ndarray]):
         self.names = list(arrays)
@@ -74,7 +75,11 @@ class ArrayPanel:
             {k: (("timestamp", "symbol"), v) for k, v in arrays.items()},
             coords={"timestamp": TIMES, "symbol": SYMBOLS},
         )
-        self.config = SimpleNamespace(dataset=Calendar(TIMES))
+        self._calendar = Calendar(TIMES)
+        self.config = SimpleNamespace(dataset=self._calendar)
+
+    def bar_before(self, date, n):
+        return self._calendar.bar_before(date, n)
 
     def _get_factor_names(self):
         return list(self.names)

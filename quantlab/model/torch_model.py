@@ -99,9 +99,10 @@ class TorchModel(TrainingTargetMixin, BaseModel):
 
     The model's warm-up is N - 1 bars: every feature request, in training
     and in a backtest, starts that many bars earlier, counted on each
-    factor's dataset calendar, and every factor starts at the earliest of
-    those bars (a daily factor computed from one-minute bars would
-    otherwise count minutes), so the first requested bar has a full window.
+    factor's own calendar (the bars of its output panel, ``Factor.bar_before``:
+    days for a daily factor computed from one-minute bars, not its dataset's
+    minutes), and every factor starts at the earliest of those bars, so the
+    first requested bar has a full window.
 
     Examples
     --------

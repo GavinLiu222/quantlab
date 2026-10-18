@@ -78,7 +78,7 @@ def _logged(run) -> list[dict]:
 
 
 class Calendar:
-    """The one dataset method a model's warm-up calls: `bar_before`."""
+    """The one calendar method a model's warm-up calls on a factor: `bar_before`."""
 
     def __init__(self, times):
         self.times = pd.DatetimeIndex(times)
@@ -98,7 +98,10 @@ class Config:
 
 
 class Panel:
-    """A factor stand-in over a fixed `[T, S]` panel on the `TIMES` calendar."""
+    """A factor stand-in over a fixed `[T, S]` panel on the `TIMES` calendar.
+
+    Its calendar is its own bars (`bar_before`), as a factor's is (ADR 0051).
+    """
 
     def __init__(self, arrays: dict[str, np.ndarray], symbols=SYMBOLS):
         self._ds = xr.Dataset(
@@ -106,7 +109,11 @@ class Panel:
             coords={"timestamp": TIMES[: len(next(iter(arrays.values())))],
                     "symbol": list(symbols)},
         )
-        self.config = Config(Calendar(self._ds.timestamp.values))
+        self._calendar = Calendar(self._ds.timestamp.values)
+        self.config = Config(self._calendar)
+
+    def bar_before(self, date, n):
+        return self._calendar.bar_before(date, n)
 
     def _get_factor_names(self):
         return list(self._ds.data_vars)

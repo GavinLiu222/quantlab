@@ -536,12 +536,12 @@ class BaseModel(Component, ABC):
     def _feature_starts(self, strategy: str, start) -> list:
         """Return the bar each factor's panel is requested from, in ``config.factors`` order.
 
-        Each factor's warm-up is counted on its own dataset (``_feature_start``),
-        and every factor then starts at the earliest of those starts: a
-        factor's panel can be on coarser bars than its dataset (a daily
-        factor computed from one-minute bars counts its warm-up in minutes),
-        and the model's windows run over the bars of every panel. Under
-        ``"read"`` no factor starts before its store does.
+        Each factor's warm-up is counted on its own calendar
+        (``_feature_start``: the bars of its output panel, days for a daily
+        factor computed from one-minute bars), and every factor then starts
+        at the earliest of those starts, since the model's windows run over
+        the bars of every panel. Under ``"read"`` no factor starts before
+        its store does.
         """
         factors = self.config.factors
         if self.warmup_bars == 0:
@@ -556,25 +556,26 @@ class BaseModel(Component, ABC):
         ]
 
     def _feature_start(self, factor, strategy: str, start):
-        """Return ``start`` moved ``warmup_bars`` bars back on ``factor``'s dataset.
+        """Return ``start`` moved ``warmup_bars`` bars back on ``factor``'s calendar.
 
-        With fewer bars before ``start`` in the dataset, or, under
-        ``"read"``, in the factor's store, the request starts at the earliest
-        one there is and a ``UserWarning`` states the shortfall; the first
-        windows then hold zero rows for the missing history. The model
-        requests every factor from the earliest of these
-        (``_feature_starts``).
+        The bars are the factor's own (``Factor.bar_before``, ADR 0051): the
+        bars of its output panel, which for a daily factor computed from
+        intraday bars are days, not its dataset's bars. With fewer bars
+        before ``start`` on that calendar, or, under ``"read"``, in the
+        factor's store, the request starts at the earliest one there is and
+        a ``UserWarning`` states the shortfall; the first windows then hold
+        zero rows for the missing history. The model requests every factor
+        from the earliest of these (``_feature_starts``).
         """
         bars = self.warmup_bars
         if bars == 0:
             return start
-        dataset = factor.config.dataset
         try:
-            warm = dataset.bar_before(start, bars)
+            warm = factor.bar_before(start, bars)
         except InsufficientHistoryError as exc:
-            warm = dataset.bar_before(start, exc.available)
+            warm = factor.bar_before(start, exc.available)
             self._warn_short_warmup(
-                factor, start, bars, f"its dataset holds only {exc.available}"
+                factor, start, bars, f"its calendar holds only {exc.available}"
             )
         if strategy == "read":
             stored = factor.store_range()

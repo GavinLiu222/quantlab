@@ -1,26 +1,31 @@
-"""A windowed model's warm-up is counted on its own bars, not on a finer dataset calendar.
+"""A windowed model's warm-up is counted on each feature's factor calendar (ADR 0051, #366).
 
 A factor's panel can be on coarser bars than its dataset: a daily factor
-computed from one-minute bars (the us3000 `intraday_low_corr` and
-`intraday_signals` stores) has a minute dataset. `_feature_start` counted each
-factor's warm-up on its own dataset, so such a factor was requested from a few
-minutes before `start`, came back without the daily bars before it, and the
-first `warmup_bars` windows held zero rows for it: a reloaded us3000 LSTM
-predicted its first 19 test bars differently from its training run (cross-
-sectional correlation 0.957 on the first bar). Every factor now starts at the
-earliest of the factors' counted starts, so a model with any factor on its own
-bars gets the whole warm-up for each.
+computed from intraday bars (the us3000 `intraday_low_corr` and
+`intraday_signals` stores, or any `Factor.resample` to daily) has an intraday
+dataset. `_feature_start` once counted each factor's warm-up on its dataset, so
+such a factor was requested from a few intraday bars before `start`, came back
+without the daily bars before it, and the first `warmup_bars` windows held zero
+rows for it: a reloaded us3000 LSTM predicted its first 19 test bars
+differently from its training run (cross-sectional correlation 0.957 on the
+first bar). The count is now made with the factor's own `bar_before`, so it
+moves by the factor's bars, and every factor still starts at the earliest of
+the counted starts (8c2d1748), so a model with any factor on its own bars gets
+the whole warm-up for each.
 
-Everything is synthetic, CPU-only and offline.
+The features are two Polars momenta: one on a daily `FrameDataset`, one on a
+half-hourly `FrameDataset` resampled to `"1d"`, both built into stores under
+`tmp_path` and read by the model. Everything is synthetic, CPU-only and
+offline; the Polars factor needs no compiler.
 """
-
-from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 
 from quantlab.dataset.memory import FrameDataset
+from quantlab.factor.config import PolarsFactorConfig
+from quantlab.factor.predefined.momentum import Momentum
 from quantlab.model.config import ModelConfig
 from quantlab.runs.trained_run import TrainedRun
 from tests.label_stubs import StubLabel
@@ -30,33 +35,36 @@ from tests.torch_heads import MeanContextHead
 TRAIN_START, TRAIN_END, TEST_START, TEST_END = map(str, (TRAIN_START, TRAIN_END, TEST_START, TEST_END))
 
 WINDOW_BARS = 5
+DAYS = pd.DatetimeIndex(TIMES)
+BARS_PER_DAY = 8  # half-hourly from 09:30
 
 
-def _calendar(stamps) -> FrameDataset:
-    """A dataset holding a ``close`` on ``stamps``: only its calendar is read."""
-    stamps = pd.DatetimeIndex(stamps)
+def _prices(stamps: pd.DatetimeIndex, seed: int) -> FrameDataset:
+    """A dataset holding one random-walk ``Close`` per symbol on ``stamps``."""
+    rng = np.random.default_rng(seed)
+    steps = rng.normal(0.0, 0.01, size=(len(stamps), len(SYMBOLS)))
     return FrameDataset(xr.Dataset(
-        {"close": (("timestamp", "symbol"), np.ones((len(stamps), len(SYMBOLS))))},
+        {"Close": (("timestamp", "symbol"), 100.0 * np.exp(steps.cumsum(axis=0)))},
         coords={"timestamp": stamps, "symbol": SYMBOLS},
     ))
 
 
-class DailyFactor(FakePanel):
-    """A daily panel whose dataset is ``dataset``."""
+def _intraday() -> pd.DatetimeIndex:
+    """``BARS_PER_DAY`` half-hour stamps on every day of ``DAYS``."""
+    offsets = np.tile(np.arange(BARS_PER_DAY) * 30 + 570, len(DAYS))
+    return DAYS.repeat(BARS_PER_DAY) + pd.to_timedelta(offsets, unit="min")
 
-    def __init__(self, names, seed, dataset):
-        super().__init__(names, seed=seed)
-        self.config = SimpleNamespace(dataset=dataset)
 
-    def store_range(self):
-        return None
+def _momentum(dataset: FrameDataset, n: int, path) -> Momentum:
+    return Momentum(PolarsFactorConfig(warmup_bars=n, dataset=dataset, file_path=str(path), kwargs={"n": n}))
 
 
 def _model(tmp_path) -> MeanContextHead:
-    days = pd.DatetimeIndex(TIMES)
-    minutes = days.repeat(8) + pd.to_timedelta(np.tile(np.arange(8) * 30 + 570, len(days)), unit="min")
+    """A five-bar head over a daily momentum and a daily-from-half-hourly one, both built."""
+    daily = _momentum(_prices(DAYS, 1), 1, tmp_path / "daily.zarr")
+    from_intraday = _momentum(_prices(_intraday(), 3), 2, tmp_path / "intraday.zarr").resample("1d", "last")
     return MeanContextHead(ModelConfig(
-        factors=[DailyFactor(["f_daily"], 1, _calendar(days)), DailyFactor(["f_minute"], 3, _calendar(minutes))],
+        factors=[daily.build(TRAIN_START, TEST_END), from_intraday.build(TRAIN_START, TEST_END)],
         labels=[StubLabel(FakePanel(["ret_a"], seed=2))],
         model_save_dir=str(tmp_path / "ckpt"), factor_data_strategy="read", label_data_strategy="read",
         start_date=TRAIN_START, end_date=TEST_END, train_start=TRAIN_START, train_end=TRAIN_END,
@@ -65,7 +73,7 @@ def _model(tmp_path) -> MeanContextHead:
     ))
 
 
-def test_every_factor_is_requested_from_the_earliest_counted_start(tmp_path):
+def test_every_factor_is_requested_from_the_same_daily_start(tmp_path):
     model = _model(tmp_path)
     expected = pd.Timestamp(TIMES[100 - (WINDOW_BARS - 1)])
 

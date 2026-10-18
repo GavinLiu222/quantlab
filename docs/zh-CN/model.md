@@ -679,7 +679,7 @@ torch 模型头（`TorchModel`）通过标准的 PyTorch 组件取数据。基�
 
 停止钩子决定模型头训练多久、保留哪一组权重。`_on_fit_start()` 在第一个 epoch 之前运行，`_should_stop(epoch, train_loss, val_loss)` 在每个 epoch 之后运行（epoch 从 0 开始计数），`_on_fit_end()` 在最后一个 epoch 之后运行；`_should_stop` 返回 True 即结束训练，而训练本来也不会超过 `epochs`。要保留较早权重的模型头在 `_should_stop` 里保存它们，在 `_on_fit_end` 里恢复。自带的两个 torch 模型头采用两种常见规则：`GATsRegressor` 保留验证损失最低的 epoch，连续 `early_stop` 个 epoch 没有更好的验证损失就停止（见“在截面上训练 GATs”）；`MASTERRegressor` 在训练损失达到 `train_loss_threshold` 时停止，并保留最后的权重（见“用市场特征训练 MASTER”）。
 
-`window_bars` 为 N 的模型在它预测的第一个 bar 之前需要 N - 1 个 bar 的历史。`collect()` 以及回测的特征请求会向每个因子多要这么多 bar（按因子自己的数据集日历计数），数据不够早时会给出警告。标签不会向前延伸。每个窗口读取的是整个收集到的面板，所以验证段和测试段的第一个 bar 会回看到前一段，这是合法的，因为那些 bar 都在过去；历史较短的标的得到 NaN 行，默认的 `_transform_feature` 会把它们变成 0。每个切分点前的清除只覆盖标签的前瞻，从不覆盖窗口。这里的替身面板没有数据集，所以下面的模型头都用一个 bar 的窗口。
+`window_bars` 为 N 的模型在它预测的第一个 bar 之前需要 N - 1 个 bar 的历史。`collect()` 以及回测的特征请求会向每个因子多要这么多 bar（按因子自己的日历计数，即 `factor.bar_before`：因子输出面板的 bar，所以由一分钟 bar 算出的日频因子按天计数，而不是按其数据集的分钟），所有因子都从这些起点中最早的一个开始，数据不够早时会给出警告。标签不会向前延伸。每个窗口读取的是整个收集到的面板，所以验证段和测试段的第一个 bar 会回看到前一段，这是合法的，因为那些 bar 都在过去；历史较短的标的得到 NaN 行，默认的 `_transform_feature` 会把它们变成 0。每个切分点前的清除只覆盖标签的前瞻，从不覆盖窗口。这里的替身面板没有数据集，所以下面的模型头都用一个 bar 的窗口。
 
 最小的模型头就是窗口、网络和损失：
 
