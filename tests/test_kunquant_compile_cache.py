@@ -11,6 +11,10 @@ compiled again rather than loaded; and the outputs are the same whether
 the cache is used or not.
 """
 
+import subprocess
+import sys
+from pathlib import Path
+
 import numpy as np
 import pytest
 from KunQuant.Driver import KunCompilerConfig
@@ -102,14 +106,33 @@ def test_outputs_are_the_same_with_and_without_the_cache(compiles, monkeypatch) 
     np.testing.assert_array_equal(cached_again["y"].values, uncached["y"].values)
 
 
-def test_a_damaged_entry_is_compiled_again(compiles, monkeypatch, tmp_path) -> None:
-    compile_graphs(_entry(), "Scaled")
+def _compile_in_another_process() -> None:
+    """Compile ``_entry()`` into the cache from a separate Python process."""
+    code = (
+        "from tests.test_kunquant_compile_cache import _entry; "
+        "from quantlab.factor.kunquant_compile import compile_graphs; "
+        "compile_graphs(_entry(), 'Scaled')"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True, cwd=Path(__file__).parent.parent)
+
+
+def test_another_process_loads_the_library_without_compiling(compiles, tmp_path) -> None:
+    _compile_in_another_process()
+    lib = compile_graphs(_entry(), "Scaled")
+    assert len(compiles) == 0
+    np.testing.assert_array_equal(_run(lib), np.arange(24, dtype=np.float32).reshape(3, 8) * 2)
+
+
+def test_a_damaged_entry_is_compiled_again(compiles, tmp_path) -> None:
+    # The entry comes from another process: overwriting a library this process
+    # has loaded would break its mapping (SIGBUS on Linux), and glibc's dlopen
+    # would return the loaded handle for the same path anyway.
+    _compile_in_another_process()
     (entry,) = (tmp_path / "cache").iterdir()
     (library,) = [path for path in entry.iterdir() if path.name.startswith("Scaled.")]
     library.write_bytes(b"not a library")
-    monkeypatch.setattr(kunquant_compile, "_LIBRARIES", {})
     lib = compile_graphs(_entry(), "Scaled")
-    assert len(compiles) == 2
+    assert len(compiles) == 1
     np.testing.assert_array_equal(_run(lib), np.arange(24, dtype=np.float32).reshape(3, 8) * 2)
 
 
