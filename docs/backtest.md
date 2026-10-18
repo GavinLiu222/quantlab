@@ -531,21 +531,28 @@ Measured on synthetic stores (`tests/test_backtest_approximate.py`): with none o
 The approximate backtest is its own module: it reads the rule's config and decides with its own implementation of the rule, which it chooses by the rule's exact class (ADR 0045): the implementations are the portfolio layer's `quantlab/portfolio/predefined/approximate/` (one module per rule, each offering `decide(rule, panel, prices, stopping)`), chosen through `quantlab.portfolio.approximate` (`implementation(rule)` returns a rule's module or raises with the reason, before any data is read; the field tables, the panel types and `LowRankCovariance` live there too), the simulation the execution layer's `quantlab.execution.approximate`, and `quantlab.backtest.approximate` holds only the backtest (prices, schedule, account, statistics). The rules' classes decide one bar at a time for a backtest run and know nothing of it. It runs:
 
 - `TopNConstructor`, long-only and long-short;
+- `TopkDropoutConstructor`, long-only and long-short (see below);
 - `MeanVarianceOptimizer`, long-only or long-short, any expected return model, with or without a turnover penalty, `candidate_top_k`, `volatility_label` and `max_names`, over `LedoitWolfEstimator` or `FactorRiskStoreEstimator` (see [Mean-variance in the approximate backtest](portfolio.md#mean-variance-in-the-approximate-backtest));
 - `ActiveRiskOptimizer` without a tracking-error cap.
 - `BlackLittermanOptimizer`, with every view type and `omega` option (see below).
 
-Each config field is read, ignored, or must keep its default. Ignored: `solver`, `min_trade` (not modelled, see above), `exposure_factors` (read only through `exposure_bounds`) and `mip_gap` (a mixed-integer solver's gap; the approximate backtest solves no mixed-integer program). Refused before any data is read, the message naming the rule, estimator or field: any other rule (`TopkDropoutConstructor`, a custom rule), a subclass of a supported rule or estimator (it may decide differently), any other covariance estimator, a tracking-error cap, `exposure_bounds`, and a field the approximate backtest does not know when it is not at its default (a field added to a rule's config later is never silently approximated).
+Each config field is read, ignored, or must keep its default. Ignored: `solver`, `min_trade` (not modelled, see above), `exposure_factors` (read only through `exposure_bounds`) and `mip_gap` (a mixed-integer solver's gap; the approximate backtest solves no mixed-integer program). Refused before any data is read, the message naming the rule, estimator or field: any other rule (a custom rule), a subclass of a supported rule or estimator (it may decide differently), any other covariance estimator, a tracking-error cap, `exposure_bounds`, and a field the approximate backtest does not know when it is not at its default (a field added to a rule's config later is never silently approximated).
 
 ```python
->>> from quantlab.portfolio.config import TopkDropoutConfig
->>> from quantlab.portfolio.predefined.topk_dropout import TopkDropoutConstructor
->>> approximate.run(predictions, TopkDropoutConstructor(TopkDropoutConfig(direction="long_only", topk=2, n_drop=1)))
+>>> from quantlab.portfolio.config import TopNConfig
+>>> from quantlab.portfolio.predefined.top_n import TopNConstructor
+>>> class EqualWeightTopN(TopNConstructor):
+...     pass
+>>> approximate.run(predictions, EqualWeightTopN(TopNConfig(direction="long_only", top_n=2)))
 Traceback (most recent call last):
-ValueError: USEquityApproximateBacktest cannot run TopkDropoutConstructor: TopkDropoutConstructor has no approximate implementation: the approximate backtest runs TopNConstructor, MeanVarianceOptimizer, ActiveRiskOptimizer, BlackLittermanOptimizer, as those exact classes; backtest it with a backtest run
+ValueError: USEquityApproximateBacktest cannot run EqualWeightTopN: EqualWeightTopN has no approximate implementation: the approximate backtest runs TopNConstructor, TopkDropoutConstructor, MeanVarianceOptimizer, ActiveRiskOptimizer, BlackLittermanOptimizer, as those exact classes; backtest it with a backtest run
 ```
 
 On a us3000-shaped synthetic store (10,000 symbols on the axis, 3,000 of them priced, returns from 60 factors whose largest covariance eigenvalues are about 4,500 and 110 times the specific variance, a 60-bar Ledoit-Wolf window), the paper-trading mean-variance rule (risk aversion 20, `weight_cap` 0.05, `turnover_penalty` 0.002) over 67 daily rebalances at 10 bp took 1.0 s against `run()`'s 532 s (4.6 iterations per bar on average), the value within 5e-4 and the annualised return within 0.25 percentage points.
+
+#### TopkDropout in the approximate backtest
+
+`TopkDropoutConstructor` reads the holdings (kept names stay at their drifted weight and only `n_drop` are replaced), so its decision bars are solved forward, each once (`quantlab/portfolio/predefined/approximate/topk_dropout.py`): a bar's holdings are the last decided book at its fill prices marked at the bar's close, a held symbol not tradable at the bar is locked, and the bar is decided by the rule's own one-book step, so the picks, the sells and the buys' weights are the per-bar rule's. Beside the usual gaps above, a fill the run rejects, a settled delisting or a buy capped by cash leaves the run's book different from the decided one, and the next bars start from the decided book. On the synthetic store (`tests/test_backtest_approximate_topk_dropout.py`, long-only, `topk` 4, rebalancing every bar with `n_drop` 1 and every fifth bar with `n_drop` 2) the weights at the decided bars equal the run's within 1e-9 without fees, and with 5 bp fees the value stays within 1e-3 of the run's. Long-short is not compared there: on that store the per-bar rule's own long-short book goes past a gross of 1, which a backtest run refuses.
 
 #### Black-Litterman in the approximate backtest
 

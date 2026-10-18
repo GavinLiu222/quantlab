@@ -531,21 +531,28 @@ True
 近似回测是一个独立的模块：它读取规则的配置，用自己的规则实现做决策，按规则的确切类选择实现（ADR 0045）：这些实现在组合层的 `quantlab/portfolio/predefined/approximate/`（每条规则一个模块，各提供 `decide(rule, panel, prices, stopping)`），经由 `quantlab.portfolio.approximate` 选择（`implementation(rule)` 返回规则的模块，不能运行时在读取任何数据之前抛出带原因的异常；字段表、面板类型和 `LowRankCovariance` 也在那里），模拟在执行层的 `quantlab.execution.approximate`，`quantlab.backtest.approximate` 只负责回测本身（价格、调仓日程、账户和统计）。规则类本身只为回测运行逐 bar 决策，对近似回测一无所知。它能运行：
 
 - `TopNConstructor`，只做多和多空；
+- `TopkDropoutConstructor`，只做多和多空（见下文）；
 - `MeanVarianceOptimizer`，只做多或多空、任意预期收益模型、有无换手惩罚、`candidate_top_k`、`volatility_label` 和 `max_names`，协方差估计器为 `LedoitWolfEstimator` 或 `FactorRiskStoreEstimator`（见[近似回测中的均值-方差](portfolio.md#近似回测中的均值-方差)）；
 - 不设跟踪误差上限的 `ActiveRiskOptimizer`。
 - `BlackLittermanOptimizer`，支持每种观点类型和每个 `omega` 选项（见下文）。
 
-每个配置字段要么被读取，要么被忽略，要么必须保持默认值。被忽略的：`solver`、`min_trade`（不模拟，见上文）、`exposure_factors`（只通过 `exposure_bounds` 起作用）和 `mip_gap`（混合整数求解器的间隙；近似回测不解混合整数规划）。以下情况在读任何数据之前就被拒绝，消息会写明规则、估计器或字段：其他规则（`TopkDropoutConstructor`、自定义规则）、受支持规则或估计器的子类（它可能做出不同的决策）、其他协方差估计器、跟踪误差上限、`exposure_bounds`，以及近似回测不认识且不是默认值的字段（以后给规则配置加的字段不会被悄悄近似掉）。
+每个配置字段要么被读取，要么被忽略，要么必须保持默认值。被忽略的：`solver`、`min_trade`（不模拟，见上文）、`exposure_factors`（只通过 `exposure_bounds` 起作用）和 `mip_gap`（混合整数求解器的间隙；近似回测不解混合整数规划）。以下情况在读任何数据之前就被拒绝，消息会写明规则、估计器或字段：其他规则（自定义规则）、受支持规则或估计器的子类（它可能做出不同的决策）、其他协方差估计器、跟踪误差上限、`exposure_bounds`，以及近似回测不认识且不是默认值的字段（以后给规则配置加的字段不会被悄悄近似掉）。
 
 ```python
->>> from quantlab.portfolio.config import TopkDropoutConfig
->>> from quantlab.portfolio.predefined.topk_dropout import TopkDropoutConstructor
->>> approximate.run(predictions, TopkDropoutConstructor(TopkDropoutConfig(direction="long_only", topk=2, n_drop=1)))
+>>> from quantlab.portfolio.config import TopNConfig
+>>> from quantlab.portfolio.predefined.top_n import TopNConstructor
+>>> class EqualWeightTopN(TopNConstructor):
+...     pass
+>>> approximate.run(predictions, EqualWeightTopN(TopNConfig(direction="long_only", top_n=2)))
 Traceback (most recent call last):
-ValueError: USEquityApproximateBacktest cannot run TopkDropoutConstructor: TopkDropoutConstructor has no approximate implementation: the approximate backtest runs TopNConstructor, MeanVarianceOptimizer, ActiveRiskOptimizer, BlackLittermanOptimizer, as those exact classes; backtest it with a backtest run
+ValueError: USEquityApproximateBacktest cannot run EqualWeightTopN: EqualWeightTopN has no approximate implementation: the approximate backtest runs TopNConstructor, TopkDropoutConstructor, MeanVarianceOptimizer, ActiveRiskOptimizer, BlackLittermanOptimizer, as those exact classes; backtest it with a backtest run
 ```
 
 在 us3000 规模的合成数据上（价格轴 10,000 只标的，其中 3,000 只有价格，收益来自 60 个因子，最大的协方差特征值约为特定方差的 4,500 倍和 110 倍，60 bar 的 Ledoit-Wolf 窗口），模拟盘的均值-方差规则（风险厌恶 20、`weight_cap` 0.05、`turnover_penalty` 0.002）在 67 次日度调仓、10 bp 成本下用时 1.0 秒，`run()` 用时 532 秒（每个 bar 平均迭代 4.6 次）；净值相差在 5e-4 以内，年化收益相差在 0.25 个百分点以内。
+
+#### 近似回测中的 TopkDropout
+
+`TopkDropoutConstructor` 要读持仓（保留的标的维持漂移后的权重，每次只换掉 `n_drop` 只），所以它的决策 bar 按时间顺序逐个求解，每个只解一次（`quantlab/portfolio/predefined/approximate/topk_dropout.py`）：某个 bar 的持仓是上一次决策的组合按成交价买入、按该 bar 收盘价估值后的结果，持有但当天不能交易的标的被锁定，然后用规则自己的单边决策步骤决定该 bar，所以选股、卖出和买入权重都与逐 bar 规则相同。除上文的常规差异外，回测运行拒绝的成交、退市清算或被现金限制的买入会让运行的组合与决策的组合不同，后续 bar 从决策的组合出发。在合成数据上（`tests/test_backtest_approximate_topk_dropout.py`，只做多，`topk` 4，每个 bar 调仓且 `n_drop` 1、每 5 个 bar 调仓且 `n_drop` 2），不计手续费时决策 bar 的权重与运行的相差在 1e-9 以内，计 5 bp 手续费时净值与运行的相差在 1e-3 以内。那里没有比较多空：在这份数据上，逐 bar 规则自己的多空组合总敞口会超过 1，回测运行会拒绝。
 
 #### 近似回测中的 Black-Litterman
 

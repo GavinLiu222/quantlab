@@ -76,6 +76,10 @@ _RULES: Mapping[str, tuple[Mapping[str, str], str]] = {
         {"direction": SUPPORTED, "top_n": SUPPORTED, "score_label": SUPPORTED},
         "top_n",
     ),
+    "quantlab.portfolio.predefined.topk_dropout.TopkDropoutConstructor": (
+        {"direction": SUPPORTED, "topk": SUPPORTED, "n_drop": SUPPORTED, "score_label": SUPPORTED},
+        "topk_dropout",
+    ),
     "quantlab.portfolio.predefined.mean_variance.MeanVarianceOptimizer": (
         _MEAN_VARIANCE_FIELDS,
         "mean_variance",
@@ -292,9 +296,13 @@ def implementation(rule):
     >>> from quantlab.portfolio.predefined.topk_dropout import TopkDropoutConstructor
     >>> implementation(TopNConstructor(TopNConfig(direction="long_only", top_n=2))).__name__
     'quantlab.portfolio.predefined.approximate.top_n'
-    >>> implementation(TopkDropoutConstructor(TopkDropoutConfig(direction="long_only", topk=3, n_drop=1)))
+    >>> implementation(TopkDropoutConstructor(TopkDropoutConfig(direction="long_only", topk=3, n_drop=1))).__name__
+    'quantlab.portfolio.predefined.approximate.topk_dropout'
+    >>> class EqualWeightTopN(TopNConstructor):
+    ...     pass
+    >>> implementation(EqualWeightTopN(TopNConfig(direction="long_only", top_n=2)))
     Traceback (most recent call last):
-    ValueError: TopkDropoutConstructor has no approximate implementation: the approximate backtest runs TopNConstructor, MeanVarianceOptimizer, ActiveRiskOptimizer, BlackLittermanOptimizer, as those exact classes
+    ValueError: EqualWeightTopN has no approximate implementation: the approximate backtest runs TopNConstructor, TopkDropoutConstructor, MeanVarianceOptimizer, ActiveRiskOptimizer, BlackLittermanOptimizer, as those exact classes
     """
     refused = _refusal(rule)
     if refused is not None:

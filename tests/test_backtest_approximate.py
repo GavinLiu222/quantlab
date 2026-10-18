@@ -12,7 +12,7 @@ the same config on the run's recorded predictions:
 - the value without costs equals a zero-cost approximate run;
 - the return statistics agree with the run's `metrics.json`;
 - a rule the approximate backtest has no implementation of
-  (`TopkDropoutConstructor`), a subclass of a supported rule or covariance
+  (a subclass of `TopkDropoutConstructor`), a subclass of a supported rule or covariance
   estimator, and a config field it does not know set away from its default
   are refused before any data is read, the message naming the rule, the
   estimator or the field; at its default an unknown field runs as before.
@@ -349,8 +349,11 @@ def test_a_rule_without_a_panel_decision_is_refused_before_any_read(store, monke
         raise AssertionError("the price dataset was read")
 
     monkeypatch.setattr(type(dataset), "panel", refuse)
-    rule = TopkDropoutConstructor(TopkDropoutConfig(direction="long_only", topk=3, n_drop=1))
-    with pytest.raises(ValueError, match="TopkDropoutConstructor"):
+    class Custom(TopkDropoutConstructor):
+        """TopkDropout under another class: it may decide differently."""
+
+    rule = Custom(TopkDropoutConfig(direction="long_only", topk=3, n_drop=1))
+    with pytest.raises(ValueError, match="Custom has no approximate implementation"):
         backtest.run(None, rule)
 
 
