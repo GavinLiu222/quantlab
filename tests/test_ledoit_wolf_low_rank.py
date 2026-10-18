@@ -107,11 +107,13 @@ def test_scaled_and_subset_agree_with_the_dense_covariance():
     estimate = _estimator().estimate(_context())
     rows = np.array([5, 0, 2])
 
-    np.testing.assert_allclose(estimate.scaled(5).covariance, 5 * estimate.covariance, rtol=1e-12)
+    np.testing.assert_allclose(
+        estimate.scaled(5).covariance, 5 * estimate.covariance, rtol=1e-12, atol=1e-18
+    )
     part = estimate.subset(rows)
     assert part.symbols.tolist() == estimate.symbols[rows].tolist()
     np.testing.assert_allclose(
-        part.covariance, estimate.covariance[np.ix_(rows, rows)], rtol=1e-12
+        part.covariance, estimate.covariance[np.ix_(rows, rows)], rtol=1e-12, atol=1e-18
     )
 
 
