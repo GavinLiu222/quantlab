@@ -15,18 +15,17 @@ output                         formula                                          
                                within 21 bars and no item 2.02 came in the last 42, else 0
 ``dividend_month``             1 if a dividend went ex 231-251 or 42-62 bars ago, else 0         Hartzmark and Solomon (2013)
 ``return_seasonality``         mean 21-bar return over the same 21 bars of the last 5 years      Heston and Sadka (2008)
-``weekday_seasonality``        mean return of the next bar's weekday 3 to 50 weeks back (the     Keloharju, Linnainmaa and
-                               bars 5k - 1 back) less the mean return over those weeks           Nyberg (2016)
+``weekday_seasonality``        mean open-to-open return on the weekday the label's return falls  Keloharju, Linnainmaa and
+                               on, 3 to 50 weeks back (the bars 5k - 2 back), less the mean      Nyberg (2016)
+                               open-to-open return over those weeks
+``tax_loss_rebound``           minus the 252-bar return where negative, 0 for a gain, from       Roll (1983); Grinblatt and
+                               December 15 to January 31; NaN on the other bars                  Moskowitz (2004)
 ``lockup_expiry``              -1 from 104 to 129 bars after a stock's first price (the          Field and Hanka (2001)
                                180-day IPO lock-up ends near bar 124), else 0
 *Systematic risk beyond the linear beta*
 ``coskewness``                 minus ``E[e m'^2] / (sd(e) var(m))`` of 21-bar returns over       Harvey and Siddique (2000)
                                1260 bars (60 months), ``e`` the market-model residual
 ``downside_beta_gap``          beta on the bars the market fell, less the beta, daily, 252 bars  Ang, Chen and Xing (2006)
-``liquidity_beta``             beta of 21-bar returns on the market's monthly liquidity          Pastor and Stambaugh (2003);
-                               innovation, 1260 bars (60 months)                                 Acharya and Pedersen (2005)
-``price_delay``                share of the betas on the 1-4-week lagged market in all five,     Hou and Moskowitz (2005)
-                               5-bar (weekly) returns, 252 bars (52 weeks)
 *Investor behaviour and information diffusion*
 ``frog_in_pan``                ``sign(R) * (%positive - %negative)`` over bars 252..21 back,     Da, Gurun and Warachka (2014)
                                ``R`` that period's return (minus information discreteness)
@@ -35,15 +34,18 @@ output                         formula                                          
 ``news_drift_gap``             sum of the returns on 8-K bars less that on the others, 63 bars   Chan (2003)
 ``earnings_volume``            log abnormal volume of the 3 bars to the one after an item 2.02,  Lerman, Livnat and Mendenhall
                                against the 63 bars before, the last 63 bars' announcement        (2008)
+``nominal_price``              log of the unadjusted close: low-priced stocks are overpriced     Birru and Wang (2016);
+                               by investors who overestimate their upside                        Kumar (2009)
 *Corporate actions*
 ``split_signal``               forward splits less reverse splits, 252 bars                      Ikenberry, Rankine and Stice
                                                                                                  (1996); Desai and Jain (1997)
 ``dividend_change``            log of the last dividend over the one before, split-adjusted,     Michaely, Thaler and Womack
                                for 252 bars after its ex-date, else 0                            (1995)
+``dividend_initiation``        1 for 252 bars after a dividend that follows none in 504 bars     Asquith and Mullins (1983);
+                               (or none since the read began), else 0                            Michaely, Thaler and Womack
+                                                                                                 (1995)
 ``debt_issuance_8k``           minus the 8-K item 2.03 (new direct financial obligation)         Spiess and Affleck-Graves (1999)
                                filings, 252 bars
-``acquisition_8k``             minus the 8-K item 2.01 (completed acquisition or disposition)    Loughran and Vijh (1997)
-                               filings, 756 bars
 *Life cycle and liquidity over time*
 ``listing_age``                bars with a price in the last 756 over 756: a stock listed less   Ritter (1991); Loughran and
                                than three years ago scores below 1                               Ritter (1995)
@@ -53,22 +55,23 @@ output                         formula                                          
 
 ``r`` is the close-to-close return of ``adjClose``, ``m`` the market's: the
 mean of ``r`` over every symbol of the panel weighted by the previous bar's
-market cap (for a k-bar return, the market's k-bar return weighted by the
-cap k bars before). Turnover ``V`` is ``adjClose * adjVolume / marketcap``.
-The market's illiquidity is the 21-bar mean of ``cap-weighted mean |r| /
-cap-weighted mean V`` and its innovation minus the change of its log over 21
-bars. Overlapping k-bar returns are sampled every bar, as the coskewness,
-liquidity beta and price delay papers' monthly and weekly returns are not
-sampled daily. An 8-K bar of ``news_drift_gap`` is one on which, or on the
-bar after which, an item 1.01, 2.01, 2.02, 5.02, 7.01 or 8.01 filing is
-available.
+market cap (for a 21-bar return, the market's 21-bar return weighted by the
+cap 21 bars before; the 21-bar returns overlap, one per bar). Turnover ``V``
+is ``adjClose * adjVolume / marketcap``. An 8-K bar of ``news_drift_gap`` is
+one on which, or on the bar after which, an item 1.01, 2.01, 2.02, 5.02,
+7.01 or 8.01 filing is available. ``weekday_seasonality`` is aligned with
+the open-to-open label of quantlab's ``Return``: the return from the open of
+bar ``t + 1`` to that of ``t + 2`` is the open-to-open return ``t + 2``, so
+the same weekday is ``5k - 2`` bars back. The tax season comes from each
+bar's date (``TAX_SEASON``).
 
 Windowed statistics skip missing bars and need 80% of their window (the
 downside beta 50 down bars); a statistic short of that is NaN. Event flags
 are 0 on a priced bar without a filing and NaN before EVENTS starts
-(``fundamental_alpha.fill_flows``). ``dividend_change`` carries its state
-from the first bar of the read window, so ``warmup_bars`` (``WARMUP_BARS``)
-must cover the longest window.
+(``fundamental_alpha.fill_flows``). ``dividend_change`` and
+``dividend_initiation`` carry their state from the first bar of the read
+window, so ``warmup_bars`` (``WARMUP_BARS``) must cover the longest window
+and the 504-bar dividend gap.
 
 The market and the ranks are taken over every symbol of the panel, so build
 it on the whole market and read it on a roster. The factor is batch only;
@@ -78,14 +81,14 @@ References
 ----------
 Frazzini and Lamont (2007); Barber, De George, Lehavy and Trueman (2013);
 Johnson and So (2018); Hartzmark and Solomon (2013); Heston and Sadka
-(2008); Keloharju, Linnainmaa and Nyberg (2016); Field and Hanka (2001);
-Harvey and Siddique (2000); Ang, Chen and Xing (2006); Pastor and
-Stambaugh (2003); Acharya and Pedersen (2005); Hou and Moskowitz (2005); Da,
-Gurun and Warachka (2014); Akbas, Boehmer, Jiang and Koch (2022); Chan
-(2003); Lerman, Livnat and Mendenhall (2008); Ikenberry, Rankine and Stice
-(1996); Desai and Jain (1997); Michaely, Thaler and Womack (1995); Spiess and
-Affleck-Graves (1999); Loughran and Vijh (1997); Ritter (1991); Loughran and
-Ritter (1995); Chordia, Subrahmanyam and Anshuman (2001).
+(2008); Keloharju, Linnainmaa and Nyberg (2016); Roll (1983); Grinblatt and
+Moskowitz (2004); Field and Hanka (2001); Harvey and Siddique (2000); Ang,
+Chen and Xing (2006); Da, Gurun and Warachka (2014); Akbas, Boehmer, Jiang
+and Koch (2022); Chan (2003); Lerman, Livnat and Mendenhall (2008); Birru
+and Wang (2016); Kumar (2009); Ikenberry, Rankine and Stice (1996); Desai
+and Jain (1997); Asquith and Mullins (1983); Michaely, Thaler and Womack
+(1995); Spiess and Affleck-Graves (1999); Ritter (1991); Loughran and Ritter
+(1995); Chordia, Subrahmanyam and Anshuman (2001).
 """
 
 from __future__ import annotations
@@ -94,23 +97,25 @@ import math
 import platform
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 from KunQuant.Driver import KunCompilerConfig
 from KunQuant.Op import Builder, ConstantOp, Input, OpBase, Output, Rank
 from KunQuant.ops import (
-    Abs,
     Accumulator,
     And,
     BackRef,
     Equals,
     Log,
     Max,
+    Min,
+    Not,
+    Or,
     Select,
     SetAccumulator,
     SetInfOrNanToValue,
     Sign,
     Sqrt,
-    WindowedAvg,
     WindowedSum,
 )
 from KunQuant.Stage import Function
@@ -122,32 +127,35 @@ from quantlab.factor.predefined.fundamental_alpha import fill_flows
 
 #: 8-K items read as news by ``news_drift_gap``: 1.01, 2.01, 2.02, 5.02, 7.01, 8.01.
 NEWS_EVENTS = ("event_11", "event_21", "event_22", "event_52", "event_71", "event_81")
-#: Data columns the graph reads: SEP, DAILY's market cap and the 8-K items.
+#: Data columns the graph reads: SEP (with the unadjusted close), DAILY's market cap and the 8-K items.
 DAILY_ANOMALY_COLUMNS = (
-    "adjOpen", "adjClose", "adjVolume", "divCash", "splitFactor", "marketcap", *NEWS_EVENTS, "event_23",
+    "adjOpen", "adjClose", "adjVolume", "close", "divCash", "splitFactor", "marketcap", *NEWS_EVENTS, "event_23",
 )
+#: Derived input: 1 from December 15 to January 31, NaN on the other bars.
+TAX_SEASON = "tax_season"
 #: The 8-K flags, filled with 0 on priced bars.
 EVENT_COLUMNS = (*NEWS_EVENTS, "event_23")
 #: The outputs, in order.
 DAILY_ANOMALY_OUTPUTS = (
     "earnings_month", "earnings_delay", "dividend_month", "return_seasonality", "weekday_seasonality",
-    "lockup_expiry",
-    "coskewness", "downside_beta_gap", "liquidity_beta", "price_delay",
-    "frog_in_pan", "daytime_reversal", "news_drift_gap", "earnings_volume",
-    "split_signal", "dividend_change", "debt_issuance_8k", "acquisition_8k",
+    "tax_loss_rebound", "lockup_expiry",
+    "coskewness", "downside_beta_gap",
+    "frog_in_pan", "daytime_reversal", "news_drift_gap", "earnings_volume", "nominal_price",
+    "split_signal", "dividend_change", "dividend_initiation", "debt_issuance_8k",
     "listing_age", "turnover_volatility",
 )
 YEAR, QUARTER, MONTH, WEEK = 252, 63, 21, 5
 SEASONAL_YEARS = 5
-#: Sixty months: the coskewness and liquidity-beta windows.
+#: Sixty months: the coskewness window.
 FIVE_YEARS = 5 * YEAR
-#: Three years: the acquisition and listing-age windows.
+#: Three years: the listing-age window.
 THREE_YEARS = 3 * YEAR
+#: Bars without a dividend before one counts as an initiation.
+INITIATION_GAP = 2 * YEAR
 #: The same-weekday lags of ``weekday_seasonality``, in weeks.
 WEEKDAY_WEEKS = range(3, 51)
-#: Bars a build should warm up: the liquidity beta's 60 months of monthly innovations (each a change
-#: over 21 bars of a 21-bar mean of returns), the longest chain.
-WARMUP_BARS = FIVE_YEARS + 2 * MONTH + 1
+#: Bars a build should warm up: 60 months of 21-bar returns (coskewness) and the 5-year seasonal lags.
+WARMUP_BARS = FIVE_YEARS + MONTH
 #: Smallest share of a window's bars a windowed statistic needs.
 MIN_SHARE = 0.8
 DOWN_BARS = 50
@@ -209,10 +217,10 @@ def _event_count(flag: OpBase, window: int, back: int) -> OpBase:
 class DailyAnomalyAlpha(FactorKunQuant):
     """Compute the twenty daily calendar, risk-shape, behavioural, corporate-action and liquidity anomalies.
 
-    The panel merges SEP (adjusted open, close and volume, the cash
-    dividend and the split factor), DAILY (market cap) and Sharadar EVENTS
-    (``EVENT_COLUMNS``: ``NEWS_EVENTS``, item 2.03 and the late-filing
-    notice, code 36), and ``data_columns`` must be
+    The panel merges SEP (adjusted open, close and volume, the unadjusted
+    close, the cash dividend and the split factor), DAILY (market cap) and
+    Sharadar EVENTS (``EVENT_COLUMNS``: ``NEWS_EVENTS`` and item 2.03), and
+    ``data_columns`` must be
     ``DAILY_ANOMALY_COLUMNS``. ``kwargs={"ranked": True}`` makes every
     output its cross-sectional percentile rank, the input
     ``NeutralizedFactor`` should wrap.
@@ -304,15 +312,20 @@ class DailyAnomalyAlpha(FactorKunQuant):
                 total, count = total + _zero(value), count + _present(value)
             out["return_seasonality"] = Select(count >= 3.0, total / Max(count, ConstantOp(1.0)), _nan()) + close * 0.0
 
-            # The next bar's weekday was the bars 5k - 1 back, k weeks; shorter lags hold the short-term reversal.
-            same = [BackRef(r, WEEK * k - 1) for k in WEEKDAY_WEEKS]
+            # The label's open-to-open return is the one of bar t + 2: its weekday was the bars 5k - 2 back, k
+            # weeks; shorter lags hold the short-term reversal.
+            open_return = open_ / BackRef(open_, 1) - 1.0
+            same = [BackRef(open_return, WEEK * k - 2) for k in WEEKDAY_WEEKS]
             total, count = _zero(same[0]), _present(same[0])
             for value in same[1:]:
                 total, count = total + _zero(value), count + _present(value)
             least = math.ceil(MIN_SHARE * len(WEEKDAY_WEEKS))
             same_mean = Select(count >= float(least), total / Max(count, ConstantOp(1.0)), _nan())
-            first, last_lag = WEEK * WEEKDAY_WEEKS[0] - 1, WEEK * WEEKDAY_WEEKS[-1] - 1
-            out["weekday_seasonality"] = same_mean - BackRef(_mean(r, last_lag - first + 1), first)
+            first, last_lag = WEEK * WEEKDAY_WEEKS[0] - 2, WEEK * WEEKDAY_WEEKS[-1] - 2
+            out["weekday_seasonality"] = same_mean - BackRef(_mean(open_return, last_lag - first + 1), first)
+
+            year_return = close / BackRef(close, YEAR) - 1.0
+            out["tax_loss_rebound"] = (0.0 - Min(year_return, ConstantOp(0.0)) + year_return * 0.0) * Input(TAX_SEASON)
 
             age = WindowedSum(_present(close), 140)
             out["lockup_expiry"] = 0.0 - _flag(And(age >= 104.0, age <= 129.0), close)
@@ -339,17 +352,6 @@ class DailyAnomalyAlpha(FactorKunQuant):
             beta = _beta(r, market, YEAR)
             out["downside_beta_gap"] = _beta(Select(down, r, _nan()), Select(down, market, _nan()), YEAR,
                                              DOWN_BARS) - beta
-
-            daily_illiquidity = (CrossSectionalWeightedMean(Abs(r), BackRef(cap, 1))
-                                 / CrossSectionalWeightedMean(turnover, BackRef(cap, 1)))
-            illiquidity = Log(WindowedAvg(daily_illiquidity, MONTH))
-            innovation = 0.0 - (illiquidity - BackRef(illiquidity, MONTH))
-            out["liquidity_beta"] = _beta(r21, innovation, FIVE_YEARS)
-
-            r5, m5 = k_bar(WEEK)
-            betas = [Abs(_beta(r5, BackRef(m5, WEEK * k), YEAR)) for k in range(5)]
-            lagged = betas[1] + betas[2] + betas[3] + betas[4]
-            out["price_delay"] = _ratio(lagged, betas[0] + lagged)
 
             # Investor behaviour and information diffusion.
             gap = YEAR - MONTH
@@ -381,6 +383,7 @@ class DailyAnomalyAlpha(FactorKunQuant):
             abnormal = Log(_ratio(WindowedSum(volume, 3), 3.0 * normal))
             measured = Select(announced, abnormal, _nan())
             out["earnings_volume"] = _mean(measured, QUARTER, 1)
+            out["nominal_price"] = Log(Input("close"))
 
             # Corporate actions.
             factor = Select(split > 0.0, split, ConstantOp(1.0))
@@ -395,13 +398,18 @@ class DailyAnomalyAlpha(FactorKunQuant):
             pays = cash > 0.0
             new_previous = SetAccumulator(previous, always, Select(pays, last / factor, previous / factor))
             new_last = SetAccumulator(last, always, Select(pays, cash, last / factor))
+            # An initiation: a dividend after none for INITIATION_GAP bars, or none since the read began.
+            first_in_long = Or(Not(Equals(since, since)), since >= float(INITIATION_GAP - 1))
+            initiated = Accumulator(cash, "dividend_initiated", is_whole_time_required=True, init_val="nan")
+            new_initiated = SetAccumulator(initiated, always,
+                                           Select(And(pays, first_in_long), ConstantOp(0.0), initiated + 1.0))
             new_since = SetAccumulator(since, always, Select(pays, ConstantOp(0.0), since + 1.0))
             recent = And(new_since < float(YEAR), new_previous > 0.0)
             change = Log(_ratio(new_last, new_previous))
             out["dividend_change"] = Select(recent, change, ConstantOp(0.0)) + close * 0.0
+            out["dividend_initiation"] = _flag(new_initiated < float(YEAR), close)
 
             out["debt_issuance_8k"] = 0.0 - WindowedSum(debt, YEAR)
-            out["acquisition_8k"] = 0.0 - WindowedSum(news_items[NEWS_EVENTS.index("event_21")], THREE_YEARS)
 
             # Life cycle and liquidity over time.
             out["listing_age"] = WindowedSum(_present(close), THREE_YEARS) / float(THREE_YEARS) + close * 0.0
@@ -416,7 +424,7 @@ class DailyAnomalyAlpha(FactorKunQuant):
     def _kunquant_inputs(
         self, inputs: xr.Dataset
     ) -> tuple[dict[str, np.ndarray], np.ndarray, np.ndarray]:
-        """Export the panel as float64 and fill the 8-K flags with 0 on priced bars."""
+        """Export the panel as float64, fill the 8-K flags with 0 on priced bars and add the tax season."""
         panel = self.config.dataset.to_shared_names(inputs).sortby(["timestamp", "symbol"])
         arrays = {
             column: np.ascontiguousarray(
@@ -427,6 +435,10 @@ class DailyAnomalyAlpha(FactorKunQuant):
         fill_flows(arrays, EVENT_COLUMNS, priced)
         for column in EVENT_COLUMNS:
             arrays[column] = arrays[column].astype(np.float64)
+        timestamps = pd.DatetimeIndex(panel["timestamp"].values)
+        season = ((timestamps.month == 12) & (timestamps.day >= 15)) | (timestamps.month == 1)
+        arrays[TAX_SEASON] = np.ascontiguousarray(np.broadcast_to(
+            np.where(season, 1.0, np.nan)[:, None], arrays["adjClose"].shape))
         return arrays, panel["symbol"].values, panel["timestamp"].values
 
     def _make(self):

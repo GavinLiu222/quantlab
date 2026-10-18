@@ -2,8 +2,8 @@
 
 The panel is 16 symbols over 1,400 business days (more than the 1,260-bar
 long-term reversal): random adjusted prices, opens, volumes and market caps,
-quarterly dividends with a raise and a 2-for-1 split, a reverse split, and
-sparse 8-K items. Symbol 5 has a four-bar hole, symbol 9 is delisted from bar
+quarterly dividends with a raise and a 2-for-1 split, a dividend
+initiation, a reverse split, and sparse 8-K items. Symbol 5 has a four-bar hole, symbol 9 is delisted from bar
 1,300, symbol 12 lists on bar 1,200 and the 8-K items start on bar 30.
 """
 
@@ -36,12 +36,17 @@ def _panel() -> xr.Dataset:
                                     + rng.normal(0, 0.015, size=shape)).cumsum(axis=0))
     data["adjOpen"] = data["adjClose"] * np.exp(rng.normal(0, 0.008, size=shape))
     data["adjVolume"] = rng.lognormal(12, 0.5, size=shape)
+    data["close"] = data["adjClose"] * rng.uniform(0.2, 5.0, size=(1, 16))
     data["marketcap"] = data["adjClose"] * rng.uniform(1e7, 1e8, size=(1, 16))
     data["splitFactor"] = np.ones(shape)
     data["splitFactor"][700, 3] = 2.0
     data["splitFactor"][900, 4] = 0.25
     data["divCash"] = np.zeros(shape)
     for s in range(0, 8):
+        if s == 6:  # pays only from bar 900: an initiation
+            for bar in range(900, len(DAYS), 63):
+                data["divCash"][bar, s] = 0.05
+            continue
         for k, bar in enumerate(range(40 + s, len(DAYS), 63)):
             data["divCash"][bar, s] = 0.10 * (1.2 if bar > 600 else 1.0) * (0.5 if s == 3 and bar > 700 else 1.0)
     for name in EVENTS:
@@ -130,11 +135,17 @@ def _reference(panel) -> dict[str, pd.DataFrame]:
     total = sum(x.fillna(0) for x in past)
     count = sum(np.isfinite(x).astype(float) for x in past)
     out["return_seasonality"] = (total / count.clip(lower=1)).where(count >= 3).where(priced)
-    same = [r.shift(5 * k - 1) for k in range(3, 51)]
+    oo = o / o.shift(1) - 1
+    same = [oo.shift(5 * k - 2) for k in range(3, 51)]
     total = sum(x.fillna(0) for x in same)
     count = sum(np.isfinite(x).astype(float) for x in same)
     same_mean = (total / count.clip(lower=1)).where(count >= 39)
-    out["weekday_seasonality"] = same_mean - _mean(r, 236).shift(14)
+    out["weekday_seasonality"] = same_mean - _mean(oo, 236).shift(13)
+    year = c / c.shift(252) - 1
+    days = pd.DatetimeIndex(c.index)
+    season = ((days.month == 12) & (days.day >= 15)) | (days.month == 1)
+    out["tax_loss_rebound"] = (-year.clip(upper=0)).where(np.isfinite(year)).where(
+        pd.Series(season, index=c.index), axis=0)
     age = priced.astype(float).rolling(140).sum()
     out["lockup_expiry"] = -_flag((age >= 104) & (age <= 129), c)
 
@@ -156,13 +167,6 @@ def _reference(panel) -> dict[str, pd.DataFrame]:
     out["coskewness"] = -((third - slope * skew_m) / den).where(den > 1e-12)
     down = m < 0
     out["downside_beta_gap"] = _beta(r.where(down), m.where(down), 252, 50) - _beta(r, m, 252)
-    illiq = np.log((_cs_mean(r.abs(), cap.shift(1)) / _cs_mean(turnover, cap.shift(1))).rolling(21).mean())
-    innovation = -(illiq - illiq.shift(21))
-    out["liquidity_beta"] = _beta(r21, innovation, 1260)
-    r5, m5 = k_bar(5)
-    betas = [_beta(r5, m5.shift(5 * k), 252).abs() for k in range(5)]
-    lagged = betas[1] + betas[2] + betas[3] + betas[4]
-    out["price_delay"] = (lagged / (betas[0] + lagged)).where(betas[0] + lagged > 1e-12)
 
     prior = c.shift(21) / c.shift(252) - 1
     pos = _mean(_flag(r > 0, r), 231).shift(21)
@@ -185,6 +189,7 @@ def _reference(panel) -> dict[str, pd.DataFrame]:
     normal = _mean(v, 63).shift(3)
     abnormal = np.log((v.rolling(3).sum() / (3 * normal)).where(3 * normal > 1e-12))
     out["earnings_volume"] = _mean(abnormal.where(announced), 63, 1)
+    out["nominal_price"] = np.log(p["close"])
 
     split = p["splitFactor"]
     direction = np.where(split > 1.0001, 1.0, np.where(split < 0.9999, -1.0, 0.0))
@@ -193,18 +198,22 @@ def _reference(panel) -> dict[str, pd.DataFrame]:
     cash = p["divCash"].fillna(0).to_numpy()
     factor = np.where(split.to_numpy() > 0, split.to_numpy(), 1.0)
     last = np.full(cash.shape[1], np.nan)
-    previous, since = last.copy(), last.copy()
+    previous, since, initiated = last.copy(), last.copy(), last.copy()
     change = np.zeros(cash.shape)
+    initiation = np.zeros(cash.shape)
     for t in range(len(cash)):
         pays = cash[t] > 0
         previous = np.where(pays, last / factor[t], previous / factor[t])
         last = np.where(pays, cash[t], last / factor[t])
+        first = pays & (np.isnan(since) | (since >= 503))
+        initiated = np.where(first, 0.0, initiated + 1)
         since = np.where(pays, 0.0, since + 1)
+        initiation[t] = np.where(initiated < 252, 1.0, 0.0)
         with np.errstate(invalid="ignore", divide="ignore"):
             change[t] = np.where((since < 252) & (previous > 0), np.log(last / previous), 0.0)
     out["dividend_change"] = pd.DataFrame(change, index=c.index, columns=c.columns).where(priced)
+    out["dividend_initiation"] = pd.DataFrame(initiation, index=c.index, columns=c.columns).where(priced)
     out["debt_issuance_8k"] = -ev["event_23"].rolling(252).sum()
-    out["acquisition_8k"] = -ev["event_21"].rolling(756).sum()
 
     out["listing_age"] = (priced.astype(float).rolling(756).sum() / 756).where(priced)
     mt = _mean(turnover, 252)
@@ -227,7 +236,7 @@ def test_every_output_matches_its_formula(panel, outputs, name):
 
 def test_the_calendar_and_action_outputs_fire(outputs):
     for name in ("earnings_month", "dividend_month", "split_signal", "dividend_change", "lockup_expiry",
-                 "acquisition_8k"):
+                 "dividend_initiation", "tax_loss_rebound"):
         assert np.nanmax(np.abs(outputs[name].values)) > 0, name
     # Symbol 3's dividend halves at its 2-for-1 split: per pre-split share it is unchanged.
     change = outputs["dividend_change"].sel(symbol="s03").to_series()
