@@ -430,7 +430,6 @@ def test_the_run_records_fingerprints_of_the_price_and_factor_datasets(overlap_r
         for entry in entries:
             assert set(entry) == entry_keys
             assert entry["algorithm"] == "sha256"
-            assert entry["n_symbols"] == len(SYMBOLS)
 
     columns = sorted([MARKET.fill_price_column, MARKET.valuation_price_column])
     window = [
@@ -445,14 +444,18 @@ def test_the_run_records_fingerprints_of_the_price_and_factor_datasets(overlap_r
         timestamp=slice(_day(BARS[OVERLAP_START_BAR]), _day(BARS[OVERLAP_END_BAR]))
     )
     assert price["digest"] == dataset_fingerprint(store, columns)["digest"]
-    # The delisting check reads the valuation column after the window.
-    assert any(
-        entry["variables"] == [MARKET.valuation_price_column]
+    assert price["n_symbols"] == len(SYMBOLS)
+    # The delisting check reads the valuation column after the window, of the
+    # symbols that stop inside it only.
+    (after,) = [
+        entry for entry in fingerprints["price_dataset"]
+        if entry["variables"] == [MARKET.valuation_price_column]
         and pd.Timestamp(entry["start"]) > pd.Timestamp(price["end"])
-        for entry in fingerprints["price_dataset"]
-    )
+    ]
+    assert 0 < after["n_symbols"] < len(SYMBOLS)
 
     (factor,) = fingerprints["model.factors.0.dataset"]
+    assert factor["n_symbols"] == len(SYMBOLS)
     # A Polars factor consumes the whole lazyframe: every data variable counts.
     assert factor["variables"] == sorted(ADJUSTED_COLUMNS + RAW_COLUMNS)
     # The factor range includes the warm-up bars before the window start (D-27).

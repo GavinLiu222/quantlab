@@ -1434,7 +1434,11 @@ class MarketDataset(BaseDataset):
         )
 
     def _priced_after(self, end: pd.Timestamp, column: str, symbols) -> np.ndarray:
-        """Whether each of ``symbols`` has a valid ``column`` price after ``end`` in the dataset."""
+        """Whether each of ``symbols`` has a valid ``column`` price after ``end`` in the dataset.
+
+        Only ``symbols`` are read: each has a price in a panel of this
+        dataset, so each is in its store.
+        """
         if len(symbols) == 0:
             return np.zeros(0, dtype=bool)
         calendar = self._calendar()
@@ -1442,7 +1446,9 @@ class MarketDataset(BaseDataset):
         if len(later) == 0:
             return np.zeros(len(symbols), dtype=bool)
         try:
-            panel = self.panel(later[0], later[-1], variables=[column])
+            panel = self.panel(
+                later[0], later[-1], symbols=list(symbols), variables=[column]
+            )
         except KeyError:  # the store has no such column
             return np.zeros(len(symbols), dtype=bool)
         return np.asarray(

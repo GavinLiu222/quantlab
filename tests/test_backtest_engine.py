@@ -1442,3 +1442,34 @@ def test_a_halt_through_the_window_end_is_not_a_delisting(tmp_path):
     marked = marks.where(marks, drop=True)
     assert marked.symbol.values.tolist() == ["CCC"]
     assert pd.Timestamp(marked.timestamp.values[0]) == bars[14]
+
+
+def test_the_look_past_the_window_reads_only_the_stopped_symbols(tmp_path, monkeypatch):
+    """`delisting_bars` reads the bars after the window for the symbols that
+    stop inside it only (BBB, halted, and CCC, delisted), not the whole store,
+    and marks the same bars as reading every symbol does."""
+    dataset_config = write_price_store(tmp_path, n_bars=30, delist_at={"CCC": 15})
+    store = xr.open_zarr(dataset_config.zarr_file_path).load()
+    j = list(store.symbol.values).index("BBB")
+    for name in store.data_vars:
+        values = store[name].transpose("timestamp", "symbol").values.copy()
+        values[18:22, j] = NAN
+        store[name] = (("timestamp", "symbol"), values)
+    store.to_zarr(dataset_config.zarr_file_path, mode="w")
+    dataset = make_stock_dataset(dataset_config)
+    bars = pd.bdate_range("2024-01-01", periods=30)
+    prices = dataset.panel(_day(bars[5]), _day(bars[19]))
+    reads = []
+    panel = type(dataset).panel
+
+    def spying(self, start, end, symbols=None, variables=None):
+        reads.append(None if symbols is None else list(symbols))
+        return panel(self, start, end, symbols=symbols, variables=variables)
+
+    monkeypatch.setattr(type(dataset), "panel", spying)
+    marks = dataset.delisting_bars(prices, MARKET.valuation_price_column)
+
+    assert reads == [["BBB", "CCC"]]
+    marked = marks.where(marks, drop=True)
+    assert marked.symbol.values.tolist() == ["CCC"]
+    assert pd.Timestamp(marked.timestamp.values[0]) == bars[14]
