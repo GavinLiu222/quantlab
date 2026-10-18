@@ -87,7 +87,6 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from KunQuant.Driver import KunCompilerConfig
-from KunQuant.jit import cfake
 from KunQuant.Op import Builder, ConstantOp, Input, OpBase, Output
 from KunQuant.ops import (
     Abs,
@@ -104,6 +103,7 @@ from KunQuant.Stage import Function
 from quantlab.dataset.base import InsufficientHistoryError
 from quantlab.factor.config import FactorConfig
 from quantlab.factor.kunquant import BATCH_OPTIONS, FactorKunQuant
+from quantlab.factor.kunquant_compile import compile_graphs
 from quantlab.factor.kunquant_cs import (
     CapWeightedStandardize,
     CrossSectionalIndustrySizeFill,
@@ -1284,10 +1284,9 @@ class BarraStyle(FactorKunQuant):
             allow_unaligned=platform.machine().lower() not in {"arm64", "aarch64"},
             options={"no_fast_stat": True, **BATCH_OPTIONS},
         )
-        return cfake.compileit(
+        return compile_graphs(
             [(module_name, self._get_factor_func(), compiler)],
             module_name,
-            cfake.CppCompilerConfig(),
         )
 
 

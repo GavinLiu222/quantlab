@@ -281,8 +281,9 @@ class Factor(Component, ABC):
     def keep_compiled(self):
         """Keep whatever the factor compiles across ``compute`` calls inside the block.
 
-        Does nothing here; ``FactorKunQuant`` keeps its compiled graph, which
-        it otherwise compiles again on every call. A computation split into
+        Does nothing here; ``FactorKunQuant`` keeps its compiled library, which
+        it otherwise looks up again on every call (``compile_graphs`` compiles
+        a graph only once). A computation split into
         many calls (``quantlab.factor.chunking``) runs inside it.
 
         Examples

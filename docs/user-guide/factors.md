@@ -565,8 +565,9 @@ feature only; Polars factors have no streaming mode.
   holidays are skipped, not counted. Set it to at least the longest
   lookback in the graph; a normalisation over a trailing window adds that
   window on top.
-- Each `compute()` compiles the KunQuant graph again. `build()` once and
-  let later runs `read()`.
+- Each `compute()` runs the whole graph again (its compiled library is
+  cached, in the process and under `~/.cache/quantlab/kunquant`). `build()`
+  once and let later runs `read()`.
 - A KunQuant graph's `Input` names must match `data_columns`, which name
   variables in the store. The graph for a US-equity store reads `adjClose`,
   not `close`.

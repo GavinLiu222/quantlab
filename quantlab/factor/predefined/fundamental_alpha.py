@@ -75,13 +75,13 @@ from dataclasses import dataclass, fields
 import numpy as np
 import xarray as xr
 from KunQuant.Driver import KunCompilerConfig
-from KunQuant.jit import cfake
 from KunQuant.Op import Builder, ConstantOp, Input, OpBase, Output, Rank
 from KunQuant.ops import Abs, BackRef, Equals, Log, Select, Sqrt, WindowedSum
 from KunQuant.Stage import Function
 
 from quantlab.factor.config import FactorConfig
 from quantlab.factor.kunquant import BATCH_OPTIONS, FactorKunQuant
+from quantlab.factor.kunquant_compile import compile_graphs
 
 #: SF1 ART items, lagged by ``reportperiod``.
 REPORT_KEY = "reportperiod"
@@ -629,10 +629,9 @@ class FundamentalAlpha(FactorKunQuant):
             allow_unaligned=platform.machine().lower() not in {"arm64", "aarch64"},
             options={"no_fast_stat": True, **BATCH_OPTIONS},
         )
-        return cfake.compileit(
+        return compile_graphs(
             [(module_name, self._get_factor_func(), compiler)],
             module_name,
-            cfake.CppCompilerConfig(),
         )
 
 

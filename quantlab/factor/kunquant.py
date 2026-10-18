@@ -19,11 +19,11 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from KunQuant.Driver import KunCompilerConfig
-from KunQuant.jit import cfake
 from KunQuant.Stage import Function
 
 from quantlab.factor.config import FactorConfig
 from quantlab.factor.base import Factor
+from quantlab.factor.kunquant_compile import compile_graphs
 from quantlab.utils.timer import Timer
 
 #: The multi-thread executors handed out by ``shared_executor``, one per thread count.
@@ -111,7 +111,7 @@ def run_batch_graph(
     symbols: np.ndarray,
     njobs: int,
 ) -> xr.Dataset:
-    """Compile ``function`` for a whole range and run it over ``arrays``.
+    """Compile ``function`` for a whole range (through ``compile_graphs``) and run it over ``arrays``.
 
     For a computation whose inputs do not come from a dataset panel (a
     factor reading another factor's store, say). The graph is compiled in
@@ -143,10 +143,9 @@ def run_batch_graph(
     >>> run_batch_graph("Double", Function(b.ops), {"x": x}, times, symbols, 2)["y"].shape
     (3, 8)
     """
-    lib = cfake.compileit(
+    lib = compile_graphs(
         [(name, function, KunCompilerConfig(input_layout="TS", output_layout="TS", options=dict(BATCH_OPTIONS)))],
         name,
-        cfake.CppCompilerConfig(),
     )
     padded = FactorKunQuant._pad_symbols(arrays, len(symbols))
     with Timer(f" {name}: cal"):
@@ -166,8 +165,10 @@ class FactorKunQuant(Factor):
     ``config.mode`` says which of the two the object is used in.
 
     Compilation needs a working C++ compiler and dominates run time on small
-    panels; pinning ``config.factor_names`` to the columns you need keeps the
-    compiled graph small. In batch mode the number of symbols must be a
+    panels; a graph is compiled once and then reused from the process or the
+    disk cache (``quantlab.factor.kunquant_compile``). Pinning
+    ``config.factor_names`` to the columns you need keeps the compiled graph
+    small. In batch mode the number of symbols must be a
     multiple of the SIMD block width KunQuant uses on the host, that is, the
     number of values the CPU processes in one vector instruction.
 
@@ -235,15 +236,17 @@ class FactorKunQuant(Factor):
 
     @contextlib.contextmanager
     def keep_compiled(self):
-        """Compile the batch graph once for every ``compute`` inside the block.
+        """Hold the batch library for every ``compute`` inside the block.
 
-        Outside the block each call compiles again and drops the library
-        afterwards; inside it the first call compiles and the library is
-        kept until the block exits. See ``Factor.keep_compiled``.
+        Outside the block each call builds its graph again and takes the
+        library from ``compile_graphs``, which compiles only the first time
+        (in this process or, through the disk cache, any other); inside it
+        the first call's library is kept until the block exits, so later
+        calls do not even build the graph. See ``Factor.keep_compiled``.
 
         Examples
         --------
-        >>> with factor.keep_compiled():   # compiles once, not twice
+        >>> with factor.keep_compiled():   # builds the graph once, not twice
         ...     january = factor.compute("2024-01-01", "2024-01-31")
         ...     february = factor.compute("2024-02-01", "2024-02-29")
         >>> factor._lib is None
@@ -469,9 +472,9 @@ class FactorKunQuant(Factor):
     def _compute_panel(self, inputs: xr.Dataset) -> xr.Dataset:
         """Run the compiled graph over every bar of ``inputs``.
 
-        The graph is compiled if no library is cached, run from bar 0 on an
-        executor of ``config.njobs`` threads, and dropped afterwards, so each
-        call compiles again, unless the call runs inside ``keep_compiled``.
+        The library comes from ``compile_graphs`` if this object holds none,
+        runs from bar 0 on an executor of ``config.njobs`` threads, and is
+        dropped afterwards unless the call runs inside ``keep_compiled``.
         """
         input_dict, symbols, timestamp = self._kunquant_inputs(inputs)
         # Every input is laid out [time, symbol]; any one gives the time count.
@@ -609,7 +612,7 @@ class FactorKunQuant(Factor):
     def _make(self):
         """Compile the graph for batch execution with the ``TS`` layout."""
         with Timer(f" {self.__class__.__name__}: make"):
-            return cfake.compileit(
+            return compile_graphs(
                 [
                     (
                         f"{self.__class__.__name__}",
@@ -622,13 +625,12 @@ class FactorKunQuant(Factor):
                     )
                 ],
                 f"{self.__class__.__name__}",
-                cfake.CppCompilerConfig(),
             )
 
     def _make_stream(self):
         """Compile the graph for streaming execution with the ``STREAM`` layout."""
         with Timer(f"{self.__class__.__name__}: make stream"):
-            return cfake.compileit(
+            return compile_graphs(
                 [
                     (
                         f"{self.__class__.__name__}_stream",
@@ -642,5 +644,4 @@ class FactorKunQuant(Factor):
                     )
                 ],
                 f"{self.__class__.__name__}_stream",
-                cfake.CppCompilerConfig(),
             )

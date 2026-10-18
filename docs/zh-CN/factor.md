@@ -19,7 +19,7 @@ KunQuant 因子在运行时编译 C++，需要可用的 C++ 编译器；Polars �
 | 配置类 | `FactorConfig` | `PolarsFactorConfig` |
 | 输入列名 | 共享列名：存储自己的列名，数据集定义了 `COLUMN_MAP` 时按它改名（现货存储的 `Close` 变成 `close`） | 存储中的原始列名（`Close`）；合并输入时为共享列名 |
 | 输出 dtype | float32 | float64 |
-| 开销 | 每次 `compute()` 都要编译计算图 | 无 |
+| 开销 | 每个计算图只编译一次，之后从缓存加载 | 无 |
 
 KunQuant 是主后端：现有的 alpha 因子库用到的滚动和截面算子它都有，并且只有它能在实盘数据上逐 bar 运行。`FactorPolars` 是新因子的补充路径，适合用 DataFrame 表达式更容易描述的因子，或者需要 KunQuant 没有的运算。需要同时支持流式运行的因子必须写成 KunQuant 因子。
 
@@ -573,7 +573,7 @@ hf_features = MembershipMaskedFactor(MembershipMaskedFactorConfig(
 
 ### 构建放不进内存的存储
 
-分块构建（`quantlab.factor.chunking` 中的 `ChunkedBuilder`）把一个因子自己的存储按时间一块一块地构建和扩充，用于整段一次算不下的区间。它是构建工具，不是因子：没有配置也没有存储，只通过因子的公开接口写入，也没有人通过它读取；模型读的是因子本身。`ChunkedBuilder(factor, granularity=None, workers=1)` 接收要构建存储的因子，这个因子必须拥有它的存储：交给它一个视图（`RosterFactor`、`MembershipMaskedFactor`）或只钉住存储部分输出的因子时，在计算任何东西之前就以该因子自己的 `refuse_unless_owner` 信息拒绝。`granularity` 为 `None` 或一个 `TimeChunkPlanner` 周期（`"year"`、`"quarter"`、`"month"`、`"day"`、`"hour"`）。`plan(start, end)` 返回一个区间的粒度和各块：为 `None` 时，若整段的峰值（含 warm-up）放得进可用内存的一半（`memory_budget()`），就整段计算；否则按最大一块放得下的最粗周期切分，连一小时都放不下时抛出 `MemoryError`。每个 bar、每个标的的峰值取因子的 `cell_bytes()`，已在 us3000 上校准（`PEAK_COPIES`：KunQuant 为 1，Polars 为 16，其余为 4），再乘以因子输出的标的数 `output_symbols()`：默认是其数据集的标的，`NeutralizedFactor` 取它包装的因子的标的（而不是暴露数据的）。`build(start, end)` 对第一块调用因子的 `build`，之后每块调用它的 `extend`，每块都用因子的 `warmup_bars` 预热，所以内存里只有一块，也只有存储的拥有者写存储；中途失败的构建会保留已完成的块，再调用 `extend(end)` 即可续跑。两者都返回因子本身，调用方可以接着调 `.store_range()` 或 `.read(...)`。`compute(start, end)` 返回一整块面板、不写存储，只是计算放不下时逐块填入；输出本身就放不下时抛出 `MemoryError`。只沿时间切分，因子的图对所有块只编译一次（`Factor.keep_compiled`）。重采样过的因子在其源 bar 上分块，块不会比重采样后的 bar 更细（`"1d"` 因子拒绝 `granularity="hour"`，自动选择时也会跳过它），所以分钟因子的日线存储可以按月构建。`workers`（默认 1）在工作进程里同时计算这么多块，每个进程从配置重建因子，并用它自己的 `njobs` 个线程；本进程按时间顺序通过因子的 `write_rows` 和 `append_rows` 写入，写法与它的 `build` 和 `extend` 写入一块计算结果相同，经过同一个拥有者检查，所以存储仍只由拥有者写入。`workers` 大于 1 且未设 `granularity` 时，计划选“切出至少 `workers` 块、且最大一块的 `workers` 倍放得进 `memory_budget()`”的最粗粒度，让每个工作进程都有块可算（找不到时与单进程的计划相同）；为 1 时计划不变。工作进程数不超过块数，也不超过能在 `memory_budget()` 里同时放下的块数（`parallel_workers(chunks)`，被削减时写日志）。它适合单块耗时主要不在因子自身线程里的情况（读取、解压、映射分钟 bar）；耗时主要在 KunQuant 图里的因子靠 `njobs` 已经用满核心，多开工作进程只会成倍增加内存。因子不能从配置重建成相等的因子时（例如数据集在内存里），多于一个工作进程会被拒绝。工作进程是一个 `joblib.Parallel` 扇出（loky 后端），与仓库里其他扇出相同。各块拼起来与整段一次算出的结果在浮点容差内相同（float32 为 `rtol=1e-5, atol=1e-6`），这依赖于所有 KunQuant 批量图都用 `quantlab.factor.kunquant.BATCH_OPTIONS` 编译。
+分块构建（`quantlab.factor.chunking` 中的 `ChunkedBuilder`）把一个因子自己的存储按时间一块一块地构建和扩充，用于整段一次算不下的区间。它是构建工具，不是因子：没有配置也没有存储，只通过因子的公开接口写入，也没有人通过它读取；模型读的是因子本身。`ChunkedBuilder(factor, granularity=None, workers=1)` 接收要构建存储的因子，这个因子必须拥有它的存储：交给它一个视图（`RosterFactor`、`MembershipMaskedFactor`）或只钉住存储部分输出的因子时，在计算任何东西之前就以该因子自己的 `refuse_unless_owner` 信息拒绝。`granularity` 为 `None` 或一个 `TimeChunkPlanner` 周期（`"year"`、`"quarter"`、`"month"`、`"day"`、`"hour"`）。`plan(start, end)` 返回一个区间的粒度和各块：为 `None` 时，若整段的峰值（含 warm-up）放得进可用内存的一半（`memory_budget()`），就整段计算；否则按最大一块放得下的最粗周期切分，连一小时都放不下时抛出 `MemoryError`。每个 bar、每个标的的峰值取因子的 `cell_bytes()`，已在 us3000 上校准（`PEAK_COPIES`：KunQuant 为 1，Polars 为 16，其余为 4），再乘以因子输出的标的数 `output_symbols()`：默认是其数据集的标的，`NeutralizedFactor` 取它包装的因子的标的（而不是暴露数据的）。`build(start, end)` 对第一块调用因子的 `build`，之后每块调用它的 `extend`，每块都用因子的 `warmup_bars` 预热，所以内存里只有一块，也只有存储的拥有者写存储；中途失败的构建会保留已完成的块，再调用 `extend(end)` 即可续跑。两者都返回因子本身，调用方可以接着调 `.store_range()` 或 `.read(...)`。`compute(start, end)` 返回一整块面板、不写存储，只是计算放不下时逐块填入；输出本身就放不下时抛出 `MemoryError`。只沿时间切分，因子的图对所有块只编译一次：构建器在各块之间保留编译好的库（`Factor.keep_compiled`），工作进程从编译缓存加载它。重采样过的因子在其源 bar 上分块，块不会比重采样后的 bar 更细（`"1d"` 因子拒绝 `granularity="hour"`，自动选择时也会跳过它），所以分钟因子的日线存储可以按月构建。`workers`（默认 1）在工作进程里同时计算这么多块，每个进程从配置重建因子，并用它自己的 `njobs` 个线程；本进程按时间顺序通过因子的 `write_rows` 和 `append_rows` 写入，写法与它的 `build` 和 `extend` 写入一块计算结果相同，经过同一个拥有者检查，所以存储仍只由拥有者写入。`workers` 大于 1 且未设 `granularity` 时，计划选“切出至少 `workers` 块、且最大一块的 `workers` 倍放得进 `memory_budget()`”的最粗粒度，让每个工作进程都有块可算（找不到时与单进程的计划相同）；为 1 时计划不变。工作进程数不超过块数，也不超过能在 `memory_budget()` 里同时放下的块数（`parallel_workers(chunks)`，被削减时写日志）。它适合单块耗时主要不在因子自身线程里的情况（读取、解压、映射分钟 bar）；耗时主要在 KunQuant 图里的因子靠 `njobs` 已经用满核心，多开工作进程只会成倍增加内存。因子不能从配置重建成相等的因子时（例如数据集在内存里），多于一个工作进程会被拒绝。工作进程是一个 `joblib.Parallel` 扇出（loky 后端），与仓库里其他扇出相同。各块拼起来与整段一次算出的结果在浮点容差内相同（float32 为 `rtol=1e-5, atol=1e-6`），这依赖于所有 KunQuant 批量图都用 `quantlab.factor.kunquant.BATCH_OPTIONS` 编译。
 
 在 us3000 上（3103 个 bar x 7625 个标的，按年分块），Alpha158 构建的峰值为 3.0 GB，整段构建为 13.8 GB。
 
@@ -767,7 +767,7 @@ features = factor.compute("2020-01-01", "2024-12-31")
 
 ### 一个 KunQuant 因子
 
-继承 `FactorKunQuant`，实现 `_get_factor_names` 和 `_get_factor_func`（KunQuant 计算图：`data_columns` 的每一项对应一个 `Input`，每个因子名对应一个 `Output`）。下面的计算图输出一个均线偏离度，分别给出原始值、沿时间的 z-score 和跨标的的 z-score。KunQuant 在每次 `compute()` 时编译（这里约一秒）。字段之间互相约束的因子（例如 `data_columns` 要和参数对应）重写 `_validate_config`，读取 `self.config`，不合格时抛 `ValueError`；它在每次给 config 赋值时运行，包括 `copy()` 和 `resample()` 所做的赋值，被拒绝的 config 不会生效，因子保留原来的 config。`LiteratureAlpha` 和 `ResidualMomentumFF3` 就是这样检查 `data_columns` 的。
+继承 `FactorKunQuant`，实现 `_get_factor_names` 和 `_get_factor_func`（KunQuant 计算图：`data_columns` 的每一项对应一个 `Input`，每个因子名对应一个 `Output`）。下面的计算图输出一个均线偏离度，分别给出原始值、沿时间的 z-score 和跨标的的 z-score。KunQuant 在第一次 `compute()` 时编译计算图（这里约一秒），之后复用编译好的库。字段之间互相约束的因子（例如 `data_columns` 要和参数对应）重写 `_validate_config`，读取 `self.config`，不合格时抛 `ValueError`；它在每次给 config 赋值时运行，包括 `copy()` 和 `resample()` 所做的赋值，被拒绝的 config 不会生效，因子保留原来的 config。`LiteratureAlpha` 和 `ResidualMomentumFF3` 就是这样检查 `data_columns` 的。
 
 ```python
 >>> import KunQuant.ops as op
@@ -849,7 +849,7 @@ Polars 因子引用了存储中不存在的列时，构造对象就会失败，�
 
 重采样后的因子不能流式计算：`init_stream()` 和 `cal_stream()` 会拒绝：`Momentum.init_stream(): a resampled factor (resample_freq='1d') is a view of its source panel and does not support init_stream. Compute or update the source factor, then resample it.` 它可以 `extend()` 自己的 store：`compute` 会读入一根重采样 bar 覆盖的全部源 bar，所以存下的每根 bar 都是完整的，按季度分段构建的 store 与一次构建的完全相同；分钟因子在多年分钟数据上的日线 store 就是这样构建的。构建出的重采样 store 是缓存：重新构建源因子不会刷新它。
 
-`FactorKunQuant.compute()` 每次调用都会重新编译计算图。把 `factor_names` 固定为需要的列可以让计算图保持较小。
+quantlab 运行的每个 KunQuant 计算图都经 `quantlab.factor.kunquant_compile.compile_graphs` 编译：一个计算图只编译一次，之后复用编译好的库。同一进程内库留在内存里；跨进程（`ChunkedBuilder` 的工作进程、下一次日更）从缓存目录加载。缓存键涵盖计算图的文本、它的 `KunCompilerConfig`、定义其算子的每个 quantlab 模块的源码、C++ 编译器及其版本、本机 CPU 和 KunQuant 安装，其中任何一项变了都会重新编译。缓存目录是 `$QUANTLAB_KUNQUANT_CACHE`，未设时为 `$XDG_CACHE_HOME/quantlab/kunquant`，再否则为 `~/.cache/quantlab/kunquant`；`QUANTLAB_KUNQUANT_CACHE=`（空值）只在进程内缓存。每个条目是以键命名的目录，里面是库文件和记录其 SHA-256 的 `complete` 标记；没有标记或库与标记不符的条目会重新编译。删除该目录即清空缓存（`rm -rf ~/.cache/quantlab/kunquant`）。在 M 系列 Mac 上，编译 Alpha158Stock 的完整计算图用时 2.8 秒，从缓存加载 0.02 秒（2026-10-17）。把 `factor_names` 固定为需要的列可以让计算图保持较小。
 
 `CrossSectionalZScore` 在某个时间点有效值少于两个或没有离散度时输出 NaN。批量运行必须从第 0 根 bar 开始，`compute()` 总是这样做。`CrossSectionalWinsorize` 和 `CrossSectionalTrim` 同样要求从第 0 根 bar 开始。每组不同的 `(lower, upper)` 会编译出各自的 C++ 函数，所以构造得到的对象属于一个生成的子类，例如 `CrossSectionalWinsorize_0p01_0p99`；`isinstance(op, CrossSectionalWinsorize)` 仍然成立。
 

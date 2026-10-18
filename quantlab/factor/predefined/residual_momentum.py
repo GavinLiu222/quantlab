@@ -35,7 +35,6 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from KunQuant.Driver import KunCompilerConfig
-from KunQuant.jit import cfake
 from KunQuant.Op import Builder, ConstantOp, Input, OpBase, Output, Rank
 from KunQuant.ops import (
     Abs,
@@ -52,6 +51,7 @@ from loguru import logger
 
 from quantlab.factor.config import FactorConfig
 from quantlab.factor.kunquant import BATCH_OPTIONS, FactorKunQuant
+from quantlab.factor.kunquant_compile import compile_graphs
 
 #: Columns of a Fama-French CSV besides ``date``, as ``scripts/fama_french.py``
 #: writes them: the market excess return, the size and value factors and the
@@ -664,10 +664,9 @@ class ResidualMomentumFF3(FactorKunQuant):
             allow_unaligned=allow_unaligned,
             options={"no_fast_stat": True, **BATCH_OPTIONS},
         )
-        return cfake.compileit(
+        return compile_graphs(
             [(module_name, self._get_factor_func(), compiler)],
             module_name,
-            cfake.CppCompilerConfig(),
         )
 
     def _fama_french_inputs(
@@ -778,10 +777,9 @@ class ResidualMomentumFF3(FactorKunQuant):
                 "fast_log": True,
             },
         )
-        return cfake.compileit(
+        return compile_graphs(
             [(module_name, self._get_factor_func(), compiler)],
             module_name,
-            cfake.CppCompilerConfig(),
         )
 
 

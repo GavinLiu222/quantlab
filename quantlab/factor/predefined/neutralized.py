@@ -18,7 +18,6 @@ industry) from its own ``dataset`` on the same bars, never earlier ones.
 import numpy as np
 import xarray as xr
 from KunQuant.Driver import KunCompilerConfig
-from KunQuant.jit import cfake
 from KunQuant.Op import Builder, Input, Output
 from KunQuant.runner import KunRunner as kr
 from KunQuant.Stage import Function
@@ -26,6 +25,7 @@ from KunQuant.Stage import Function
 from quantlab.factor.base import Factor
 from quantlab.factor.config import NeutralizedConfig
 from quantlab.factor.kunquant import BATCH_OPTIONS, FactorKunQuant, shared_executor
+from quantlab.factor.kunquant_compile import compile_graphs
 from quantlab.factor.kunquant_cs import CrossSectionalNeutralize, CrossSectionalZScore
 from quantlab.utils.date_range import check_range
 from quantlab.utils.timer import Timer
@@ -109,6 +109,17 @@ class NeutralizedFactor(Factor):
         True
         """
         return self.config.factor.output_symbols()
+
+    def keep_compiled(self):
+        """Keep the wrapped factor's compiled graph inside the block.
+
+        Examples
+        --------
+        >>> with neutral.keep_compiled():
+        ...     january = neutral.compute("2024-01-01", "2024-01-31")
+        ...     february = neutral.compute("2024-02-01", "2024-02-29")
+        """
+        return self.config.factor.keep_compiled()
 
     def _validate_config(self) -> None:
         """Refuse bad regressors, a warm-up, resampling or an unknown factor name.
@@ -244,12 +255,11 @@ class NeutralizedFactor(Factor):
         """Compile the graph, run it over every bar and return its outputs."""
         module = self.class_name
         with Timer(f" {self.class_name}: make"):
-            lib = cfake.compileit(
+            lib = compile_graphs(
                 [(module, self._function(), KunCompilerConfig(
                     input_layout="TS", output_layout="TS", options=dict(BATCH_OPTIONS)
                 ))],
                 module,
-                cfake.CppCompilerConfig(),
             )
         padded = FactorKunQuant._pad_symbols(arrays, num_symbols)
         with Timer(f" {self.class_name}: cal"):

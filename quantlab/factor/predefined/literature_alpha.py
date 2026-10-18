@@ -31,7 +31,6 @@ from typing import Self
 import numpy as np
 import xarray as xr
 from KunQuant.Driver import KunCompilerConfig
-from KunQuant.jit import cfake
 from KunQuant.Op import Builder, ConstantOp, Input, OpBase, Output, Rank
 from KunQuant.ops import (
     Abs,
@@ -51,6 +50,7 @@ from loguru import logger
 
 from quantlab.factor.config import FactorConfig
 from quantlab.factor.kunquant import BATCH_OPTIONS, FactorKunQuant
+from quantlab.factor.kunquant_compile import compile_graphs
 from quantlab.factor.predefined.residual_momentum import (
     FAMA_FRENCH_COLUMNS,
     compound_onto_bars,
@@ -609,10 +609,9 @@ class LiteratureAlpha(FactorKunQuant):
             allow_unaligned=allow_unaligned,
             options={"no_fast_stat": True, **BATCH_OPTIONS},
         )
-        return cfake.compileit(
+        return compile_graphs(
             [(module_name, self._get_factor_func(), compiler)],
             module_name,
-            cfake.CppCompilerConfig(),
         )
 
     def _make_stream(self):
@@ -630,10 +629,9 @@ class LiteratureAlpha(FactorKunQuant):
                 "fast_log": True,
             },
         )
-        return cfake.compileit(
+        return compile_graphs(
             [(module_name, self._get_factor_func(), compiler)],
             module_name,
-            cfake.CppCompilerConfig(),
         )
 
     def _fama_french_inputs(

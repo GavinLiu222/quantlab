@@ -203,6 +203,15 @@ def test_build_read_and_extend_answer_like_compute(panels, tmp_path) -> None:
         np.testing.assert_allclose(read[name].values, computed[name].values, equal_nan=True)
 
 
+def test_keep_compiled_keeps_the_wrapped_factor_compiled(panels) -> None:
+    factor = _wrapper(panels)
+    inner = factor.config.factor
+    with factor.keep_compiled():
+        factor.compute(_START, _day(9))
+        assert inner._lib is not None
+    assert inner._lib is None
+
+
 def test_pinned_factor_names_keep_only_those(panels) -> None:
     got = _wrapper(panels, factor_names=("sig_b",)).compute(_START, _END)
     assert list(got.data_vars) == ["sig_b"]
