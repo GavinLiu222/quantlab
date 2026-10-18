@@ -630,7 +630,8 @@ class FactorAnalysis:
         output_dir : str or pathlib.Path
             Directory to write into.
         workers : int, optional
-            Processes that draw the figures; ``None`` uses every CPU.
+            Processes that draw the figures; ``None`` uses every CPU the
+            process may run on (``os.process_cpu_count``).
 
         Returns
         -------
@@ -691,7 +692,8 @@ class FactorAnalysis:
             (pair, str(out / f"{key}.png"), decays[pair.factor_name])
             for key, pair in self.pairs.items()
         ]
-        count = workers if workers is not None else (os.cpu_count() or 1)
+        # The CPUs this process may run on (taskset, numactl), not the machine's.
+        count = workers if workers is not None else (os.process_cpu_count() or 1)
         if len(jobs) == 1 or count <= 1:
             for args in jobs:
                 _render_and_save(*args)
@@ -776,7 +778,8 @@ class FactorAnalyzer:
         one they are held in ``FactorAnalysis.figures``.
     workers : int, optional
         Processes that draw the figures of a saved report; ``None`` uses
-        every CPU.
+        every CPU the process may run on (``os.process_cpu_count``, which
+        follows ``taskset`` and ``numactl``).
     chunk_size : int, default 32
         Factor variables per lazy plan. Each plan holds ``chunk_size + 3``
         float columns of ``timestamps * symbols`` rows in memory.
