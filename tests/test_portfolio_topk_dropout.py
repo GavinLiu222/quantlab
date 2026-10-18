@@ -11,7 +11,9 @@ contexts: no store, no model, no vectorbt. What is locked:
 - locked positions are kept and never counted as sells, untradable or
   unscored symbols are never bought, an unscored holding goes first;
 - `long_short` runs the rule on each side with half the budget, the short
-  side mirrored, the two books disjoint;
+  side mirrored, the two books disjoint, and the book never exceeds a gross
+  of 1: the buys share what the kept book leaves of it, and a kept book
+  above it is scaled down (locked positions excepted);
 - the config round-trips and is checked.
 """
 
@@ -139,8 +141,54 @@ def test_a_partly_filled_book_fills_up_to_topk():
     np.testing.assert_allclose(weights.values, [0.4, 0.3, 0.3, 0, 0, 0])
 
 
-def test_a_side_above_its_budget_spends_what_it_sells():
-    # The long side drifted to 0.6 > 0.5: selling BBB (0.2) buys CCC at 0.2, not at 0.
+def test_a_side_above_its_budget_spends_what_it_sells_within_the_book_budget():
+    # The long side drifted to 0.6 > 0.5 and the short side is at 0.5: selling BBB
+    # (0.2) would buy CCC at 0.2, but the kept book (0.4 long, 0.5 short) leaves 0.1.
     weights = _rule(topk=2, n_drop=1, direction="long_short").construct(_context(
         [0.5, 0.1, 0.9, 0.0, -0.3, -0.4], current=[0.4, 0.2, 0, 0, -0.2, -0.3]))
-    np.testing.assert_allclose(weights.values, [0.4, 0, 0.2, 0, -0.2, -0.3])
+    np.testing.assert_allclose(weights.values, [0.4, 0, 0.1, 0, -0.2, -0.3])
+
+
+def test_a_long_only_side_above_its_budget_spends_what_it_sells():
+    # Long-only cannot hold more than the book: the kept weight and the sold weight
+    # are the book itself, so spending the sale never exceeds it.
+    weights = _rule(topk=2, n_drop=1).construct(_context(
+        [0.5, 0.1, 0.9, 0.0, 0.0, 0.0], current=[0.7, 0.3, 0, 0, 0, 0]))
+    np.testing.assert_allclose(weights.values, [0.7, 0, 0.3, 0, 0, 0])
+
+
+def test_long_short_buys_share_what_the_kept_book_leaves_of_a_gross_of_one():
+    # Long AAA drifted to 0.55 and short BBB to 0.45, both replaced: each side alone
+    # would buy 0.55 and 0.5 (gross 1.05); the two buys share the gross of 1 in that ratio.
+    weights = _rule(topk=1, n_drop=1, direction="long_short").construct(_context(
+        [0.1, -0.1, 0.9, -0.9, 0.0, 0.0], current=[0.55, -0.45, 0, 0, 0, 0]))
+    np.testing.assert_allclose(weights.values, [0, 0, 0.55 / 1.05, -0.5 / 1.05, 0, 0])
+    assert np.abs(weights.values).sum() == pytest.approx(1.0)
+
+
+def test_a_kept_long_short_book_above_a_gross_of_one_is_scaled_down():
+    # Nothing is replaced (n_drop 0) but the shorts lost: the drifted book's gross is
+    # 1.01, so the kept positions are scaled to a gross of 1.
+    weights = _rule(topk=1, n_drop=0, direction="long_short").construct(_context(
+        [0.9, -0.9, 0.0, 0.0, 0.0, 0.0], current=[0.5, -0.51, 0, 0, 0, 0]))
+    np.testing.assert_allclose(weights.values, [0.5 / 1.01, -0.51 / 1.01, 0, 0, 0, 0])
+
+
+def test_a_locked_position_is_not_scaled_down():
+    # BBB is locked at -0.51: only AAA, the kept position that can trade, is scaled.
+    weights = _rule(topk=1, n_drop=0, direction="long_short").construct(_context(
+        [0.9, -0.9, 0.0, 0.0, 0.0, 0.0], current=[0.5, -0.51, 0, 0, 0, 0],
+        tradable=[True, False, True, True, True, True]))
+    np.testing.assert_allclose(weights.values, [0.49, -0.51, 0, 0, 0, 0])
+
+
+def test_no_long_short_book_exceeds_a_gross_of_one():
+    rng = np.random.default_rng(7)
+    rule = _rule(topk=2, n_drop=1, direction="long_short")
+    for _ in range(300):
+        held = rng.permutation(6)[:4]
+        current = np.zeros(6)
+        current[held[:2]] = rng.uniform(0.15, 0.35, 2)
+        current[held[2:]] = -rng.uniform(0.15, 0.35, 2)
+        weights = rule.construct(_context(rng.standard_normal(6), current=current)).values
+        assert np.abs(weights).sum() <= 1 + 1e-12

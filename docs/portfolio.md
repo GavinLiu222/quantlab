@@ -171,7 +171,7 @@ array([False, False, False,  True])
 2. The holdings among the `n_drop` worst of the holdings and candidates ranked together are sold. A holding is therefore sold only for a better-scored symbol. A holding without a finite score ranks worst. A locked position is never sold.
 3. The first `len(sell) + topk - len(last)` candidates are bought, so an empty book fills up to `topk`.
 
-Kept holdings stay at their current weight. The buys split equally what the kept holdings leave of the budget (1 long-only, 0.5 per side long-short), or the sold weight when that is more. The short side runs the same rule on the negated scores, and never buys a held symbol or one of the bar's long buys. qlib's `hold_thresh`, random methods and price-limit rules are not reproduced.
+Kept holdings stay at their current weight. The buys split equally what the kept holdings leave of the budget (1 long-only, 0.5 per side long-short), or the sold weight when that is more. The short side runs the same rule on the negated scores, and never buys a held symbol or one of the bar's long buys. Long-short, the book stays within a gross of 1: the two sides' buys share what the kept book leaves of it, in the ratio of what each would buy alone, and a kept book above it (the shorts lost, or a side drifted past its half) is scaled down to it, locked positions excepted. Without such a drift every weight is the one-side rule's. qlib's `hold_thresh`, random methods and price-limit rules are not reproduced.
 
 ```python
 >>> from quantlab.portfolio.config import TopkDropoutConfig

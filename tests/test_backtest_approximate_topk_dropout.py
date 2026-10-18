@@ -9,10 +9,9 @@ with the same rule on the run's recorded predictions:
   bars are decided forward from the drifted book, as the run decides them);
 - with fees the value stays within 1e-3 of the run's (the run caps buys at
   the cash the fees leave; the approximation does not);
-- long-only, rebalancing every bar and every fifth bar. Long-short is not
-  compared: on this store the per-bar rule's own long-short book exceeds a
-  gross of 1 (1.004 at 2024-03-27, kept shorts drifting past their half
-  budget), which `run()` refuses.
+- long-only rebalancing every bar and every fifth bar, and long-short every
+  bar: its drifted book reaches a gross of 1.0044 at 2024-03-27, which the
+  rule scales back to 1 (before that fix, `run()` refused the row).
 
 What turns this file red: the approximation decides from the undrifted book,
 a bar from a book other than the previous decision, or picks other names
@@ -33,6 +32,7 @@ from tests.test_backtest_approximate import FEES, VALUE_TOLERANCE, WINDOW, _appr
 CASES = {
     "long_only_r1": (TopkDropoutConfig(direction="long_only", topk=4, n_drop=1), 1),
     "long_only_r5": (TopkDropoutConfig(direction="long_only", topk=4, n_drop=2), 5),
+    "long_short_r1": (TopkDropoutConfig(direction="long_short", topk=3, n_drop=1), 1),
 }
 
 

@@ -7,7 +7,7 @@ last decided book (or ``prices.previous``) at its fill prices, marked at the
 bar's valuation price over the book's value, cash included, as
 ``quantlab.execution.approximate.mark_book`` marks it; a held symbol that is
 not tradable at the bar is locked. Each bar is then decided by the rule's own
-one-book step (``TopkDropoutConstructor._side``), so the picks, the sells and
+book step (``TopkDropoutConstructor.book``), so the picks, the sells and
 the buys' weights are the per-bar rule's. What the approximate backtest gives
 up is the exact book's: an order a backtest run rejects, a settled delisting
 or a buy capped by cash leaves the run's book different from the decided one.
@@ -89,18 +89,13 @@ def decide(rule, panel: DecisionPanel, prices: PanelPrices | None = None, stoppi
             previous=np.zeros(symbols), previous_entry=np.ones(symbols),
             close=np.ones((bars, symbols)), entry=np.ones((bars, symbols)),
         )
-    long_only = rule.config.direction == "long_only"
     book = np.nan_to_num(np.asarray(prices.previous, dtype=np.float64))
     book_entry = np.asarray(prices.previous_entry, dtype=np.float64)
     weights = np.zeros((bars, symbols))
     for b in range(bars):
         current = holdings(book, book_entry, prices.close[b])
         locked = (current != 0) & ~tradable[b]
-        row = np.where(locked, current, 0.0)
-        held = current != 0
-        bought = rule._side(row, scores[b], current, tradable[b], locked, held, 1.0, 1.0 if long_only else 0.5)
-        if not long_only:
-            rule._side(row, scores[b], current, tradable[b], locked, held | bought, -1.0, 0.5)
+        row = rule.book(scores[b], current, tradable[b], locked)
         weights[b] = row
         book, book_entry = row, np.asarray(prices.entry[b], dtype=np.float64)
     return PanelSolution(

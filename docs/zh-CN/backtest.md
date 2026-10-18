@@ -552,7 +552,7 @@ ValueError: USEquityApproximateBacktest cannot run EqualWeightTopN: EqualWeightT
 
 #### 近似回测中的 TopkDropout
 
-`TopkDropoutConstructor` 要读持仓（保留的标的维持漂移后的权重，每次只换掉 `n_drop` 只），所以它的决策 bar 按时间顺序逐个求解，每个只解一次（`quantlab/portfolio/predefined/approximate/topk_dropout.py`）：某个 bar 的持仓是上一次决策的组合按成交价买入、按该 bar 收盘价估值后的结果，持有但当天不能交易的标的被锁定，然后用规则自己的单边决策步骤决定该 bar，所以选股、卖出和买入权重都与逐 bar 规则相同。除上文的常规差异外，回测运行拒绝的成交、退市清算或被现金限制的买入会让运行的组合与决策的组合不同，后续 bar 从决策的组合出发。在合成数据上（`tests/test_backtest_approximate_topk_dropout.py`，只做多，`topk` 4，每个 bar 调仓且 `n_drop` 1、每 5 个 bar 调仓且 `n_drop` 2），不计手续费时决策 bar 的权重与运行的相差在 1e-9 以内，计 5 bp 手续费时净值与运行的相差在 1e-3 以内。那里没有比较多空：在这份数据上，逐 bar 规则自己的多空组合总敞口会超过 1，回测运行会拒绝。
+`TopkDropoutConstructor` 要读持仓（保留的标的维持漂移后的权重，每次只换掉 `n_drop` 只），所以它的决策 bar 按时间顺序逐个求解，每个只解一次（`quantlab/portfolio/predefined/approximate/topk_dropout.py`）：某个 bar 的持仓是上一次决策的组合按成交价买入、按该 bar 收盘价估值后的结果，持有但当天不能交易的标的被锁定，然后用规则自己的整本决策步骤（`TopkDropoutConstructor.book`）决定该 bar，所以选股、卖出和买入权重都与逐 bar 规则相同。除上文的常规差异外，回测运行拒绝的成交、退市清算或被现金限制的买入会让运行的组合与决策的组合不同，后续 bar 从决策的组合出发。在合成数据上（`tests/test_backtest_approximate_topk_dropout.py`：只做多，`topk` 4，每个 bar 调仓且 `n_drop` 1、每 5 个 bar 调仓且 `n_drop` 2；多空，`topk` 3，`n_drop` 1，每个 bar 调仓），不计手续费时决策 bar 的权重与运行的相差在 1e-9 以内，计 5 bp 手续费时净值与运行的相差在 1e-3 以内。
 
 #### 近似回测中的 Black-Litterman
 

@@ -35,7 +35,10 @@ class TopkDropoutConstructor(PortfolioConstructor):
     Kept holdings stay at their current weight (``context.current_weights``);
     the buys split equally what the kept holdings leave of the book's budget,
     or the sold weight when that is more (a side that drifted above its
-    budget spends its sale proceeds, as qlib spends its cash). A book holding
+    budget spends its sale proceeds, as qlib spends its cash). Long-short,
+    the whole book stays within a gross of 1: the two sides' buys share what
+    the kept book leaves of it, and a kept book above it is scaled down, its
+    locked positions excepted (see ``book``). A book holding
     more than ``topk`` (locked positions) gets no candidates, so it only sells
     down toward ``topk``. With ``direction="long_only"`` the budget is
     1; with ``"long_short"`` each side has 0.5, the short side runs the same
@@ -137,11 +140,13 @@ class TopkDropoutConstructor(PortfolioConstructor):
         taken: np.ndarray,
         sign: float,
         budget: float,
-    ) -> np.ndarray:
-        """Decide one book into ``row``; return the mask of its buys.
+    ) -> tuple[np.ndarray, float]:
+        """Keep one book's holdings in ``row``; return its buys and the weight they would spend.
 
         ``sign`` is +1 for the long book and -1 for the short book, whose
         scores are negated; ``taken`` marks the symbols the book may not buy.
+        The weight is what the kept holdings leave of ``budget``, or the sold
+        weight when that is more; ``book`` writes the buys.
         """
         topk, n_drop = self.config.topk, self.config.n_drop
         position = np.arange(scores.size)
@@ -163,11 +168,50 @@ class TopkDropoutConstructor(PortfolioConstructor):
         kept = np.setdiff1d(last, sell)
         row[kept] = current[kept]
         left = max(budget - sign * current[kept].sum(), sign * current[sell].sum())
-        if buy.size and left > 0:
-            row[buy] = sign * left / buy.size
+        return buy, (left if buy.size and left > 0 else 0.0)
+
+    def book(self, scores: np.ndarray, current: np.ndarray, tradable: np.ndarray,
+             locked: np.ndarray) -> np.ndarray:
+        """Return the book of one bar from arrays on its symbols: the rule of the class docstring.
+
+        Long-short, the book never exceeds a gross of 1: a kept book above
+        it (the shorts lost, or a side drifted past its half) has its
+        positions that can trade scaled down to it, and the two sides' buys
+        share what the kept book leaves, in the ratio of what each would
+        spend alone. Without such a drift every weight is the one-side rule's.
+
+        Examples
+        --------
+        >>> rule = TopkDropoutConstructor(TopkDropoutConfig("long_short", topk=1, n_drop=0))
+        >>> rule.book(np.array([0.9, -0.9]), np.array([0.5, -0.51]), np.ones(2, bool), np.zeros(2, bool)).round(4)
+        array([ 0.495, -0.505])
+        """
+        row = np.where(locked, current, 0.0)
+        held = current != 0
+        if self.config.direction == "long_only":
+            buy, spend = self._side(row, scores, current, tradable, locked, held, 1.0, 1.0)
+            if spend:
+                row[buy] = spend / buy.size
+            return row
+        long_buy, long_spend = self._side(row, scores, current, tradable, locked, held, 1.0, 0.5)
         bought = np.zeros(scores.size, dtype=bool)
-        bought[buy] = True
-        return bought
+        bought[long_buy] = True
+        short_buy, short_spend = self._side(row, scores, current, tradable, locked, held | bought, -1.0, 0.5)
+        kept = float(np.abs(row).sum())
+        if kept > 1.0:
+            fixed = float(np.abs(row[locked]).sum())
+            movable = ~locked & (row != 0)
+            room = max(1.0 - fixed, 0.0)
+            row[movable] *= room / (kept - fixed)
+            kept = float(np.abs(row).sum())
+        free = max(1.0 - kept, 0.0)
+        wanted = long_spend + short_spend
+        scale = min(1.0, free / wanted) if wanted > 0 else 0.0
+        if long_spend:
+            row[long_buy] = long_spend * scale / long_buy.size
+        if short_spend:
+            row[short_buy] = -short_spend * scale / short_buy.size
+        return row
 
     def construct(self, context: PortfolioContext) -> xr.DataArray:
         """Return the TopkDropout book of the context's bar.
@@ -205,10 +249,5 @@ class TopkDropoutConstructor(PortfolioConstructor):
         current = np.asarray(context.current_weights.sel(symbol=symbols).values, dtype=np.float64)
         tradable = np.asarray(context.tradable.values, dtype=bool)
         locked = np.asarray(context.locked.values, dtype=bool)
-        row = np.where(locked, current, 0.0)
-        long_only = self.config.direction == "long_only"
-        held = current != 0
-        bought = self._side(row, scores, current, tradable, locked, held, 1.0, 1.0 if long_only else 0.5)
-        if not long_only:
-            self._side(row, scores, current, tradable, locked, held | bought, -1.0, 0.5)
+        row = self.book(scores, current, tradable, locked)
         return xr.DataArray(row, dims="symbol", coords={"symbol": symbols})
