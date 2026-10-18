@@ -2,8 +2,8 @@
 
 Each output is one published mechanism, computed from the daily SEP bars,
 DAILY's market cap and the 8-K items of Sharadar EVENTS, and signed so the
-source paper expects a higher value to predict a higher return. Windows and
-signs are the papers'; none was tuned.
+source paper expects a higher value to predict a higher return. Windows,
+return frequencies and signs are the papers'; none was tuned.
 
 =============================  ================================================================  ===================================
 output                         formula                                                           reference
@@ -15,23 +15,23 @@ output                         formula                                          
                                within 21 bars and no item 2.02 came in the last 42, else 0
 ``dividend_month``             1 if a dividend went ex 231-251 or 42-62 bars ago, else 0         Hartzmark and Solomon (2013)
 ``return_seasonality``         mean 21-bar return over the same 21 bars of the last 5 years      Heston and Sadka (2008)
+``weekday_seasonality``        mean return of the next bar's weekday 3 to 50 weeks back (the     Keloharju, Linnainmaa and
+                               bars 5k - 1 back) less the mean return over those weeks           Nyberg (2016)
 ``lockup_expiry``              -1 from 104 to 129 bars after a stock's first price (the          Field and Hanka (2001)
                                180-day IPO lock-up ends near bar 124), else 0
-*Systematic risk beyond the linear beta (252 bars)*
-``coskewness``                 ``-E[(r-mr)(m-mm)^2] / (sd(r) var(m))``                           Harvey and Siddique (2000)
-``downside_beta_gap``          beta on the bars the market fell, less the beta                   Ang, Chen and Xing (2006)
-``liquidity_beta``             beta on the market's liquidity innovation                         Pastor and Stambaugh (2003);
-                                                                                                 Acharya and Pedersen (2005)
-``price_delay``                share of the betas on the 1-4-bar lagged market in all five       Hou and Moskowitz (2005)
+*Systematic risk beyond the linear beta*
+``coskewness``                 minus ``E[e m'^2] / (sd(e) var(m))`` of 21-bar returns over       Harvey and Siddique (2000)
+                               1260 bars (60 months), ``e`` the market-model residual
+``downside_beta_gap``          beta on the bars the market fell, less the beta, daily, 252 bars  Ang, Chen and Xing (2006)
+``liquidity_beta``             beta of 21-bar returns on the market's monthly liquidity          Pastor and Stambaugh (2003);
+                               innovation, 1260 bars (60 months)                                 Acharya and Pedersen (2005)
+``price_delay``                share of the betas on the 1-4-week lagged market in all five,     Hou and Moskowitz (2005)
+                               5-bar (weekly) returns, 252 bars (52 weeks)
 *Investor behaviour and information diffusion*
 ``frog_in_pan``                ``sign(R) * (%positive - %negative)`` over bars 252..21 back,     Da, Gurun and Warachka (2014)
                                ``R`` that period's return (minus information discreteness)
-``vshape_overhang``            root mean square unrealized gain or loss over the price,          An (2016); Grinblatt and Han
-                               ``sqrt(1 - 2 RP / P + Q / P^2)``, ``RP`` and ``Q`` the            (2005)
-                               turnover-decayed mean and second moment of the cost basis
-                               ``RP_t = (1 - V_t) RP_t-1 + V_t P_t``, ``Q`` likewise of ``P^2``
-``daytime_reversal``           frequency of a negative overnight and positive daytime return     Akbas, Boehmer, Jiang and Koch
-                               less that of the opposite, 21 bars                                (2022)
+``daytime_reversal``           share of the last 21 bars with a positive overnight and a         Akbas, Boehmer, Jiang and Koch
+                               negative daytime return, over that share's 252-bar mean           (2022)
 ``news_drift_gap``             sum of the returns on 8-K bars less that on the others, 63 bars   Chan (2003)
 ``earnings_volume``            log abnormal volume of the 3 bars to the one after an item 2.02,  Lerman, Livnat and Mendenhall
                                against the 63 bars before, the last 63 bars' announcement        (2008)
@@ -42,34 +42,33 @@ output                         formula                                          
                                for 252 bars after its ex-date, else 0                            (1995)
 ``debt_issuance_8k``           minus the 8-K item 2.03 (new direct financial obligation)         Spiess and Affleck-Graves (1999)
                                filings, 252 bars
-``late_filing``                minus the notices of a late 10-K or 10-Q (Form 12b-25, EVENTS     Alford, Jones and Zmijewski
-                               code 36), 252 bars                                                (1994); Bartov, DeFond and
-                                                                                                 Konchitchki (2013)
-*Long horizon and liquidity over time*
-``long_term_reversal``         minus the return from 1260 to 252 bars back                       De Bondt and Thaler (1985)
+``acquisition_8k``             minus the 8-K item 2.01 (completed acquisition or disposition)    Loughran and Vijh (1997)
+                               filings, 756 bars
+*Life cycle and liquidity over time*
+``listing_age``                bars with a price in the last 756 over 756: a stock listed less   Ritter (1991); Loughran and
+                               than three years ago scores below 1                               Ritter (1995)
 ``turnover_volatility``        minus the coefficient of variation of daily turnover, 252 bars    Chordia, Subrahmanyam and
                                                                                                  Anshuman (2001)
 =============================  ================================================================  ===================================
 
 ``r`` is the close-to-close return of ``adjClose``, ``m`` the market's: the
 mean of ``r`` over every symbol of the panel weighted by the previous bar's
-market cap. Turnover ``V`` is ``adjClose * adjVolume / marketcap``. The
-liquidity innovation is minus the change of the market's log illiquidity
-``log(cap-weighted mean |r| / cap-weighted mean V)`` from its mean over the
-21 bars before. ``vshape_overhang`` measures how far the price is from the
-cost basis in either direction: the V-shaped disposition effect makes
-holders sell both extreme winners and extreme losers, which depresses those
-prices (An 2016; symmetric here, the paper weighs gains more). An 8-K bar of ``news_drift_gap`` is one on
-which, or on the bar after which, an item 1.01, 2.01, 2.02, 5.02, 7.01 or
-8.01 filing is available.
+market cap (for a k-bar return, the market's k-bar return weighted by the
+cap k bars before). Turnover ``V`` is ``adjClose * adjVolume / marketcap``.
+The market's illiquidity is the 21-bar mean of ``cap-weighted mean |r| /
+cap-weighted mean V`` and its innovation minus the change of its log over 21
+bars. Overlapping k-bar returns are sampled every bar, as the coskewness,
+liquidity beta and price delay papers' monthly and weekly returns are not
+sampled daily. An 8-K bar of ``news_drift_gap`` is one on which, or on the
+bar after which, an item 1.01, 2.01, 2.02, 5.02, 7.01 or 8.01 filing is
+available.
 
 Windowed statistics skip missing bars and need 80% of their window (the
 downside beta 50 down bars); a statistic short of that is NaN. Event flags
 are 0 on a priced bar without a filing and NaN before EVENTS starts
-(``fundamental_alpha.fill_flows``). ``vshape_overhang`` and
-``dividend_change`` carry their state from the first bar of the read
-window, so ``warmup_bars`` (``WARMUP_BARS``) must cover the longest window
-and the cost basis's memory.
+(``fundamental_alpha.fill_flows``). ``dividend_change`` carries its state
+from the first bar of the read window, so ``warmup_bars`` (``WARMUP_BARS``)
+must cover the longest window.
 
 The market and the ranks are taken over every symbol of the panel, so build
 it on the whole market and read it on a roster. The factor is batch only;
@@ -79,15 +78,14 @@ References
 ----------
 Frazzini and Lamont (2007); Barber, De George, Lehavy and Trueman (2013);
 Johnson and So (2018); Hartzmark and Solomon (2013); Heston and Sadka
-(2008); Field and Hanka (2001); Harvey and Siddique (2000); Ang, Chen and
-Xing (2006); Pastor and Stambaugh (2003); Acharya and Pedersen (2005); Hou
-and Moskowitz (2005); Da, Gurun and Warachka (2014); An (2016); Grinblatt
-and Han (2005); Akbas, Boehmer, Jiang and Koch (2022);
-Chan (2003); Lerman, Livnat and Mendenhall (2008); Ikenberry, Rankine and
-Stice (1996); Desai and Jain (1997); Michaely, Thaler and Womack (1995);
-Spiess and Affleck-Graves (1999); Alford, Jones and Zmijewski (1994);
-Bartov, DeFond and Konchitchki (2013); De Bondt and Thaler (1985); Chordia,
-Subrahmanyam and Anshuman (2001).
+(2008); Keloharju, Linnainmaa and Nyberg (2016); Field and Hanka (2001);
+Harvey and Siddique (2000); Ang, Chen and Xing (2006); Pastor and
+Stambaugh (2003); Acharya and Pedersen (2005); Hou and Moskowitz (2005); Da,
+Gurun and Warachka (2014); Akbas, Boehmer, Jiang and Koch (2022); Chan
+(2003); Lerman, Livnat and Mendenhall (2008); Ikenberry, Rankine and Stice
+(1996); Desai and Jain (1997); Michaely, Thaler and Womack (1995); Spiess and
+Affleck-Graves (1999); Loughran and Vijh (1997); Ritter (1991); Loughran and
+Ritter (1995); Chordia, Subrahmanyam and Anshuman (2001).
 """
 
 from __future__ import annotations
@@ -107,7 +105,6 @@ from KunQuant.ops import (
     Equals,
     Log,
     Max,
-    Min,
     Select,
     SetAccumulator,
     SetInfOrNanToValue,
@@ -127,23 +124,30 @@ from quantlab.factor.predefined.fundamental_alpha import fill_flows
 NEWS_EVENTS = ("event_11", "event_21", "event_22", "event_52", "event_71", "event_81")
 #: Data columns the graph reads: SEP, DAILY's market cap and the 8-K items.
 DAILY_ANOMALY_COLUMNS = (
-    "adjOpen", "adjClose", "adjVolume", "divCash", "splitFactor", "marketcap", *NEWS_EVENTS, "event_23", "event_36",
+    "adjOpen", "adjClose", "adjVolume", "divCash", "splitFactor", "marketcap", *NEWS_EVENTS, "event_23",
 )
-#: The 8-K and filing-notice flags, filled with 0 on priced bars.
-EVENT_COLUMNS = (*NEWS_EVENTS, "event_23", "event_36")
+#: The 8-K flags, filled with 0 on priced bars.
+EVENT_COLUMNS = (*NEWS_EVENTS, "event_23")
 #: The outputs, in order.
 DAILY_ANOMALY_OUTPUTS = (
-    "earnings_month", "earnings_delay", "dividend_month", "return_seasonality", "lockup_expiry",
+    "earnings_month", "earnings_delay", "dividend_month", "return_seasonality", "weekday_seasonality",
+    "lockup_expiry",
     "coskewness", "downside_beta_gap", "liquidity_beta", "price_delay",
-    "frog_in_pan", "vshape_overhang", "daytime_reversal", "news_drift_gap", "earnings_volume",
-    "split_signal", "dividend_change", "debt_issuance_8k", "late_filing",
-    "long_term_reversal", "turnover_volatility",
+    "frog_in_pan", "daytime_reversal", "news_drift_gap", "earnings_volume",
+    "split_signal", "dividend_change", "debt_issuance_8k", "acquisition_8k",
+    "listing_age", "turnover_volatility",
 )
-YEAR, QUARTER, MONTH = 252, 63, 21
+YEAR, QUARTER, MONTH, WEEK = 252, 63, 21, 5
 SEASONAL_YEARS = 5
-LONG_REVERSAL = 5 * YEAR
-#: Bars a build should warm up: the seasonal lags (5 years and a month) and the cost basis's memory.
-WARMUP_BARS = SEASONAL_YEARS * YEAR + MONTH
+#: Sixty months: the coskewness and liquidity-beta windows.
+FIVE_YEARS = 5 * YEAR
+#: Three years: the acquisition and listing-age windows.
+THREE_YEARS = 3 * YEAR
+#: The same-weekday lags of ``weekday_seasonality``, in weeks.
+WEEKDAY_WEEKS = range(3, 51)
+#: Bars a build should warm up: the liquidity beta's 60 months of monthly innovations (each a change
+#: over 21 bars of a 21-bar mean of returns), the longest chain.
+WARMUP_BARS = FIVE_YEARS + 2 * MONTH + 1
 #: Smallest share of a window's bars a windowed statistic needs.
 MIN_SHARE = 0.8
 DOWN_BARS = 50
@@ -271,7 +275,7 @@ class DailyAnomalyAlpha(FactorKunQuant):
         with builder:
             open_, close, volume = Input("adjOpen"), Input("adjClose"), Input("adjVolume")
             dividend, split, cap = Input("divCash"), Input("splitFactor"), Input("marketcap")
-            results, debt, late = Input("event_22"), Input("event_23"), Input("event_36")
+            results, debt = Input("event_22"), Input("event_23")
             news_items = [Input(name) for name in NEWS_EVENTS]
             always = Equals(ConstantOp(0.0), ConstantOp(0.0))
 
@@ -300,28 +304,50 @@ class DailyAnomalyAlpha(FactorKunQuant):
                 total, count = total + _zero(value), count + _present(value)
             out["return_seasonality"] = Select(count >= 3.0, total / Max(count, ConstantOp(1.0)), _nan()) + close * 0.0
 
+            # The next bar's weekday was the bars 5k - 1 back, k weeks; shorter lags hold the short-term reversal.
+            same = [BackRef(r, WEEK * k - 1) for k in WEEKDAY_WEEKS]
+            total, count = _zero(same[0]), _present(same[0])
+            for value in same[1:]:
+                total, count = total + _zero(value), count + _present(value)
+            least = math.ceil(MIN_SHARE * len(WEEKDAY_WEEKS))
+            same_mean = Select(count >= float(least), total / Max(count, ConstantOp(1.0)), _nan())
+            first, last_lag = WEEK * WEEKDAY_WEEKS[0] - 1, WEEK * WEEKDAY_WEEKS[-1] - 1
+            out["weekday_seasonality"] = same_mean - BackRef(_mean(r, last_lag - first + 1), first)
+
             age = WindowedSum(_present(close), 140)
             out["lockup_expiry"] = 0.0 - _flag(And(age >= 104.0, age <= 129.0), close)
 
-            # Systematic risk beyond the beta.
-            rj, mj = _jointly(r, market), _jointly(market, r)
-            a, b = _mean(rj, YEAR), _mean(mj, YEAR)
-            erm, em2, er2 = _mean(rj * mj, YEAR), _mean(mj * mj, YEAR), _mean(rj * rj, YEAR)
-            third = _mean(rj * mj * mj, YEAR) - 2.0 * b * erm - a * em2 + 2.0 * a * b * b
+            # Systematic risk beyond the beta. Monthly and weekly returns overlap, one per bar.
+            def k_bar(k: int) -> tuple[OpBase, OpBase]:
+                stock = close / BackRef(close, k) - 1.0
+                return stock, CrossSectionalWeightedMean(stock, BackRef(cap, k))
+
+            r21, m21 = k_bar(MONTH)
+            rj, mj = _jointly(r21, m21), _jointly(m21, r21)
+            a, b = _mean(rj, FIVE_YEARS), _mean(mj, FIVE_YEARS)
+            erm, em2, er2 = _mean(rj * mj, FIVE_YEARS), _mean(mj * mj, FIVE_YEARS), _mean(rj * rj, FIVE_YEARS)
             var_r, var_m = er2 - a * a, em2 - b * b
-            out["coskewness"] = 0.0 - _ratio(third, Sqrt(Max(var_r, ConstantOp(0.0))) * var_m)
+            slope = _ratio(erm - a * b, var_m)
+            # E[(r - a)(m - b)^2] less the slope times E[(m - b)^3]: the residual's co-moment.
+            third = _mean(rj * mj * mj, FIVE_YEARS) - 2.0 * b * erm - a * em2 + 2.0 * a * b * b
+            skew_m = _mean(mj * mj * mj, FIVE_YEARS) - 3.0 * b * em2 + 2.0 * b * b * b
+            residual_var = var_r - slope * slope * var_m
+            out["coskewness"] = 0.0 - _ratio(third - slope * skew_m,
+                                             Sqrt(Max(residual_var, ConstantOp(0.0))) * var_m)
 
             down = market < 0.0
             beta = _beta(r, market, YEAR)
             out["downside_beta_gap"] = _beta(Select(down, r, _nan()), Select(down, market, _nan()), YEAR,
                                              DOWN_BARS) - beta
 
-            illiquidity = Log(CrossSectionalWeightedMean(Abs(r), BackRef(cap, 1))
-                              / CrossSectionalWeightedMean(turnover, BackRef(cap, 1)))
-            innovation = 0.0 - (illiquidity - BackRef(WindowedAvg(illiquidity, MONTH), 1))
-            out["liquidity_beta"] = _beta(r, innovation, YEAR)
+            daily_illiquidity = (CrossSectionalWeightedMean(Abs(r), BackRef(cap, 1))
+                                 / CrossSectionalWeightedMean(turnover, BackRef(cap, 1)))
+            illiquidity = Log(WindowedAvg(daily_illiquidity, MONTH))
+            innovation = 0.0 - (illiquidity - BackRef(illiquidity, MONTH))
+            out["liquidity_beta"] = _beta(r21, innovation, FIVE_YEARS)
 
-            betas = [Abs(_beta(r, BackRef(market, k), YEAR)) for k in range(5)]
+            r5, m5 = k_bar(WEEK)
+            betas = [Abs(_beta(r5, BackRef(m5, WEEK * k), YEAR)) for k in range(5)]
             lagged = betas[1] + betas[2] + betas[3] + betas[4]
             out["price_delay"] = _ratio(lagged, betas[0] + lagged)
 
@@ -333,28 +359,12 @@ class DailyAnomalyAlpha(FactorKunQuant):
             negative = BackRef(_mean(falls, gap), MONTH)
             out["frog_in_pan"] = Sign(prior) * (positive - negative)
 
-            # The cost basis: each bar a share V of the float trades at P and replaces older holdings.
-            share = Min(turnover, ConstantOp(1.0))
-            step = share * close
-            moving = Equals(step, step)
-
-            def cost_moment(value: OpBase, name: str) -> OpBase:
-                state = Accumulator(value, name, is_whole_time_required=True, init_val="nan")
-                started = Equals(state, state)
-                return SetAccumulator(state, moving, Select(started, (1.0 - share) * state + share * value, value))
-
-            mean_cost = cost_moment(close, "cost_mean")
-            second_cost = cost_moment(close * close, "cost_second")
-            spread = 1.0 - 2.0 * _ratio(mean_cost, close) + _ratio(second_cost, close * close)
-            # Max(NaN, 0) is 0 in KunQuant: carry the NaN of a bar without a price.
-            out["vshape_overhang"] = Sqrt(Max(spread, ConstantOp(0.0))) + spread * 0.0
-
             overnight = open_ / BackRef(close, 1) - 1.0
             daytime = close / open_ - 1.0
             pair = overnight + daytime * 0.0
-            positive_reversal = _flag(And(overnight < 0.0, daytime > 0.0), pair)
+            # The tug of war: noise traders push the price up overnight, arbitrageurs push it down by day.
             negative_reversal = _flag(And(overnight > 0.0, daytime < 0.0), pair)
-            out["daytime_reversal"] = _mean(positive_reversal, MONTH) - _mean(negative_reversal, MONTH)
+            out["daytime_reversal"] = _ratio(_mean(negative_reversal, MONTH), _mean(negative_reversal, YEAR))
 
             filed = news_items[0]
             for item in news_items[1:]:
@@ -391,10 +401,10 @@ class DailyAnomalyAlpha(FactorKunQuant):
             out["dividend_change"] = Select(recent, change, ConstantOp(0.0)) + close * 0.0
 
             out["debt_issuance_8k"] = 0.0 - WindowedSum(debt, YEAR)
-            out["late_filing"] = 0.0 - WindowedSum(late, YEAR)
+            out["acquisition_8k"] = 0.0 - WindowedSum(news_items[NEWS_EVENTS.index("event_21")], THREE_YEARS)
 
-            # Long horizon and liquidity over time.
-            out["long_term_reversal"] = 0.0 - (BackRef(close, YEAR) / BackRef(close, LONG_REVERSAL) - 1.0)
+            # Life cycle and liquidity over time.
+            out["listing_age"] = WindowedSum(_present(close), THREE_YEARS) / float(THREE_YEARS) + close * 0.0
             mean_turnover = _mean(turnover, YEAR)
             dispersion = Sqrt(Max(_mean(turnover * turnover, YEAR) - mean_turnover * mean_turnover, ConstantOp(0.0)))
             out["turnover_volatility"] = 0.0 - _ratio(dispersion, mean_turnover)

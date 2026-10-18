@@ -3,7 +3,7 @@
 The panel is 16 symbols over 1,400 business days (more than the 1,260-bar
 long-term reversal): random adjusted prices, opens, volumes and market caps,
 quarterly dividends with a raise and a 2-for-1 split, a reverse split, and
-sparse 8-K items and late-filing notices. Symbol 5 has a four-bar hole, symbol 9 is delisted from bar
+sparse 8-K items. Symbol 5 has a four-bar hole, symbol 9 is delisted from bar
 1,300, symbol 12 lists on bar 1,200 and the 8-K items start on bar 30.
 """
 
@@ -24,7 +24,7 @@ from quantlab.factor.predefined.daily_anomaly_alpha import (
 DAYS = pd.bdate_range("2019-01-01", periods=1400)
 START, END = DAYS[0].strftime("%Y-%m-%d"), DAYS[-1].strftime("%Y-%m-%d")
 SYMBOLS = [f"s{i:02d}" for i in range(16)]
-EVENTS = (*NEWS_EVENTS, "event_23", "event_36")
+EVENTS = (*NEWS_EVENTS, "event_23")
 
 
 def _panel() -> xr.Dataset:
@@ -130,22 +130,37 @@ def _reference(panel) -> dict[str, pd.DataFrame]:
     total = sum(x.fillna(0) for x in past)
     count = sum(np.isfinite(x).astype(float) for x in past)
     out["return_seasonality"] = (total / count.clip(lower=1)).where(count >= 3).where(priced)
+    same = [r.shift(5 * k - 1) for k in range(3, 51)]
+    total = sum(x.fillna(0) for x in same)
+    count = sum(np.isfinite(x).astype(float) for x in same)
+    same_mean = (total / count.clip(lower=1)).where(count >= 39)
+    out["weekday_seasonality"] = same_mean - _mean(r, 236).shift(14)
     age = priced.astype(float).rolling(140).sum()
     out["lockup_expiry"] = -_flag((age >= 104) & (age <= 129), c)
 
-    both = np.isfinite(r) & np.isfinite(m)
-    rj, mj = r.where(both), m.where(both)
-    a, b = _mean(rj, 252), _mean(mj, 252)
-    erm, em2, er2 = _mean(rj * mj, 252), _mean(mj * mj, 252), _mean(rj * rj, 252)
-    third = _mean(rj * mj * mj, 252) - 2 * b * erm - a * em2 + 2 * a * b * b
-    den = np.sqrt((er2 - a * a).clip(lower=0)) * (em2 - b * b)
-    out["coskewness"] = -(third / den).where(den > 1e-12)
+    def k_bar(k):
+        stock = c / c.shift(k) - 1
+        return stock, _cs_mean(stock, cap.shift(k))
+
+    r21, m21 = k_bar(21)
+    both = np.isfinite(r21) & np.isfinite(m21)
+    rj, mj = r21.where(both), m21.where(both)
+    w = 1260
+    a, b = _mean(rj, w), _mean(mj, w)
+    erm, em2, er2 = _mean(rj * mj, w), _mean(mj * mj, w), _mean(rj * rj, w)
+    var_r, var_m = er2 - a * a, em2 - b * b
+    slope = ((erm - a * b) / var_m).where(var_m > 1e-12)
+    third = _mean(rj * mj * mj, w) - 2 * b * erm - a * em2 + 2 * a * b * b
+    skew_m = _mean(mj ** 3, w) - 3 * b * em2 + 2 * b ** 3
+    den = np.sqrt((var_r - slope ** 2 * var_m).clip(lower=0)) * var_m
+    out["coskewness"] = -((third - slope * skew_m) / den).where(den > 1e-12)
     down = m < 0
     out["downside_beta_gap"] = _beta(r.where(down), m.where(down), 252, 50) - _beta(r, m, 252)
-    illiq = np.log(_cs_mean(r.abs(), cap.shift(1)) / _cs_mean(turnover, cap.shift(1)))
-    innovation = -(illiq - illiq.rolling(21).mean().shift(1))
-    out["liquidity_beta"] = _beta(r, innovation, 252)
-    betas = [_beta(r, m.shift(k), 252).abs() for k in range(5)]
+    illiq = np.log((_cs_mean(r.abs(), cap.shift(1)) / _cs_mean(turnover, cap.shift(1))).rolling(21).mean())
+    innovation = -(illiq - illiq.shift(21))
+    out["liquidity_beta"] = _beta(r21, innovation, 1260)
+    r5, m5 = k_bar(5)
+    betas = [_beta(r5, m5.shift(5 * k), 252).abs() for k in range(5)]
     lagged = betas[1] + betas[2] + betas[3] + betas[4]
     out["price_delay"] = (lagged / (betas[0] + lagged)).where(betas[0] + lagged > 1e-12)
 
@@ -154,25 +169,11 @@ def _reference(panel) -> dict[str, pd.DataFrame]:
     neg = _mean(_flag(r < 0, r), 231).shift(21)
     out["frog_in_pan"] = np.sign(prior) * (pos - neg)
 
-    share = turnover.clip(upper=1.0).to_numpy()
-    price = c.to_numpy()
-    moments = []
-    for value in (price, price ** 2):
-        state = np.full(price.shape[1], np.nan)
-        path = np.full(price.shape, np.nan)
-        for t in range(len(price)):
-            ok = np.isfinite(share[t] * price[t])
-            new = np.where(np.isfinite(state), (1 - share[t]) * state + share[t] * value[t], value[t])
-            state = np.where(ok, new, state)
-            path[t] = state
-        moments.append(pd.DataFrame(path, index=c.index, columns=c.columns))
-    spread = 1 - 2 * moments[0] / c + moments[1] / c ** 2
-    out["vshape_overhang"] = np.sqrt(spread.clip(lower=0))
-
     overnight, daytime = o / c.shift(1) - 1, c / o - 1
     pair = overnight + daytime * 0
-    out["daytime_reversal"] = (_mean(_flag((overnight < 0) & (daytime > 0), pair), 21)
-                               - _mean(_flag((overnight > 0) & (daytime < 0), pair), 21))
+    negative = _flag((overnight > 0) & (daytime < 0), pair)
+    long_mean = _mean(negative, 252)
+    out["daytime_reversal"] = (_mean(negative, 21) / long_mean).where(long_mean > 1e-12)
 
     filed = sum(ev[name] for name in NEWS_EVENTS)
     news = (filed + filed.shift(1)) > 0.5
@@ -203,9 +204,9 @@ def _reference(panel) -> dict[str, pd.DataFrame]:
             change[t] = np.where((since < 252) & (previous > 0), np.log(last / previous), 0.0)
     out["dividend_change"] = pd.DataFrame(change, index=c.index, columns=c.columns).where(priced)
     out["debt_issuance_8k"] = -ev["event_23"].rolling(252).sum()
-    out["late_filing"] = -ev["event_36"].rolling(252).sum()
+    out["acquisition_8k"] = -ev["event_21"].rolling(756).sum()
 
-    out["long_term_reversal"] = -(c.shift(252) / c.shift(1260) - 1)
+    out["listing_age"] = (priced.astype(float).rolling(756).sum() / 756).where(priced)
     mt = _mean(turnover, 252)
     sd = np.sqrt((_mean(turnover * turnover, 252) - mt * mt).clip(lower=0))
     out["turnover_volatility"] = -(sd / mt).where(mt > 1e-12)
@@ -226,7 +227,7 @@ def test_every_output_matches_its_formula(panel, outputs, name):
 
 def test_the_calendar_and_action_outputs_fire(outputs):
     for name in ("earnings_month", "dividend_month", "split_signal", "dividend_change", "lockup_expiry",
-                 "late_filing"):
+                 "acquisition_8k"):
         assert np.nanmax(np.abs(outputs[name].values)) > 0, name
     # Symbol 3's dividend halves at its 2-for-1 split: per pre-split share it is unchanged.
     change = outputs["dividend_change"].sel(symbol="s03").to_series()
