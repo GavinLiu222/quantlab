@@ -6,6 +6,7 @@
 </p>
 
 <p align="center">
+  <a href="https://pypi.org/project/quantlab-py/"><img alt="PyPI" src="https://img.shields.io/pypi/v/quantlab-py?label=pypi&color=3776ab"></a>
   <a href="https://www.python.org/downloads/"><img alt="Python 3.13+" src="https://img.shields.io/badge/python-3.13%2B-3776ab?logo=python&logoColor=white"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-green"></a>
   <a href="https://github.com/Menooker/KunQuant"><img alt="Factors: KunQuant" src="https://img.shields.io/badge/factors-KunQuant-0ea5e9"></a>
@@ -77,7 +78,7 @@ pip install quantlab-py         # 或：uv add quantlab-py
 pip install 'quantlab-py[all]'  # 连同除 mosek 外的全部可选 extra
 ```
 
-PyPI 上的发行名是 `quantlab-py`（那里的 `quantlab` 是另一个无关项目），导入时仍写 `import quantlab`。
+[PyPI](https://pypi.org/project/quantlab-py/) 上的发行名是 `quantlab-py`（那里的 `quantlab` 是另一个无关项目），导入时仍写 `import quantlab`。
 
 部分组件需要可选 extra；没装时导入它会抛出 `ImportError`，并写明该装哪个 extra：
 

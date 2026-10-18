@@ -6,6 +6,7 @@
 </p>
 
 <p align="center">
+  <a href="https://pypi.org/project/quantlab-py/"><img alt="PyPI" src="https://img.shields.io/pypi/v/quantlab-py?label=pypi&color=3776ab"></a>
   <a href="https://www.python.org/downloads/"><img alt="Python 3.13+" src="https://img.shields.io/badge/python-3.13%2B-3776ab?logo=python&logoColor=white"></a>
   <a href="https://github.com/ZhaorongDai/quantlab/blob/main/LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-green"></a>
   <a href="https://github.com/Menooker/KunQuant"><img alt="Factors: KunQuant" src="https://img.shields.io/badge/factors-KunQuant-0ea5e9"></a>
@@ -87,7 +88,7 @@ pip install quantlab-py         # or: uv add quantlab-py
 pip install 'quantlab-py[all]'  # with every optional extra except mosek
 ```
 
-The distribution is named `quantlab-py` on PyPI (`quantlab` there is an unrelated project);
+The distribution is named [`quantlab-py` on PyPI](https://pypi.org/project/quantlab-py/) (`quantlab` there is an unrelated project);
 the package is imported as `quantlab`.
 
 Some components need an optional extra; importing one without it raises an `ImportError` that
