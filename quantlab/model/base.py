@@ -1161,6 +1161,73 @@ class BaseModel(Component, ABC):
             )
         return run
 
+    def check_reload(
+        self, p: Path | str, bars: int = 5, rtol: float = 1e-4, atol: float = 1e-6
+    ) -> TrainedRun:
+        """Check that the model predicts its checkpoint's first test bars as the training run did.
+
+        The first ``warmup_bars + bars`` bars of the predictions the trained
+        run stored (``test_predictions.zarr``) are predicted again with
+        ``predict_window``, from freshly requested features, as a backtest or
+        a live run predicts them, and compared on the symbols both hold. The
+        training run predicted them from one panel read from its
+        ``start_date``; a difference means a later prediction does not see
+        the inputs the model was scored on: a feature requested without its
+        warm-up, a store rewritten since training, or a different checkpoint
+        loaded. Call it on the trained or loaded model.
+
+        Parameters
+        ----------
+        p : Path | str
+            Path to the checkpoint file; its trained unit holds the stored
+            predictions.
+        bars : int
+            Bars compared after the warm-up bars.
+        rtol, atol : float
+            Tolerances of ``numpy.isclose``; NaN equals NaN.
+
+        Returns
+        -------
+        TrainedRun
+            The checkpoint's trained unit.
+
+        Raises
+        ------
+        ValueError
+            If the unit stored no test predictions, or a label's predictions
+            differ on some bar, naming the bars and the largest difference.
+
+        Examples
+        --------
+        >>> model.check_reload(checkpoint).kind
+        'model'
+        """
+        run = TrainedRun.open(p)
+        if run.test_predictions is None:
+            raise ValueError(f"{self.class_name}: {p} stored no test predictions to compare with")
+        stored = xr.open_zarr(run.test_predictions)
+        try:
+            stored = stored.isel(timestamp=slice(0, self.warmup_bars + bars)).load()
+        finally:
+            stored.close()
+        stamps = pd.DatetimeIndex(stored.timestamp.values)
+        fresh = self.predict_window(stamps[0], stamps[-1]).reindex(timestamp=stamps)
+        symbols = [s for s in stored.symbol.values if s in set(fresh.symbol.values)]
+        for name in stored.data_vars:
+            expected = stored[name].sel(symbol=symbols).transpose("timestamp", "symbol").values
+            got = fresh[name].sel(symbol=symbols).transpose("timestamp", "symbol").values
+            close = np.isclose(got, expected, rtol=rtol, atol=atol, equal_nan=True)
+            differ = ~close.all(axis=1)
+            if differ.any():
+                gap = np.abs(np.where(close, 0.0, np.nan_to_num(got - expected, nan=np.inf)))
+                days = [stamp.strftime("%Y-%m-%d") for stamp in stamps[differ]]
+                raise ValueError(
+                    f"{self.class_name}: predictions of {name!r} from {p} differ from the "
+                    f"training run's on {int(differ.sum())} of {len(stamps)} bars ({', '.join(days)}); "
+                    f"largest difference {float(gap.max()):.3g}"
+                )
+        return run
+
     def predict(self, data):
         """Return ``[T, S, L]`` predictions for a ``[T, S, F]`` input.
 

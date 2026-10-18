@@ -144,6 +144,13 @@ True
 ('2024-01-01', '2024-05-29T00:00:00')
 ```
 
+`check_reload(checkpoint, bars=5)` checks that a later prediction sees what the training run saw: it predicts the first `warmup_bars + bars` bars of the predictions the trained unit stored (`test_predictions.zarr`) again through `predict_window`, from freshly requested features as a backtest or a live run requests them, and raises `ValueError` naming the bars where a label differs beyond `rtol`/`atol`. A feature requested without its warm-up, a store rewritten since training or another checkpoint loaded all show up there. Call it on the trained or loaded model; it returns the checkpoint's `TrainedRun`.
+
+```python
+>>> restored.check_reload(checkpoint).kind
+'model'
+```
+
 ### Metrics
 
 `quantlab.model.evaluation` scores `[T, S]` panels. Only cells where both prediction and target are finite count. Besides MSE, RMSE, MAE and R2 it provides two cross-sectional measures. IC is the Pearson correlation between prediction and target across the symbols of one timestamp, averaged over time. RankIC does the same on the per-timestamp ranks, so it measures ordering and ignores scale. A timestamp with fewer than two symbols where both are finite, or with a constant prediction or target, has no IC and is left out of the mean rather than counted as 0. ICIR and RankICIR measure how stable the signal is: the mean of the per-timestamp IC (or RankIC) divided by its sample standard deviation (`ddof=1`). They are NaN when fewer than two timestamps have an IC.

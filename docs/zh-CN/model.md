@@ -144,6 +144,13 @@ True
 ('2024-01-01', '2024-05-29T00:00:00')
 ```
 
+`check_reload(checkpoint, bars=5)` 检查后来的预测能否看到训练时看到的输入：它取训练单元保存的预测（`test_predictions.zarr`）的前 `warmup_bars + bars` 个 bar，像回测或实盘那样重新请求特征，用 `predict_window` 再预测一遍；某个标签在某些 bar 上的差异超过 `rtol`/`atol` 时抛出 `ValueError`，并列出这些 bar。特征请求时缺了预热、训练后 store 被改写、载入了别的检查点，都会在这里暴露出来。在训练好或载入后的模型上调用；它返回检查点的 `TrainedRun`。
+
+```python
+>>> restored.check_reload(checkpoint).kind
+'model'
+```
+
 ### 评估指标
 
 `quantlab.model.evaluation` 对 `[T, S]` 面板打分，只有预测和目标同时有限的单元格才参与计算。除了 MSE、RMSE、MAE 和 R2，还有两个截面指标。IC 是同一时间点上、跨标的的预测与目标之间的 Pearson 相关系数，再对时间取平均。RankIC 在每个时间点的排名上做同样的计算，因此衡量的是排序能力，与量纲无关。某个时间点上预测和目标同时有限的标的少于两个，或者预测或目标在截面上是常数时，这个时间点没有 IC，求平均时直接跳过，而不是当作 0。ICIR 和 RankICIR 衡量信号的稳定性：逐时间点 IC（或 RankIC）的均值除以它的样本标准差（`ddof=1`）。有 IC 的时间点少于两个时，它们是 NaN。
