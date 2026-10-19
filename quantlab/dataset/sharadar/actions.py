@@ -121,6 +121,8 @@ _CASH = (
     "acquisitiondistributioncashusd", "acquisitiondividendusd", "acquisitionelectcash",
     "acquisitionelectcashusd", "acquisitionestimatedcashusd",
     "acquisitionqualificationcashcad", "acquisitionterminalcashusd",
+    # Sharadar 2026-10: best-effort variants of the cash consideration.
+    "acquisitionbesteffortcashcad", "acquisitionbesteffortcashusd",
 )
 _STOCK = (
     "acquisitionstock", "acquisitioncommon", "acquisitionpreferred",
@@ -130,8 +132,14 @@ _STOCK = (
     "acquisitionestimatedpackagecommon", "acquisitionestimatedpackagepreferred",
     "acquisitionestimatedroundupcommon", "acquisitionqualificationdefaultstock",
     "acquisitionqualificationstock",
+    # Sharadar 2026-10: best-effort variants of the common and preferred consideration.
+    "acquisitionbesteffortcommon", "acquisitionbesteffortpreferred", "acquisitionbesteffortpreferred2",
 )
-_OTHER = ("acquisitionwarrant", "acquisitionalternativewarrant", "acquisitionspecial")
+_OTHER = (
+    "acquisitionwarrant", "acquisitionalternativewarrant", "acquisitionspecial",
+    # Sharadar 2026-10: notes and rights, neither cash nor stock, as the warrants.
+    "acquisitionbesteffortnote", "acquisitionbesteffortright",
+)
 
 #: Code of each kind of consideration; several kinds on one day are ``MIXED``.
 CONSIDERATION_CODES: dict[str, str] = {"1": "cash", "2": "stock", "3": "mixed", "4": "other"}
