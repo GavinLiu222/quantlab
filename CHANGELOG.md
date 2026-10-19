@@ -14,6 +14,12 @@ compatibility shims or config migrations.
 - Ranged downloads resume: an interrupted download keeps its `.part` file and a sidecar
   recording the size and the object identity (an S3 ETag), and the next attempt continues
   from where it stopped when the object is unchanged. The Massive flat-file client uses it.
+  A download resumes only with an object identity (a call without one, such as the Sharadar
+  bulk zip, starts over) and a well-formed sidecar naming only this download's range starts;
+  downloads to one path take turns through a file lock beside the `.part`.
+- The Massive flat-file client conditions every ranged GET on the ETag its HEAD read
+  (`If-Match`): a file replaced mid-download raises `MassiveObjectChangedError` (412) inside
+  the client, and the day starts over from a fresh HEAD instead of mixing two versions.
 
 ### Fixed
 
@@ -22,6 +28,8 @@ compatibility shims or config migrations.
   no longer stop the live prediction for a missing bar.
 - Sharadar ACTIONS: the seven `acquisitionbesteffort*` action names Sharadar started
   publishing on 2026-10-19 are mapped (cash, stock or other), so the actions table builds again.
+- `BlackLittermanOptimizer` warns for `ZScoreMu` used as total-return views
+  (`views_relative_to_prior=False`), as it does for the other centred alphas.
 
 ## 0.1.0 (2026-10-18)
 
