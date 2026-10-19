@@ -13,8 +13,9 @@ backtest. Five are shipped:
 - ``ZScoreExpectedReturn``: ``mu = ic * median(sigma) * z``, the same scale
   without the tilt to risky names: within a bar ``mu`` ranks as the
   prediction;
-- ``ZScoreMu``: ``mu = z``, the z-score itself, unscaled: the same units
-  on every bar, so ``turnover_penalty`` is in z units;
+- ``UnscaledZScoreExpectedReturn``: ``mu = z``, the z-score itself,
+  unscaled: the same units on every bar, so ``turnover_penalty`` is in z
+  units;
 - ``RawExpectedReturn``: ``mu`` is the prediction, which must be in return
   units (its label spec's scale ``"raw"``);
 - ``PredictionExpectedReturn``: ``mu`` is the prediction as it is, in its own
@@ -29,8 +30,8 @@ from quantlab.portfolio.config import (
     GrinoldExpectedReturnConfig,
     PredictionExpectedReturnConfig,
     RawExpectedReturnConfig,
+    UnscaledZScoreExpectedReturnConfig,
     ZScoreExpectedReturnConfig,
-    ZScoreMuConfig,
 )
 from quantlab.runs.prediction_panel import LabelSpec
 from quantlab.utils.cross_section import cross_sectional_zscore
@@ -154,7 +155,7 @@ class ZScoreExpectedReturn(_ScaledByIC):
         return np.where(candidates, scaled, 0.0)
 
 
-class ZScoreMu(ExpectedReturnModel):
+class UnscaledZScoreExpectedReturn(ExpectedReturnModel):
     """``mu = z``: the prediction's cross-sectional z-score over the candidates, unscaled.
 
     ``z`` is the z-score (``ddof=1``) of each bar's prediction over its
@@ -165,13 +166,13 @@ class ZScoreMu(ExpectedReturnModel):
 
     Examples
     --------
-    >>> ZScoreMu(ZScoreMuConfig()).expected_returns(
+    >>> UnscaledZScoreExpectedReturn(UnscaledZScoreExpectedReturnConfig()).expected_returns(
     ...     np.array([[1.0, 2.0, 3.0, 9.0]]), None, np.array([[True, True, True, False]])
     ... )
     array([[-1.,  0.,  1.,  0.]])
     """
 
-    config_cls = ZScoreMuConfig
+    config_cls = UnscaledZScoreExpectedReturnConfig
     needs_sigma = False
 
     def expected_returns(self, predictions, sigma, candidates) -> np.ndarray:

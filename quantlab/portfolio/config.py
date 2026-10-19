@@ -135,13 +135,13 @@ class ZScoreExpectedReturnConfig(FrozenConfig):
 
 
 @dataclass(frozen=True)
-class ZScoreMuConfig(FrozenConfig):
-    """Config of ``ZScoreMu``: ``mu = z``, the z-score itself; no parameters.
+class UnscaledZScoreExpectedReturnConfig(FrozenConfig):
+    """Config of ``UnscaledZScoreExpectedReturn``: ``mu = z``, the z-score itself; no parameters.
 
     Examples
     --------
-    >>> ZScoreMuConfig()
-    ZScoreMuConfig()
+    >>> UnscaledZScoreExpectedReturnConfig()
+    UnscaledZScoreExpectedReturnConfig()
     """
 
 

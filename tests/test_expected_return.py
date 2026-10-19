@@ -24,15 +24,15 @@ from quantlab.portfolio.config import (
     MeanVarianceConfig,
     PredictionExpectedReturnConfig,
     RawExpectedReturnConfig,
+    UnscaledZScoreExpectedReturnConfig,
     ZScoreExpectedReturnConfig,
-    ZScoreMuConfig,
 )
 from quantlab.portfolio.predefined.expected_return import (
     GrinoldExpectedReturn,
     PredictionExpectedReturn,
     RawExpectedReturn,
+    UnscaledZScoreExpectedReturn,
     ZScoreExpectedReturn,
-    ZScoreMu,
 )
 from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
 from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
@@ -182,12 +182,12 @@ def test_the_approximate_backtest_hands_sigma_only_to_a_model_that_needs_it(
         assert all(isinstance(sigma, np.ndarray) and sigma.ndim == 2 for sigma in spy.seen)
 
 
-def test_zscore_mu_is_the_candidates_zscore_unscaled():
-    """ZScoreMu: mu is the z-score (ddof=1) over each bar's candidates, 0.0 elsewhere, read without sigma,
-    and the same mu whatever the bar's scale (a bar's predictions times 10 give the same mu)."""
+def test_unscaled_zscore_expected_return_is_the_candidates_zscore_unscaled():
+    """UnscaledZScoreExpectedReturn: mu is the z-score (ddof=1) over each bar's candidates, 0.0 elsewhere,
+    read without sigma, and the same mu whatever the bar's scale (a bar's predictions times 10 give the same mu)."""
     predictions = np.array([[0.1, 0.4, -0.2, 5.0, np.nan], [1.0, 4.0, -2.0, 50.0, 3.0]])
     candidates = np.array([[True, True, True, False, True], [True, True, True, False, False]])
-    model = ZScoreMu(ZScoreMuConfig())
+    model = UnscaledZScoreExpectedReturn(UnscaledZScoreExpectedReturnConfig())
     assert model.needs_sigma is False
     mu = model.expected_returns(predictions, None, candidates)
     z = cross_sectional_zscore(np.where(candidates, predictions, np.nan))

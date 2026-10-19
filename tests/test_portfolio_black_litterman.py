@@ -14,7 +14,7 @@ What is locked here, and what turns it red:
   ``C = 1`` puts the posterior on the views and a small ``C`` leaves it at
   the prior.
 - A cross-sectionally centred expected return model (Grinold, z-score,
-  ZScoreMu) used as total-return views warns, and nothing else does.
+  UnscaledZScoreExpectedReturn) used as total-return views warns, and nothing else does.
 - With no views, the decided book is the market's weights.
 - A view on one name moves a correlated name's posterior, by the
   reference's amount, and leaves an uncorrelated one at its prior.
@@ -58,8 +58,8 @@ from quantlab.portfolio.config import (
     PredictionExpectedReturnConfig,
     RelativeFactorReturnViewConfig,
     RawExpectedReturnConfig,
+    UnscaledZScoreExpectedReturnConfig,
     ZScoreExpectedReturnConfig,
-    ZScoreMuConfig,
 )
 from quantlab.portfolio.predefined.black_litterman import (
     BlackLittermanOptimizer,
@@ -72,8 +72,8 @@ from quantlab.portfolio.predefined.expected_return import (
     GrinoldExpectedReturn,
     PredictionExpectedReturn,
     RawExpectedReturn,
+    UnscaledZScoreExpectedReturn,
     ZScoreExpectedReturn,
-    ZScoreMu,
 )
 from quantlab.portfolio.predefined.factor_risk import FactorRiskStoreEstimator
 from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
@@ -299,8 +299,8 @@ def test_idzorek_at_a_small_confidence_leaves_the_posterior_at_the_prior():
         (ZScoreExpectedReturn(ZScoreExpectedReturnConfig(ic=0.05)), False, True),
         (GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)), True, False),
         (ZScoreExpectedReturn(ZScoreExpectedReturnConfig(ic=0.05)), True, False),
-        (ZScoreMu(ZScoreMuConfig()), False, True),
-        (ZScoreMu(ZScoreMuConfig()), True, False),
+        (UnscaledZScoreExpectedReturn(UnscaledZScoreExpectedReturnConfig()), False, True),
+        (UnscaledZScoreExpectedReturn(UnscaledZScoreExpectedReturnConfig()), True, False),
         (RawExpectedReturn(RawExpectedReturnConfig()), False, False),
         (PredictionExpectedReturn(PredictionExpectedReturnConfig()), False, False),
     ],
