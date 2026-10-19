@@ -179,8 +179,27 @@ def last_bar(dataset: BaseDataset) -> pd.Timestamp | None:
 
 
 def _holds(dataset: BaseDataset, bar: pd.Timestamp) -> bool:
-    """Whether ``dataset``'s calendar holds ``bar``."""
-    return bar in dataset.calendar(bar, bar)
+    """Whether ``dataset``'s calendar holds ``bar``.
+
+    A daily ``bar`` (at midnight) is also held by a store with bars inside
+    the day (one-minute bars, stamped from the open to the close) when it
+    holds any bar of that day: the daily factors of such a store read the
+    day's minute bars, none of which is stamped at midnight.
+
+    Examples
+    --------
+    >>> class Minutes:
+    ...     bars = pd.DatetimeIndex(["2026-10-15 09:30", "2026-10-15 16:00"])
+    ...     def calendar(self, start, end):
+    ...         return self.bars[(self.bars >= start) & (self.bars <= end)]
+    >>> _holds(Minutes(), pd.Timestamp("2026-10-15")), _holds(Minutes(), pd.Timestamp("2026-10-16"))
+    (True, False)
+    """
+    if bar in dataset.calendar(bar, bar):
+        return True
+    if bar != bar.normalize():
+        return False
+    return len(dataset.calendar(bar, bar + pd.Timedelta(days=1) - pd.Timedelta(1, "ns"))) > 0
 
 
 def _store_bars(path: str) -> pd.DatetimeIndex:
