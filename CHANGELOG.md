@@ -4,6 +4,25 @@ quantlab follows [semantic versioning](https://semver.org/). While the version i
 minor release may break the API, the config format or the store layout; there are no
 compatibility shims or config migrations.
 
+## Unreleased
+
+### Added
+
+- `ZScoreMu` (`quantlab.portfolio.predefined.expected_return`, config `ZScoreMuConfig`): an
+  expected return model whose `mu` is the candidates' cross-sectional z-score of the
+  prediction, with no volatility tilt.
+- Ranged downloads resume: an interrupted download keeps its `.part` file and a sidecar
+  recording the size and the object identity (an S3 ETag), and the next attempt continues
+  from where it stopped when the object is unchanged. The Massive flat-file client uses it.
+
+### Fixed
+
+- `predict_live_bar` treats a store with bars inside the day (a one-minute store) as holding
+  the daily bar t when it holds any bar of t's day, so daily factors read from minute stores
+  no longer stop the live prediction for a missing bar.
+- Sharadar ACTIONS: the seven `acquisitionbesteffort*` action names Sharadar started
+  publishing on 2026-10-19 are mapped (cash, stock or other), so the actions table builds again.
+
 ## 0.1.0 (2026-10-18)
 
 The first release, published to PyPI as `quantlab-py` and imported as `quantlab`.
