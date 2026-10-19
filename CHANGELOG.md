@@ -15,8 +15,7 @@ compatibility shims or config migrations.
   recording the size and the object identity (an S3 ETag), and the next attempt continues
   from where it stopped when the object is unchanged. The Massive flat-file client uses it.
   A download resumes only with an object identity (a call without one, such as the Sharadar
-  bulk zip, starts over) and a well-formed sidecar naming only this download's range starts;
-  downloads to one path take turns through a file lock beside the `.part`.
+  bulk zip, starts over) and a well-formed sidecar naming only this download's range starts.
 - The Massive flat-file client conditions every ranged GET on the ETag its HEAD read
   (`If-Match`): a file replaced mid-download raises `MassiveObjectChangedError` (412) inside
   the client, and the day starts over from a fresh HEAD instead of mixing two versions.

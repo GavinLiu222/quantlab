@@ -343,38 +343,3 @@ def test_a_symlink_planted_at_the_sidecar_scratch_name_is_not_followed(tmp_path)
     _download(target, FakeRanges(), part_bytes=2000, identity="etag-1")
     assert victim.read_text() == "precious"
     assert target.read_bytes() == BODY
-
-
-def test_two_downloads_to_one_path_run_one_after_the_other(tmp_path):
-    """A second download of the same file waits for the first to finish; neither corrupts the other's .part."""
-    target = tmp_path / "file.bin"
-    started = threading.Event()
-    release = threading.Event()
-
-    def held(start, stop):
-        started.set()
-        release.wait(5)
-        return [BODY[start:stop]]
-
-    second = FakeRanges()
-    errors = []
-
-    def run(fetch):
-        try:
-            _download(target, fetch, part_bytes=2000, identity="etag-1")
-        except BaseException as raised:  # pragma: no cover - reported below
-            errors.append(raised)
-
-    first_run = threading.Thread(target=run, args=(held,))
-    first_run.start()
-    assert started.wait(5)
-    second_run = threading.Thread(target=run, args=(second,))
-    second_run.start()
-    time.sleep(0.5)
-    assert second.requests == []  # still waiting for the first
-    release.set()
-    first_run.join(10)
-    second_run.join(10)
-    assert errors == []
-    assert target.read_bytes() == BODY
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["file.bin"]
