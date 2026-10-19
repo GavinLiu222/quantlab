@@ -198,7 +198,8 @@ def test_a_stream_that_keeps_breaking_without_progress_fails(env, tmp_path):
         _client(store, retries=3).download_day("trades", DAY, tmp_path)
     assert len(store.reads) == 4
     assert raw_days(tmp_path / "massive", "trades") == []
-    assert not list((tmp_path / "massive").rglob("*.part"))
+    # The .part and its sidecar stay for the next run to resume (ranged_download).
+    assert len(list((tmp_path / "massive").rglob("*.part.json"))) == 1
 
 
 def test_a_file_shorter_than_the_vendor_lists_leaves_nothing(env, tmp_path):
@@ -209,7 +210,8 @@ def test_a_file_shorter_than_the_vendor_lists_leaves_nothing(env, tmp_path):
     with pytest.raises(MassiveTransportError, match="bytes"):
         _client(store, retries=2).download_day("trades", DAY, tmp_path)
     assert raw_days(tmp_path / "massive", "trades") == []
-    assert not list((tmp_path / "massive").rglob("*.part"))
+    # The .part and its sidecar stay for the next run to resume (ranged_download).
+    assert len(list((tmp_path / "massive").rglob("*.part.json"))) == 1
 
 
 def test_a_corrupt_gzip_leaves_nothing(env, tmp_path):
@@ -220,7 +222,7 @@ def test_a_corrupt_gzip_leaves_nothing(env, tmp_path):
     with pytest.raises(MassiveTransportError, match="gzip"):
         _client(FakeStore({KEY: corrupt})).download_day("trades", DAY, tmp_path)
     assert raw_days(tmp_path / "massive", "trades") == []
-    assert not list((tmp_path / "massive").rglob("*.part"))
+    assert not list((tmp_path / "massive").rglob("*.part*"))  # a corrupt file is removed with its sidecar
 
 
 def test_not_published_and_not_entitled_are_told_apart(env, tmp_path):

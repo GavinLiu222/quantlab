@@ -342,12 +342,30 @@ class S3ObjectStore:
         from botocore.exceptions import ClientError
 
         try:
-            return int(self._client.head_object(Bucket=BUCKET, Key=key)["ContentLength"])
+            head = self._client.head_object(Bucket=BUCKET, Key=key)
+            # Kept for etag(): the same HEAD names the object, no second request.
+            self.__dict__.setdefault("_etags", {})[key] = head.get("ETag")
+            return int(head["ContentLength"])
         except ClientError as error:
             code = str(error.response.get("Error", {}).get("Code", ""))
             raise (self._forbidden(key, code) if code in _FORBIDDEN else self._translate(error, key)) from error
         except Exception as error:
             raise self._translate(error, key) from error
+
+    def etag(self, key: str) -> str | None:
+        """The ETag ``size`` last read for ``key`` (it changes when the object is replaced), else None.
+
+        The ranged download's identity: a ``.part`` left for another ETag starts over.
+
+        Examples
+        --------
+        Needs the credentials and the network::
+
+            store = S3ObjectStore(MassiveCredentials.from_env())
+            key = s3_key("trades", date(2016, 11, 25))
+            store.size(key), store.etag(key)
+        """
+        return self.__dict__.get("_etags", {}).get(key)
 
     def _forbidden(self, key: str, code: str) -> Exception:
         """Tell a 403 on ``key`` apart by listing its month; see the class docstring."""
@@ -804,6 +822,9 @@ class MassiveClient:
         if target.exists() and target.stat().st_size == expected:
             return target, 0
         target.parent.mkdir(parents=True, exist_ok=True)
+        # A store that names its objects (S3's ETag) lets a .part left by an earlier run resume.
+        etag = getattr(self.store, "etag", None)
+        identity = None if etag is None else etag(key)
         started = time.monotonic()
         policy = self._policy
         for tries in range(self.retries + 1):
@@ -820,6 +841,7 @@ class MassiveClient:
                     verify=lambda partial: _check_gzip(partial, key),
                     fetch_lock=fetching,
                     abort=abort,
+                    identity=identity,
                 )
                 break
             except _NotWholeGzip as error:
