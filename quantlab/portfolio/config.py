@@ -135,6 +135,17 @@ class ZScoreExpectedReturnConfig(FrozenConfig):
 
 
 @dataclass(frozen=True)
+class UnscaledZScoreExpectedReturnConfig(FrozenConfig):
+    """Config of ``UnscaledZScoreExpectedReturn``: ``mu = z``, the z-score itself; no parameters.
+
+    Examples
+    --------
+    >>> UnscaledZScoreExpectedReturnConfig()
+    UnscaledZScoreExpectedReturnConfig()
+    """
+
+
+@dataclass(frozen=True)
 class RawExpectedReturnConfig(FrozenConfig):
     """Config of ``RawExpectedReturn``: ``mu`` is the prediction, in return units; no parameters.
 

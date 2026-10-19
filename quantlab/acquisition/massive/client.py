@@ -23,7 +23,10 @@ requests with boto3) and ``http_get`` (one REST GET returning an
 before the vendor publishes), ``MassiveEntitlementError`` (the key was
 refused, or the day is outside the plan's window) and
 ``MassiveTransportError`` (the network, throttling included), which alone is
-retried after a back-off that doubles on each attempt.
+retried after a back-off that doubles on each attempt. Every ranged GET is
+conditioned on the ETag its HEAD read: an object replaced mid-download
+answers 412 (``MassiveObjectChangedError``), and the day starts over at once
+from a fresh HEAD.
 
 ``pull`` keeps one REST endpoint (``quantlab.acquisition.massive.rest``) in
 the raw tier: it pages on the endpoint's date field from the day after its
@@ -157,6 +160,14 @@ class MassiveNotPublishedError(LookupError):
     """Massive has no file for that day: not a trading day, or not published yet."""
 
 
+class MassiveObjectChangedError(RuntimeError):
+    """The object was replaced while its ranges were fetched (S3 answered 412 to ``If-Match``).
+
+    Not transient for the range: the download of the day starts over from a
+    fresh HEAD, ``retries`` times.
+    """
+
+
 class MassiveTransportError(TransientError):
     """The connection failed or broke, Massive throttled, or a downloaded file failed its checks; retried.
 
@@ -231,12 +242,19 @@ class ObjectStore(Protocol):
     Both raise ``MassiveNotPublishedError``, ``MassiveEntitlementError`` or
     ``MassiveTransportError``; ``read`` may raise it after yielding some
     chunks, when its stream breaks. Both are called from several threads.
+    ``etag`` names the object ``size`` last read (``None`` when the store
+    cannot name it: its download then never resumes), and ``read`` given
+    ``if_match`` raises ``MassiveObjectChangedError`` when the object no
+    longer has that ETag.
     """
 
     def size(self, key: str) -> int:
         """Return the object's size in bytes."""
 
-    def read(self, key: str, start: int, stop: int) -> Iterable[bytes]:
+    def etag(self, key: str) -> str | None:
+        """Return the ETag ``size`` last read for ``key``, else None."""
+
+    def read(self, key: str, start: int, stop: int, if_match: str | None = None) -> Iterable[bytes]:
         """Return the object's bytes ``start`` up to (not including) ``stop``, in chunks."""
 
 
@@ -283,6 +301,8 @@ class S3ObjectStore:
     ) -> None:
         """Create the boto3 client; see the class docstring."""
         self._today = today if today is not None else _new_york_today
+        # The ETag of each key's last HEAD, for etag().
+        self._etags: dict[str, str | None] = {}
         if client is not None:
             self._client = client
             return
@@ -315,6 +335,8 @@ class S3ObjectStore:
 
         if isinstance(error, ClientError):
             code = str(error.response.get("Error", {}).get("Code", ""))
+            if code in ("412", "PreconditionFailed"):
+                return MassiveObjectChangedError(f"Massive replaced {key!r} while it was being downloaded.")
             if code in ("404", "NoSuchKey", "NotFound"):
                 return MassiveNotPublishedError(f"Massive has no {key!r} (not a trading day, or not published yet).")
             if code in _FORBIDDEN or code in _BAD_CREDENTIALS:
@@ -342,12 +364,30 @@ class S3ObjectStore:
         from botocore.exceptions import ClientError
 
         try:
-            return int(self._client.head_object(Bucket=BUCKET, Key=key)["ContentLength"])
+            head = self._client.head_object(Bucket=BUCKET, Key=key)
+            # Kept for etag(): the same HEAD names the object, no second request.
+            self._etags[key] = head.get("ETag")
+            return int(head["ContentLength"])
         except ClientError as error:
             code = str(error.response.get("Error", {}).get("Code", ""))
             raise (self._forbidden(key, code) if code in _FORBIDDEN else self._translate(error, key)) from error
         except Exception as error:
             raise self._translate(error, key) from error
+
+    def etag(self, key: str) -> str | None:
+        """The ETag ``size`` last read for ``key`` (it changes when the object is replaced), else None.
+
+        The ranged download's identity: a ``.part`` left for another ETag starts over.
+
+        Examples
+        --------
+        Needs the credentials and the network::
+
+            store = S3ObjectStore(MassiveCredentials.from_env())
+            key = s3_key("trades", date(2016, 11, 25))
+            store.size(key), store.etag(key)
+        """
+        return self._etags.get(key)
 
     def _forbidden(self, key: str, code: str) -> Exception:
         """Tell a 403 on ``key`` apart by listing its month; see the class docstring."""
@@ -372,8 +412,11 @@ class S3ObjectStore:
             f"(before the oldest day it serves)."
         )
 
-    def read(self, key: str, start: int, stop: int) -> Iterable[bytes]:
+    def read(self, key: str, start: int, stop: int, if_match: str | None = None) -> Iterable[bytes]:
         """Yield the bytes ``start`` up to ``stop`` of the object in chunks from one ranged GET.
+
+        With ``if_match`` (an ETag) the GET is conditioned on it: an object
+        replaced since raises ``MassiveObjectChangedError`` (S3's 412).
 
         Examples
         --------
@@ -383,7 +426,10 @@ class S3ObjectStore:
             head = b"".join(store.read(s3_key("trades", date(2016, 11, 25)), 0, 1024))
         """
         try:
-            body = self._client.get_object(Bucket=BUCKET, Key=key, Range=f"bytes={start}-{stop - 1}")["Body"]
+            request = {"Bucket": BUCKET, "Key": key, "Range": f"bytes={start}-{stop - 1}"}
+            if if_match is not None:
+                request["IfMatch"] = if_match
+            body = self._client.get_object(**request)["Body"]
             yield from body.iter_chunks(_CHUNK)
         except Exception as error:
             raise self._translate(error, key) from error
@@ -796,7 +842,10 @@ class MassiveClient:
 
         Its ranges are fetched by ``download_ranges`` while holding
         ``fetching``; setting ``abort`` stops them at their next chunk. A
-        file that is not a whole gzip is downloaded again, ``retries`` times.
+        file that is not a whole gzip is downloaded again, ``retries`` times,
+        after a back-off; an object replaced mid-download (each ranged GET is
+        conditioned on the ETag its HEAD read) starts over at once from a
+        fresh HEAD, within the same ``retries``.
         """
         key = s3_key(data_type, day)
         target = raw_file(Path(download_root) / VENDOR_DIR, data_type, day)
@@ -804,6 +853,8 @@ class MassiveClient:
         if target.exists() and target.stat().st_size == expected:
             return target, 0
         target.parent.mkdir(parents=True, exist_ok=True)
+        # The object's name (S3's ETag) lets a .part left by an earlier run resume.
+        identity = self.store.etag(key)
         started = time.monotonic()
         policy = self._policy
         for tries in range(self.retries + 1):
@@ -811,7 +862,7 @@ class MassiveClient:
                 download_ranges(
                     target,
                     expected,
-                    lambda start, stop: self.store.read(key, start, stop),
+                    lambda start, stop, identity=identity: self.store.read(key, start, stop, if_match=identity),
                     workers=self.streams,
                     part_bytes=self.part_bytes,
                     policy=policy,
@@ -820,8 +871,15 @@ class MassiveClient:
                     verify=lambda partial: _check_gzip(partial, key),
                     fetch_lock=fetching,
                     abort=abort,
+                    identity=identity,
                 )
                 break
+            except MassiveObjectChangedError as error:
+                if tries == self.retries:
+                    raise
+                logger.warning(f"Massive: {error} Starting it over from a fresh HEAD.")
+                expected = self._retrying(f"HEAD {key}", lambda: self.store.size(key))
+                identity = self.store.etag(key)
             except _NotWholeGzip as error:
                 if tries == self.retries:
                     raise

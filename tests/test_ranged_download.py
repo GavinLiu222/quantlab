@@ -16,7 +16,8 @@ import pytest
 
 from quantlab.acquisition._support.request_policy import RequestPolicy, TransientError
 
-BODY = bytes(random.Random(7).getrandbits(8) for _ in range(10_000))  # SYNTHETIC
+_RNG = random.Random(7)
+BODY = bytes(_RNG.getrandbits(8) for _ in range(10_000))  # SYNTHETIC
 SIZE = len(BODY)
 
 
@@ -74,6 +75,11 @@ def _download(path, fetch, *, size=SIZE, sleeps=None, retries=3, **settings):
     return download_ranges(path, size, fetch, policy=policy, what="SYNTHETIC file", error=Broken, **settings)
 
 
+def test_the_body_varies_so_a_misplaced_range_shows():
+    # Bytes at the wrong offset compare equal only in a body of one repeated byte.
+    assert len(set(BODY)) > 200 and BODY[:2000] != BODY[2000:4000]
+
+
 def test_parallel_ranges_assemble_the_exact_bytes(tmp_path):
     # Two ranges must be in flight together, or the barrier times out and breaks.
     fetch = FakeRanges(barrier=threading.Barrier(2, timeout=5))
@@ -106,7 +112,7 @@ def test_a_range_that_keeps_failing_past_the_budget_raises_and_leaves_no_file(tm
     with pytest.raises(Broken, match="reset"):
         _download(target, fetch, retries=3)
     assert len(fetch.requests) == 4
-    assert list(tmp_path.iterdir()) == []
+    assert not (tmp_path / "file.bin").exists()  # the .part and its sidecar stay for a resume
 
 
 def test_progress_resets_the_retry_budget(tmp_path):
@@ -124,7 +130,7 @@ def test_a_body_that_ends_short_is_resumed_then_raises_the_vendors_error(tmp_pat
     target = tmp_path / "file.bin"
     with pytest.raises(Broken, match="bytes 0-10049 ended after 10000 of 10050 bytes"):
         _download(target, fetch, size=len(BODY) + 50, retries=2)
-    assert list(tmp_path.iterdir()) == []
+    assert not (tmp_path / "file.bin").exists()  # the .part and its sidecar stay for a resume
 
 
 def test_a_failed_range_stops_the_others_and_its_error_is_raised(tmp_path):
@@ -150,7 +156,7 @@ def test_a_failed_range_stops_the_others_and_its_error_is_raised(tmp_path):
     with pytest.raises(Refused):
         _download(tmp_path / "file.bin", fetch, workers=2, part_bytes=len(BODY) // 2)
     assert time.monotonic() - began < 5
-    assert list(tmp_path.iterdir()) == []
+    assert not (tmp_path / "file.bin").exists()  # the .part and its sidecar stay for a resume
 
 
 def test_setting_abort_stops_the_ranges(tmp_path):
@@ -166,7 +172,7 @@ def test_setting_abort_stops_the_ranges(tmp_path):
 
     with pytest.raises(DownloadAborted):
         _download(tmp_path / "file.bin", fetch, abort=abort)
-    assert list(tmp_path.iterdir()) == []
+    assert not (tmp_path / "file.bin").exists()  # the .part and its sidecar stay for a resume
 
 
 def test_verify_runs_before_the_rename_and_a_failure_leaves_no_file(tmp_path):
@@ -179,8 +185,8 @@ def test_verify_runs_before_the_rename_and_a_failure_leaves_no_file(tmp_path):
     with pytest.raises(ValueError, match="gzip"):
         _download(tmp_path / "file.bin", FakeRanges(), verify=verify)
     assert seen == [("file.bin.part", True)]
-    assert list(tmp_path.iterdir()) == []
-
+    assert not (tmp_path / "file.bin").exists()  # the .part and its sidecar stay for a resume
+    assert list(tmp_path.iterdir()) == []  # a file verify refuses is removed with its sidecar
 
 def test_the_lock_is_held_while_ranges_are_fetched_not_while_verifying(tmp_path):
     lock = threading.Lock()
@@ -207,3 +213,133 @@ def test_settings_below_one_are_refused(tmp_path):
         _download(tmp_path / "file.bin", FakeRanges(), workers=0)
     with pytest.raises(ValueError, match="part_bytes"):
         _download(tmp_path / "file.bin", FakeRanges(), part_bytes=0)
+
+
+class FailingAfter:
+    """A ``fetch_range`` serving ``BODY`` whose ranges starting at ``fail_from`` or later refuse (not transient)."""
+
+    def __init__(self, fail_from):
+        self.fail_from = fail_from
+        self.requests = []
+
+    def __call__(self, start, stop):
+        self.requests.append((start, stop))
+        if start >= self.fail_from:
+            raise RuntimeError("refused")
+        return [BODY[start:stop]]
+
+
+def test_an_interrupted_download_resumes_only_its_missing_ranges(tmp_path):
+    """A run that stops keeps the .part and its sidecar; the next fetches only the ranges not complete."""
+    target = tmp_path / "file.bin"
+    first = FailingAfter(fail_from=6000)
+    with pytest.raises(RuntimeError):
+        _download(target, first, part_bytes=2000, identity="etag-1")
+    assert not target.exists()
+    assert (tmp_path / "file.bin.part").exists() and (tmp_path / "file.bin.part.json").exists()
+    second = FakeRanges()
+    _download(target, second, part_bytes=2000, identity="etag-1")
+    assert target.read_bytes() == BODY
+    assert sorted(second.requests) == [(6000, 8000), (8000, 10000)]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["file.bin"]
+
+
+def test_a_changed_identity_or_size_starts_the_file_over(tmp_path):
+    """A .part left for another ETag is not reused: every range is fetched again."""
+    target = tmp_path / "file.bin"
+    with pytest.raises(RuntimeError):
+        _download(target, FailingAfter(fail_from=6000), part_bytes=2000, identity="etag-1")
+    again = FakeRanges()
+    _download(target, again, part_bytes=2000, identity="etag-2")
+    assert target.read_bytes() == BODY
+    assert len(again.requests) == 5
+
+
+def test_a_part_without_a_sidecar_starts_over(tmp_path):
+    """A .part with no record of its complete ranges is never trusted."""
+    target = tmp_path / "file.bin"
+    (tmp_path / "file.bin.part").write_bytes(b"\0" * SIZE)
+    fetch = FakeRanges()
+    _download(target, fetch, part_bytes=2000, identity="etag-1")
+    assert target.read_bytes() == BODY and len(fetch.requests) == 5
+
+
+def test_a_part_without_an_identity_starts_over(tmp_path):
+    """No identity names the object, so a same-sized replacement could not be told apart: never resume."""
+    target = tmp_path / "file.bin"
+    with pytest.raises(RuntimeError):
+        _download(target, FailingAfter(fail_from=6000), part_bytes=2000)
+    again = FakeRanges()
+    _download(target, again, part_bytes=2000)
+    assert target.read_bytes() == BODY
+    assert len(again.requests) == 5
+
+
+def _interrupted_with_sidecar(tmp_path, state):
+    """A run stopped after its first three ranges, its sidecar then replaced by ``state``."""
+    import json
+
+    target = tmp_path / "file.bin"
+    with pytest.raises(RuntimeError):
+        _download(target, FailingAfter(fail_from=6000), part_bytes=2000, identity="etag-1")
+    key = {"size": SIZE, "identity": "etag-1", "part_bytes": 2000}
+    sidecar = tmp_path / "file.bin.part.json"
+    sidecar.write_text(json.dumps(state(key) if callable(state) else state))
+    return target
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        lambda key: {**key, "done": [0, 2000, 7000]},  # 7000 starts no range
+        lambda key: {**key, "done": [0, 2000, 4000, 10_000]},  # past the end
+        lambda key: {**key, "done": [0, -2000]},
+        lambda key: {**key, "done": [0, 2000.0]},
+        lambda key: {**key, "done": [0, True]},
+        lambda key: {**key, "done": ["0", "2000"]},
+    ],
+    ids=["not-a-range-start", "past-the-end", "negative", "float", "bool", "strings"],
+)
+def test_a_sidecar_naming_anything_but_range_starts_starts_over(tmp_path, state):
+    target = _interrupted_with_sidecar(tmp_path, state)
+    again = FakeRanges()
+    _download(target, again, part_bytes=2000, identity="etag-1")
+    assert target.read_bytes() == BODY
+    assert len(again.requests) == 5
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        [],
+        "done",
+        None,
+        lambda key: {**key, "done": None},
+        lambda key: {**key, "done": "0"},
+        lambda key: {**key, "done": {"0": True}},
+        lambda key: {**key, "done": [None]},
+        lambda key: {**key, "done": [[0]]},
+        lambda key: {k: v for k, v in key.items() if k != "part_bytes"} | {"done": [0]},
+    ],
+    ids=["list", "string", "null", "done-null", "done-string", "done-dict", "done-of-null", "done-nested",
+         "no-part-bytes"],
+)
+def test_a_malformed_sidecar_starts_over_and_raises_nothing(tmp_path, state):
+    target = _interrupted_with_sidecar(tmp_path, state)
+    again = FakeRanges()
+    _download(target, again, part_bytes=2000, identity="etag-1")
+    assert target.read_bytes() == BODY
+    assert len(again.requests) == 5
+
+
+def test_a_symlink_planted_at_the_sidecar_scratch_name_is_not_followed(tmp_path):
+    """The sidecar's scratch file is created afresh, never through a link someone left at its name."""
+    victim = tmp_path / "victim.txt"
+    victim.write_text("precious")
+    (tmp_path / "file.bin.part.json.tmp").symlink_to(victim)
+    target = tmp_path / "file.bin"
+    with pytest.raises(RuntimeError):
+        _download(target, FailingAfter(fail_from=6000), part_bytes=2000, identity="etag-1")
+    _download(target, FakeRanges(), part_bytes=2000, identity="etag-1")
+    assert victim.read_text() == "precious"
+    assert target.read_bytes() == BODY

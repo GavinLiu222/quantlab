@@ -96,7 +96,10 @@ class FakeStore:
             raise MassiveNotPublishedError(key)
         return self.sizes.get(key, len(self.objects[key]))
 
-    def read(self, key: str, start: int, stop: int):
+    def etag(self, key: str) -> str | None:
+        return None  # names no object: its downloads never resume
+
+    def read(self, key: str, start: int, stop: int, if_match: str | None = None):
         from quantlab.acquisition.massive.client import MassiveTransportError
 
         with self._lock:
@@ -198,7 +201,8 @@ def test_a_stream_that_keeps_breaking_without_progress_fails(env, tmp_path):
         _client(store, retries=3).download_day("trades", DAY, tmp_path)
     assert len(store.reads) == 4
     assert raw_days(tmp_path / "massive", "trades") == []
-    assert not list((tmp_path / "massive").rglob("*.part"))
+    # The .part and its sidecar stay for the next run to resume (ranged_download).
+    assert len(list((tmp_path / "massive").rglob("*.part.json"))) == 1
 
 
 def test_a_file_shorter_than_the_vendor_lists_leaves_nothing(env, tmp_path):
@@ -209,7 +213,8 @@ def test_a_file_shorter_than_the_vendor_lists_leaves_nothing(env, tmp_path):
     with pytest.raises(MassiveTransportError, match="bytes"):
         _client(store, retries=2).download_day("trades", DAY, tmp_path)
     assert raw_days(tmp_path / "massive", "trades") == []
-    assert not list((tmp_path / "massive").rglob("*.part"))
+    # The .part and its sidecar stay for the next run to resume (ranged_download).
+    assert len(list((tmp_path / "massive").rglob("*.part.json"))) == 1
 
 
 def test_a_corrupt_gzip_leaves_nothing(env, tmp_path):
@@ -220,7 +225,7 @@ def test_a_corrupt_gzip_leaves_nothing(env, tmp_path):
     with pytest.raises(MassiveTransportError, match="gzip"):
         _client(FakeStore({KEY: corrupt})).download_day("trades", DAY, tmp_path)
     assert raw_days(tmp_path / "massive", "trades") == []
-    assert not list((tmp_path / "massive").rglob("*.part"))
+    assert not list((tmp_path / "massive").rglob("*.part*"))  # a corrupt file is removed with its sidecar
 
 
 def test_not_published_and_not_entitled_are_told_apart(env, tmp_path):
@@ -476,7 +481,9 @@ class FakeS3:
 
     ``errors`` (error codes) are raised by HEAD requests first, in order;
     ``get_errors`` likewise by ranged GETs, ``list_errors`` by listings.
-    ``listed`` are the keys a listing returns, filtered by prefix.
+    ``listed`` are the keys a listing returns, filtered by prefix. HEAD
+    names the object by ``etag``; a ranged GET whose ``IfMatch`` names
+    another answers 412, as S3 does.
     """
 
     def __init__(self, body: bytes, errors: list[str] | None = None, get_errors: list[str] | None = None,
@@ -486,6 +493,8 @@ class FakeS3:
         self.errors = {"HeadObject": list(errors or []), "GetObject": list(get_errors or []),
                        "ListObjectsV2": list(list_errors or [])}
         self.ranges: list[str] = []
+        self.etag = '"synthetic-etag-1"'  # SYNTHETIC
+        self.if_matches: list[str | None] = []
         self._lock = threading.Lock()
 
     def _raise(self, operation: str) -> None:
@@ -498,18 +507,22 @@ class FakeS3:
 
     def head_object(self, Bucket, Key):
         self._raise("HeadObject")
-        return {"ContentLength": len(self.body)}
+        return {"ContentLength": len(self.body), "ETag": self.etag}
 
     def list_objects_v2(self, Bucket, Prefix):
         self._raise("ListObjectsV2")
         return {"Contents": [{"Key": key} for key in self.listed if key.startswith(Prefix)]}
 
-    def get_object(self, Bucket, Key, Range):
+    def get_object(self, Bucket, Key, Range, IfMatch=None):
         import io
 
+        from botocore.exceptions import ClientError
         from botocore.response import StreamingBody
 
         self._raise("GetObject")
+        self.if_matches.append(IfMatch)
+        if IfMatch is not None and IfMatch != self.etag:
+            raise ClientError({"Error": {"Code": "PreconditionFailed", "Message": "412"}}, "GetObject")
         self.ranges.append(Range)
         first, last = (int(x) for x in Range.removeprefix("bytes=").split("-"))
         part = self.body[first : last + 1]
@@ -540,6 +553,42 @@ def test_a_throttled_range_is_backed_off_and_retried(env, tmp_path):
     path = _s3_client(s3, sleeps, streams=1, part_bytes=len(body)).download_day("trades", DAY, tmp_path)
     assert path.read_bytes() == body
     assert sleeps == [2.0, 4.0]
+
+
+def test_every_ranged_get_is_conditioned_on_the_etag_its_head_read(env, tmp_path):
+    body = _big_body()
+    s3 = FakeS3(body)
+    path = _s3_client(s3, [], streams=2, part_bytes=2000).download_day("trades", DAY, tmp_path)
+    assert path.read_bytes() == body
+    assert len(s3.if_matches) > 1 and set(s3.if_matches) == {'"synthetic-etag-1"'}
+
+
+def test_an_object_replaced_mid_download_starts_over_with_a_fresh_head(env, tmp_path):
+    """A 412 on If-Match: the object changed under the ranges, so none of them is kept."""
+    old, new = _big_body(400), _big_body(500)
+
+    class Replaced(FakeS3):
+        heads = 0
+
+        def head_object(self, Bucket, Key):
+            self.heads += 1
+            return super().head_object(Bucket, Key)
+
+        def get_object(self, Bucket, Key, Range, IfMatch=None):
+            answer = super().get_object(Bucket, Key, Range, IfMatch)
+            if self.body is old:  # replaced right after its first range is served
+                self.body, self.etag = new, '"synthetic-etag-2"'
+            return answer
+
+    s3 = Replaced(old)
+    sleeps: list[float] = []
+    path = _s3_client(s3, sleeps, streams=1, part_bytes=2000).download_day("trades", DAY, tmp_path)
+    assert path.read_bytes() == new
+    assert s3.heads == 2
+    assert s3.if_matches[:2] == ['"synthetic-etag-1"', '"synthetic-etag-1"']
+    assert set(s3.if_matches[2:]) == {'"synthetic-etag-2"'}
+    assert sleeps == []  # a changed object is fetched again at once, not backed off
+    assert not list((tmp_path / "massive").rglob("*.part*"))
 
 
 def test_s3_refusals_and_missing_keys_are_told_apart(env, tmp_path):

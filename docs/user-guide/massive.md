@@ -51,7 +51,9 @@ massive/conditions/conditions_<UTC stamp>.json
 
 A file is fetched in parallel byte ranges, a broken range resumes from the bytes it lacks, and the
 whole file is checked against the vendor's size and decoded to the end before it is renamed into
-place. A day without a file raises `MassiveNotPublishedError` (a holiday, or a day the vendor has
+place. Every range is requested on the condition that the object still has the ETag its size was
+read with: a file the vendor replaces mid-download is started over from a fresh size and ETag.
+A day without a file raises `MassiveNotPublishedError` (a holiday, or a day the vendor has
 not published yet); a day outside the plan's window raises `MassiveEntitlementError`.
 
 A range of days goes through `download_days`, which asks only for XNYS sessions and yields one

@@ -4,6 +4,36 @@ quantlab follows [semantic versioning](https://semver.org/). While the version i
 minor release may break the API, the config format or the store layout; there are no
 compatibility shims or config migrations.
 
+## Unreleased
+
+### Added
+
+- `UnscaledZScoreExpectedReturn` (`quantlab.portfolio.predefined.expected_return`, config
+  `UnscaledZScoreExpectedReturnConfig`): an expected return model whose `mu` is the
+  candidates' cross-sectional z-score of the prediction, unscaled, with no volatility tilt.
+- Ranged downloads resume: an interrupted download keeps its `.part` file and a sidecar
+  recording the size and the object identity (an S3 ETag), and the next attempt continues
+  from where it stopped when the object is unchanged. The Massive flat-file client uses it.
+  A download resumes only with an object identity (a call without one, such as the Sharadar
+  bulk zip, starts over) and a well-formed sidecar naming only this download's range starts.
+  A download that does not resume now also leaves its `.part` and `.part.json` behind after a
+  transient failure, where it used to remove the `.part`; the next call overwrites them.
+- The Massive flat-file client conditions every ranged GET on the ETag its HEAD read
+  (`If-Match`): a file replaced mid-download (S3's 412) raises the new
+  `MassiveObjectChangedError` inside the client, and the day starts over from a fresh HEAD
+  instead of mixing two versions. When the client's retries run out it propagates: a
+  `RuntimeError`, not a `MassiveTransportError`.
+
+### Fixed
+
+- `predict_live_bar` treats a store with bars inside the day (a one-minute store) as holding
+  the daily bar t when it holds any bar of t's day, so daily factors read from minute stores
+  no longer stop the live prediction for a missing bar.
+- Sharadar ACTIONS: the seven `acquisitionbesteffort*` action names Sharadar started
+  publishing on 2026-10-19 are mapped (cash, stock or other), so the actions table builds again.
+- `BlackLittermanOptimizer` warns for `UnscaledZScoreExpectedReturn` used as total-return views
+  (`views_relative_to_prior=False`), as it does for the other centred alphas.
+
 ## 0.1.0 (2026-10-18)
 
 The first release, published to PyPI as `quantlab-py` and imported as `quantlab`.

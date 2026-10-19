@@ -496,3 +496,25 @@ def test_a_run_reading_the_vendor_store_on_a_roster_extends_and_predicts(tmp_pat
     fixture.factor().build(_day(fixture.bars[0]), _day(t))
     xr.testing.assert_identical(extended, xr.open_zarr(factor_store).sel(timestamp=[t]).load())
     assert LivePredictionStore(fixture.live).row(t)["fwd_ret_1"].notnull().sum() > 0
+
+
+def test_a_minute_store_holds_a_daily_bar_when_it_holds_a_bar_of_its_day():
+    """A daily factor of one-minute bars reads a store none of whose bars is stamped at midnight: the
+    leaf check takes any bar of t's day as holding t (red before: the us3000 SEL0 run's intraday
+    factors refused 2026-10-15 against a minute store ending 2026-10-15 20:00)."""
+    from quantlab.backtest.live import _holds
+
+    class Minutes:
+        bars = pd.DatetimeIndex(["2026-10-14 09:30", "2026-10-14 20:00", "2026-10-15 09:30", "2026-10-15 20:00"])
+
+        def calendar(self, start, end):
+            return self.bars[(self.bars >= pd.Timestamp(start)) & (self.bars <= pd.Timestamp(end))]
+
+    class Days(Minutes):
+        bars = pd.DatetimeIndex(["2026-10-14", "2026-10-15"])
+
+    assert _holds(Minutes(), pd.Timestamp("2026-10-15"))
+    assert not _holds(Minutes(), pd.Timestamp("2026-10-16"))
+    assert _holds(Days(), pd.Timestamp("2026-10-15"))
+    assert not _holds(Days(), pd.Timestamp("2026-10-16"))
+    assert not _holds(Minutes(), pd.Timestamp("2026-10-15 12:00"))

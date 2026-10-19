@@ -281,7 +281,13 @@ def test_every_action_name_sharadar_documents_is_in_a_family():
         tickerchangeto voluntarydelisting
     """.split()
     assert len(documented) == 66
-    assert set(FAMILIES) == set(documented)
+    # Seen in the ACTIONS rows of 2026-10-19 before the descriptions table lists them (mapped in FAMILIES).
+    observed = {
+        "acquisitionbesteffortcashcad", "acquisitionbesteffortcashusd", "acquisitionbesteffortcommon",
+        "acquisitionbesteffortnote", "acquisitionbesteffortpreferred", "acquisitionbesteffortpreferred2",
+        "acquisitionbesteffortright",
+    }
+    assert set(FAMILIES) == set(documented) | observed
 
 
 def test_a_day_at_a_time_equals_at_once(tmp_path, today):

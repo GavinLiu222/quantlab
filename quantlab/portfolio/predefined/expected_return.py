@@ -4,7 +4,7 @@ An ``ExpectedReturnModel`` (``quantlab.portfolio.base``) turns the prediction
 of a mean-variance rule's ``expected_return_label`` into the expected return
 ``mu`` its optimiser maximises, on ``[bars, symbols]`` arrays, so one
 implementation serves the per-bar rule (one row) and the approximate
-backtest. Four are shipped:
+backtest. Five are shipped:
 
 - ``GrinoldExpectedReturn``: ``mu = ic * sigma * z``, ``z`` the prediction's
   cross-sectional z-score over the bar's candidates and ``sigma`` each
@@ -13,6 +13,9 @@ backtest. Four are shipped:
 - ``ZScoreExpectedReturn``: ``mu = ic * median(sigma) * z``, the same scale
   without the tilt to risky names: within a bar ``mu`` ranks as the
   prediction;
+- ``UnscaledZScoreExpectedReturn``: ``mu = z``, the z-score itself,
+  unscaled: the same units on every bar, so ``turnover_penalty`` is in z
+  units;
 - ``RawExpectedReturn``: ``mu`` is the prediction, which must be in return
   units (its label spec's scale ``"raw"``);
 - ``PredictionExpectedReturn``: ``mu`` is the prediction as it is, in its own
@@ -27,6 +30,7 @@ from quantlab.portfolio.config import (
     GrinoldExpectedReturnConfig,
     PredictionExpectedReturnConfig,
     RawExpectedReturnConfig,
+    UnscaledZScoreExpectedReturnConfig,
     ZScoreExpectedReturnConfig,
 )
 from quantlab.runs.prediction_panel import LabelSpec
@@ -149,6 +153,32 @@ class ZScoreExpectedReturn(_ScaledByIC):
             median = np.nanmedian(np.where(candidates, sigma, np.nan), axis=-1, keepdims=True)
         scaled = self.config.ic * np.nan_to_num(median, nan=0.0) * _zscore(predictions, candidates)
         return np.where(candidates, scaled, 0.0)
+
+
+class UnscaledZScoreExpectedReturn(ExpectedReturnModel):
+    """``mu = z``: the prediction's cross-sectional z-score over the candidates, unscaled.
+
+    ``z`` is the z-score (``ddof=1``) of each bar's prediction over its
+    candidates, 0.0 off them. ``ZScoreExpectedReturn`` scales it by
+    ``ic * median(sigma)``, which changes from bar to bar; here ``mu`` is the
+    z-score itself, so ``turnover_penalty`` (and ``risk_aversion``) weigh
+    against it in z units on every bar. No volatility is read.
+
+    Examples
+    --------
+    >>> UnscaledZScoreExpectedReturn(UnscaledZScoreExpectedReturnConfig()).expected_returns(
+    ...     np.array([[1.0, 2.0, 3.0, 9.0]]), None, np.array([[True, True, True, False]])
+    ... )
+    array([[-1.,  0.,  1.,  0.]])
+    """
+
+    config_cls = UnscaledZScoreExpectedReturnConfig
+    needs_sigma = False
+
+    def expected_returns(self, predictions, sigma, candidates) -> np.ndarray:
+        """The candidates' z-score, 0.0 elsewhere; see the class docstring."""
+        candidates = np.asarray(candidates, dtype=bool)
+        return np.where(candidates, _zscore(predictions, candidates), 0.0)
 
 
 class PredictionExpectedReturn(ExpectedReturnModel):

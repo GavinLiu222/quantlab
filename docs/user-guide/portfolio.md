@@ -300,6 +300,9 @@ an {py:class}`~quantlab.portfolio.base.ExpectedReturnModel` that turns the predi
   get a larger `mu`.
 - {py:class}`~quantlab.portfolio.predefined.expected_return.ZScoreExpectedReturn`:
   `mu = ic * median(sigma) * z`, Grinold's scale without the tilt toward volatile names.
+- {py:class}`~quantlab.portfolio.predefined.expected_return.UnscaledZScoreExpectedReturn`:
+  `mu = z`, the z-score itself with no volatility read, so `mu` is in the same units on every
+  bar and `risk_aversion` and `turnover_penalty` weigh against it in z units.
 - {py:class}`~quantlab.portfolio.predefined.expected_return.RawExpectedReturn`: the
   prediction itself, for a model that predicts returns in their own units.
 - {py:class}`~quantlab.portfolio.predefined.expected_return.PredictionExpectedReturn`: the
@@ -522,8 +525,8 @@ Views come from two places:
 
 - **Symbol views**: the `expected_return` model's `mu` on the predicted candidates, read as
   total returns over the span or, with `views_relative_to_prior=True`, as alphas added to
-  `pi`. An IC-scaled model (`GrinoldExpectedReturn`, `ZScoreExpectedReturn`) gives centred
-  alphas, so use it with alpha views. `omega` sets each view's uncertainty: `"he_litterman"`
+  `pi`. A z-score model (`GrinoldExpectedReturn`, `ZScoreExpectedReturn`,
+  `UnscaledZScoreExpectedReturn`) gives centred alphas, so use it with alpha views. `omega` sets each view's uncertainty: `"he_litterman"`
   (the default, `tau Sigma_jj`), `"idzorek"` with a `confidence` in `(0, 1]`, or
   `"specific"` (`tau D_j`).
 - **User views** ({py:class}`~quantlab.portfolio.predefined.black_litterman.ReturnView`):
