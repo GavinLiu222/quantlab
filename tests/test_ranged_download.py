@@ -16,7 +16,8 @@ import pytest
 
 from quantlab.acquisition._support.request_policy import RequestPolicy, TransientError
 
-BODY = bytes(random.Random(7).getrandbits(8) for _ in range(10_000))  # SYNTHETIC
+_RNG = random.Random(7)
+BODY = bytes(_RNG.getrandbits(8) for _ in range(10_000))  # SYNTHETIC
 SIZE = len(BODY)
 
 
@@ -72,6 +73,11 @@ def _download(path, fetch, *, size=SIZE, sleeps=None, retries=3, **settings):
     settings.setdefault("workers", 1)
     settings.setdefault("part_bytes", size or 1)
     return download_ranges(path, size, fetch, policy=policy, what="SYNTHETIC file", error=Broken, **settings)
+
+
+def test_the_body_varies_so_a_misplaced_range_shows():
+    # Bytes at the wrong offset compare equal only in a body of one repeated byte.
+    assert len(set(BODY)) > 200 and BODY[:2000] != BODY[2000:4000]
 
 
 def test_parallel_ranges_assemble_the_exact_bytes(tmp_path):
