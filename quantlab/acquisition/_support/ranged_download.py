@@ -25,9 +25,12 @@ complete, so the next call fetches only the missing ranges; a sidecar whose
 size, identity or ``part_bytes`` differs (the object changed), one that is not
 the shape written here or names anything but this download's range starts,
 and any call without an ``identity`` (a same-sized replacement could not be
-told apart) start the file over. The file appears at ``path`` only once every range is in, its size is
-checked and ``verify`` (when given) accepted it, by one atomic rename; a file
-``verify`` refuses is removed with its sidecar.
+told apart) start the file over. The file appears at ``path`` only once every
+range is in, its size is checked and ``verify`` (when given) accepted it, by
+one atomic rename; a file ``verify`` refuses is removed with its sidecar.
+Calls downloading one ``path`` take turns, threads and processes alike: each holds an exclusive
+``flock`` on ``<name>.part.lock`` for its whole run, so two never share the
+``.part`` and its sidecar.
 
 Examples
 --------
@@ -45,12 +48,13 @@ True
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import tempfile
 import threading
-from collections.abc import Callable, Iterable
-from contextlib import AbstractContextManager, nullcontext
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from pathlib import Path
 
 from joblib import Parallel, delayed
@@ -164,50 +168,81 @@ def download_ranges(
             stopped.set()
             raise
 
-    sidecar = Path(f"{partial}.json")
-    key = {"size": size, "identity": identity, "part_bytes": part_bytes}
-    done = _completed(partial, sidecar, key, {first for first, _ in parts})
-    record_lock = threading.Lock()
-    pending = [(first, stop) for first, stop in parts if first not in done]
-    if done:
-        logger.info(f"{what}: resuming, {len(parts) - len(pending)} of {len(parts)} range(s) already complete.")
+    # One download of a path at a time, across threads and processes: two would share the .part.
+    with _exclusive(Path(f"{partial}.lock")):
+        sidecar = Path(f"{partial}.json")
+        key = {"size": size, "identity": identity, "part_bytes": part_bytes}
+        done = _completed(partial, sidecar, key, {first for first, _ in parts})
+        record_lock = threading.Lock()
+        pending = [(first, stop) for first, stop in parts if first not in done]
+        if done:
+            logger.info(f"{what}: resuming, {len(parts) - len(pending)} of {len(parts)} range(s) already complete.")
 
-    def fetch_and_record(first: int, stop: int) -> None:
-        fetch(first, stop)
-        with record_lock:
-            done.add(first)
-            _write_sidecar(sidecar, key, done)
+        def fetch_and_record(first: int, stop: int) -> None:
+            fetch(first, stop)
+            with record_lock:
+                done.add(first)
+                _write_sidecar(sidecar, key, done)
 
-    verifying = False
-    try:
-        if not done:
-            with partial.open("wb") as handle:
-                handle.truncate(size)
-            _write_sidecar(sidecar, key, done)
-        with fetch_lock if fetch_lock is not None else nullcontext():
-            if pending:
-                # Threads, as every fan-out in quantlab: the ranges wait on the network.
-                Parallel(n_jobs=min(workers, len(pending)), backend="threading", batch_size=1)(
-                    delayed(fetch_and_record)(first, stop) for first, stop in pending
-                )
-        verifying = True
-        if partial.stat().st_size != size:
-            raise error(f"{what}: the downloaded file holds {partial.stat().st_size} bytes, not {size}")
-        if verify is not None:
-            verify(partial)
-        os.replace(partial, target)
-        sidecar.unlink(missing_ok=True)
-    except BaseException as raised:
-        stopped.set()
-        if verifying:
-            # A whole file that is wrong is not resumed: the next call starts over.
-            partial.unlink(missing_ok=True)
+        verifying = False
+        try:
+            if not done:
+                with partial.open("wb") as handle:
+                    handle.truncate(size)
+                _write_sidecar(sidecar, key, done)
+            with fetch_lock if fetch_lock is not None else nullcontext():
+                if pending:
+                    # Threads, as every fan-out in quantlab: the ranges wait on the network.
+                    Parallel(n_jobs=min(workers, len(pending)), backend="threading", batch_size=1)(
+                        delayed(fetch_and_record)(first, stop) for first, stop in pending
+                    )
+            verifying = True
+            if partial.stat().st_size != size:
+                raise error(f"{what}: the downloaded file holds {partial.stat().st_size} bytes, not {size}")
+            if verify is not None:
+                verify(partial)
+            os.replace(partial, target)
             sidecar.unlink(missing_ok=True)
-        # The range that failed first, not one it stopped.
-        if isinstance(raised, DownloadAborted) and failures:
-            raise failures[0] from None
-        raise
-    return len(parts)
+        except BaseException as raised:
+            stopped.set()
+            if verifying:
+                # A whole file that is wrong is not resumed: the next call starts over.
+                partial.unlink(missing_ok=True)
+                sidecar.unlink(missing_ok=True)
+            # The range that failed first, not one it stopped.
+            if isinstance(raised, DownloadAborted) and failures:
+                raise failures[0] from None
+            raise
+        return len(parts)
+
+
+@contextmanager
+def _exclusive(lock: Path) -> Iterator[None]:
+    """Hold an exclusive ``flock`` on ``lock`` (created, never followed through a link); remove it on leaving.
+
+    A waiter that wakes on a file its holder has already removed locks the
+    one now at the path instead, so the removal never lets two in at once.
+    """
+    while True:
+        handle = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            held = os.fstat(handle)
+            try:
+                current = os.stat(lock, follow_symlinks=False)
+            except FileNotFoundError:
+                current = None
+        except BaseException:
+            os.close(handle)
+            raise
+        if current is not None and (current.st_dev, current.st_ino) == (held.st_dev, held.st_ino):
+            break
+        os.close(handle)
+    try:
+        yield
+    finally:
+        lock.unlink(missing_ok=True)
+        os.close(handle)
 
 
 def _completed(partial: Path, sidecar: Path, key: dict, starts: set[int]) -> set[int]:
