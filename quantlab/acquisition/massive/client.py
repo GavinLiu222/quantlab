@@ -23,7 +23,10 @@ requests with boto3) and ``http_get`` (one REST GET returning an
 before the vendor publishes), ``MassiveEntitlementError`` (the key was
 refused, or the day is outside the plan's window) and
 ``MassiveTransportError`` (the network, throttling included), which alone is
-retried after a back-off that doubles on each attempt.
+retried after a back-off that doubles on each attempt. Every ranged GET is
+conditioned on the ETag its HEAD read: an object replaced mid-download
+answers 412 (``MassiveObjectChangedError``), and the day starts over at once
+from a fresh HEAD.
 
 ``pull`` keeps one REST endpoint (``quantlab.acquisition.massive.rest``) in
 the raw tier: it pages on the endpoint's date field from the day after its
@@ -157,6 +160,14 @@ class MassiveNotPublishedError(LookupError):
     """Massive has no file for that day: not a trading day, or not published yet."""
 
 
+class MassiveObjectChangedError(RuntimeError):
+    """The object was replaced while its ranges were fetched (S3 answered 412 to ``If-Match``).
+
+    Not transient for the range: the download of the day starts over from a
+    fresh HEAD, ``retries`` times.
+    """
+
+
 class MassiveTransportError(TransientError):
     """The connection failed or broke, Massive throttled, or a downloaded file failed its checks; retried.
 
@@ -231,12 +242,14 @@ class ObjectStore(Protocol):
     Both raise ``MassiveNotPublishedError``, ``MassiveEntitlementError`` or
     ``MassiveTransportError``; ``read`` may raise it after yielding some
     chunks, when its stream breaks. Both are called from several threads.
+    ``read`` given ``if_match`` raises ``MassiveObjectChangedError`` when the
+    object no longer has that ETag.
     """
 
     def size(self, key: str) -> int:
         """Return the object's size in bytes."""
 
-    def read(self, key: str, start: int, stop: int) -> Iterable[bytes]:
+    def read(self, key: str, start: int, stop: int, if_match: str | None = None) -> Iterable[bytes]:
         """Return the object's bytes ``start`` up to (not including) ``stop``, in chunks."""
 
 
@@ -315,6 +328,8 @@ class S3ObjectStore:
 
         if isinstance(error, ClientError):
             code = str(error.response.get("Error", {}).get("Code", ""))
+            if code in ("412", "PreconditionFailed"):
+                return MassiveObjectChangedError(f"Massive replaced {key!r} while it was being downloaded.")
             if code in ("404", "NoSuchKey", "NotFound"):
                 return MassiveNotPublishedError(f"Massive has no {key!r} (not a trading day, or not published yet).")
             if code in _FORBIDDEN or code in _BAD_CREDENTIALS:
@@ -390,8 +405,11 @@ class S3ObjectStore:
             f"(before the oldest day it serves)."
         )
 
-    def read(self, key: str, start: int, stop: int) -> Iterable[bytes]:
+    def read(self, key: str, start: int, stop: int, if_match: str | None = None) -> Iterable[bytes]:
         """Yield the bytes ``start`` up to ``stop`` of the object in chunks from one ranged GET.
+
+        With ``if_match`` (an ETag) the GET is conditioned on it: an object
+        replaced since raises ``MassiveObjectChangedError`` (S3's 412).
 
         Examples
         --------
@@ -401,7 +419,10 @@ class S3ObjectStore:
             head = b"".join(store.read(s3_key("trades", date(2016, 11, 25)), 0, 1024))
         """
         try:
-            body = self._client.get_object(Bucket=BUCKET, Key=key, Range=f"bytes={start}-{stop - 1}")["Body"]
+            request = {"Bucket": BUCKET, "Key": key, "Range": f"bytes={start}-{stop - 1}"}
+            if if_match is not None:
+                request["IfMatch"] = if_match
+            body = self._client.get_object(**request)["Body"]
             yield from body.iter_chunks(_CHUNK)
         except Exception as error:
             raise self._translate(error, key) from error
@@ -814,7 +835,10 @@ class MassiveClient:
 
         Its ranges are fetched by ``download_ranges`` while holding
         ``fetching``; setting ``abort`` stops them at their next chunk. A
-        file that is not a whole gzip is downloaded again, ``retries`` times.
+        file that is not a whole gzip is downloaded again, ``retries`` times,
+        after a back-off; an object replaced mid-download (each ranged GET is
+        conditioned on the ETag its HEAD read) starts over at once from a
+        fresh HEAD, within the same ``retries``.
         """
         key = s3_key(data_type, day)
         target = raw_file(Path(download_root) / VENDOR_DIR, data_type, day)
@@ -832,7 +856,7 @@ class MassiveClient:
                 download_ranges(
                     target,
                     expected,
-                    lambda start, stop: self.store.read(key, start, stop),
+                    lambda start, stop, identity=identity: self.store.read(key, start, stop, if_match=identity),
                     workers=self.streams,
                     part_bytes=self.part_bytes,
                     policy=policy,
@@ -844,6 +868,12 @@ class MassiveClient:
                     identity=identity,
                 )
                 break
+            except MassiveObjectChangedError as error:
+                if tries == self.retries:
+                    raise
+                logger.warning(f"Massive: {error} Starting it over from a fresh HEAD.")
+                expected = self._retrying(f"HEAD {key}", lambda: self.store.size(key))
+                identity = None if etag is None else etag(key)
             except _NotWholeGzip as error:
                 if tries == self.retries:
                     raise
