@@ -242,12 +242,17 @@ class ObjectStore(Protocol):
     Both raise ``MassiveNotPublishedError``, ``MassiveEntitlementError`` or
     ``MassiveTransportError``; ``read`` may raise it after yielding some
     chunks, when its stream breaks. Both are called from several threads.
-    ``read`` given ``if_match`` raises ``MassiveObjectChangedError`` when the
-    object no longer has that ETag.
+    ``etag`` names the object ``size`` last read (``None`` when the store
+    cannot name it: its download then never resumes), and ``read`` given
+    ``if_match`` raises ``MassiveObjectChangedError`` when the object no
+    longer has that ETag.
     """
 
     def size(self, key: str) -> int:
         """Return the object's size in bytes."""
+
+    def etag(self, key: str) -> str | None:
+        """Return the ETag ``size`` last read for ``key``, else None."""
 
     def read(self, key: str, start: int, stop: int, if_match: str | None = None) -> Iterable[bytes]:
         """Return the object's bytes ``start`` up to (not including) ``stop``, in chunks."""
@@ -296,6 +301,8 @@ class S3ObjectStore:
     ) -> None:
         """Create the boto3 client; see the class docstring."""
         self._today = today if today is not None else _new_york_today
+        # The ETag of each key's last HEAD, for etag().
+        self._etags: dict[str, str | None] = {}
         if client is not None:
             self._client = client
             return
@@ -359,7 +366,7 @@ class S3ObjectStore:
         try:
             head = self._client.head_object(Bucket=BUCKET, Key=key)
             # Kept for etag(): the same HEAD names the object, no second request.
-            self.__dict__.setdefault("_etags", {})[key] = head.get("ETag")
+            self._etags[key] = head.get("ETag")
             return int(head["ContentLength"])
         except ClientError as error:
             code = str(error.response.get("Error", {}).get("Code", ""))
@@ -380,7 +387,7 @@ class S3ObjectStore:
             key = s3_key("trades", date(2016, 11, 25))
             store.size(key), store.etag(key)
         """
-        return self.__dict__.get("_etags", {}).get(key)
+        return self._etags.get(key)
 
     def _forbidden(self, key: str, code: str) -> Exception:
         """Tell a 403 on ``key`` apart by listing its month; see the class docstring."""
@@ -846,9 +853,8 @@ class MassiveClient:
         if target.exists() and target.stat().st_size == expected:
             return target, 0
         target.parent.mkdir(parents=True, exist_ok=True)
-        # A store that names its objects (S3's ETag) lets a .part left by an earlier run resume.
-        etag = getattr(self.store, "etag", None)
-        identity = None if etag is None else etag(key)
+        # The object's name (S3's ETag) lets a .part left by an earlier run resume.
+        identity = self.store.etag(key)
         started = time.monotonic()
         policy = self._policy
         for tries in range(self.retries + 1):
@@ -873,7 +879,7 @@ class MassiveClient:
                     raise
                 logger.warning(f"Massive: {error} Starting it over from a fresh HEAD.")
                 expected = self._retrying(f"HEAD {key}", lambda: self.store.size(key))
-                identity = None if etag is None else etag(key)
+                identity = self.store.etag(key)
             except _NotWholeGzip as error:
                 if tries == self.retries:
                     raise

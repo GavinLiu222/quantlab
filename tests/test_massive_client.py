@@ -96,6 +96,9 @@ class FakeStore:
             raise MassiveNotPublishedError(key)
         return self.sizes.get(key, len(self.objects[key]))
 
+    def etag(self, key: str) -> str | None:
+        return None  # names no object: its downloads never resume
+
     def read(self, key: str, start: int, stop: int, if_match: str | None = None):
         from quantlab.acquisition.massive.client import MassiveTransportError
 
