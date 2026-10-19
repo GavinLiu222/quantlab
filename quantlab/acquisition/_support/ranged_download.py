@@ -47,7 +47,6 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 import threading
 from collections.abc import Callable, Iterable
 from contextlib import AbstractContextManager, nullcontext
@@ -57,6 +56,7 @@ from joblib import Parallel, delayed
 from loguru import logger
 
 from quantlab.acquisition._support.request_policy import RequestPolicy, TransientError
+from quantlab.utils.atomic import write_json_atomically
 
 #: ``fetch_range(start, stop)``: the bytes ``start`` up to ``stop`` (exclusive), in chunks.
 FetchRange = Callable[[int, int], Iterable[bytes]]
@@ -236,17 +236,11 @@ def _completed(partial: Path, sidecar: Path, key: dict, starts: set[int]) -> set
 def _write_sidecar(sidecar: Path, key: dict, done: set[int]) -> None:
     """Record ``key`` and the completed ranges' first bytes, replacing the sidecar atomically.
 
-    The scratch file is created afresh (``mkstemp``: exclusive, no link
-    followed), so nothing planted in the directory is written through.
+    Through ``write_json_atomically``, whose scratch file is created afresh
+    (``mkstemp``: exclusive, no link followed), so nothing planted in the
+    directory is written through.
     """
-    handle, scratch = tempfile.mkstemp(dir=sidecar.parent, prefix=f"{sidecar.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(handle, "w") as file:
-            file.write(json.dumps({**key, "done": sorted(done)}))
-        os.replace(scratch, sidecar)
-    except BaseException:
-        Path(scratch).unlink(missing_ok=True)
-        raise
+    write_json_atomically(sidecar, {**key, "done": sorted(done)})
 
 
 def _fetch_one(
