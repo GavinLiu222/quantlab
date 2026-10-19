@@ -262,3 +262,71 @@ def test_a_part_without_a_sidecar_starts_over(tmp_path):
     fetch = FakeRanges()
     _download(target, fetch, part_bytes=2000, identity="etag-1")
     assert target.read_bytes() == BODY and len(fetch.requests) == 5
+
+
+def test_a_part_without_an_identity_starts_over(tmp_path):
+    """No identity names the object, so a same-sized replacement could not be told apart: never resume."""
+    target = tmp_path / "file.bin"
+    with pytest.raises(RuntimeError):
+        _download(target, FailingAfter(fail_from=6000), part_bytes=2000)
+    again = FakeRanges()
+    _download(target, again, part_bytes=2000)
+    assert target.read_bytes() == BODY
+    assert len(again.requests) == 5
+
+
+def _interrupted_with_sidecar(tmp_path, state):
+    """A run stopped after its first three ranges, its sidecar then replaced by ``state``."""
+    import json
+
+    target = tmp_path / "file.bin"
+    with pytest.raises(RuntimeError):
+        _download(target, FailingAfter(fail_from=6000), part_bytes=2000, identity="etag-1")
+    key = {"size": SIZE, "identity": "etag-1", "part_bytes": 2000}
+    sidecar = tmp_path / "file.bin.part.json"
+    sidecar.write_text(json.dumps(state(key) if callable(state) else state))
+    return target
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        lambda key: {**key, "done": [0, 2000, 7000]},  # 7000 starts no range
+        lambda key: {**key, "done": [0, 2000, 4000, 10_000]},  # past the end
+        lambda key: {**key, "done": [0, -2000]},
+        lambda key: {**key, "done": [0, 2000.0]},
+        lambda key: {**key, "done": [0, True]},
+        lambda key: {**key, "done": ["0", "2000"]},
+    ],
+    ids=["not-a-range-start", "past-the-end", "negative", "float", "bool", "strings"],
+)
+def test_a_sidecar_naming_anything_but_range_starts_starts_over(tmp_path, state):
+    target = _interrupted_with_sidecar(tmp_path, state)
+    again = FakeRanges()
+    _download(target, again, part_bytes=2000, identity="etag-1")
+    assert target.read_bytes() == BODY
+    assert len(again.requests) == 5
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        [],
+        "done",
+        None,
+        lambda key: {**key, "done": None},
+        lambda key: {**key, "done": "0"},
+        lambda key: {**key, "done": {"0": True}},
+        lambda key: {**key, "done": [None]},
+        lambda key: {**key, "done": [[0]]},
+        lambda key: {k: v for k, v in key.items() if k != "part_bytes"} | {"done": [0]},
+    ],
+    ids=["list", "string", "null", "done-null", "done-string", "done-dict", "done-of-null", "done-nested",
+         "no-part-bytes"],
+)
+def test_a_malformed_sidecar_starts_over_and_raises_nothing(tmp_path, state):
+    target = _interrupted_with_sidecar(tmp_path, state)
+    again = FakeRanges()
+    _download(target, again, part_bytes=2000, identity="etag-1")
+    assert target.read_bytes() == BODY
+    assert len(again.requests) == 5

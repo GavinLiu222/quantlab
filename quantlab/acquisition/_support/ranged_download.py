@@ -22,8 +22,10 @@ interrupt stops every other range at its next chunk. The ``.part`` file is
 kept with a sidecar ``<name>.part.json`` recording the file's size, the
 vendor's ``identity`` of the object (an S3 ETag) and the ranges already
 complete, so the next call fetches only the missing ranges; a sidecar whose
-size, identity or ``part_bytes`` differs (the object changed) starts the file
-over. The file appears at ``path`` only once every range is in, its size is
+size, identity or ``part_bytes`` differs (the object changed), one that is not
+the shape written here or names anything but this download's range starts,
+and any call without an ``identity`` (a same-sized replacement could not be
+told apart) start the file over. The file appears at ``path`` only once every range is in, its size is
 checked and ``verify`` (when given) accepted it, by one atomic rename; a file
 ``verify`` refuses is removed with its sidecar.
 
@@ -84,7 +86,9 @@ def download_ranges(
     ----------
     path : str or Path
         Where the file lands; its directory must exist. The bytes are
-        written to ``<path>.part`` first, which is truncated to ``size``.
+        written to ``<path>.part`` first: a fresh start truncates it to
+        ``size``; a sidecar matching this call keeps it and its completed
+        ranges, and only the others are fetched.
     size : int
         The file's size in bytes, as the vendor gives it.
     fetch_range : callable
@@ -114,7 +118,8 @@ def download_ranges(
         Set by the caller to stop every range at its next chunk.
     identity : str or None, default None
         The vendor's identity of the remote object (an S3 ETag), recorded in
-        the sidecar: a ``.part`` left for another identity is started over.
+        the sidecar: a ``.part`` left for another identity is started over,
+        and without one (``None``) every call starts over.
 
     Returns
     -------
@@ -160,7 +165,7 @@ def download_ranges(
 
     sidecar = Path(f"{partial}.json")
     key = {"size": size, "identity": identity, "part_bytes": part_bytes}
-    done = _completed(partial, sidecar, key)
+    done = _completed(partial, sidecar, key, {first for first, _ in parts})
     record_lock = threading.Lock()
     pending = [(first, stop) for first, stop in parts if first not in done]
     if done:
@@ -204,17 +209,27 @@ def download_ranges(
     return len(parts)
 
 
-def _completed(partial: Path, sidecar: Path, key: dict) -> set[int]:
-    """The first bytes of the ranges already complete in ``partial``; empty to start over."""
-    if not (partial.exists() and sidecar.exists()):
+def _completed(partial: Path, sidecar: Path, key: dict, starts: set[int]) -> set[int]:
+    """The first bytes of the ranges already complete in ``partial``; empty to start over.
+
+    Anything but a sidecar written for ``key`` whose ``done`` lists only
+    ``starts`` (this download's range starts) is no resume state.
+    """
+    if key["identity"] is None or not (partial.exists() and sidecar.exists()):
         return set()
     try:
         state = json.loads(sidecar.read_text())
     except (OSError, ValueError):
         return set()
-    if {name: state.get(name) for name in key} != key or partial.stat().st_size != key["size"]:
+    if not isinstance(state, dict) or {name: state.get(name) for name in key} != key:
         return set()
-    return {int(first) for first in state.get("done", [])}
+    done = state.get("done")
+    # bool is an int to Python; JSON true is no range start.
+    if not isinstance(done, list) or not all(type(first) is int and first in starts for first in done):
+        return set()
+    if partial.stat().st_size != key["size"]:
+        return set()
+    return set(done)
 
 
 def _write_sidecar(sidecar: Path, key: dict, done: set[int]) -> None:
