@@ -16,9 +16,13 @@ compatibility shims or config migrations.
   from where it stopped when the object is unchanged. The Massive flat-file client uses it.
   A download resumes only with an object identity (a call without one, such as the Sharadar
   bulk zip, starts over) and a well-formed sidecar naming only this download's range starts.
+  A download that does not resume now also leaves its `.part` and `.part.json` behind after a
+  transient failure, where it used to remove the `.part`; the next call overwrites them.
 - The Massive flat-file client conditions every ranged GET on the ETag its HEAD read
-  (`If-Match`): a file replaced mid-download raises `MassiveObjectChangedError` (412) inside
-  the client, and the day starts over from a fresh HEAD instead of mixing two versions.
+  (`If-Match`): a file replaced mid-download (S3's 412) raises the new
+  `MassiveObjectChangedError` inside the client, and the day starts over from a fresh HEAD
+  instead of mixing two versions. When the client's retries run out it propagates: a
+  `RuntimeError`, not a `MassiveTransportError`.
 
 ### Fixed
 
