@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import threading
 from collections.abc import Callable, Iterable
 from contextlib import AbstractContextManager, nullcontext
@@ -233,10 +234,19 @@ def _completed(partial: Path, sidecar: Path, key: dict, starts: set[int]) -> set
 
 
 def _write_sidecar(sidecar: Path, key: dict, done: set[int]) -> None:
-    """Record ``key`` and the completed ranges' first bytes, replacing the sidecar atomically."""
-    scratch = sidecar.with_name(sidecar.name + ".tmp")
-    scratch.write_text(json.dumps({**key, "done": sorted(done)}))
-    os.replace(scratch, sidecar)
+    """Record ``key`` and the completed ranges' first bytes, replacing the sidecar atomically.
+
+    The scratch file is created afresh (``mkstemp``: exclusive, no link
+    followed), so nothing planted in the directory is written through.
+    """
+    handle, scratch = tempfile.mkstemp(dir=sidecar.parent, prefix=f"{sidecar.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(handle, "w") as file:
+            file.write(json.dumps({**key, "done": sorted(done)}))
+        os.replace(scratch, sidecar)
+    except BaseException:
+        Path(scratch).unlink(missing_ok=True)
+        raise
 
 
 def _fetch_one(

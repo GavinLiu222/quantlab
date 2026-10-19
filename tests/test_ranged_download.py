@@ -330,3 +330,16 @@ def test_a_malformed_sidecar_starts_over_and_raises_nothing(tmp_path, state):
     _download(target, again, part_bytes=2000, identity="etag-1")
     assert target.read_bytes() == BODY
     assert len(again.requests) == 5
+
+
+def test_a_symlink_planted_at_the_sidecar_scratch_name_is_not_followed(tmp_path):
+    """The sidecar's scratch file is created afresh, never through a link someone left at its name."""
+    victim = tmp_path / "victim.txt"
+    victim.write_text("precious")
+    (tmp_path / "file.bin.part.json.tmp").symlink_to(victim)
+    target = tmp_path / "file.bin"
+    with pytest.raises(RuntimeError):
+        _download(target, FailingAfter(fail_from=6000), part_bytes=2000, identity="etag-1")
+    _download(target, FakeRanges(), part_bytes=2000, identity="etag-1")
+    assert victim.read_text() == "precious"
+    assert target.read_bytes() == BODY
