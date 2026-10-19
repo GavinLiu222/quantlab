@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "quantlab-py"
-version = "0.1.0"
+version = "0.2.0"
 description = "End-to-end config-driven quant research backend: data -> factors -> return model -> portfolio optimization -> target positions -> backtest."
 readme = "README.md"
 license = "MIT AND Apache-2.0"
