@@ -89,7 +89,7 @@ class _PanelFixture(IndexConstituentDataset):
     network, the cache and the Zarr store.
     """
 
-    def _pit_coverage_start(self) -> str:
+    def _pit_coverage_start(self, config) -> str:
         return _COVERAGE_START
 
     def _build_intervals(self) -> pl.DataFrame:

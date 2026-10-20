@@ -107,7 +107,7 @@ from quantlab.dataset.config import ConstituentDatasetConfig
 from quantlab.dataset.raw import IndexConstituentDataset
 
 class DemoIndex(IndexConstituentDataset):
-    def _pit_coverage_start(self) -> str:
+    def _pit_coverage_start(self, config) -> str:
         return "2024-01-01"
 
     def _build_intervals(self) -> pl.DataFrame:

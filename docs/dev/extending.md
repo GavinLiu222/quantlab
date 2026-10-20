@@ -257,7 +257,7 @@ takes a {py:class}`~quantlab.dataset.config.FileConstituentDatasetConfig` (`conf
 >>> root = tempfile.mkdtemp()
 >>> class DemoIndexDataset(IndexConstituentDataset):
 ...     config_cls = FileConstituentDatasetConfig
-...     def _pit_coverage_start(self):
+...     def _pit_coverage_start(self, config):
 ...         return DemoIndexFetcher.PIT_COVERAGE_START
 ...     def _build_intervals(self):
 ...         return DemoIndexFetcher(cache_dir=self.config.cache_dir).build_intervals()

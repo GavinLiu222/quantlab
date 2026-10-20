@@ -29,6 +29,7 @@ from quantlab.dataset.constituent import (
     Nasdaq100ConstituentDataset,
     SP500ConstituentDataset,
 )
+from quantlab.dataset.common_stock import CommonStockConstituentDataset
 from quantlab.dataset.estu import EstuConstituentDataset
 from quantlab.dataset.sharadar.membership import SharadarSP500ConstituentDataset
 
@@ -85,3 +86,36 @@ def test_a_derived_membership_refuses_the_file_config(tmp_path):
             cache_dir=str(tmp_path),
             kwargs={"barra_store": str(tmp_path / "barra.zarr")},
         ))
+
+
+def _common_stock_store(path, first_day: str) -> None:
+    days = pd.bdate_range(first_day, periods=3)
+    xr.Dataset(
+        {"close": (("timestamp", "symbol"), np.ones((3, 1)))},  # SYNTHETIC
+        coords={"timestamp": days, "symbol": np.array([101], np.int64)},
+    ).to_zarr(path, mode="w")
+
+
+def test_a_refused_config_is_refused_before_any_store_is_read_and_leaves_the_dataset_as_it_was(tmp_path):
+    _common_stock_store(tmp_path / "a.zarr", "2024-01-02")
+    _common_stock_store(tmp_path / "b.zarr", "2024-01-04")
+    members = CommonStockConstituentDataset(ConstituentDatasetConfig(
+        zarr_file_path=str(tmp_path / "membership.zarr"),
+        kwargs={"price_store": str(tmp_path / "a.zarr")},
+    ))
+
+    # A store that does not exist: the config's class is refused first, not the read.
+    with pytest.raises(TypeError, match="needs a ConstituentDatasetConfig"):
+        members.config = FileConstituentDatasetConfig(
+            zarr_file_path=str(tmp_path / "membership.zarr"), cache_dir=str(tmp_path),
+            kwargs={"price_store": str(tmp_path / "missing.zarr")},
+        )
+    # A valid store starting later: refused, and the coverage stays the first store's.
+    with pytest.raises(TypeError):
+        members.config = FileConstituentDatasetConfig(
+            zarr_file_path=str(tmp_path / "membership.zarr"), cache_dir=str(tmp_path),
+            kwargs={"price_store": str(tmp_path / "b.zarr")},
+        )
+
+    panel = members.from_raw_data().get_xarray_dataset()["is_member"]
+    assert str(panel["timestamp"].values[0])[:10] == "2024-01-02"

@@ -61,7 +61,7 @@ class EstuConstituentDataset(IndexConstituentDataset):
     3000
     """
 
-    def _pit_coverage_start(self) -> str:
+    def _pit_coverage_start(self, config) -> str:
         """Return the first bar of the Sharadar BarraStyle ``estu``."""
         return ESTU_COVERAGE_START
 

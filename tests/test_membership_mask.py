@@ -45,7 +45,7 @@ class IntervalMembership(IndexConstituentDataset):
 
     intervals: list[tuple] = []
 
-    def _pit_coverage_start(self) -> str:
+    def _pit_coverage_start(self, config) -> str:
         return COVERAGE_START
 
     def _build_intervals(self) -> pl.DataFrame:

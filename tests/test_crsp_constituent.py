@@ -872,10 +872,9 @@ def test_the_crsp_classes_add_only_the_two_hooks_and_leave_wikipedia_alone(tmp_p
 
     # The Wikipedia pair is untouched: same left edges, still theirs.
     wikipedia = _panel_config(tmp_path, tmp_path / "_cache", "wikipedia")
-    assert SP500ConstituentDataset(wikipedia)._pit_coverage_start() == "1976-07-01"
+    assert SP500ConstituentDataset(wikipedia)._pit_coverage_start(wikipedia) == "1976-07-01"
+    wikipedia_ndx = _panel_config(tmp_path, tmp_path / "_cache", "wikipedia_ndx")
     assert (
-        Nasdaq100ConstituentDataset(
-            _panel_config(tmp_path, tmp_path / "_cache", "wikipedia_ndx")
-        )._pit_coverage_start()
+        Nasdaq100ConstituentDataset(wikipedia_ndx)._pit_coverage_start(wikipedia_ndx)
         == "2007-02-01"
     )

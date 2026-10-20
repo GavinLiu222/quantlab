@@ -101,7 +101,7 @@ class SP500ConstituentDataset(IndexConstituentDataset):
         """Initialize the dataset; see the class docstring for parameters."""
         super().__init__(dataset_config)
 
-    def _pit_coverage_start(self) -> str:
+    def _pit_coverage_start(self, config) -> str:
         """Return the fetcher's coverage start, ``"1976-07-01"``."""
         return SP500MembershipFetcher.PIT_COVERAGE_START
 
@@ -152,7 +152,7 @@ class Nasdaq100ConstituentDataset(IndexConstituentDataset):
         """Initialize the dataset; see the class docstring for parameters."""
         super().__init__(dataset_config)
 
-    def _pit_coverage_start(self) -> str:
+    def _pit_coverage_start(self, config) -> str:
         """Return the fetcher's coverage start, ``"2007-02-01"``."""
         return Nasdaq100MembershipFetcher.PIT_COVERAGE_START
 
@@ -209,7 +209,7 @@ class CrspSP500ConstituentDataset(IndexConstituentDataset):
         """Initialize the dataset; see the class docstring for parameters."""
         super().__init__(dataset_config)
 
-    def _pit_coverage_start(self) -> str:
+    def _pit_coverage_start(self, config) -> str:
         """Return ``CrspMembership``'s coverage start for the S&P 500."""
         return CrspMembership.PIT_COVERAGE_START[self.INDEX]
 
@@ -276,7 +276,7 @@ class CompustatNasdaq100ConstituentDataset(IndexConstituentDataset):
         """Initialize the dataset; see the class docstring for parameters."""
         super().__init__(dataset_config)
 
-    def _pit_coverage_start(self) -> str:
+    def _pit_coverage_start(self, config) -> str:
         """Return ``CrspMembership``'s coverage start for the Nasdaq-100."""
         return CrspMembership.PIT_COVERAGE_START[self.INDEX]
 
@@ -343,7 +343,7 @@ class CrspMarketConstituentDataset(IndexConstituentDataset):
         """Initialize the dataset; see the class docstring for parameters."""
         super().__init__(dataset_config)
 
-    def _pit_coverage_start(self) -> str:
+    def _pit_coverage_start(self, config) -> str:
         """Return ``PIT_COVERAGE_START``, the first date CRSP has daily prices."""
         return self.PIT_COVERAGE_START
 

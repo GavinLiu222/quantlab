@@ -211,7 +211,7 @@ class SharadarSP500ConstituentDataset(IndexConstituentDataset):
     #: The config class a saved ``config.json`` is rebuilt with.
     config_cls = FileConstituentDatasetConfig
 
-    def _pit_coverage_start(self) -> str:
+    def _pit_coverage_start(self, config) -> str:
         """Return ``PIT_COVERAGE_START``."""
         return PIT_COVERAGE_START
 

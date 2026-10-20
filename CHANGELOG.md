@@ -18,6 +18,10 @@ compatibility shims or config migrations.
   `ConstituentDatasetConfig`, which no longer has the field. `IndexConstituentDataset`
   refuses a config that is not its `config_cls` with a `TypeError`. A saved config of a
   derived membership holding `cache_dir` no longer rebuilds: drop the key.
+- The coverage hook of a membership dataset takes the config being normalised,
+  `_pit_coverage_start(self, config)`, instead of reading state set on the dataset, so
+  normalisation changes nothing on the dataset and a refused config reads no store. A
+  subclass written against the old hook adds the parameter.
 
 ## 0.2.0 (2026-10-20)
 

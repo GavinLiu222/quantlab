@@ -220,7 +220,7 @@ def main() -> None:
     class DemoIndex(IndexConstituentDataset):
         """A toy index: AAA always, BBB until Feb 15, DDD in January."""
 
-        def _pit_coverage_start(self) -> str:
+        def _pit_coverage_start(self, config) -> str:
             """Return the first date for which the toy membership data is complete."""
             return "2024-01-01"
 
