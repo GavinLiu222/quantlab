@@ -7,7 +7,9 @@ Locked:
 - a dataset that reads its source from files (Wikipedia caches, CRSP
   reference tables, Sharadar's S&P 500 table) takes a
   ``FileConstituentDatasetConfig``, whose ``cache_dir`` is required, and
-  refuses any other config at construction.
+  refuses any other config at construction;
+- a derived membership refuses a ``FileConstituentDatasetConfig``, whose
+  ``cache_dir`` it would never read and its saved config could not rebuild.
 
 Every value is SYNTHETIC.
 """
@@ -74,3 +76,12 @@ def test_a_source_read_from_files_takes_the_file_config(tmp_path, cls):
 def test_the_file_config_requires_the_directory(tmp_path):
     with pytest.raises(TypeError, match="cache_dir"):
         FileConstituentDatasetConfig(zarr_file_path=str(tmp_path / "membership.zarr"))
+
+
+def test_a_derived_membership_refuses_the_file_config(tmp_path):
+    with pytest.raises(TypeError, match="needs a ConstituentDatasetConfig"):
+        EstuConstituentDataset(FileConstituentDatasetConfig(
+            zarr_file_path=str(tmp_path / "membership.zarr"),
+            cache_dir=str(tmp_path),
+            kwargs={"barra_store": str(tmp_path / "barra.zarr")},
+        ))

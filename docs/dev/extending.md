@@ -228,12 +228,13 @@ in a catalog's `MEMBERSHIP_FETCHERS`; the catalog derives the category's coverag
 boundary from it. A real fetcher inherits the Wikipedia change-log parser and sets
 `CHANGES_URL`, `EXPECTED_SOURCE_HEADER` and `DATE_HEADER` to match its page; the example
 overrides `fetch_changes` so that it runs offline. The panel subclasses
-{py:class}`~quantlab.dataset.raw.IndexConstituentDataset`.
+{py:class}`~quantlab.dataset.raw.IndexConstituentDataset`; it reads the fetcher's cache, so it
+takes a {py:class}`~quantlab.dataset.config.FileConstituentDatasetConfig` (`config_cls`).
 
 ```python
 >>> import os, tempfile
 >>> import polars as pl
->>> from quantlab.dataset.config import ConstituentDatasetConfig
+>>> from quantlab.dataset.config import FileConstituentDatasetConfig
 >>> from quantlab.universe import UniverseConfig
 >>> from quantlab.dataset.raw import IndexConstituentDataset
 >>> from quantlab.universe import IndexMembershipFetcher, UniverseCatalog
@@ -255,11 +256,12 @@ overrides `fetch_changes` so that it runs offline. The panel subclasses
 ...         })
 >>> root = tempfile.mkdtemp()
 >>> class DemoIndexDataset(IndexConstituentDataset):
+...     config_cls = FileConstituentDatasetConfig
 ...     def _pit_coverage_start(self):
 ...         return DemoIndexFetcher.PIT_COVERAGE_START
 ...     def _build_intervals(self):
 ...         return DemoIndexFetcher(cache_dir=self.config.cache_dir).build_intervals()
->>> demo_config = ConstituentDatasetConfig(
+>>> demo_config = FileConstituentDatasetConfig(
 ...     zarr_file_path=os.path.join(root, "demo.zarr"),
 ...     cache_dir=root,
 ...     start_date="2020-01-01",

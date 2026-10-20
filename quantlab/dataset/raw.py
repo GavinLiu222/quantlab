@@ -1447,6 +1447,13 @@ class IndexConstituentDataset(RawDataset):
             A new config whose ``start_date`` is not before the coverage
             start.
 
+        Raises
+        ------
+        TypeError
+            If ``config`` is not exactly the class's ``config_cls``: a source
+            read from files given a config with no ``cache_dir``, or a
+            membership derived from another store given one.
+
         Examples
         --------
         A requested date before the coverage start is raised, with a
@@ -1456,12 +1463,14 @@ class IndexConstituentDataset(RawDataset):
         >>> ds.config.start_date
         '2020-01-01'
         """
-        if not isinstance(config, self.config_cls):
+        config = super()._normalize_config(config)
+        # The exact class: a subclass config carries fields this class never reads, which its
+        # saved config.json then cannot be rebuilt with.
+        if type(config) is not self.config_cls:
             raise TypeError(
                 f"{self.class_name} needs a {self.config_cls.__name__}, got "
                 f"{type(config).__name__}."
             )
-        config = super()._normalize_config(config)
         requested = config.start_date
         coverage_start = self._pit_coverage_start()
         if requested >= coverage_start:
