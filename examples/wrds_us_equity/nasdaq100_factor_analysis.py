@@ -26,7 +26,7 @@ from pathlib import Path
 from loguru import logger
 
 from quantlab.factor.config import FactorConfig
-from quantlab.dataset.config import ConstituentDatasetConfig, CrspDatasetConfig, DatasetConfig
+from quantlab.dataset.config import FileConstituentDatasetConfig, CrspDatasetConfig, DatasetConfig
 from quantlab.config import get_data_root
 from quantlab.dataset.constituent import CompustatNasdaq100ConstituentDataset
 from quantlab.dataset.crsp import CrspStockDataset
@@ -91,7 +91,7 @@ def stock_dataset(store: Path) -> StockDataset:
 
 def index_membership() -> CompustatNasdaq100ConstituentDataset:
     """The point-in-time Nasdaq-100 membership (``is_member``) on the PERMNO axis."""
-    return CompustatNasdaq100ConstituentDataset(ConstituentDatasetConfig(
+    return CompustatNasdaq100ConstituentDataset(FileConstituentDatasetConfig(
         zarr_file_path=str(store_path(UNIVERSE_DIR, "wrds_crsp_nasdaq100_membership")),
         cache_dir=str(REFERENCE),
     ))

@@ -59,7 +59,6 @@ def _membership(tmp_path, intervals, *, as_of="2024-03-29") -> IntervalMembershi
     dataset = IntervalMembership(
         ConstituentDatasetConfig(
             zarr_file_path=str(tmp_path / "membership.zarr"),
-            cache_dir=str(tmp_path / "membership_cache"),
             as_of=as_of,
         )
     )

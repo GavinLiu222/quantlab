@@ -50,7 +50,6 @@ def _store(path, n_days: int = len(DAYS), symbols=np.asarray(SYMBOLS, np.int64))
 def _members(tmp_path, store) -> CommonStockConstituentDataset:
     return CommonStockConstituentDataset(ConstituentDatasetConfig(
         zarr_file_path=str(tmp_path / "membership.zarr"),
-        cache_dir=str(tmp_path),
         kwargs={"price_store": str(store)},
     ))
 

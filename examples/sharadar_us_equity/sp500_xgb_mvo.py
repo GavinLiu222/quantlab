@@ -56,7 +56,7 @@ from quantlab.backtest.predefined.us_equity import USEquityCrossectionSelectStoc
 from quantlab.config import get_data_root
 from quantlab.dataset.config import (
     SPY_PERMATICKER,
-    ConstituentDatasetConfig,
+    FileConstituentDatasetConfig,
     FredRateConfig,
     SharadarDailyConfig,
     SharadarDatasetConfig,
@@ -179,7 +179,7 @@ def masked_index() -> BadPrintMaskedDataset:
 
 def index_membership() -> SharadarSP500ConstituentDataset:
     """The point-in-time S&P 500 membership (``is_member``) on the permaticker axis."""
-    return SharadarSP500ConstituentDataset(ConstituentDatasetConfig(
+    return SharadarSP500ConstituentDataset(FileConstituentDatasetConfig(
         zarr_file_path=str(store_path(MEMBERSHIPS, "sharadar_sp500_membership")),
         cache_dir=str(VENDOR),
     ))

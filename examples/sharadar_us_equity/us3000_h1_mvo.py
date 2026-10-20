@@ -232,7 +232,7 @@ def membership() -> EstuConstituentDataset:
         "scripts/data_update/update.py; read by the recipe's runs.\n"
     ))
     return EstuConstituentDataset(ConstituentDatasetConfig(
-        zarr_file_path=str(MEMBERSHIP), cache_dir=str(VENDOR), start_date=PRICE_START,
+        zarr_file_path=str(MEMBERSHIP), start_date=PRICE_START,
         kwargs={"barra_store": str(EXPOSURES)},
     ))
 

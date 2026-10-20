@@ -569,14 +569,14 @@ def test_membership_symbols_agree_with_the_crsp_price_panel(
 
 def _panel_config(tmp_path, reference_dir, name, **overrides):
     """Module-local config constructor (03.1-PATTERNS.md section 6)."""
-    from quantlab.dataset.config import ConstituentDatasetConfig
+    from quantlab.dataset.config import FileConstituentDatasetConfig
 
     params = dict(
         zarr_file_path=str(Path(tmp_path) / "us_equity" / f"{name}.zarr"),
         cache_dir=str(reference_dir),
     )
     params.update(overrides)
-    return ConstituentDatasetConfig(**params)  # type: ignore[arg-type]
+    return FileConstituentDatasetConfig(**params)  # type: ignore[arg-type]
 
 
 def _label(panel, permno: int):
@@ -819,7 +819,7 @@ def test_both_crsp_universes_round_trip_through_their_saved_config(tmp_path):
     """
     import json
 
-    from quantlab.dataset.config import ConstituentDatasetConfig
+    from quantlab.dataset.config import FileConstituentDatasetConfig
     from quantlab.dataset.constituent import (
         CompustatNasdaq100ConstituentDataset,
         CrspSP500ConstituentDataset,
@@ -836,7 +836,7 @@ def test_both_crsp_universes_round_trip_through_their_saved_config(tmp_path):
         rebuilt = rebuild(json.loads(json.dumps(saved)))
 
         assert type(rebuilt) is cls
-        assert type(rebuilt.config) is ConstituentDatasetConfig
+        assert type(rebuilt.config) is FileConstituentDatasetConfig
         assert json.loads(json.dumps(rebuilt.get_config(), default=str)) == saved
 
 

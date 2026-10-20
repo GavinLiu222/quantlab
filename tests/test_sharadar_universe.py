@@ -54,10 +54,10 @@ def _pull(download_dir, sep_rows, tickers_rows, sp500_rows=None):
 
 
 def _membership(tmp_path, vendor_root, **fields):
-    from quantlab.dataset.config import ConstituentDatasetConfig
+    from quantlab.dataset.config import FileConstituentDatasetConfig
     from quantlab.dataset.sharadar.membership import SharadarSP500ConstituentDataset
 
-    config = ConstituentDatasetConfig(
+    config = FileConstituentDatasetConfig(
         zarr_file_path=str(tmp_path / "sharadar_sp500_membership.zarr"),
         cache_dir=str(vendor_root),
         **fields,

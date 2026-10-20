@@ -1401,7 +1401,6 @@ class IndexConstituentDataset(RawDataset):
 
     >>> config = ConstituentDatasetConfig(
     ...     zarr_file_path="data/demo.zarr",
-    ...     cache_dir="data/demo_cache",
     ...     start_date="2020-01-01",
     ...     end_date="2020-01-08",
     ...     as_of="2020-01-08",
@@ -1457,6 +1456,11 @@ class IndexConstituentDataset(RawDataset):
         >>> ds.config.start_date
         '2020-01-01'
         """
+        if not isinstance(config, self.config_cls):
+            raise TypeError(
+                f"{self.class_name} needs a {self.config_cls.__name__}, got "
+                f"{type(config).__name__}."
+            )
         config = super()._normalize_config(config)
         requested = config.start_date
         coverage_start = self._pit_coverage_start()

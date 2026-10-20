@@ -17,7 +17,6 @@ Examples
 >>> from quantlab.dataset.config import ConstituentDatasetConfig
 >>> members = CommonStockConstituentDataset(ConstituentDatasetConfig(
 ...     zarr_file_path="/data/quantlab/universe/sharadar/sharadar_common_stock_membership/sharadar_common_stock_membership.zarr",
-...     cache_dir="/data/quantlab/downloads/sharadar",
 ...     kwargs={"price_store": "/data/quantlab/market/sharadar/sharadar_sep_1d/sharadar_sep_1d.zarr"},
 ... ))
 >>> members.update().panel("2026-10-14", "2026-10-15")["is_member"].sum("symbol").values
@@ -78,7 +77,6 @@ class CommonStockConstituentDataset(IndexConstituentDataset):
     <xarray.backends.zarr.ZarrStore object at ...>
     >>> members = CommonStockConstituentDataset(ConstituentDatasetConfig(
     ...     zarr_file_path="data/common_stock.zarr",
-    ...     cache_dir="data",
     ...     kwargs={"price_store": "data/sep.zarr"},
     ... ))
     >>> members.from_raw_data().get_xarray_dataset()["is_member"].to_pandas()

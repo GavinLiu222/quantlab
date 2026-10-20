@@ -16,7 +16,6 @@ Examples
 >>> from quantlab.dataset.config import ConstituentDatasetConfig
 >>> members = EstuConstituentDataset(ConstituentDatasetConfig(
 ...     zarr_file_path="/data/universe/us3000/membership_estu/membership_estu.zarr",
-...     cache_dir="/data/downloads/sharadar",
 ...     start_date="2010-01-01",
 ...     kwargs={"barra_store": "/data/factors/market/barra_style/barra_style.zarr"},
 ... ))

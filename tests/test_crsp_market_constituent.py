@@ -26,7 +26,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from quantlab.dataset.config import ConstituentDatasetConfig
+from quantlab.dataset.config import FileConstituentDatasetConfig
 from quantlab.dataset.constituent import CrspMarketConstituentDataset
 
 from crsp_fixtures import secinfo_row, write_reference_tables
@@ -64,7 +64,7 @@ def _panel_config(tmp_path, reference_dir, **overrides):
         cache_dir=str(reference_dir),
     )
     params.update(overrides)
-    return ConstituentDatasetConfig(**params)  # type: ignore[arg-type]
+    return FileConstituentDatasetConfig(**params)  # type: ignore[arg-type]
 
 
 def _panel(tmp_path, rows=None, **overrides):
@@ -211,7 +211,7 @@ def test_the_panel_round_trips_through_its_saved_config(tmp_path):
 
     rebuilt = get_cls_from_path(
         "quantlab.dataset.constituent.CrspMarketConstituentDataset"
-    )(ConstituentDatasetConfig(**recorded))
+    )(FileConstituentDatasetConfig(**recorded))
 
     assert rebuilt.config.kwargs == {"security_filter": "none"}
     assert sorted(

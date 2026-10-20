@@ -17,7 +17,7 @@ import xarray as xr
 from loguru import logger
 
 from conftest import WHOLE_STORE
-from quantlab.dataset.config import ConstituentDatasetConfig
+from quantlab.dataset.config import FileConstituentDatasetConfig
 from quantlab.dataset.raw import IndexConstituentDataset
 from quantlab.dataset.raw import RawDataset
 from quantlab.dataset._support.cleaning import clean_membership_panel
@@ -26,7 +26,7 @@ from quantlab.dataset.constituent import SP500ConstituentDataset
 _COVERAGE_START = "1976-07-01"
 
 
-def _make_config(tmp_path, **overrides) -> ConstituentDatasetConfig:
+def _make_config(tmp_path, **overrides) -> FileConstituentDatasetConfig:
     """Module-local config constructor (03.1-PATTERNS.md §6: shared mocks live
     in conftest, per-module config constructors stay module-local)."""
     params = dict(
@@ -34,7 +34,7 @@ def _make_config(tmp_path, **overrides) -> ConstituentDatasetConfig:
         cache_dir=str(tmp_path / "reference" / "_cache"),
     )
     params.update(overrides)
-    return ConstituentDatasetConfig(**params)  # type: ignore[arg-type]
+    return FileConstituentDatasetConfig(**params)  # type: ignore[arg-type]
 
 
 def _hand_built_intervals() -> pl.DataFrame:

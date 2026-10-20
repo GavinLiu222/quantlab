@@ -18,14 +18,14 @@ import pandas as pd
 import xarray as xr
 
 from conftest import WHOLE_STORE
-from quantlab.dataset.config import ConstituentDatasetConfig
+from quantlab.dataset.config import FileConstituentDatasetConfig
 from quantlab.dataset.constituent import Nasdaq100ConstituentDataset, SP500ConstituentDataset
 
 _NDX_COVERAGE_START = "2007-02-01"
 _SP500_COVERAGE_START = "1976-07-01"
 
 
-def _make_config(tmp_path, **overrides) -> ConstituentDatasetConfig:
+def _make_config(tmp_path, **overrides) -> FileConstituentDatasetConfig:
     """Module-local config constructor (03.1-PATTERNS.md §6: shared mocks live
     in conftest, per-module config constructors stay module-local)."""
     params = dict(
@@ -35,7 +35,7 @@ def _make_config(tmp_path, **overrides) -> ConstituentDatasetConfig:
         cache_dir=str(tmp_path / "reference" / "_cache"),
     )
     params.update(overrides)
-    return ConstituentDatasetConfig(**params)  # type: ignore[arg-type]
+    return FileConstituentDatasetConfig(**params)  # type: ignore[arg-type]
 
 
 def test_nasdaq100_panel_round_trips_through_zarr(mock_universe_fetchers, tmp_path):

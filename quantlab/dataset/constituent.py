@@ -37,7 +37,7 @@ from quantlab.universe import (
     Nasdaq100MembershipFetcher,
     SP500MembershipFetcher,
 )
-from quantlab.dataset.config import ConstituentDatasetConfig
+from quantlab.dataset.config import FileConstituentDatasetConfig
 from quantlab.dataset.raw import IndexConstituentDataset
 from quantlab.dataset.crsp.market import CrspMarketRoster
 from quantlab.dataset.crsp.membership import CrspMembership
@@ -75,7 +75,7 @@ class SP500ConstituentDataset(IndexConstituentDataset):
 
     Parameters
     ----------
-    dataset_config : ConstituentDatasetConfig
+    dataset_config : FileConstituentDatasetConfig
         Output Zarr path, cache directory, date range and ``as_of`` date.
 
     Examples
@@ -83,7 +83,7 @@ class SP500ConstituentDataset(IndexConstituentDataset):
     Building the panel fetches the change log over the network (or reads
     the snapshot cached under ``cache_dir``):
 
-    >>> config = ConstituentDatasetConfig(
+    >>> config = FileConstituentDatasetConfig(
     ...     zarr_file_path="data/reference/sp500_constituent.zarr",
     ...     cache_dir="data/reference/_cache",
     ...     start_date="2015-01-01",
@@ -94,7 +94,10 @@ class SP500ConstituentDataset(IndexConstituentDataset):
     >>> panel = SP500ConstituentDataset(config).panel("2015-01-01", "2024-12-31")
     """
 
-    def __init__(self, dataset_config: ConstituentDatasetConfig):
+    #: The config class a saved ``config.json`` is rebuilt with.
+    config_cls = FileConstituentDatasetConfig
+
+    def __init__(self, dataset_config: FileConstituentDatasetConfig):
         """Initialize the dataset; see the class docstring for parameters."""
         super().__init__(dataset_config)
 
@@ -124,7 +127,7 @@ class Nasdaq100ConstituentDataset(IndexConstituentDataset):
 
     Parameters
     ----------
-    dataset_config : ConstituentDatasetConfig
+    dataset_config : FileConstituentDatasetConfig
         Output Zarr path, cache directory, date range and ``as_of`` date.
 
     Examples
@@ -132,7 +135,7 @@ class Nasdaq100ConstituentDataset(IndexConstituentDataset):
     Building the panel fetches the change log over the network (or reads
     the snapshot cached under ``cache_dir``):
 
-    >>> config = ConstituentDatasetConfig(
+    >>> config = FileConstituentDatasetConfig(
     ...     zarr_file_path="data/reference/nasdaq100_constituent.zarr",
     ...     cache_dir="data/reference/_cache",
     ...     start_date="2015-01-01",
@@ -142,7 +145,10 @@ class Nasdaq100ConstituentDataset(IndexConstituentDataset):
     >>> Nasdaq100ConstituentDataset(config).from_raw_data().save()
     """
 
-    def __init__(self, dataset_config: ConstituentDatasetConfig):
+    #: The config class a saved ``config.json`` is rebuilt with.
+    config_cls = FileConstituentDatasetConfig
+
+    def __init__(self, dataset_config: FileConstituentDatasetConfig):
         """Initialize the dataset; see the class docstring for parameters."""
         super().__init__(dataset_config)
 
@@ -173,7 +179,7 @@ class CrspSP500ConstituentDataset(IndexConstituentDataset):
 
     Parameters
     ----------
-    dataset_config : ConstituentDatasetConfig
+    dataset_config : FileConstituentDatasetConfig
         Output Zarr path, CRSP reference directory (``cache_dir``) and date
         range. ``kwargs["allow_unlinked"]`` is passed to ``CrspMembership``.
 
@@ -181,7 +187,7 @@ class CrspSP500ConstituentDataset(IndexConstituentDataset):
     --------
     Needs a CRSP reference directory on disk; no WRDS connection is made:
 
-    >>> config = ConstituentDatasetConfig(
+    >>> config = FileConstituentDatasetConfig(
     ...     zarr_file_path="data/reference/crsp_sp500.zarr",
     ...     cache_dir="downloads/us_equity/1d/wrds_crsp/_reference",
     ...     start_date="2015-01-01",
@@ -196,7 +202,10 @@ class CrspSP500ConstituentDataset(IndexConstituentDataset):
     #: they cannot disagree.
     INDEX = CrspMembership.SP500
 
-    def __init__(self, dataset_config: ConstituentDatasetConfig):
+    #: The config class a saved ``config.json`` is rebuilt with.
+    config_cls = FileConstituentDatasetConfig
+
+    def __init__(self, dataset_config: FileConstituentDatasetConfig):
         """Initialize the dataset; see the class docstring for parameters."""
         super().__init__(dataset_config)
 
@@ -239,7 +248,7 @@ class CompustatNasdaq100ConstituentDataset(IndexConstituentDataset):
 
     Parameters
     ----------
-    dataset_config : ConstituentDatasetConfig
+    dataset_config : FileConstituentDatasetConfig
         Output Zarr path, CRSP reference directory (``cache_dir``), date
         range and optional ``kwargs["allow_unlinked"]``.
 
@@ -247,7 +256,7 @@ class CompustatNasdaq100ConstituentDataset(IndexConstituentDataset):
     --------
     Needs a CRSP reference directory on disk; no WRDS connection is made:
 
-    >>> config = ConstituentDatasetConfig(
+    >>> config = FileConstituentDatasetConfig(
     ...     zarr_file_path="data/reference/compustat_nasdaq100.zarr",
     ...     cache_dir="downloads/us_equity/1d/wrds_crsp/_reference",
     ...     start_date="2015-01-01",
@@ -260,7 +269,10 @@ class CompustatNasdaq100ConstituentDataset(IndexConstituentDataset):
     #: The ``CrspMembership`` index this class reads.
     INDEX = CrspMembership.NASDAQ100
 
-    def __init__(self, dataset_config: ConstituentDatasetConfig):
+    #: The config class a saved ``config.json`` is rebuilt with.
+    config_cls = FileConstituentDatasetConfig
+
+    def __init__(self, dataset_config: FileConstituentDatasetConfig):
         """Initialize the dataset; see the class docstring for parameters."""
         super().__init__(dataset_config)
 
@@ -302,7 +314,7 @@ class CrspMarketConstituentDataset(IndexConstituentDataset):
 
     Parameters
     ----------
-    dataset_config : ConstituentDatasetConfig
+    dataset_config : FileConstituentDatasetConfig
         Output Zarr path, CRSP reference directory (``cache_dir``), date
         range and optional ``kwargs["security_filter"]``.
 
@@ -310,7 +322,7 @@ class CrspMarketConstituentDataset(IndexConstituentDataset):
     --------
     Needs a CRSP reference directory on disk; no WRDS connection is made:
 
-    >>> config = ConstituentDatasetConfig(
+    >>> config = FileConstituentDatasetConfig(
     ...     zarr_file_path="data/reference/crsp_market.zarr",
     ...     cache_dir="downloads/us_equity/1d/wrds_crsp/_reference",
     ...     start_date="2020-01-01",
@@ -324,7 +336,10 @@ class CrspMarketConstituentDataset(IndexConstituentDataset):
     #: prices exist.
     PIT_COVERAGE_START = "1925-12-31"
 
-    def __init__(self, dataset_config: ConstituentDatasetConfig):
+    #: The config class a saved ``config.json`` is rebuilt with.
+    config_cls = FileConstituentDatasetConfig
+
+    def __init__(self, dataset_config: FileConstituentDatasetConfig):
         """Initialize the dataset; see the class docstring for parameters."""
         super().__init__(dataset_config)
 

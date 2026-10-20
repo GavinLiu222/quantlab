@@ -22,7 +22,7 @@ built from the same raw file is the same whenever it is built.
 
 Examples
 --------
->>> config = ConstituentDatasetConfig(
+>>> config = FileConstituentDatasetConfig(
 ...     zarr_file_path="/data/universe/sharadar/sharadar_sp500_membership/sharadar_sp500_membership.zarr",
 ...     cache_dir="/data/downloads/sharadar",
 ...     start_date="2015-01-01",
@@ -40,6 +40,7 @@ from pathlib import Path
 import polars as pl
 from loguru import logger
 
+from quantlab.dataset.config import FileConstituentDatasetConfig
 from quantlab.dataset.raw import IndexConstituentDataset
 from quantlab.dataset.sharadar.tables import (
     map_permatickers,
@@ -195,7 +196,7 @@ class SharadarSP500ConstituentDataset(IndexConstituentDataset):
 
     Parameters
     ----------
-    dataset_config : ConstituentDatasetConfig
+    dataset_config : FileConstituentDatasetConfig
         ``cache_dir`` is ``<download-dir>/sharadar``, holding the ``sp500``
         and ``tickers`` raw tables.
 
@@ -206,6 +207,9 @@ class SharadarSP500ConstituentDataset(IndexConstituentDataset):
     >>> ds.panel("2024-01-02", "2024-01-05")["is_member"].dtype
     dtype('bool')
     """
+
+    #: The config class a saved ``config.json`` is rebuilt with.
+    config_cls = FileConstituentDatasetConfig
 
     def _pit_coverage_start(self) -> str:
         """Return ``PIT_COVERAGE_START``."""
