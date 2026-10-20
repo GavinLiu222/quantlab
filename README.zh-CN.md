@@ -205,7 +205,7 @@ uv run python examples/quickstart.py
 
 [examples/](examples/README.md) 里每个主题一个可运行的脚本（构建面板、训练模型、回测、数据源）；
 做时点研究请看 [`wrds_us_equity/`](examples/wrds_us_equity/README.zh-CN.md)（WRDS 上的 CRSP）和
-[`sharadar_us_equity/`](examples/sharadar_us_equity/README.md)（Sharadar）。下面两张图来自 WRDS 示例。
+[`sharadar_us_equity/`](examples/sharadar_us_equity/README.md)（Sharadar）。下面的因子报告用的是 Sharadar 数据，回测报告来自 WRDS 示例。
 
 ### 因子报告
 
@@ -213,10 +213,12 @@ uv run python examples/quickstart.py
 信息系数（IC）随时间的变化、IC 的分布、月均 IC、分层收益、多空曲线、换手率和多个滞后阶的排序自相关，
 另外还有一张汇总表（含 Newey-West t 值，以及多空组合的收益、波动率、夏普比率和回撤）和整齐的 CSV 文件。因子有两个或更多时，还会按平均秩相关对它们聚类。
 下图是 Alpha158 中的 `MIN5`（5 日最低价相对收盘价）对 5 日开盘到开盘未来收益的报告，
-股票池是 CRSP 中的全部普通股，约 7,200 个标的（含已退市股票），时间为 2012 至 2024 年。
+股票池是 us3000（按市值点时选出的美国前 3,000 只普通股，整个区间约 10,600 个标的，含已退市股票），
+Sharadar 日线，时间为 2000 年 2 月至 2026 年 10 月。因子在全市场上计算，按当天成员读取
+（`MembershipMaskedFactor(RosterFactor(...))`），价格已屏蔽坏报价。
 
 <p align="center">
-  <img src="docs/assets/factor_report.png" alt="MIN5 因子对全美市场 5 日未来收益的因子报告" width="820">
+  <img src="docs/assets/factor_report.png" alt="MIN5 因子对 us3000 5 日未来收益的因子报告，2000 至 2026 年" width="820">
 </p>
 
 ### 回测报告

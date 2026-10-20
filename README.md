@@ -225,8 +225,8 @@ uv run python examples/quickstart.py
 [examples/](https://github.com/ZhaorongDai/quantlab/blob/main/examples/README.md) has one runnable script per topic (building panels, training
 models, backtesting, data sources) and, for point-in-time research,
 [`wrds_us_equity/`](https://github.com/ZhaorongDai/quantlab/blob/main/examples/wrds_us_equity/README.md) (CRSP via WRDS) and
-[`sharadar_us_equity/`](https://github.com/ZhaorongDai/quantlab/blob/main/examples/sharadar_us_equity/README.md) (Sharadar). The two figures
-below come from the WRDS examples.
+[`sharadar_us_equity/`](https://github.com/ZhaorongDai/quantlab/blob/main/examples/sharadar_us_equity/README.md) (Sharadar). The factor report
+below is on Sharadar data, the backtest report from the WRDS examples.
 
 ### Factor report
 
@@ -236,11 +236,14 @@ distribution, monthly mean IC, returns by quantile, the long-short curve, turnov
 autocorrelation at several lags, plus a summary table (with the Newey-West t-statistic and
 the long-short's return, volatility, Sharpe ratio and drawdown) and tidy CSVs. With two or more factors it also
 clusters them by their mean rank correlation. This is `MIN5` from the Alpha158 set, the
-5-day low relative to the close, against the 5-day open-to-open forward return on every
-common stock in CRSP, about 7,200 symbols including the delisted ones, 2012 to 2024.
+5-day low relative to the close, against the 5-day open-to-open forward return on us3000
+(the 3,000 largest US common stocks by market cap, point in time, about 10,600 symbols over
+the window including the delisted ones), Sharadar daily bars, February 2000 to October 2026.
+The factor is computed on the whole market and read on the members of the day
+(`MembershipMaskedFactor(RosterFactor(...))`), with bad prints masked.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/ZhaorongDai/quantlab/main/docs/assets/factor_report.png" alt="Factor report for MIN5 against the 5-day forward return on the full US market" width="820">
+  <img src="https://raw.githubusercontent.com/ZhaorongDai/quantlab/main/docs/assets/factor_report.png" alt="Factor report for MIN5 against the 5-day forward return on us3000, 2000 to 2026" width="820">
 </p>
 
 ### Backtest report
