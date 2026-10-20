@@ -115,10 +115,10 @@ Cross-sectional factors are computed on the market store and read by roster; see
 [Universes](universes.md). The `sp500` table also becomes a point-in-time membership panel:
 
 ```python
-from quantlab.dataset.config import ConstituentDatasetConfig
+from quantlab.dataset.config import FileConstituentDatasetConfig
 from quantlab.dataset.sharadar.membership import SharadarSP500ConstituentDataset
 
-membership = SharadarSP500ConstituentDataset(ConstituentDatasetConfig(
+membership = SharadarSP500ConstituentDataset(FileConstituentDatasetConfig(
     zarr_file_path="/data/quantlab/universe/sharadar/sharadar_sp500_membership/sharadar_sp500_membership.zarr",
     cache_dir="/data/quantlab/downloads/sharadar",
 ))

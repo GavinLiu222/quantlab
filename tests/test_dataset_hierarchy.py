@@ -30,7 +30,7 @@ import xarray as xr
 from conftest import WHOLE_STORE
 from quantlab.dataset.bad_prints import BadPrintMaskedDataset
 from quantlab.dataset.base import BaseDataset, MarketDataset
-from quantlab.dataset.config import BaseDatasetConfig, ConstituentDatasetConfig, DatasetConfig
+from quantlab.dataset.config import BaseDatasetConfig, ConstituentDatasetConfig, DatasetConfig, FileConstituentDatasetConfig
 from quantlab.dataset.massive.mapped_bars import MappedDayBarDataset, MappedPermatickerDataset, MappedTradeBarDataset
 from quantlab.dataset.massive.permaticker_bars import PermatickerDayBarDataset, PermatickerTradeBarDataset
 from quantlab.dataset.memory import FrameDataset
@@ -89,7 +89,9 @@ MARKET_ONLY_CONFIG_FIELDS = {"raw_data_dir_path", "market", "frequency", "vendor
 
 # `ConstituentDatasetConfig` adds the cached source directory and the `as_of`
 # that pins a membership panel's right edge.
-CONSTITUENT_ONLY_CONFIG_FIELDS = {"cache_dir", "as_of"}
+CONSTITUENT_ONLY_CONFIG_FIELDS = {"as_of"}
+#: What a membership read from source files adds: their directory.
+FILE_CONSTITUENT_ONLY_CONFIG_FIELDS = {"cache_dir"}
 
 _PANEL_SYMBOLS = ("PANEL_A", "PANEL_B")
 _PANEL_PERIODS = 4
@@ -183,6 +185,8 @@ def test_market_only_config_fields_stay_off_the_shared_base() -> None:
     constituent_fields = {f.name for f in dataclasses.fields(ConstituentDatasetConfig)}
     assert market_fields - base_fields == MARKET_ONLY_CONFIG_FIELDS
     assert constituent_fields - base_fields == CONSTITUENT_ONLY_CONFIG_FIELDS
+    file_fields = {f.name for f in dataclasses.fields(FileConstituentDatasetConfig)}
+    assert file_fields - constituent_fields == FILE_CONSTITUENT_ONLY_CONFIG_FIELDS
 
 
 def test_a_raw_dataset_assigns_its_backend_before_its_config() -> None:

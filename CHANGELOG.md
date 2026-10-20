@@ -4,6 +4,25 @@ quantlab follows [semantic versioning](https://semver.org/). While the version i
 minor release may break the API, the config format or the store layout; there are no
 compatibility shims or config migrations.
 
+## Unreleased
+
+### Changed
+
+- `cache_dir` moves off `ConstituentDatasetConfig` onto a new subclass,
+  `FileConstituentDatasetConfig` (`quantlab.dataset.config`), where it is required. The
+  classes that read their membership source from local files take it
+  (`SP500ConstituentDataset`, `Nasdaq100ConstituentDataset`, `CrspSP500ConstituentDataset`,
+  `CompustatNasdaq100ConstituentDataset`, `CrspMarketConstituentDataset`,
+  `SharadarSP500ConstituentDataset`); a membership derived from another store
+  (`EstuConstituentDataset`, `CommonStockConstituentDataset`) takes
+  `ConstituentDatasetConfig`, which no longer has the field. `IndexConstituentDataset`
+  refuses a config that is not its `config_cls` with a `TypeError`. A saved config of a
+  derived membership holding `cache_dir` no longer rebuilds: drop the key.
+- The coverage hook of a membership dataset takes the config being normalised,
+  `_pit_coverage_start(self, config)`, instead of reading state set on the dataset, so
+  normalisation changes nothing on the dataset and a refused config reads no store. A
+  subclass written against the old hook adds the parameter.
+
 ## 0.2.0 (2026-10-20)
 
 ### Added

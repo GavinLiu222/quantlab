@@ -34,7 +34,7 @@ from quantlab.model.config import ModelConfig
 from quantlab.factor.config import FactorConfig
 from quantlab.dataset.config import (
     SPY_PERMNO,
-    ConstituentDatasetConfig,
+    FileConstituentDatasetConfig,
     CrspDatasetConfig,
     DatasetConfig,
 )
@@ -130,7 +130,7 @@ def index_dataset() -> CrspStockDataset:
 
 def index_membership() -> CrspSP500ConstituentDataset:
     """The point-in-time S&P 500 membership (``is_member``) on the PERMNO axis."""
-    return CrspSP500ConstituentDataset(ConstituentDatasetConfig(
+    return CrspSP500ConstituentDataset(FileConstituentDatasetConfig(
         zarr_file_path=str(store_path(UNIVERSE_DIR, "wrds_crsp_sp500_membership")),
         cache_dir=str(REFERENCE),
     ))

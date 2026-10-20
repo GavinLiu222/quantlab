@@ -45,7 +45,7 @@ import pytest
 import quantlab.core.component as component_rule
 from quantlab.model.config import ModelConfig
 from quantlab.factor.config import FactorConfig, PolarsFactorConfig
-from quantlab.dataset.config import ConstituentDatasetConfig, DatasetConfig
+from quantlab.dataset.config import ConstituentDatasetConfig, DatasetConfig, FileConstituentDatasetConfig
 from quantlab.dataset.raw import IndexConstituentDataset
 from quantlab.dataset.base import BaseDataset, MarketDataset
 from quantlab.factor.base import Factor
@@ -91,7 +91,7 @@ def _alpha101(stock_config: DatasetConfig, tmp_path: Path) -> Alpha101Stock:
 
 def _sp500(tmp_path: Path) -> SP500ConstituentDataset:
     return SP500ConstituentDataset(
-        ConstituentDatasetConfig(
+        FileConstituentDatasetConfig(
             zarr_file_path=str(tmp_path / "us_equity" / "sp500_constituent.zarr"),
             cache_dir=str(tmp_path / "reference" / "_cache"),
         )
@@ -142,7 +142,7 @@ def test_constituent_dataset_round_trips(tmp_path: Path) -> None:
     rebuilt = component_rule.rebuild(copy.deepcopy(saved))
 
     assert type(rebuilt) is SP500ConstituentDataset
-    assert type(rebuilt.config) is ConstituentDatasetConfig
+    assert type(rebuilt.config) is FileConstituentDatasetConfig
     assert _normalized(rebuilt.get_config()) == saved
 
 
@@ -207,6 +207,7 @@ def test_config_cls_is_a_plain_class_attribute() -> None:
     expected = {
         MarketDataset: DatasetConfig,
         IndexConstituentDataset: ConstituentDatasetConfig,
+        SP500ConstituentDataset: FileConstituentDatasetConfig,
         FactorKunQuant: FactorConfig,
         FactorPolars: PolarsFactorConfig,
     }

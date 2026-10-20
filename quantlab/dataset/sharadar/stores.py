@@ -54,7 +54,7 @@ from quantlab.dataset._support.ledger import ChunkLedger
 from quantlab.dataset.base import ResumeRefused
 from quantlab.dataset.config import (
     SPY_PERMATICKER,
-    ConstituentDatasetConfig,
+    FileConstituentDatasetConfig,
     SharadarActionsConfig,
     SharadarDailyConfig,
     SharadarDatasetConfig,
@@ -201,7 +201,7 @@ STORES: tuple[SharadarStore, ...] = (
     SharadarStore(
         "sharadar_sp500_membership", UNIVERSE_FOLDER,
         "Point-in-time S&P 500 membership from the Sharadar SP500 table.",
-        ConstituentDatasetConfig, SharadarSP500ConstituentDataset, raw_field="cache_dir",
+        FileConstituentDatasetConfig, SharadarSP500ConstituentDataset, raw_field="cache_dir",
     ),
     SharadarStore(
         "sharadar_sf1_arq", MARKET_FOLDER,

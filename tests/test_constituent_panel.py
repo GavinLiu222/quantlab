@@ -17,7 +17,7 @@ import xarray as xr
 from loguru import logger
 
 from conftest import WHOLE_STORE
-from quantlab.dataset.config import ConstituentDatasetConfig
+from quantlab.dataset.config import ConstituentDatasetConfig, FileConstituentDatasetConfig
 from quantlab.dataset.raw import IndexConstituentDataset
 from quantlab.dataset.raw import RawDataset
 from quantlab.dataset._support.cleaning import clean_membership_panel
@@ -31,10 +31,17 @@ def _make_config(tmp_path, **overrides) -> ConstituentDatasetConfig:
     in conftest, per-module config constructors stay module-local)."""
     params = dict(
         zarr_file_path=str(tmp_path / "us_equity" / "sp500_constituent.zarr"),
-        cache_dir=str(tmp_path / "reference" / "_cache"),
     )
     params.update(overrides)
     return ConstituentDatasetConfig(**params)  # type: ignore[arg-type]
+
+
+def _sp500_config(tmp_path, **overrides) -> FileConstituentDatasetConfig:
+    """The S&P 500 panel's config: it reads the Wikipedia cache under ``cache_dir``."""
+    return FileConstituentDatasetConfig(
+        cache_dir=str(tmp_path / "reference" / "_cache"),
+        **{"zarr_file_path": str(tmp_path / "us_equity" / "sp500_constituent.zarr"), **overrides},
+    )
 
 
 def _hand_built_intervals() -> pl.DataFrame:
@@ -82,7 +89,7 @@ class _PanelFixture(IndexConstituentDataset):
     network, the cache and the Zarr store.
     """
 
-    def _pit_coverage_start(self) -> str:
+    def _pit_coverage_start(self, config) -> str:
         return _COVERAGE_START
 
     def _build_intervals(self) -> pl.DataFrame:
@@ -136,11 +143,11 @@ def test_sp500_panel_round_trips_through_zarr(mock_universe_fetchers, tmp_path):
     """DATA-05 / D-04: the S&P 500 membership panel survives a full
     build -> Zarr write -> fresh-instance read cycle as a boolean
     `(timestamp, symbol)` grid."""
-    cfg = _make_config(tmp_path)
+    cfg = _sp500_config(tmp_path)
     SP500ConstituentDataset(cfg).from_raw_data().save()
 
     reloaded = (
-        SP500ConstituentDataset(_make_config(tmp_path)).panel(*WHOLE_STORE)
+        SP500ConstituentDataset(_sp500_config(tmp_path)).panel(*WHOLE_STORE)
     )
 
     assert isinstance(reloaded, xr.Dataset)
@@ -391,7 +398,7 @@ def test_construction_performs_no_network_call_and_no_store_read(
 
     monkeypatch.setattr("quantlab.universe.requests.get", _explode)
 
-    cfg = _make_config(
+    cfg = _sp500_config(
         tmp_path / "does-not-exist", symbols=("AAPL", "MSFT")
     )
     dataset = SP500ConstituentDataset(cfg)

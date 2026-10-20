@@ -1227,12 +1227,15 @@ class ConstituentDatasetConfig(BaseDatasetConfig):
     """Config of an index-membership panel (a boolean mask over time and symbol).
 
     A cell is True when the symbol was a member of the index on that date.
+    A membership read from local source files takes a
+    ``FileConstituentDatasetConfig``, which adds their directory; one derived
+    from another store (the estimation universe, the common stocks of a price
+    store) takes this config, its store named in ``kwargs``.
 
     Examples
     --------
     >>> cfg = ConstituentDatasetConfig(
-    ...     zarr_file_path="/data/us_equity/1d/sp500_constituent.zarr",
-    ...     cache_dir="/data/reference/_cache",
+    ...     zarr_file_path="/data/universe/us3000/membership_estu/membership_estu.zarr",
     ...     start_date="2020-01-01",
     ...     end_date="2020-12-31",
     ...     as_of="2024-06-30",
@@ -1241,12 +1244,35 @@ class ConstituentDatasetConfig(BaseDatasetConfig):
     '2024-06-30'
     """
 
-    #: Directory holding the membership source the panel is built from (the
-    #: universe catalog cache or the CRSP reference tables).
-    cache_dir: str
     #: Date the membership is observed from. ``None`` means today, so a panel
     #: that must be reproducible later should pin it.
     as_of: str | None = None
+
+
+@dataclass(kw_only=True, frozen=True)
+class FileConstituentDatasetConfig(ConstituentDatasetConfig):
+    """Config of an index-membership panel built from source files on disk.
+
+    The Wikipedia change logs (``SP500ConstituentDataset``,
+    ``Nasdaq100ConstituentDataset``), the CRSP and Compustat reference
+    tables and Sharadar's S&P 500 table are read from ``cache_dir``.
+
+    Examples
+    --------
+    >>> cfg = FileConstituentDatasetConfig(
+    ...     zarr_file_path="/data/us_equity/1d/sp500_constituent.zarr",
+    ...     cache_dir="/data/reference/_cache",
+    ...     start_date="2020-01-01",
+    ...     as_of="2024-06-30",
+    ... )
+    >>> cfg.cache_dir
+    '/data/reference/_cache'
+    """
+
+    #: Directory holding the membership source the panel is built from (the
+    #: Wikipedia page cache, the CRSP reference tables, Sharadar's S&P 500
+    #: table).
+    cache_dir: str
 
 
 @dataclass(kw_only=True, frozen=True)

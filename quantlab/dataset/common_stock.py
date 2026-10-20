@@ -17,7 +17,6 @@ Examples
 >>> from quantlab.dataset.config import ConstituentDatasetConfig
 >>> members = CommonStockConstituentDataset(ConstituentDatasetConfig(
 ...     zarr_file_path="/data/quantlab/universe/sharadar/sharadar_common_stock_membership/sharadar_common_stock_membership.zarr",
-...     cache_dir="/data/quantlab/downloads/sharadar",
 ...     kwargs={"price_store": "/data/quantlab/market/sharadar/sharadar_sep_1d/sharadar_sep_1d.zarr"},
 ... ))
 >>> members.update().panel("2026-10-14", "2026-10-15")["is_member"].sum("symbol").values
@@ -78,7 +77,6 @@ class CommonStockConstituentDataset(IndexConstituentDataset):
     <xarray.backends.zarr.ZarrStore object at ...>
     >>> members = CommonStockConstituentDataset(ConstituentDatasetConfig(
     ...     zarr_file_path="data/common_stock.zarr",
-    ...     cache_dir="data",
     ...     kwargs={"price_store": "data/sep.zarr"},
     ... ))
     >>> members.from_raw_data().get_xarray_dataset()["is_member"].to_pandas()
@@ -89,8 +87,8 @@ class CommonStockConstituentDataset(IndexConstituentDataset):
     2024-01-04  True  False
     """
 
-    def _normalize_config(self, config: ConstituentDatasetConfig) -> ConstituentDatasetConfig:
-        """Read the price store's first bar (the coverage start), then normalise as the base class does.
+    def _pit_coverage_start(self, config: ConstituentDatasetConfig) -> str:
+        """Return the first bar of the config's price store.
 
         Raises
         ------
@@ -98,12 +96,7 @@ class CommonStockConstituentDataset(IndexConstituentDataset):
             If the config has no ``kwargs["price_store"]``.
         """
         first = xr.open_zarr(config.kwargs["price_store"])["timestamp"].values[0]
-        self._first_bar = pd.Timestamp(first).strftime("%Y-%m-%d")
-        return super()._normalize_config(config)
-
-    def _pit_coverage_start(self) -> str:
-        """Return the price store's first bar."""
-        return self._first_bar
+        return pd.Timestamp(first).strftime("%Y-%m-%d")
 
     def _build_intervals(self) -> pl.DataFrame:
         """Return one ``symbol``/``start_date``/``end_date`` row per security with a priced bar."""

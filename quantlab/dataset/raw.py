@@ -1385,7 +1385,7 @@ class IndexConstituentDataset(RawDataset):
     A minimal index over an in-memory interval table::
 
         class DemoPanel(IndexConstituentDataset):
-            def _pit_coverage_start(self) -> str:
+            def _pit_coverage_start(self, config) -> str:
                 return "2020-01-01"
 
             def _build_intervals(self) -> pl.DataFrame:
@@ -1401,7 +1401,6 @@ class IndexConstituentDataset(RawDataset):
 
     >>> config = ConstituentDatasetConfig(
     ...     zarr_file_path="data/demo.zarr",
-    ...     cache_dir="data/demo_cache",
     ...     start_date="2020-01-01",
     ...     end_date="2020-01-08",
     ...     as_of="2020-01-08",
@@ -1428,7 +1427,7 @@ class IndexConstituentDataset(RawDataset):
     ) -> ConstituentDatasetConfig:
         """Normalise as the base class does, then raise ``start_date`` to the coverage start.
 
-        The source cannot answer membership before ``_pit_coverage_start()``.
+        The source cannot answer membership before ``_pit_coverage_start(config)``.
         Without this adjustment, the inherited default start date
         (``Date.START_DATE``) would add decades of all-False rows, which read
         as "not a member" when the truth is "unknown". A warning is logged
@@ -1448,6 +1447,13 @@ class IndexConstituentDataset(RawDataset):
             A new config whose ``start_date`` is not before the coverage
             start.
 
+        Raises
+        ------
+        TypeError
+            If ``config`` is not exactly the class's ``config_cls``: a source
+            read from files given a config with no ``cache_dir``, or a
+            membership derived from another store given one.
+
         Examples
         --------
         A requested date before the coverage start is raised, with a
@@ -1458,8 +1464,16 @@ class IndexConstituentDataset(RawDataset):
         '2020-01-01'
         """
         config = super()._normalize_config(config)
+        # The exact class: a subclass config carries fields this class never reads, which its
+        # saved config.json then cannot be rebuilt with.
+        if type(config) is not self.config_cls:
+            raise TypeError(
+                f"{self.class_name} needs a {self.config_cls.__name__}, got "
+                f"{type(config).__name__}."
+            )
         requested = config.start_date
-        coverage_start = self._pit_coverage_start()
+        # The config's class is checked first, so a refused config reads no store.
+        coverage_start = self._pit_coverage_start(config)
         if requested >= coverage_start:
             return config
 
@@ -1553,7 +1567,7 @@ class IndexConstituentDataset(RawDataset):
         column_of = {symbol: i for i, symbol in enumerate(symbols)}
 
         left = pd.Timestamp(
-            max(self.config.start_date, self._pit_coverage_start())
+            max(self.config.start_date, self._pit_coverage_start(self.config))
         )
 
         observed = max(
@@ -1596,7 +1610,7 @@ class IndexConstituentDataset(RawDataset):
                 f"{self.class_name}: empty membership window -- resolved left "
                 f"edge {left.strftime('%Y-%m-%d')} is after resolved right "
                 f"edge {right.strftime('%Y-%m-%d')} (index coverage starts "
-                f"{self._pit_coverage_start()}). An empty panel is never a "
+                f"{self._pit_coverage_start(self.config)}). An empty panel is never a "
                 f"valid answer."
             )
 
@@ -1621,10 +1635,12 @@ class IndexConstituentDataset(RawDataset):
         )
 
     @abstractmethod
-    def _pit_coverage_start(self) -> str:
+    def _pit_coverage_start(self, config: ConstituentDatasetConfig) -> str:
         """Return the ISO date before which the source cannot answer membership.
 
         The panel never starts earlier than this, whatever the config asks.
+        It reads ``config``, not ``self.config``: normalisation calls it on
+        a config not yet installed, and it changes nothing on ``self``.
         """
 
     @abstractmethod

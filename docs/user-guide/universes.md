@@ -27,7 +27,11 @@ ends, so a symbol removed on date D is a member on D and not on D + 1.
 To use membership in the pipeline, it is densified into a panel whose single boolean
 variable `is_member` is `True` where a symbol belonged to the index on that day. These
 datasets derive from {py:class}`~quantlab.dataset.raw.IndexConstituentDataset` and take a
-{py:class}`~quantlab.dataset.config.ConstituentDatasetConfig`.
+{py:class}`~quantlab.dataset.config.ConstituentDatasetConfig`, or, when the source is read
+from local files (the Wikipedia cache, the CRSP reference tables, Sharadar's S&P 500 table),
+a {py:class}`~quantlab.dataset.config.FileConstituentDatasetConfig`, which adds their
+directory as `cache_dir`. A membership derived from another store (the estimation universe,
+the common stocks of a price store) names that store in `kwargs` and has no `cache_dir`.
 
 | Class | Universe | `symbol` axis | Source |
 |---|---|---|---|
@@ -62,7 +66,6 @@ priced bar. The store path goes in `kwargs["price_store"]`:
 ... ).to_zarr("data/sep.zarr", mode="w")
 >>> members = CommonStockConstituentDataset(ConstituentDatasetConfig(
 ...     zarr_file_path="data/common_stock.zarr",
-...     cache_dir="data",
 ...     kwargs={"price_store": "data/sep.zarr"},
 ... ))
 >>> members.from_raw_data().get_xarray_dataset()["is_member"].to_pandas()
@@ -104,7 +107,7 @@ from quantlab.dataset.config import ConstituentDatasetConfig
 from quantlab.dataset.raw import IndexConstituentDataset
 
 class DemoIndex(IndexConstituentDataset):
-    def _pit_coverage_start(self) -> str:
+    def _pit_coverage_start(self, config) -> str:
         return "2024-01-01"
 
     def _build_intervals(self) -> pl.DataFrame:
@@ -120,7 +123,6 @@ class DemoIndex(IndexConstituentDataset):
 
 index_config = ConstituentDatasetConfig(
     zarr_file_path="demo_index.zarr",
-    cache_dir="_cache",
     start_date="2024-01-01",
     end_date="2024-03-29",
     as_of="2024-03-29",

@@ -36,7 +36,7 @@ from quantlab.dataset.config import (
     IWM_PERMNO,
     QQQ_PERMNO,
     SPY_PERMNO,
-    ConstituentDatasetConfig,
+    FileConstituentDatasetConfig,
     CrspDatasetConfig,
     DatasetConfig,
 )
@@ -148,7 +148,7 @@ def index_dataset() -> CrspStockDataset:
 
 def index_membership() -> CompustatNasdaq100ConstituentDataset:
     """The point-in-time Nasdaq-100 membership (``is_member``) on the PERMNO axis."""
-    return CompustatNasdaq100ConstituentDataset(ConstituentDatasetConfig(
+    return CompustatNasdaq100ConstituentDataset(FileConstituentDatasetConfig(
         zarr_file_path=str(store_path(UNIVERSE_DIR, "wrds_crsp_nasdaq100_membership")),
         cache_dir=str(REFERENCE),
     ))

@@ -220,7 +220,7 @@ def main() -> None:
     class DemoIndex(IndexConstituentDataset):
         """A toy index: AAA always, BBB until Feb 15, DDD in January."""
 
-        def _pit_coverage_start(self) -> str:
+        def _pit_coverage_start(self, config) -> str:
             """Return the first date for which the toy membership data is complete."""
             return "2024-01-01"
 
@@ -238,7 +238,6 @@ def main() -> None:
 
     index_config = ConstituentDatasetConfig(
         zarr_file_path=str(root / "data" / "reference" / "demo_index.zarr"),
-        cache_dir=str(root / "data" / "reference" / "_cache"),
         start_date="2024-01-01",
         end_date="2024-03-29",
         as_of="2024-03-29",

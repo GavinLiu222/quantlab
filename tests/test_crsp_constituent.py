@@ -569,14 +569,14 @@ def test_membership_symbols_agree_with_the_crsp_price_panel(
 
 def _panel_config(tmp_path, reference_dir, name, **overrides):
     """Module-local config constructor (03.1-PATTERNS.md section 6)."""
-    from quantlab.dataset.config import ConstituentDatasetConfig
+    from quantlab.dataset.config import FileConstituentDatasetConfig
 
     params = dict(
         zarr_file_path=str(Path(tmp_path) / "us_equity" / f"{name}.zarr"),
         cache_dir=str(reference_dir),
     )
     params.update(overrides)
-    return ConstituentDatasetConfig(**params)  # type: ignore[arg-type]
+    return FileConstituentDatasetConfig(**params)  # type: ignore[arg-type]
 
 
 def _label(panel, permno: int):
@@ -819,7 +819,7 @@ def test_both_crsp_universes_round_trip_through_their_saved_config(tmp_path):
     """
     import json
 
-    from quantlab.dataset.config import ConstituentDatasetConfig
+    from quantlab.dataset.config import FileConstituentDatasetConfig
     from quantlab.dataset.constituent import (
         CompustatNasdaq100ConstituentDataset,
         CrspSP500ConstituentDataset,
@@ -836,7 +836,7 @@ def test_both_crsp_universes_round_trip_through_their_saved_config(tmp_path):
         rebuilt = rebuild(json.loads(json.dumps(saved)))
 
         assert type(rebuilt) is cls
-        assert type(rebuilt.config) is ConstituentDatasetConfig
+        assert type(rebuilt.config) is FileConstituentDatasetConfig
         assert json.loads(json.dumps(rebuilt.get_config(), default=str)) == saved
 
 
@@ -872,10 +872,9 @@ def test_the_crsp_classes_add_only_the_two_hooks_and_leave_wikipedia_alone(tmp_p
 
     # The Wikipedia pair is untouched: same left edges, still theirs.
     wikipedia = _panel_config(tmp_path, tmp_path / "_cache", "wikipedia")
-    assert SP500ConstituentDataset(wikipedia)._pit_coverage_start() == "1976-07-01"
+    assert SP500ConstituentDataset(wikipedia)._pit_coverage_start(wikipedia) == "1976-07-01"
+    wikipedia_ndx = _panel_config(tmp_path, tmp_path / "_cache", "wikipedia_ndx")
     assert (
-        Nasdaq100ConstituentDataset(
-            _panel_config(tmp_path, tmp_path / "_cache", "wikipedia_ndx")
-        )._pit_coverage_start()
+        Nasdaq100ConstituentDataset(wikipedia_ndx)._pit_coverage_start(wikipedia_ndx)
         == "2007-02-01"
     )

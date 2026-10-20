@@ -29,7 +29,6 @@ def _estu_store(path, days, mask, symbols=(101, 202)):
 def _members(tmp_path, store):
     return EstuConstituentDataset(ConstituentDatasetConfig(
         zarr_file_path=str(tmp_path / "membership.zarr"),
-        cache_dir=str(tmp_path),
         start_date="2024-01-01",
         kwargs={"barra_store": str(store)},
     ))

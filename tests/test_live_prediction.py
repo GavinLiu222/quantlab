@@ -180,7 +180,7 @@ class Fixture:
     def membership_config(self) -> ConstituentDatasetConfig:
         return ConstituentDatasetConfig(
             zarr_file_path=str(self.membership_path),
-            cache_dir=str(self.root / "membership_cache"), as_of="2024-07-31",
+            as_of="2024-07-31",
         )
 
     def membership(self) -> IntervalMembership:

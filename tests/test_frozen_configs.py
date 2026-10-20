@@ -20,7 +20,7 @@ import quantlab.core.component as component_rule
 from quantlab.model.config import ModelConfig, ModelConfig
 from quantlab.factor.config import FactorConfig, PolarsFactorConfig
 from quantlab.dataset.config import (
-    ConstituentDatasetConfig,
+    FileConstituentDatasetConfig,
     CrspDatasetConfig,
     DatasetConfig,
     NbboDatasetConfig,
@@ -82,8 +82,8 @@ def _nbbo_config(tmp_path: Path, **overrides) -> NbboDatasetConfig:
     return NbboDatasetConfig(**values)
 
 
-def _constituent_config(tmp_path: Path) -> ConstituentDatasetConfig:
-    return ConstituentDatasetConfig(
+def _constituent_config(tmp_path: Path) -> FileConstituentDatasetConfig:
+    return FileConstituentDatasetConfig(
         zarr_file_path=str(tmp_path / "members.zarr"),
         cache_dir=str(tmp_path / "cache"),
         start_date="1900-01-01",
