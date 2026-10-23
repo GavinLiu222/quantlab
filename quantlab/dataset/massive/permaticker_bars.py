@@ -197,7 +197,7 @@ class PermatickerDataset(MarketDataset):
     # -- reading ----------------------------------------------------------------
 
     def _map_rows(self, first: pd.Timestamp, last: pd.Timestamp) -> pl.DataFrame:
-        """Return the map's mapped rows of the days around ``first``..``last`` whose ticker is stored."""
+        """Return the map's mapped rows of the days around ``first`` to ``last`` whose ticker is stored."""
         rows = self.ticker_map.read(
             (first - timedelta(days=1)).date(), (last + timedelta(days=1)).date()
         ).filter(pl.col("permaticker").is_not_null())
@@ -246,7 +246,7 @@ class PermatickerDataset(MarketDataset):
         return {day: int(n) for day, n in counts.iter_rows()}
 
     def columns(self, start, end) -> pl.DataFrame:
-        """Return the ticker each permaticker's column holds on each mapped day of ``start``..``end``.
+        """Return the ticker each permaticker's column holds on each mapped day of ``start`` to ``end``.
 
         Where two stored tickers map to one permaticker on a day, the busier
         one holds the column (the rule ``panel`` applies), so an event of
@@ -281,7 +281,7 @@ class PermatickerDataset(MarketDataset):
         return pl.DataFrame(chosen, schema=schema, orient="row").sort("date", "permaticker")
 
     def _mapped_panel(self, start, end, symbols, variables) -> xr.Dataset:
-        """Return the store's bars of ``start``..``end`` on permatickers, at the store's own bars."""
+        """Return the store's bars of ``start`` to ``end`` on permatickers, at the store's own bars."""
         first, last = check_range(start, end, f"{self.class_name}.panel()")
         rows = self._map_rows(first, last)
         if symbols is not None:

@@ -839,7 +839,7 @@ class BaseModel(Component, ABC):
         Each factor is asked for its panel from ``warmup_bars`` bars before
         ``start`` (counted as ``_feature_starts`` counts them) to ``end``, by
         ``config.factor_data_strategy``; the panel goes through
-        ``predict_panel`` and the result is cut to ``start``..``end``. No
+        ``predict_panel`` and the result is cut to ``start`` to ``end``. No
         config is changed. The model must be trained or loaded.
 
         Parameters

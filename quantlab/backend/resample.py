@@ -114,7 +114,7 @@ def resample_on_read(
     labels: BarLabels,
     owner: str,
 ) -> tuple[xr.Dataset, xr.Dataset]:
-    """Return the source bars read and their resample, cut to ``start``..``end``.
+    """Return the source bars read and their resample, cut to ``start`` to ``end``.
 
     The source bars are opened from ``resample_padding(freq)`` before the
     first instant of the range to that padding after its last, so every

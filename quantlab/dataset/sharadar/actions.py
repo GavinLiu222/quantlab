@@ -48,7 +48,7 @@ value means as Sharadar's ``descriptions`` table (``actiontypes`` rows,
   3 voluntary, 4 bankruptcy or liquidation, the largest when several.
 - flags, True on the action's day: ``listed``, ``initiated`` (coverage
   start of an already listed security), ``ticker_change``, ``name_change``,
-  ``exchange_change``, ``sic_change`` (each from its ``...from``/``...to``
+  ``exchange_change``, ``sic_change`` (each from its ``...from`` / ``...to``
   pair), ``spac_merger``, ``spac_unit_separation``, ``relation``,
   ``reorganization`` (``reorganizationfrom``, ``reorganizationto``,
   ``reorganizationpostsplitcommon``) and ``equity_cancellation``.

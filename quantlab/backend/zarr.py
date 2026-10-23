@@ -1797,11 +1797,16 @@ class XrBackend(DataBackend):
         n : int
             Maximum number of rows (and of labels per dimension) to read.
 
-        The store is opened by path with the same opener ``read`` uses, and
-        every dimension is sliced to ``n`` before conversion, so the whole
-        store is never materialised. ``data`` is neither read nor written:
-        a probe must not observe or inherit the in-place narrowing that
-        ``filter_by_date`` leaves behind.
+        Returns
+        -------
+        polars.LazyFrame
+            Up to ``n`` rows from the store, with coordinates as columns.
+
+        Notes
+        -----
+        Each dimension is limited to ``n`` labels before conversion to a
+        frame. The method reads directly from ``path`` and leaves ``data``
+        unchanged, so earlier ``filter_by_date`` calls do not affect it.
 
         Raises
         ------

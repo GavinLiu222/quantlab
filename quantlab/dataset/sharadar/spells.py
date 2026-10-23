@@ -137,7 +137,7 @@ class SpellPanelDataset(RawDataset):
         return self._calendar_cache
 
     def _days_in(self, start_date, end_date) -> pl.Series:
-        """Return the trading days in the configured window and ``start_date``..``end_date``."""
+        """Return the trading days in the configured window and ``start_date`` to ``end_date``."""
         return self._trading_calendar().days_in(start_date, end_date)
 
     def _spells(self) -> pl.DataFrame:

@@ -223,10 +223,16 @@ class PlBackend(DataBackend):
         n : int
             Maximum number of rows to return.
 
-        The limit is pushed down into the Parquet reader, and a fresh frame
-        is returned without touching ``data``. The existence check is done
-        here because ``scan_parquet`` on a missing file only fails at
-        collect time.
+        Returns
+        -------
+        polars.LazyFrame
+            A lazy query limited to at most ``n`` rows.
+
+        Notes
+        -----
+        The row limit is applied by the Parquet reader. The method leaves
+        ``data`` unchanged and checks that the file exists before returning
+        the query, rather than waiting until collection.
 
         Raises
         ------

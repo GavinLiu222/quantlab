@@ -430,7 +430,7 @@ def window_file(
 ) -> Path:
     """Return the path a date-window pull of a table is written to.
 
-    A window pull is a complete copy of the table over ``start``..``end``
+    A window pull is a complete copy of the table over ``start`` to ``end``
     (both inclusive), so its rows replace every earlier row of those dates.
     The name records when it was pulled, so names sort in pull order, and
     the dates it covers.

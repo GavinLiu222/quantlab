@@ -359,7 +359,7 @@ class MeanVarianceOptimizer(PortfolioConstructor):
     --------
     ``specs`` holds the spec of a 5-bar ``ret_5`` label
     (``LabelSpec("ret_5", "raw", 1, 5)``); ``context`` is a bar of four
-    symbols ``AAA``..``DDD``, all tradable and none held, with 60 bars of
+    symbols ``AAA``, ``BBB``, ``CCC`` and ``DDD``, all tradable and none held, with 60 bars of
     one-bar returns of volatility 1%, 1.5%, 2% and 2.5% and ``ret_5``
     predictions 0.8, -0.1, -0.3 and 0.2. With a risk aversion of 5 on so small
     an expected return the book leans toward the low-volatility symbols:

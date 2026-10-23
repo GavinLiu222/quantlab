@@ -122,7 +122,7 @@ class TradingCalendar:
         return cls(trading_days(vendor_root, through), through=through, start=start, end=end)
 
     def days_in(self, start, end) -> pl.Series:
-        """Return the trading days in both ``start``..``end`` and the configured window.
+        """Return the trading days in both ``start`` to ``end`` and the configured window.
 
         Examples
         --------

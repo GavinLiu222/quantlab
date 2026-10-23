@@ -478,7 +478,7 @@ class BlackLittermanOptimizer(MeanVarianceOptimizer):
 
     Examples
     --------
-    ``forecast`` is a ``FactorRiskForecast`` over ``AAA``..``FFF``,
+    ``forecast`` is a ``FactorRiskForecast`` over ``AAA`` to ``FFF``,
     ``risk`` a ``FactorRiskStoreEstimator`` returning it, ``cap_weight`` a
     factor whose output ``benchmark_weight`` is 0.3, 0.25, 0.2, 0.15, 0.07
     and 0.03, and ``context`` a bar whose predictions are all NaN. With no

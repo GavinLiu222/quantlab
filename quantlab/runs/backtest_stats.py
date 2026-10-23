@@ -593,8 +593,10 @@ def win_rates(
     Returns
     -------
     dict
-        ``Rebalance Win Rate [%]`` and ``Monthly Win Rate [%]``, with
-        `` vs Benchmark`` before `` [%]`` when ``benchmark_returns`` is given.
+        ``Rebalance Win Rate [%]`` and ``Monthly Win Rate [%]``. With
+        ``benchmark_returns``, the keys are instead
+        ``Rebalance Win Rate vs Benchmark [%]`` and
+        ``Monthly Win Rate vs Benchmark [%]``.
 
     Examples
     --------

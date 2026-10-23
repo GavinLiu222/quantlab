@@ -133,7 +133,7 @@ def day_digests(rows: pl.DataFrame) -> dict[str, str]:
 def map_days(
     source: PermatickerDataset, first: str, last: str
 ) -> tuple[xr.Dataset, dict[str, str], dict[str, int]]:
-    """Return the view's panel of ``first``..``last``, the map digests it was mapped with and the unplaced counts.
+    """Return the view's panel of ``first`` to ``last``, the map digests it was mapped with and the unplaced counts.
 
     The digests are read before the bars are mapped: a map that changes in
     between leaves the older digests recorded, so the days are mapped again
@@ -355,7 +355,7 @@ class MappedPermatickerDataset(MarketDataset):
             )
 
     def _open_bars(self, start, end) -> xr.Dataset:
-        """Return the store's bars of ``start``..``end``, refusing a day mapped by a map since changed.
+        """Return the store's bars of ``start`` to ``end``, refusing a day mapped by a map since changed.
 
         The read seam's bars (``BaseDataset.panel``): the store's own
         one-minute bars, lazily, which a resampled dataset resamples on read.
@@ -966,7 +966,7 @@ class MappedDayBarDataset(MappedPermatickerDataset):
             )
 
     def _compare(self, stored: xr.Dataset, sep, a: int, b: int, tolerance: float) -> tuple[date | None, list[dict]]:
-        """Compare bars ``a``..``b - 1`` with SEP's; return the last day compared and the disagreements.
+        """Compare bars ``a`` to ``b - 1`` with SEP's; return the last day compared and the disagreements.
 
         A permaticker-day both vendors price disagrees when its ``divCash``
         or ``splitFactor`` differ (``EVENT_RTOL``, ``EVENT_ATOL``). Its return,
