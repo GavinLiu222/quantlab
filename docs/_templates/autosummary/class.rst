@@ -40,3 +40,16 @@ Attributes
 .. autoattribute:: {{ objname }}.{{ item }}
 {%- endfor %}
 {% endif %}
+
+{% if common_inherited_api is defined and common_inherited_api.get(fullname) %}
+Common inherited methods
+------------------------
+
+These methods use the shared interface documented on the base class.
+
+.. autosummary::
+   :nosignatures:
+{% for item in common_inherited_api[fullname] %}
+   ~{{ item }}
+{%- endfor %}
+{% endif %}

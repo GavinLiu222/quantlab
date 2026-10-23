@@ -763,6 +763,33 @@ print(result.summary()[["factor", "fret", "ic", "rank_ic", "turnover"]].round(4)
 
 On random prices the IC is near zero, as it should be.
 
+### Read the analysis results
+
+The returned {py:class}`~quantlab.analysis.factor_report.FactorAnalysis` holds
+all results. {py:class}`~quantlab.analysis.factor_report.FactorAnalyzer` performs
+the calculations; you do not need to construct one when calling `factor.analyze`.
+Each entry in `result.pairs` is a {py:class}`~quantlab.analysis.factor_report.PairAnalysis`
+for one factor and one forward-return target (`fret` in column and argument names).
+For DataFrames, `qa.analyze_factors` returns a `FactorReport` whose `.raw` is
+this same `FactorAnalysis` result.
+
+| Compact `summary()` column | Detailed `summary_table()` column | Meaning |
+|---|---|---|
+| `ic` | `pearson_ic_mean` | Mean cross-sectional Pearson correlation |
+| `rank_ic` | `ic_mean` | Mean cross-sectional Spearman rank correlation |
+| `icir` | `pearson_ir` | Mean Pearson IC divided by its standard deviation |
+| `rank_icir` | `ir` | Mean rank IC divided by its standard deviation |
+| `long_short_return` | `mean_spread` | Mean forward return of the top group minus the bottom group |
+| `turnover` | Average of `mean_turnover_top` and `mean_turnover_bottom` | Fraction of symbols newly entering the top and bottom groups per bar |
+
+The compact return is a fraction over the target's **full holding horizon**,
+not an annualized return: `0.01` means 1% over that horizon. IC ratios also
+have no annualization multiplier. Annualized return and volatility fields
+are named explicitly in the detailed table. Turnover measures group membership,
+so it is different from the trading-notional turnover of a simulated portfolio.
+Undefined statistics are NaN; an IC ratio can be infinite for zero dispersion.
+
+
 Each pair gets the information analysis (per-period rank IC and Pearson IC,
 their mean, IR, t-statistic and a Newey-West t-statistic `ic_nw_t_stat`,
 which is the one to read for a label spanning several bars), the returns

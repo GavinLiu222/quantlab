@@ -41,6 +41,40 @@ autosummary_generate_overwrite = True
 autosummary_filename_map = {
     "quantlab.core.component.component": "quantlab.core.component_field",
 }
+# Show the methods readers need on common concrete classes without duplicating
+# the inherited method pages for every subclass.
+autosummary_context = {"common_inherited_api": {}}
+for _class in (
+    "quantlab.factor.predefined.alpha158.Alpha158Stock",
+    "quantlab.factor.predefined.alpha101.Alpha101Stock",
+):
+    autosummary_context["common_inherited_api"][_class] = [
+        f"quantlab.factor.base.Factor.{method}"
+        for method in ("compute", "read", "build", "extend", "analyze")
+    ]
+for _class in (
+    "quantlab.model.predefined.xgb.XGBoostRegressor",
+    "quantlab.model.predefined.linear.LinearRegressor",
+    "quantlab.model.predefined.lgbm.LGBMRegressor",
+):
+    autosummary_context["common_inherited_api"][_class] = [
+        f"quantlab.model.base.BaseModel.{method}"
+        for method in ("collect", "train", "load", "predict_panel", "train_cv")
+    ]
+for _class in (
+    "quantlab.dataset.memory.FrameDataset",
+    "quantlab.dataset.stock.StockDataset",
+    "quantlab.dataset.sharadar.stock.SharadarStockDataset",
+):
+    autosummary_context["common_inherited_api"][_class] = [
+        f"quantlab.dataset.base.BaseDataset.{method}"
+        for method in ("panel", "calendar", "resample")
+    ]
+autosummary_context["common_inherited_api"]["quantlab.label.predefined.fret.Return"] = [
+    f"quantlab.label.forward.Forward.{method}"
+    for method in ("compute", "read", "lookahead_bars", "span_bars")
+]
+
 autodoc_default_options = {"members": True, "inherited-members": False, "show-inheritance": True}
 autodoc_typehints = "none"
 numpydoc_show_class_members = False

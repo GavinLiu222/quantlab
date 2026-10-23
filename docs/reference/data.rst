@@ -4,8 +4,12 @@ Datasets and universes
 Read market panels, select symbols and locate stored data.
 See the :doc:`../user-guide/datasets` for usage and examples.
 
-In-memory and stored data
--------------------------
+Read your data
+--------------
+
+Use ``FrameDataset`` for in-memory frames, ``StockDataset`` for compatible
+vendor price files, and ``SharadarStockDataset`` for Sharadar daily prices.
+The Sharadar panel uses permanent security identifiers rather than tickers.
 
 .. autosummary::
    :toctree: generated
@@ -13,9 +17,22 @@ In-memory and stored data
 
    quantlab.dataset.memory.FrameDataset
    quantlab.dataset.stock.StockDataset
-   quantlab.dataset.base.MarketDataset
+   quantlab.dataset.sharadar.stock.SharadarStockDataset
+   quantlab.dataset.config.SharadarDatasetConfig
    quantlab.dataset.config.FrameDatasetConfig
    quantlab.dataset.config.DatasetConfig
+
+Extend the dataset API
+----------------------
+
+``MarketDataset`` defines the interface for custom market datasets. Use a
+concrete dataset above for ordinary price queries.
+
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+
+   quantlab.dataset.base.MarketDataset
 
 Universes and data locations
 ----------------------------

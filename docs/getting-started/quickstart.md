@@ -3,15 +3,17 @@
 This tour runs the whole pipeline on synthetic data: write a price panel, define factors and
 a forward-return label, train an XGBoost model, backtest a top-N strategy on its predictions,
 read the run directory and rebuild the run from it. It needs no network, credential or GPU.
-The code is taken from `examples/quickstart.py`; every output below is that script's.
+Run the Python blocks below in order in one session, or run the complete
+script from a source checkout. Outputs are representative; checkpoint names
+contain a timestamp and performance values can vary with library versions.
 
 ```bash
 uv run python examples/quickstart.py
 ```
 
-It takes about half a minute, mostly compiling the factor graph. In the snippets, `root` is
-the temporary directory the script works in. The script first sets `OMP_NUM_THREADS=1` on
-macOS (see [installation](installation.md#macos-pytorch-and-xgboost-in-one-process)).
+The first run compiles factor calculations and may take longer than later runs.
+All generated files go into a temporary directory. The setup below also handles
+[macOS OpenMP settings](installation.md#macos-pytorch-and-xgboost-in-one-process).
 
 ## Step 1: write a price panel
 
@@ -21,9 +23,20 @@ over 400 business days, with the variable names the Tiingo converter produces (`
 split- and dividend-adjusted prices, the others unadjusted).
 
 ```python
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+if sys.platform == "darwin":
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 import numpy as np
 import pandas as pd
 import xarray as xr
+
+workspace = tempfile.TemporaryDirectory(prefix="quantlab-quickstart-")
+root = Path(workspace.name)
 
 from quantlab.dataset.config import DatasetConfig
 
@@ -35,7 +48,14 @@ rng = np.random.default_rng(0)
 timestamps = pd.bdate_range("2022-01-03", periods=N_BARS)
 shape = (N_BARS, len(SYMBOLS))
 close = 50.0 * np.exp(np.cumsum(rng.normal(0.0, 0.02, shape), axis=0))
-# ... open, high, low and volume are built the same way (see the script)
+prev_close = np.vstack([close[:1], close[:-1]])
+open_ = prev_close * np.exp(rng.normal(0.0, 0.01, shape))
+high = np.maximum(open_, close) * 1.01
+low = np.minimum(open_, close) * 0.99
+volume = rng.uniform(1e5, 1e6, shape)
+columns = dict(zip(ADJUSTED, (open_, high, low, close, volume)))
+for raw_name, adj_name in zip(("open", "high", "low", "close", "volume"), ADJUSTED):
+    columns[raw_name] = columns[adj_name]
 
 panel = xr.Dataset(
     {name: (("timestamp", "symbol"), values) for name, values in columns.items()},
@@ -162,7 +182,7 @@ previous `build()` wrote. `collect()` gathers factors and labels into one panel 
 
 ```python
 model.collect()
-collected = model.data_backend.get_xarray_dataset()
+collected = model.collected_panel.data
 print("Collected panel:", dict(collected.sizes), f"{len(collected.data_vars)} variables")
 checkpoint = model.train()
 print("Checkpoint:", checkpoint.relative_to(root))
@@ -195,7 +215,7 @@ from quantlab.portfolio.predefined.top_n import TopNConstructor
 backtester = USEquityCrossectionSelectStockVectorBt(
     CrossSectionBacktestConfig(
         price_dataset=StockDataset(dataclasses.replace(dataset_config)),
-        model=make_model(root, dataset_config, dates),  # same config as in step 3
+        model=type(model)(dataclasses.replace(model.config)),  # fresh instance, same settings
         model_mode="load",
         checkpoint=str(checkpoint),
         start_date="2023-01-02",  # bar 260
@@ -256,7 +276,7 @@ print("Out-of-sample ranges:", result.metrics["out_of_sample_ranges"])
   Total Return [%]   10.984
   Sharpe Ratio       1.410
   Max Drawdown [%]   8.645
-Metric groups: ['execution', 'in_sample', 'in_sample_range', 'notes', 'out_of_sample', 'out_of_sample_ranges', 'portfolio_construction', 'training_window', 'whole']
+Metric groups: ['attribution', 'execution', 'in_sample', 'in_sample_range', 'notes', 'out_of_sample', 'out_of_sample_ranges', 'portfolio_construction', 'training_window', 'whole']
 In-sample range: None
 Out-of-sample ranges: [('2023-01-02', '2023-07-14')]
 ```
@@ -273,6 +293,7 @@ rebuilt = run.rebuild_backtester()
 again = rebuilt.run()
 same = np.allclose(again.simulation.value.values, result.simulation.value.values)
 print("Rebuilt from its run directory, same equity curve:", same)
+assert same
 ```
 
 ```text
@@ -281,6 +302,12 @@ Rebuilt from its run directory, same equity curve: True
 
 The re-run compares the data it reads with the fingerprints the first run recorded and warns
 if the data, a component's code or a library version changed.
+
+When finished inspecting the report, remove this tutorial's temporary files:
+
+```python
+workspace.cleanup()
+```
 
 ## Where to go next
 

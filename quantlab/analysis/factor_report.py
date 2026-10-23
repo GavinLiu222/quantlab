@@ -5,9 +5,11 @@ It pairs every analyzed factor variable with every forward-return variable
 (a *fret*) and reports three groups of metrics, following the alphalens
 library:
 
-- Information analysis. The IC (information coefficient) of a period is the
-  Spearman rank correlation between the factor and the forward return across
-  the symbols of that timestamp. The report gives the IC series, its mean,
+- Information analysis. Each timestamp has a Spearman rank correlation and
+  a Pearson correlation between factor values and forward returns across
+  symbols. The detailed tables call the Spearman statistic ``ic_mean`` and
+  the Pearson statistic ``pearson_ic_mean``; the compact ``summary`` table
+  names them ``rank_ic`` and ``ic``, respectively. The report gives the IC series, its mean,
   standard deviation, IR (mean over standard deviation), t-statistic and
   p-value against zero, skew, excess kurtosis and monthly means.
 - Returns analysis. At every timestamp the symbols are split into equal-count
@@ -376,7 +378,19 @@ class PairAnalysis:
 
 @dataclass
 class FactorAnalysis:
-    """The result of ``Factor.analyze``: one ``PairAnalysis`` per pair.
+    """Results for a collection of factors evaluated against future returns.
+
+    Returned by ``Factor.analyze``, ``FactorAnalyzer.run`` and
+    ``FactorAnalyzer.analyze_panels``. Each factor/return-target combination
+    has a ``PairAnalysis`` in ``pairs``. Use ``summary`` for a compact metric
+    table, ``ic_table`` for time series, and ``save`` to export the results.
+    This object holds results; ``FactorAnalyzer`` performs the calculations.
+
+    See Also
+    --------
+    FactorAnalyzer : Configure and run an analysis.
+    PairAnalysis : Detailed results for one factor and return target.
+    quantlab.api.FactorReport : DataFrame-facing wrapper around these results.
 
     Attributes
     ----------
@@ -420,8 +434,16 @@ class FactorAnalysis:
           quantiles, averaged (``mean_turnover_top``,
           ``mean_turnover_bottom``).
 
-        Every value is one of ``summary_table()``'s, which holds the full set
-        of scalar metrics.
+        ``ic`` is Pearson correlation; ``rank_ic`` is Spearman rank
+        correlation. In the detailed ``summary_table`` these are named
+        ``pearson_ic_mean`` and ``ic_mean``, respectively.
+
+        ``long_short_return`` is a fraction over the target's full holding
+        horizon, averaged across timestamps; it is not annualized. The
+        IC ratios are mean divided by standard deviation without an
+        annualization multiplier. Turnover is a fraction per evaluation bar.
+        Undefined statistics are NaN; an IC ratio can be infinite when its
+        standard deviation is zero. For the full set of metrics, use ``summary_table``.
 
         Returns
         -------
@@ -464,7 +486,16 @@ class FactorAnalysis:
         return pd.DataFrame(rows, columns=SUMMARY_COLUMNS)
 
     def summary_table(self) -> pd.DataFrame:
-        """Return the scalar metrics, one row per pair.
+        """Return the full scalar metrics, one row per factor/return pair.
+
+        ``ic_mean`` is mean Spearman rank IC; ``pearson_ic_mean`` is mean
+        Pearson IC. For the compact table these are renamed ``rank_ic`` and
+        ``ic`` by ``summary``. ``mean_spread`` is a fractional forward return
+        over the target horizon; annualized fields are named explicitly.
+
+        See Also
+        --------
+        summary : Compact metrics with shorter column names.
 
         Examples
         --------
@@ -763,13 +794,17 @@ class Fret:
 
 
 class FactorAnalyzer:
-    """Compute alphalens-style metrics of factor variables against frets.
+    """Evaluate how factor values rank symbols by their future returns.
 
-    The metrics are computed with polars: the aligned panels become one
-    long ``(timestamp, symbol)`` frame per chunk of factor variables, every
-    per-period statistic of every variable in the chunk is one lazy plan,
-    and the plan is collected once. Only the small per-period series are
-    then finished in pandas.
+    Configure the number of ranked groups and plotting options here, then
+    call ``run`` for factor objects or ``analyze_panels`` for xarray data.
+    Both return a ``FactorAnalysis`` containing IC (correlation with future
+    returns), group returns, turnover and optional charts. ``analyze_pair``
+    returns a ``PairAnalysis`` for one factor and one return target.
+
+    A return target is called a ``fret`` in argument names and output
+    columns; it means forward return. For pandas or polars inputs, use
+    ``quantlab.api.analyze_factors`` instead.
 
     Parameters
     ----------
@@ -797,12 +832,28 @@ class FactorAnalyzer:
         Lags, in periods, of the factor rank autocorrelation. Lag 1 is
         always included.
 
+    See Also
+    --------
+    FactorAnalysis : Results returned by multi-factor analysis.
+    PairAnalysis : Results returned by single-pair analysis.
+    quantlab.api.analyze_factors : Analyze pandas or polars DataFrames.
+
     Examples
     --------
-    >>> analyzer = FactorAnalyzer(quantiles=5)
-    >>> pair = analyzer.analyze_pair(signal, ret, "signal", "ret_1")
-    >>> round(pair.summary["ic_mean"], 4), pair.mean_quantile_returns.round(4).tolist()
-    (0.2384, [-0.0037, -0.0013, -0.0005, 0.0018, 0.0032])
+    >>> import pandas as pd
+    >>> import xarray as xr
+    >>> from quantlab.analysis.factor_report import FactorAnalyzer, Fret
+    >>> signal = xr.DataArray(
+    ...     [[1., 2., 3.], [3., 1., 2.], [2., 3., 1.]],
+    ...     dims=("timestamp", "symbol"),
+    ...     coords={"timestamp": pd.date_range("2024-01-01", periods=3),
+    ...             "symbol": ["AAA", "BBB", "CCC"]},
+    ... )
+    >>> target = Fret((signal * 0.01).to_dataset(name="ret_1"), horizon=1)
+    >>> analyzer = FactorAnalyzer(quantiles=3, plot=False)
+    >>> result = analyzer.analyze_panels(signal.to_dataset(name="signal"), [target])
+    >>> result.summary()[["factor", "fret"]].to_dict("records")
+    [{'factor': 'signal', 'fret': 'ret_1'}]
     """
 
     def __init__(
@@ -1273,9 +1324,20 @@ class FactorAnalyzer:
 
         Examples
         --------
-        >>> pair = FactorAnalyzer().analyze_pair(signal, ret, "signal", "ret_1")
+        >>> import pandas as pd
+        >>> import xarray as xr
+        >>> from quantlab.analysis.factor_report import FactorAnalyzer
+        >>> signal = xr.DataArray(
+        ...     [[1., 2., 3.], [3., 1., 2.], [2., 3., 1.]],
+        ...     dims=("timestamp", "symbol"),
+        ...     coords={"timestamp": pd.date_range("2024-01-01", periods=3),
+        ...             "symbol": ["AAA", "BBB", "CCC"]},
+        ... )
+        >>> pair = FactorAnalyzer(quantiles=3, plot=False).analyze_pair(
+        ...     signal, signal * 0.01, "signal", "ret_1"
+        ... )
         >>> pair.key, pair.quantile_returns.shape
-        ('signal__ret_1', (100, 5))
+        ('signal__ret_1', (3, 3))
         """
         return self.analyze_many(
             factor.to_dataset(name=factor_name),

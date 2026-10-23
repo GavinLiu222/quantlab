@@ -7,12 +7,18 @@ MyST Markdown, numpydoc and the PyData Sphinx Theme.
 
 ```bash
 uv sync --all-extras --group docs
-OMP_NUM_THREADS=1 uv run sphinx-build -b html docs docs/_build/html
+uv run python tools/check_docs_examples.py
+OMP_NUM_THREADS=1 uv run sphinx-build -W --keep-going -b html docs docs/_build/html
+uv run python tools/check_docs_html.py docs/_build/html
 python -m http.server 8000 --directory docs/_build/html
 ```
 
 Open <http://localhost:8000>. GitHub Actions builds the site on pull requests
-and deploys pushes to `main` to GitHub Pages.
+and deploys pushes to `main` to GitHub Pages. Publication requires the selected
+self-contained doctests and every quickstart Python block to run, a warning-free
+build, and HTML checks for broken local links and leaked reStructuredText markup.
+External documentation links are resolved by Sphinx intersphinx during the build;
+the HTML checker does not send network requests.
 
 ## Where to edit
 
