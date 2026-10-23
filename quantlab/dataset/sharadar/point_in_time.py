@@ -3,7 +3,7 @@
 Several Sharadar tables are *releases*: each row became public on some day
 (an SF1 filing on its SEC filing date, a 13F quarter 45 days after its end,
 an 8-K on its filing date), and a panel built from them must never show a
-row before that day. This module owns that rule (ADR 0003, ADR 0040) and the calendar
+row before that day. This module owns that rule and the calendar
 and axis plumbing around it, so a dataset supplies only its rows and a spec:
 
 - ``TradingCalendar`` is SEP's trading days up to the day the raw tables

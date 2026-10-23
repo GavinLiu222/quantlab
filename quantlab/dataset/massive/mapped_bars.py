@@ -27,7 +27,7 @@ per day, the number of stored tickers the map could not place
    write.
 
 A permaticker met for the first time is appended at the end of the symbol
-axis without rewriting what is stored (ADR 0032); over earlier days it reads
+axis without rewriting what is stored; over earlier days it reads
 as a column without a trade (NaN prices, zero volumes), as the view gives
 it. ``panel`` refuses to return a day whose map rows no longer match the
 sidecar, so a read never returns bars mapped by a map that has since
@@ -592,12 +592,12 @@ def _prefer(state: pl.DataFrame, older: pl.DataFrame) -> pl.DataFrame:
 
 
 class MappedDayBarDataset(MappedPermatickerDataset):
-    """Massive's Day aggregates on permatickers, adjusted by Massive's own events (#353, #354).
+    """Massive's Day aggregates on permatickers, adjusted by Massive's own events.
 
     The store ``massive_permaticker_day_bars_1d`` holds the raw ``open``,
     ``high``, ``low``, ``close``, ``volume`` and ``n_trades`` of every
     security the Ticker map places, and SEP's adjusted variables chained
-    from Massive's own split and dividend events (ADR 0048):
+    from Massive's own split and dividend events:
 
     - ``divCash`` and ``splitFactor``, the events of each permaticker's bar
       (``quantlab.dataset.massive.day_bar_events``: Massive's ``/stocks/v1``

@@ -13,8 +13,7 @@ statistics, or rows a trader builds from its fills), which open ``whole``.
 Every row comes from ``quantlab.runs.backtest_stats``; this module decides
 which series, ranges, rebalances and year each row is computed on, and the
 order of the rows and blocks. It imports numpy, pandas, xarray and the runs
-layer's statistics only: no model, dataset or backtest layer and no vectorbt
-(ADR 0034).
+layer's statistics only: no model, dataset or backtest layer and no vectorbt.
 """
 
 from collections.abc import Mapping, Sequence
@@ -268,8 +267,7 @@ def run_metrics(
         The benchmark on the account's bars.
     within : (str, str), optional
         Inclusive bar labels of the stretch measured as ``whole`` instead of
-        the whole account: a ``run_cv()`` fold of its stitched account
-        (ADR 0033).
+        the whole account: a ``run_cv()`` fold of its stitched account.
 
     Returns
     -------

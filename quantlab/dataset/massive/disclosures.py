@@ -1,4 +1,4 @@
-"""Massive's 8-K disclosure categories as a daily panel on the permaticker axis (#358).
+"""Massive's 8-K disclosure categories as a daily panel on the permaticker axis.
 
 Massive's ``/stocks/filings/8-K/vX/disclosures`` records, as
 ``MassiveClient.pull`` keeps them in the REST raw tier

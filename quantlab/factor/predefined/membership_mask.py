@@ -16,7 +16,7 @@ factor is computed on unmasked prices, so a symbol that joins at t has a
 value at t from its full price history and enters the cross-section at t.
 The wrapper is a factor view (``quantlab.factor.view``): it reads the
 wrapped factor's store, and only the factor owning every variable of that
-store writes it (ADR 0029).
+store writes it.
 """
 
 import xarray as xr

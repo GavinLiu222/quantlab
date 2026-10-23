@@ -10,7 +10,7 @@ one to three months early; they stay in the raw tier and never enter a store.
 
 ``SharadarFundamentalsDataset`` places each row of one as-reported dimension
 at its *available date*, the first SEP trading day on or after its release
-date, and is *point-in-time* (as the Compustat panel of ADR 0003 is): on
+date, and uses only information available at the time: on
 every trading day it shows, per security, the row with the latest fiscal
 period among the rows available by that day, and within that period the
 latest filing. So:

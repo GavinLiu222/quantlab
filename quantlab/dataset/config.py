@@ -43,14 +43,13 @@ if TYPE_CHECKING:
 
 @dataclass(kw_only=True, frozen=True)
 class BaseDatasetConfig(FrozenConfig):
-    """Fields every dataset shares, whatever it holds.
+    """Configure a dataset's stored location and raw-data conversion options.
 
-    Both market panels and constituent (index membership) panels build on
-    this class. Market-specific fields live on ``DatasetConfig``. The dates
-    and symbols bound what the build path (``from_raw_data``,
-    ``from_raw_data_chunked``, ``update``) converts from raw files; reading
-    a range of the store is ``panel(start, end, symbols)``, which does not
-    use them.
+    Build dates and symbols limit which raw records are converted by
+    ``from_raw_data``, ``from_raw_data_chunked`` or ``update``. They do not
+    limit reads: ``panel`` takes its own dates and symbol selection.
+    For market prices, use ``DatasetConfig`` to also specify market and
+    frequency.
 
     Examples
     --------
@@ -92,12 +91,11 @@ class BaseDatasetConfig(FrozenConfig):
 
 @dataclass(kw_only=True, frozen=True)
 class DatasetConfig(BaseDatasetConfig):
-    """Config of a market data panel built from a raw download tree.
+    """Configure market data and the vendor files used to build it.
 
-    ``market`` and ``frequency`` sit here, not on ``BaseDatasetConfig``,
-    because a constituent panel has neither. Together with the ``data_type``
-    entry of ``kwargs`` they form the key the vendor registry uses to pick the
-    converter for this dataset.
+    ``zarr_file_path`` names the stored panel; ``raw_data_dir_path`` names
+    downloaded input files. ``market``, ``frequency`` and
+    ``kwargs["data_type"]`` identify the data format and converter.
 
     Examples
     --------
@@ -268,7 +266,7 @@ IWM_PERMNO: str = "88222"
 
 @dataclass(kw_only=True, frozen=True)
 class MassiveTradeBarsDatasetConfig(DatasetConfig):
-    """Config of the Trade bar panel built from Massive's daily trade files (ADRs 0030, 0031).
+    """Config of the Trade bar panel built from Massive's daily trade files.
 
     ``frequency`` stays ``"tick"`` (the raw tier holds one row per trade);
     the size of the bars is ``bar_interval``. The session window and the bar
@@ -319,7 +317,7 @@ class MassiveTradeBarsDatasetConfig(DatasetConfig):
 
 @dataclass(kw_only=True, frozen=True)
 class MassiveDayBarsDatasetConfig(DatasetConfig):
-    """Config of the Day aggregate panel built from Massive's ``day_aggs`` files (#352, ADR 0031).
+    """Config of the Day aggregate panel built from Massive's ``day_aggs`` files.
 
     The panel's ``symbol`` axis is the Massive ticker, exactly as the files
     spell it; every ticker of every file is kept. The inherited ``symbols``
@@ -348,7 +346,7 @@ class MassiveDayBarsDatasetConfig(DatasetConfig):
 
 @dataclass(kw_only=True, frozen=True)
 class TickerMapConfig(FrozenConfig):
-    """Config of the Ticker map: each day's Massive ticker to its permaticker (ADR 0031).
+    """Config of the Ticker map: each day's Massive ticker to its permaticker.
 
     Examples
     --------
@@ -430,7 +428,7 @@ class MappedTradeBarsConfig(FrozenConfig):
 
 @dataclass(kw_only=True, frozen=True)
 class PermatickerDayBarsConfig(FrozenConfig):
-    """Config of the Day aggregates read on the permaticker axis through the Ticker map (#353).
+    """Config of the Day aggregates read on the permaticker axis through the Ticker map.
 
     The view holds no store of its own; ``day_bars`` and ``ticker_map``
     keep their own configs, both component fields.
@@ -459,12 +457,12 @@ class PermatickerDayBarsConfig(FrozenConfig):
 
 @dataclass(kw_only=True, frozen=True)
 class MappedDayBarsConfig(FrozenConfig):
-    """Config of the Day aggregates mapped onto permatickers, adjusted and kept in a store (#353, #354).
+    """Config of the Day aggregates mapped onto permatickers, adjusted and kept in a store.
 
     ``source`` is the permaticker view the store is written from (its own
     bars, not resampled); ``zarr_file_path`` is the store. The adjusted
     prices are chained from Massive's split and dividend pulls in the raw
-    tier of ``source``'s Day aggregates (ADR 0048). ``sep``, when given, is
+    tier of ``source``'s Day aggregates. ``sep``, when given, is
     SEP's store the adjusted returns are checked against, within
     ``check_tolerance``.
 
@@ -682,8 +680,7 @@ class SharadarDatasetConfig(DatasetConfig):
 
     Sharadar keys its price tables by ticker and renames a delisted company's
     history when its ticker is reused, so the panel's ``symbol`` axis is the
-    *permaticker*, Sharadar's unchanging integer id of one share class (ADR
-    0023). The inherited ticker-side ``symbols`` field is refused by the
+    *permaticker*, Sharadar's unchanging integer id of one share class. The inherited ticker-side ``symbols`` field is refused by the
     dataset; use ``permatickers`` instead.
 
     Examples
@@ -803,7 +800,7 @@ class SharadarFundamentalsConfig(SharadarDatasetConfig):
     dimension: str = "ARQ"
 
     #: Days after its release date that a row stops being shown when no
-    #: newer row has replaced it, as for the Compustat panel (ADR 0003).
+    #: newer row has replaced it, as for the Compustat panel.
     #: ``None`` shows it until it is replaced.
     stale_after_days: int | None = 365
 
@@ -1070,7 +1067,7 @@ class MassiveRestPanelConfig(SharadarDatasetConfig):
 
 @dataclass(kw_only=True, frozen=True)
 class MassiveDividendsConfig(MassiveRestPanelConfig):
-    """Config of the Massive dividend panel on the permaticker axis (#351).
+    """Config of the Massive dividend panel on the permaticker axis.
 
     Massive's dividend and split records (the REST raw tier under
     ``massive_dir``) are placed on permatickers through the Ticker map at
@@ -1094,7 +1091,7 @@ class MassiveDividendsConfig(MassiveRestPanelConfig):
 
 @dataclass(kw_only=True, frozen=True)
 class MassiveShortVolumeConfig(MassiveRestPanelConfig):
-    """Config of the Massive short volume panel on the permaticker axis (#356).
+    """Config of the Massive short volume panel on the permaticker axis.
 
     Massive's daily short volume records (the REST raw tier under
     ``massive_dir``) are placed on permatickers through the Ticker map at
@@ -1118,7 +1115,7 @@ class MassiveShortVolumeConfig(MassiveRestPanelConfig):
 
 @dataclass(kw_only=True, frozen=True)
 class MassiveDisclosuresConfig(MassiveRestPanelConfig):
-    """Config of the Massive 8-K disclosure panel on the permaticker axis (#358).
+    """Config of the Massive 8-K disclosure panel on the permaticker axis.
 
     Massive's 8-K disclosure records and its disclosure taxonomy (the REST
     raw tier under ``massive_dir``) are placed on permatickers through the
@@ -1142,7 +1139,7 @@ class MassiveDisclosuresConfig(MassiveRestPanelConfig):
 
 @dataclass(kw_only=True, frozen=True)
 class MassiveIposConfig(MassiveRestPanelConfig):
-    """Config of the Massive IPO panel on the permaticker axis (#359).
+    """Config of the Massive IPO panel on the permaticker axis.
 
     Massive's IPO records (the REST raw tier ``rest/ipos`` under
     ``massive_dir``) are placed on permatickers through the Ticker map at
@@ -1330,7 +1327,7 @@ class RosterDatasetConfig(FrozenConfig):
 
 @dataclass(kw_only=True, frozen=True)
 class BadPrintMaskedDatasetConfig(MergedDatasetConfig):
-    """Config of a merged dataset whose bad prints are masked (#223).
+    """Config of a merged dataset whose bad prints are masked.
 
     The inputs as for ``MergedDatasetConfig``, plus the rule of
     ``quantlab.dataset._support.cleaning.bad_print_mask`` and the variables
@@ -1402,7 +1399,7 @@ class FrameDatasetConfig(BaseDatasetConfig):
 
 @dataclass(kw_only=True, frozen=True)
 class MassiveShortInterestConfig(MassiveRestPanelConfig):
-    """Config of the Massive short interest panel on the permaticker axis (#355).
+    """Config of the Massive short interest panel on the permaticker axis.
 
     Massive's short interest records (the REST raw tier under
     ``massive_dir``) are placed on permatickers through the Ticker map at
@@ -1466,7 +1463,7 @@ class MassiveTenKChangesConfig(SharadarDatasetConfig):
 
 @dataclass(kw_only=True, frozen=True)
 class MassiveNewsConfig(MassiveRestPanelConfig):
-    """Config of the Massive news count and sentiment panel on the permaticker axis (#357).
+    """Config of the Massive news count and sentiment panel on the permaticker axis.
 
     Massive's news articles (the REST raw tier ``rest/news`` under
     ``massive_dir``) are counted per security and trading day, each article

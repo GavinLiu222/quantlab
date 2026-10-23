@@ -1,4 +1,4 @@
-"""The Weights & Biases tracker; the only module that imports wandb (ADR 0015).
+"""The Weights & Biases tracker; the only module that imports wandb.
 
 A run maps onto a W&B run of the same project, group and name. Step metrics
 are logged against their step, the summary goes to the run summary, a table

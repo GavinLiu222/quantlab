@@ -1,7 +1,6 @@
 """Sharadar API client: pull a table as a bulk zip and keep it as raw parquet.
 
-Sharadar (``api.sharadar.com/v1.0``) is the primary US-equity vendor (ADR
-0023). It is reached through its own API, not Nasdaq Data Link: the
+Sharadar (``api.sharadar.com/v1.0``) is the primary US-equity vendor. It is reached through its own API, not Nasdaq Data Link: the
 purchased key answers only there. The key is read from the
 ``SHARADAR_API_KEY`` environment variable and nowhere else, and it travels in
 the ``x-api-key`` header, so it never appears in a URL a log could print.

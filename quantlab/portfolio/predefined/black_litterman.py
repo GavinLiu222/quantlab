@@ -1,6 +1,6 @@
 """Black-Litterman on a factor risk model: ``BlackLittermanOptimizer``.
 
-A mean-variance rule (ADR 0047) whose expected return and covariance are a
+A mean-variance rule whose expected return and covariance are a
 Black-Litterman posterior: an equilibrium prior from the declared market
 portfolio, blended with the views of the rule's expected return model by
 Bayes' rule, in the risk model's factor space. Returns are ``r = B f + e``,

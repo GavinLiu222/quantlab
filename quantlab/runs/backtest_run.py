@@ -1,50 +1,9 @@
-"""Backtest runs: the directory a backtest writes, and how it is read back and rebuilt.
+"""Read saved backtests and reconstruct their configurations.
 
-A backtester writes one run directory per ``run()``, ``run_cv()`` or
-``run_weights()`` through ``write_backtest_run``, a run of the run layer
-(``quantlab.runs.directory``): staged, complete or absent, with ``run.json``
-written last. Its kinds are ``"run"``, ``"run_cv"``, ``"run_weights"`` and
-``"fold"``, one fold of a ``run_cv`` run, written as a child run.
-
-- ``config.json`` holds the rebuild recipe only: the backtester's
-  ``get_config()``, where every in-memory dataset found anywhere in the
-  component tree is recorded reading its copy under ``inputs/``, named by its
-  component path and written once however many fields hold it.
-- ``run.json`` holds the header, the window (the first and last bar of the
-  equity curve), ``market`` (the backtester class's price columns),
-  ``annualization`` (its trading days per year and session minutes per day),
-  the
-  config fields that hold components (``components``, so a field is rebuilt
-  by its declaration without importing the backtester class), the data
-  fingerprint (what the run's ``DataRecorder`` recorded: every dataset or
-  factor store it read, by component path; a ``run_cv`` run's is its stitched
-  pass, each fold child run what its fold's prediction read), ``code`` (the backtester tree's
-  code record, ``quantlab.runs.record``), ``trained_run`` (the trained unit
-  the backtest used: the one trained in train mode, the checkpoint's in load
-  mode, the walk-forward unit for ``run_cv``; none for ``run_weights``) and
-  the folds.
-- The weights, the equity curve, the holdings (when the engine supplies
-  them), the metrics, the settlements, the report,
-  the prediction panel (a run with a model), the per-bar factor attribution
-  (a run with a risk model) and each fold's metrics are files of the
-  directory, named by this module only. A fold is the run's stitched account
-  over its test segment (ADR 0033): its weights, equity, holdings and
-  settlements are read from the run, cut to the fold's window.
-
-``BacktestRun.open`` (or ``quantlab.runs.directory.open_run``) reads a run:
-typed properties, readers that return loaded objects, ``trained_run()``,
-``folds`` and the rebuilds ``rebuild_backtester(**overrides)`` and
-``rebuild(field)``. No path is exposed but the run directory itself.
-
-Opening and reading a run imports no model, factor, label or backtest module;
-rebuilding imports what the recorded classes need.
-
-Examples
---------
->>> run = BacktestRun.open(result.run_dir)
->>> run.kind, run.rebalance_periods, run.market.fill_price_column
-('run', 5, 'open')
->>> again = run.rebuild_backtester().run()  # reproduces the run
+``BacktestRun.open`` loads a run directory. Use the returned object to read
+metrics, predictions and weights, inspect walk-forward folds, or rebuild the
+backtester. A saved run records its dates, market conventions, code versions
+and input-data checksums for reproducibility.
 """
 
 import dataclasses
@@ -122,8 +81,7 @@ class Annualization:
 class FoldArtifacts:
     """What a ``run_cv`` run writes for one fold, a child run of kind ``"fold"``.
 
-    A fold is the run's stitched account over the fold's test segment (ADR
-    0033): its weights, equity, holdings and settlements are the run's, cut
+    A fold is the run's stitched account over the fold's test segment: its weights, equity, holdings and settlements are the run's, cut
     to ``window``, and are not written again.
 
     Attributes
@@ -356,7 +314,12 @@ def _unit(path: Path | str | None) -> str | None:
 
 @dataclass(frozen=True)
 class BacktestRun:
-    """One backtest run directory, as its ``run.json`` describes it.
+    """Read results and reproduce a backtest from its saved directory.
+
+    Use ``BacktestRun.open(path)`` to load the run metadata. Methods provide
+    saved metrics, weights and predictions; ``rebuild_backtester`` reconstructs
+    the configuration for another run. Walk-forward runs expose their
+    individual test windows through ``folds``.
 
     Attributes
     ----------

@@ -10,8 +10,7 @@ the registry, so a caller names a vendor, never a client.
 
 The function is a ``RawTierRefresh``: a protocol rather than a root class,
 because the three vendors share no implementation (whole tables, REST pages,
-symbol batches) and each refresh is a plain function over its own client
-(ADR 0017). What every refresh shares is the call, the result and how it
+symbol batches) and each refresh is a plain function over its own client. What every refresh shares is the call, the result and how it
 fails.
 
 The failure rule is the same for every vendor. A part that fails (a table, an

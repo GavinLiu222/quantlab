@@ -6,7 +6,7 @@ FRED, the retired WRDS CRSP and TAQ downloads). It is not the base of every
 download. Sharadar's whole tables and Massive's daily files and REST
 endpoints are pulled by their own clients, and every vendor the daily update
 keeps current registers a ``RawTierRefresh`` (``quantlab.acquisition.refresh``)
-instead (ADR 0049). The descriptions of every vendor (``SourceDescriptor``,
+instead. The descriptions of every vendor (``SourceDescriptor``,
 ``Capability``, ``DataSourceRegistry``) live in ``quantlab.acquisition.base``.
 
 A subclass declares ``VENDOR`` and ``RAW_COLUMNS`` and implements

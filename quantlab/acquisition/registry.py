@@ -14,7 +14,7 @@ A dataset class then converts the raw tier into a Zarr store holding a panel,
 an ``xarray.Dataset`` indexed by ``timestamp`` and ``symbol``; ``convert()``
 does that without the caller naming any vendor class.
 
-There are two ways to download, by what the caller knows (ADR 0049):
+There are two ways to download, by what the caller knows:
 
 - ``refresh_raw_tier()`` keeps a vendor's raw tier current from its
   watermarks up to today. It is the one way to keep a raw tier current, and
@@ -137,7 +137,7 @@ def download_symbols(
     them to Zarr is the separate ``convert()`` step.
 
     Keeping a vendor's whole raw tier current from its watermarks, with no
-    roster or window, is ``refresh_raw_tier()`` instead (ADR 0049).
+    roster or window, is ``refresh_raw_tier()`` instead.
 
     Parameters
     ----------
@@ -241,7 +241,7 @@ def refresh_raw_tier(
     endpoints, FRED's series. It writes the raw tier only; the stores are
     brought up to date afterwards from it.
 
-    This is the registry's one way to keep a raw tier current (ADR 0049). A
+    This is the registry's one way to keep a raw tier current. A
     vendor whose download is symbol-batched serves it by wrapping its
     ``SymbolBatchAcquisition`` in its refresh, as FRED does; downloading an
     explicit roster over an explicit window is ``download_symbols()``.

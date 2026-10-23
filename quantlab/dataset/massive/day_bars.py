@@ -4,7 +4,7 @@
 in the raw tier (``quantlab.dataset.massive.raw``, data type ``day_aggs``),
 one file per trading day, and returns the dense ``(timestamp, symbol)``
 panel its store ``massive_day_bars_1d`` holds (#352; the two-store pattern
-of the Trade bars, ADR 0031).
+of the Trade bars).
 
 - **The variables are the file's**, unchanged: ``open``, ``high``, ``low``,
   ``close``, ``volume`` and ``n_trades`` (the file's ``transactions``), as
@@ -22,7 +22,7 @@ of the Trade bars, ADR 0031).
   ``volume`` and ``n_trades`` that day.
 - **The store grows at its end.** ``update()`` appends the raw days after
   the store's last; a ticker first met on one of them is appended at the
-  end of the symbol axis in place (ADR 0032), with no bar over the days
+  end of the symbol axis in place, with no bar over the days
   before, so a backfill and a daily update are the same operation. With
   ``end_date=None`` the range is every raw day, so the daily update extends
   the store from its own ``component.json``.

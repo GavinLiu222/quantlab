@@ -1,4 +1,4 @@
-"""The shipped expected return models of the mean-variance rule (ADR 0046).
+"""The shipped expected return models of the mean-variance rule.
 
 An ``ExpectedReturnModel`` (``quantlab.portfolio.base``) turns the prediction
 of a mean-variance rule's ``expected_return_label`` into the expected return

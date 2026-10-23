@@ -1,4 +1,4 @@
-"""Massive's dividends and splits as a daily panel on the permaticker axis (#351).
+"""Massive's dividends and splits as a daily panel on the permaticker axis.
 
 Massive's ``/stocks/v1/dividends`` and ``/stocks/v1/splits`` records, as
 ``MassiveClient.pull`` keeps them in the REST raw tier

@@ -29,7 +29,7 @@ none):
   factor risk model's regression and estimate stores) is extended to t with
   its handle's ``extend``, in one loop, deepest in the tree first (so a risk
   model's exposures before its regression store, and that before its
-  estimate store). Only a store's owner extends it (ADR 0029); a ranged
+  estimate store). Only a store's owner extends it; a ranged
   store only read (a factor view, a factor pinned to some of its
   variables), with no owner in the run, is an outside input and must
   already hold t.

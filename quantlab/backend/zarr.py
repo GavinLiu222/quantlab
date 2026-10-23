@@ -126,7 +126,7 @@ class XrBackend(DataBackend):
 
     #: Chunk width pinned along the symbol axis when a store is created by
     #: ``append``, ``widen_and_append`` or a widen rewrite. A store's symbol
-    #: axis grows at its end (``extend_symbol_axis``, ADR 0032), so a width
+    #: axis grows at its end (``extend_symbol_axis``), so a width
     #: taken from the first window would leave a store that started with a
     #: few symbols in thousands of narrow chunks. Stores created before the
     #: constant keep their own width; Zarr fixes it at creation.

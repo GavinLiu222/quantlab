@@ -8,10 +8,9 @@
 [Issue tracker](https://github.com/ZhaorongDai/quantlab/issues) |
 [PyPI](https://pypi.org/project/quantlab-py/)
 
-quantlab is a configuration-driven backend for quantitative equity research. It downloads
-market data, turns it into `(timestamp, symbol)` panels stored as Zarr, computes factors,
-trains return models, builds portfolios and backtests them, and every stage rebuilds from the
-config it records.
+quantlab is a Python library for quantitative equity research: prepare market data,
+compute factors, train return models and backtest portfolios. Use DataFrames for a single
+task, or connect the stages with configurations and saved runs.
 
 ::::{grid} 1 1 2 2
 :gutter: 3
@@ -20,7 +19,7 @@ config it records.
 :link: getting-started/index
 :link-type: doc
 
-New to quantlab? Install it and run the whole pipeline on synthetic data in ten minutes.
+Install quantlab and run an offline example with synthetic data.
 :::
 
 :::{grid-item-card} User guide
@@ -35,7 +34,7 @@ backtests and the daily jobs.
 :link: reference/index
 :link-type: doc
 
-Every public module, class and function, generated from the numpydoc docstrings.
+Functions and classes grouped by task, with signatures, parameters and examples.
 :::
 
 :::{grid-item-card} Developer guide
@@ -46,6 +45,16 @@ The architecture, how to extend each layer, and the machinery underneath: resuma
 atomic writes, fingerprints, the risk model.
 :::
 ::::
+
+## Choose a starting point
+
+| I want to… | Start here |
+|---|---|
+| Compute factors or backtest my own DataFrame | [Frame API](user-guide/frame-api.md) |
+| Run the complete research pipeline | [Quickstart](getting-started/quickstart.md) |
+| Understand panels, factors and saved runs | [Concepts](user-guide/concepts.md) |
+| Look up a function or a parameter | [API reference](reference/index.rst) |
+| Add a dataset, model or portfolio rule | [Extending quantlab](dev/extending.md) |
 
 ```{toctree}
 :hidden:

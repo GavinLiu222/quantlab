@@ -8,10 +8,10 @@ into the factor's own store in time order. Joined, they equal the whole
 range computed at once, to within floating-point tolerance, provided the
 factor's ``warmup_bars`` is enough for its rolling operators.
 
-A chunked build is not a factor (ADR 0043): it writes only through the
+A chunked build is not a factor: it writes only through the
 store owner's public entries (``build``, ``extend``, ``write_rows``,
 ``append_rows``, ``extendable_range``, ``refuse_unless_owner``), so only the
-owner writes the store (ADR 0029), and nothing reads through it; a model
+owner writes the store, and nothing reads through it; a model
 reads the factor itself. A factor that does not own its store (a view, a
 factor pinned to some of its store's outputs) is refused when handed to the
 builder, before anything is computed. A build that fails part way leaves
@@ -26,7 +26,7 @@ every symbol of a bar at once.
 A resampled factor is chunked on its source bars, in chunks no finer than
 its resampled bars, so every chunk holds whole resampled bars: a minute
 factor's daily store is built a month at a time. Its output is sized on
-the factor calendar (``Factor.calendar``, ADR 0051): the panel ``compute``
+the factor calendar (``Factor.calendar``): the panel ``compute``
 fills is allocated on the factor's own bars, daily for a minute-to-daily
 factor, while the chunks and their peak are counted on the dataset's bars
 the factor reads.

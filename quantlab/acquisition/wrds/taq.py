@@ -710,7 +710,7 @@ class WrdsSession:
         return self._query(work)
 
     def copy_csv(self, query) -> bytes:
-        """Run a ``COPY ... TO STDOUT`` statement and return the CSV bytes.
+        """Copy query results to CSV bytes.
 
         The statement is passed to ``copy_expert`` unchanged, so no SQL text
         is assembled outside ``psycopg2.sql``. Up to ``COPY_SPOOL_BYTES``
@@ -807,7 +807,7 @@ class WrdsSession:
             )
 
     def count_rows(self, day: date, pairs) -> int:
-        """Return how many rows ``copy_query(day, pairs, ...)`` would return.
+        """Count rows for one day and symbol batch.
 
         Parameters
         ----------

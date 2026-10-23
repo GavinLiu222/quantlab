@@ -1,9 +1,9 @@
-"""The config of the model layer.
+"""Configuration for model inputs, date windows and training options.
 
-A model is constructed from a ``ModelConfig`` and exposes it as ``self.config``. It is
-frozen; the model's config setter normalises the config it is given into a new one.
-The model's factors, labels and tracker are declared with ``component()`` and
-written as their own configs.
+Pass a ``ModelConfig`` to a model constructor. It records factor features,
+training labels, data-reading strategies, checkpoint location and estimator
+hyperparameters. Configurations are immutable; use ``dataclasses.replace``
+to create a modified copy.
 """
 
 from dataclasses import dataclass, field
@@ -19,39 +19,29 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class ModelConfig(FrozenConfig):
-    """Config of every model head, torch or library.
+    """Configure model inputs, training dates and estimator settings.
 
-    It holds only what both variants read. Everything a variant or a head
-    reads for training goes in ``hyperparameters``, one flat dict. The base
-    classes and the shipped heads read these reserved keys from it:
+    ``factors`` supply input features and ``labels`` supply prediction targets.
+    ``start_date`` and ``end_date`` bound data collection; ``train_start``,
+    ``train_end``, ``test_start`` and ``test_end`` select the training and test
+    windows. Walk-forward training sets these windows separately for each fold.
+
+    Put estimator options, such as XGBoost's ``max_depth``, in
+    ``hyperparameters``. The shared training code also reads these keys:
 
     ``epochs``
-        Epoch cap of a ``TorchModel``; default 100, a positive integer.
+        Maximum PyTorch training epochs; default 100.
     ``lr``
-        Learning rate of the default ``TorchModel._init_optim``; default
-        ``1e-3``.
+        Learning rate for the default PyTorch optimizer; default ``1e-3``.
     ``early_stopping``, ``early_stopping_patience``
-        The library's native early stopping in the shipped library heads;
-        default off and 5 rounds (or the library's own unit).
+        Enable early stopping for supported external estimators and set its
+        patience. Defaults are disabled and 5 rounds, respectively.
     ``training_target``
-        A ``LibraryModel``'s training target: ``"cs_rank"`` or
-        ``"cs_zscore"``, applied per bar; unset trains on the raw label.
-        Set, ``label_scales`` is ``"standardized"``; metrics still read the
-        raw label.
-    ``batch_size``, ``num_workers``, ``pin_memory``, ``prefetch``, ``panel_device``,
-    ``panel_dtype``
-        Reserved for the torch data loader and training panel.
-
-    A ``LibraryModel``'s ``_init_model`` receives the dict without the
-    library keys above. A ``TorchModel``'s receives the whole dict, reserved
-    keys included, so a torch head never splats it into a network; it reads
-    its own keys by name, or drops the reserved ones with
-    ``BaseModel.head_hyperparameters``.
-
-    ``train_start``, ``train_end``, ``test_start`` and ``test_end`` bound the
-    training and test windows; rolling cross-validation overwrites them fold
-    by fold. ``start_date`` and ``end_date`` bound all the data the model
-    collects; they are passed to every factor and label per request.
+        For external estimators, ``"cs_rank"`` ranks labels across symbols and
+        ``"cs_zscore"`` standardizes them per bar. Omit it to use raw labels.
+        Evaluation always uses the original labels.
+    ``batch_size``, ``num_workers``, ``pin_memory``, ``prefetch``, ``panel_device``, ``panel_dtype``
+        PyTorch data loading and training-panel settings.
 
     Examples
     --------
@@ -112,7 +102,7 @@ class ModelConfig(FrozenConfig):
     test_start: str | None = None
     #: Last date of the test window, inclusive.
     test_end: str | None = None
-    #: Where training runs are tracked (ADR 0015); the default
+    #: Where training runs are tracked; the default
     #: ``NullTracker`` sends nothing anywhere.
     tracker: Tracker = component(default_factory=NullTracker)
 

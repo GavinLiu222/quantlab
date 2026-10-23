@@ -3,7 +3,7 @@
 The implementation ``quantlab.portfolio.approximate.implementation``
 chooses for a ``MeanVarianceOptimizer`` or an ``ActiveRiskOptimizer``:
 ``decide`` reads the rule's config and the span its ``bind`` read, and maximises the per-bar rule's
-objective
+objective::
 
     w @ mu - risk_aversion / 2 * (w - b) @ Sigma @ (w - b) - turnover_penalty * |w - holdings|_1
 
@@ -249,7 +249,7 @@ def decide(
     the better book kept); each projection keeps the names whose zeroing
     costs it most and projects again on them, the steps have no momentum,
     and a swap search then moves one held name's weight to an unheld
-    candidate while that lowers the objective (#363). That is a local
+    candidate while that lowers the objective. That is a local
     optimum of the mixed-integer program a backtest run solves exactly.
 
     With a ``turnover_penalty`` or ``candidate_top_k`` the bars are solved

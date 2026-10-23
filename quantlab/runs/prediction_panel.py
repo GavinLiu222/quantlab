@@ -1,7 +1,7 @@
 """A run's predictions and the specs of the labels they predict.
 
 Every backtest run with a model writes the predictions its rule read as a
-``PredictionPanel`` (ADR 0016): one variable per label on ``(timestamp,
+``PredictionPanel``: one variable per label on ``(timestamp,
 symbol)``, each label described by a ``LabelSpec`` (its name, the scale its
 values are on, its delay and its span). The panel is part of the run directory, so it
 lives in the run layer, below the portfolio and backtest layers that write and

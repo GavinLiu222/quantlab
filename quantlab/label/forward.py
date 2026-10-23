@@ -24,18 +24,17 @@ from quantlab.utils.date_range import as_label, check_range, last_moment
 
 
 class Forward(Component):
-    """A factor shifted ``delay + span`` bars earlier, used as a label.
+    """Use future factor values as training labels.
 
-    ``read`` and ``compute`` ask the wrapped factor for the requested range
-    plus ``lookahead_bars()`` bars after it, counted on the factor calendar
-    (the bars of the factor's output, ``Factor.bar_after``) and stopping at
-    the calendar's last bar, then shift the panel and trim it back to the
-    request. A factor resampled from minute bars to daily counts its
-    lookahead in trading days. The last bars of a request are therefore
-    filled wherever the factor has later bars, and NaN only past the
-    calendar's end. A ``Forward`` owns no store: ``read`` reads the wrapped
-    factor's, so one factor store serves as a feature and, wrapped, as a
-    label.
+    The output at bar ``t`` is the wrapped factor's value at
+    ``t + delay + span``. The shift counts the factor's output bars: a daily
+    factor uses trading days, even if its input data has minute bars.
+
+    ``compute`` and ``read`` fetch the future bars needed, then return only
+    the requested date range. Values become NaN where that future history is
+    unavailable. ``read`` uses the wrapped factor's store; no separate label
+    store is created. For forward price returns, use the predefined ``Return``
+    label or ``quantlab.api.forward_returns``.
 
     Parameters
     ----------

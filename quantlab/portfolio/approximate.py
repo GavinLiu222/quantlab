@@ -1,6 +1,6 @@
 """The approximate backtest's interface to its rule implementations: which rules it runs, and what a decision reads and returns.
 
-The approximate backtest (``quantlab.backtest.approximate``, ADR 0045) owns
+The approximate backtest (``quantlab.backtest.approximate``) owns
 its implementations of the portfolio construction rules it supports, apart
 from the per-bar rule classes: they live in
 ``quantlab.portfolio.predefined.approximate``, one module per rule, and are

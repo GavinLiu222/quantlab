@@ -1,4 +1,4 @@
-"""Datasets on the Massive ticker axis read on the permaticker axis, through the Ticker map (ADR 0031).
+"""Datasets on the Massive ticker axis read on the permaticker axis, through the Ticker map.
 
 The Trade bar store's and the Day aggregate store's symbol axis is the
 Massive ticker, which names a column, not a security. ``PermatickerDataset``
@@ -542,7 +542,7 @@ class PermatickerTradeBarDataset(PermatickerDataset):
 
 
 class PermatickerDayBarDataset(PermatickerDataset):
-    """Massive's Day aggregates on the permaticker axis (#353); see the module docstring.
+    """Massive's Day aggregates on the permaticker axis; see the module docstring.
 
     Parameters
     ----------

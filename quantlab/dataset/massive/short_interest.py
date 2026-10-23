@@ -1,4 +1,4 @@
-"""Massive's short interest as a daily release panel on the permaticker axis (#355).
+"""Massive's short interest as a daily release panel on the permaticker axis.
 
 Massive's ``/stocks/v1/short-interest`` records (FINRA's short interest,
 settled twice a month), as ``MassiveClient.pull`` keeps them in the REST raw

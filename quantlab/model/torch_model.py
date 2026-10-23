@@ -31,7 +31,7 @@ class TorchModel(TrainingTargetMixin, BaseModel):
     The base class assembles the collected panel as a ``TrainingPanel`` of
     torch tensors and computes the training target once per fit. The head's
     ``_dataset`` hook turns it into a PyTorch ``Dataset`` and ``_dataloader``
-    batches it. The default is one cross-section per step (ADR 0006): one
+    batches it. The default is one cross-section per step: one
     bar's present symbols, each with its last ``window_bars`` bars, so the
     network sees ``[S_t, N, F]``; S_t changes from bar to bar, so it must not
     depend on the order or the number of symbols, and a symbol the model

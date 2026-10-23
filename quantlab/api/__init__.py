@@ -1,42 +1,13 @@
-"""Frame-in, frame-out functions for callers who hold their own DataFrames.
+"""Functions for factor research and backtesting with DataFrames.
 
-``quantlab.api`` lets a researcher with market data in a pandas or polars DataFrame use
-one quantlab capability without adopting the project's stores and configs (ADR 0011). A
-function takes a *frame*, a DataFrame in long form with one row per ``timestamp`` and
-``symbol``, and returns a frame of the same library; ``as_xarray=True`` returns the
-library's own ``xarray`` panel instead. Nothing is written to disk unless an
-``output_dir`` is given.
+Pass pandas or polars data in long form, with one row per ``(timestamp,
+symbol)``. Functions return the same DataFrame library unless an xarray
+result is requested. ``columns`` maps your column names to the expected
+names, such as ``open``, ``close`` and ``volume``.
 
-The canonical columns are ``timestamp``, ``symbol``, ``open``, ``high``, ``low``,
-``close`` and ``volume``, plus ``amount`` (traded value) where a function needs it. The
-``columns`` argument maps differently named columns onto them. The input rules:
-
-- a pandas ``(timestamp, symbol)`` MultiIndex is reset automatically;
-- a repeated ``(timestamp, symbol)`` pair raises, listing the first ones;
-- missing ``(timestamp, symbol)`` cells become NaN;
-- timezone-aware timestamps are converted to UTC and made naive;
-- symbols are converted to ``str``.
-
-Underneath, the frame becomes a ``quantlab.dataset.memory.FrameDataset``, a market
-dataset held in memory, which advanced users can also plug into the full pipeline.
-
-Examples
---------
->>> import pandas as pd
->>> import quantlab.api as qa
->>> frame = pd.DataFrame({
-...     "timestamp": pd.to_datetime(["2024-01-02", "2024-01-02", "2024-01-03", "2024-01-03"]),
-...     "symbol": ["AAA", "BBB", "AAA", "BBB"],
-...     "open": [10.0, 20.0, 10.5, 19.0], "high": [11.0, 21.0, 11.5, 20.5],
-...     "low": [9.5, 19.5, 10.0, 18.5], "close": [10.5, 20.5, 11.0, 19.5],
-...     "volume": [1e6, 2e6, 1.1e6, 1.8e6],
-... })
->>> qa.compute_factors(frame, "alpha158")[["timestamp", "symbol", "KMID"]]
-   timestamp symbol      KMID
-0 2024-01-02    AAA  0.707107
-1 2024-01-02    BBB -0.707107
-2 2024-01-03    AAA  0.707107
-3 2024-01-03    BBB -0.707107
+Use ``compute_factors`` for features, ``forward_returns`` for future-return
+labels, ``analyze_factors`` for signal evaluation and ``backtest`` for
+portfolio simulation. Files are written only when explicitly requested.
 """
 
 from collections.abc import Mapping
@@ -54,10 +25,15 @@ def compute_factors(
     columns: Mapping[str, str] | None = None,
     as_xarray: bool = False,
 ):
-    """Compute a factor set over every bar of a frame.
+    """Compute factor values from market price and volume data.
 
-    The whole frame is computed at once, with no history before its first bar, so the
-    leading bars of each rolling window are NaN rather than dropped.
+    Choose a predefined factor set, such as ``"alpha158"``, or pass a factor
+    class. The result contains one column per factor and one row per
+    ``(timestamp, symbol)``. pandas inputs return pandas frames; polars inputs
+    return polars frames.
+
+    Rolling calculations use only the supplied data. Values without enough
+    history are NaN; those rows are kept.
 
     Parameters
     ----------
@@ -104,6 +80,11 @@ def compute_factors(
         If ``frame`` is not a pandas or polars DataFrame, or ``factor`` is neither a short
         name nor a ``Factor`` subclass.
 
+    See Also
+    --------
+    analyze_factors : Evaluate factor values against forward returns.
+    forward_returns : Compute forward-return labels.
+
     Examples
     --------
     >>> import numpy as np
@@ -144,17 +125,16 @@ def forward_returns(
     columns: Mapping[str, str] | None = None,
     as_xarray: bool = False,
 ):
-    """Compute the forward return of each bar, the label factors are judged against.
+    """Compute future returns to use as training labels or evaluation targets.
 
-    The label at bar ``t`` is the return of a position entered ``delay`` bars later and
-    held ``span`` bars, both at the ``price`` column::
+    For a signal at bar ``t``, enter ``delay`` bars later and hold for ``span``
+    bars. The return is::
 
         price[t + delay + span] / price[t + delay] - 1
 
-    ``delay + span`` is the label's lookahead: the last ``delay + span`` bars of the
-    frame have no later bars to read and are NaN. The defaults match the library's
-    ``Return`` label, a signal at bar ``t`` filled at bar ``t + 1``'s open. The whole frame
-    is computed at once.
+    By default, entry is at the next bar's open. The last ``delay + span`` bars
+    have no future prices available, so their labels are NaN. Returns are
+    fractions: ``0.05`` means a 5% return.
 
     Parameters
     ----------
@@ -198,6 +178,11 @@ def forward_returns(
     TypeError
         If ``frame`` is not a pandas or polars DataFrame, ``price`` is not a string,
         ``span`` or ``delay`` is not an int, or ``binary`` is not a bool.
+
+    See Also
+    --------
+    analyze_factors : Evaluate factors using these return labels.
+    backtest : Simulate signals with a matching execution delay.
 
     Examples
     --------
@@ -249,18 +234,16 @@ def analyze_factors(
     plot: bool = True,
     columns: Mapping[str, str] | None = None,
 ) -> FactorReport:
-    """Report how well each factor orders symbols by their forward return.
+    """Measure how well factor values predict future returns across symbols.
 
-    Every factor column is paired with the forward returns, and the library's factor
-    report (``quantlab.analysis.factor_report``) measures each pair on the bars and symbols
-    the two share: the per-bar IC (Pearson and Spearman rank correlation across symbols)
-    and its statistics, the mean forward return of each of ``quantiles`` equal-count
-    buckets by factor value, the top-minus-bottom spread, turnover and rank
-    autocorrelation. With two or more factor columns it also measures their correlation.
+    For each factor, the report includes correlation with future returns
+    (information coefficient, or IC), returns by factor-ranked group, the
+    spread between the highest and lowest groups, and portfolio turnover.
+    Multiple factors are also compared with each other.
 
-    Exactly one source of forward returns is given: ``returns``, the caller's own, or
-    ``prices``, from which they are computed exactly as ``forward_returns(prices,
-    price=price, span=span, delay=delay)`` computes them.
+    Supply exactly one return source: your own ``returns``, or ``prices`` from
+    which this function computes forward returns. Only timestamps and symbols
+    shared by the factor and return data are evaluated.
 
     Parameters
     ----------
@@ -319,6 +302,12 @@ def analyze_factors(
         If an input is not a pandas or polars DataFrame (or an xarray panel), ``price``
         is not a string, ``span``, ``delay`` or ``quantiles`` is not an int, or ``plot``
         is not a bool.
+
+    See Also
+    --------
+    compute_factors : Compute a predefined factor set from price bars.
+    forward_returns : Compute return labels explicitly.
+    FactorReport : Inspect and save the factor analysis.
 
     Examples
     --------
@@ -392,37 +381,31 @@ def backtest(
     output_dir=None,
     columns: Mapping[str, str] | None = None,
 ) -> BacktestReport:
-    """Backtest target weights, or the top-N names of a score, on a price frame.
+    """Simulate a portfolio from target weights or signal scores.
 
-    Exactly one signal is given. ``weights`` are simulated as given; ``scores`` become
-    equal weights on the ``top_n`` highest-scoring names (and, for ``direction=
-    "long_short"``, minus the ``top_n`` lowest) every ``rebalance_periods`` bars, a name
-    being picked only when it has a score and a fill price at that bar, and a held name
-    without one keeping its weight. A weight formed
-    at bar t fills at bar t+1's ``fill`` price and the portfolio is valued at the
-    ``valuation`` price. The run covers every bar of ``prices``; the bar interval is the
-    most common spacing of its timestamps. There is no training window, so the metrics
-    cover the whole window. Nothing is written and no W&B run is started, unless
-    ``output_dir`` is given.
+    Supply exactly one of ``weights`` or ``scores``. Weights specify the
+    fraction of portfolio value to hold in each symbol. Scores select the
+    ``top_n`` highest-ranked symbols with equal weights; long-short mode also
+    shorts the lowest-ranked symbols. Scores are reconsidered every
+    ``rebalance_periods`` bars.
 
-    Weights follow the target-weight contract: on a bar that has weights every symbol
-    has a finite weight and the gross exposure (sum of absolute weights) is at most 1;
-    a bar without weights holds the current positions. A weight frame may leave things
-    out:
+    A decision at bar ``t`` trades at bar ``t + 1`` using ``fill`` prices.
+    Portfolio value is measured using ``valuation`` prices. Statistics cover
+    the full price history supplied. Results are returned as a
+    ``BacktestReport``; ``output_dir`` optionally saves the run.
 
-    - a symbol without a weight on a bar that has weights for other symbols gets
-      weight 0: a row left out of a long frame, or a NaN cell of a wide frame, so a
-      sparse long frame listing only the names held and its pivot mean the same;
-    - a bar without any weight is a hold: absent from a long frame, or an all-NaN row
-      of a wide frame. A frame listing only the rebalance bars is therefore enough; to
-      go flat on a bar, give it explicit zeros;
-    - a NaN written in a long frame beside finite weights on the same bar keeps that
-      symbol's holding there, untraded; a bar whose weights have a gross exposure
-      above 1 raises.
+    Weight inputs follow these rules:
 
-    Timestamps in a time zone are converted to UTC and naive ones are taken as UTC;
-    when the weights', scores' or benchmark's bars miss the prices' and the inputs came
-    in different zones, the error names both zones.
+    - On a rebalance bar, an omitted symbol has target weight zero.
+    - An omitted bar, or an all-NaN row in a wide frame, keeps existing positions.
+    - An explicit NaN in a long frame beside other finite weights leaves that
+      symbol untraded. Use explicit zeros to close all positions.
+    - Gross exposure, the sum of absolute target weights, must not exceed one.
+
+    For score selection, a symbol needs a finite score and fill price.
+    An existing position without these inputs keeps its current weight.
+    Timezone-aware timestamps are converted to UTC; naive timestamps are
+    interpreted as UTC.
 
     Parameters
     ----------
@@ -481,6 +464,11 @@ def backtest(
         prices lack, or a weight row breaks the contract (naming the bar).
     TypeError
         If a frame is not a pandas or polars DataFrame (or an xarray panel).
+
+    See Also
+    --------
+    BacktestReport : Inspect, plot and save the simulation results.
+    analyze_factors : Evaluate a signal before constructing a portfolio.
 
     Examples
     --------

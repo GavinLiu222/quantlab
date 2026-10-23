@@ -46,7 +46,7 @@ input (turnover, the decided rebalances, the deepest drawdown, the Rolling
 window, the timeline, the Setup lines, the benchmark curve) is derived here
 from those, so an executor that simulates elsewhere (an event-driven replay
 of a quantlab run) writes a page in exactly this format by handing over its
-own record (ADR 0035). This module imports only the standard library, numpy,
+own record. This module imports only the standard library, numpy,
 pandas, xarray, plotly, ``quantlab.runs.backtest_stats``,
 ``quantlab.runs.run_metrics`` and ``quantlab.runs.factor_attribution_report``.
 """

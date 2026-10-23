@@ -1,6 +1,6 @@
 """Markowitz mean-variance weights with a turnover penalty, solved with cvxpy.
 
-``MeanVarianceOptimizer`` maximises, on every rebalance bar,
+``MeanVarianceOptimizer`` maximises, on every rebalance bar::
 
     w @ mu - risk_aversion / 2 * w @ Sigma @ w - turnover_penalty * |w - w_current|_1
 
@@ -236,16 +236,16 @@ class MeanVarianceOptimizer(PortfolioConstructor):
     not tradable) keeps its current weight; a held, tradable symbol the risk
     model does not cover is closed, and the row reports it in
     ``attrs["events"]["closed_without_risk"]``; every other symbol gets 0.0.
-    Over the candidates the optimiser solves
+    Over the candidates the optimiser solves::
 
         maximise    w @ mu - risk_aversion / 2 * w @ Sigma @ w
                     - turnover_penalty * |w - w_current|_1
 
-    subject to, with ``direction="long_only"``,
+    subject to, with ``direction="long_only"``::
 
         sum(w) = 1,  0 <= w <= weight_cap
 
-    and with ``direction="long_short"``,
+    and with ``direction="long_short"``::
 
         sum(w) = 0,  |w|_1 <= 1,  |w| <= weight_cap.
 
@@ -264,7 +264,7 @@ class MeanVarianceOptimizer(PortfolioConstructor):
     model's estimate has a factor form (``B F B' + diag(D)``), the risk term
     is built as ``|F^(1/2) B' w|^2 + w' diag(D) w`` and the dense matrix is
     never formed. ``mu`` is the ``expected_return`` model's (an
-    ``ExpectedReturnModel``, ADR 0046) on the prediction of the predicted
+    ``ExpectedReturnModel``) on the prediction of the predicted
     candidates, handed ``sigma``, the square root of ``Sigma``'s diagonal,
     when the model needs it: ``GrinoldExpectedReturn`` gives ``ic * sigma *
     z``, ``z`` the candidates' cross-sectional z-score (``ddof=1``), so the
@@ -316,8 +316,7 @@ class MeanVarianceOptimizer(PortfolioConstructor):
     reference book, a benchmark say) and ``risk_constraints`` (constraints
     on the risk term, a tracking-error cap say). A third, ``posterior``,
     lets it replace ``mu`` and the covariance estimate and change the
-    candidates, after ``mu`` is computed and before ``candidate_top_k``
-    (ADR 0047). All are unused by default, and the problem is then exactly
+    candidates, after ``mu`` is computed and before ``candidate_top_k``. All are unused by default, and the problem is then exactly
     the one above. ``ActiveRiskOptimizer``
     (``quantlab.portfolio.predefined.active_risk``) builds a
     benchmark-relative rule on the first two.

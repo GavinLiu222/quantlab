@@ -417,8 +417,7 @@ def _solve_bar(mu, cap, ut, specific, bound, start, anchor, settings, out):
     ``settings`` is ``(risk_aversion, penalty, long_only, gross, tolerance,
     max_iterations, max_names)``, ``max_names`` 0 for no name-count cap.
 
-    Without ``max_names`` this is ``_descend``. With it, a local search
-    (#363):
+    Without ``max_names`` this is ``_descend``. With it, a local search:
 
     1. the bar's problem is solved first without the cap, from ``start``,
        and the sparse descent starts from that book, so the first names are

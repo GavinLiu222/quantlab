@@ -6,7 +6,7 @@ A portfolio construction rule built on the extension points of
 capitalization weights, such as ``MembershipCapWeight``); the rule declares
 it among its factors (``declared_inputs()``), so a backtest computes it and
 an executor injects it like any other factor value. Over the candidates the
-rule solves
+rule solves::
 
     maximise    w @ mu - risk_aversion / 2 * (w - b) @ Sigma @ (w - b)
                 - turnover_penalty * |w - w_current|_1

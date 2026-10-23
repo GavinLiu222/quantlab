@@ -1,11 +1,8 @@
-"""The configs of the factor layer.
+"""Configurations for factor calculations and saved factor data.
 
-A factor is constructed from one of these and exposes it as ``self.config``. They
-are frozen; the factor's config setter normalises the config it is given into a
-new one (dates, factor names, the ``name`` field the factor is rebuilt from; see
-``quantlab.core.component``). A factor's ``dataset`` (a market-feature
-factor's ``series``, a neutralized factor's ``factor``) is declared with
-``component()`` and written as its own config.
+Choose the configuration class required by the factor, set its input data
+and calculation options, then pass it to the factor constructor. Date ranges
+are supplied when computing or reading values. Configurations are immutable.
 """
 
 from dataclasses import dataclass, field
@@ -23,13 +20,11 @@ if TYPE_CHECKING:
 
 @dataclass(kw_only=True, frozen=True)
 class BaseFactorConfig(FrozenConfig):
-    """Fields every factor (and label) shares, whichever backend computes it.
+    """Configure a factor's inputs, warm-up history and optional saved output.
 
-    The config says what is computed, not when: the date range is an
-    argument of ``compute``, ``read`` and ``build``. ``compute(start, end)``
-    requests ``warmup_bars`` bars of the dataset before ``start``, counted
-    on the dataset's own calendar, so rolling computations are warm at the
-    first requested bar.
+    Date ranges are passed to ``compute``, ``read`` and ``build`` rather than
+    stored in this configuration. ``warmup_bars`` specifies how many earlier
+    input bars a calculation can read to initialize rolling windows.
 
     Examples
     --------
@@ -73,7 +68,13 @@ class BaseFactorConfig(FrozenConfig):
 
 @dataclass(kw_only=True, frozen=True)
 class FactorConfig(BaseFactorConfig):
-    """Config of a KunQuant-computed factor.
+    """Configure a factor computed with the KunQuant engine.
+
+    Set ``dataset`` to its input data, ``data_columns`` to the fields it reads,
+    and ``warmup_bars`` to the history required by rolling calculations.
+    ``file_path`` optionally names the Zarr output written by ``build``.
+    Use ``mode="batch"`` for date-range calculations; ``"stream"`` processes
+    new bars one at a time.
 
     Examples
     --------

@@ -1,4 +1,4 @@
-"""NBBO bar panel from bars resampled on the WRDS server (ADR 0027).
+"""NBBO bar panel from bars resampled on the WRDS server.
 
 The tick path (``quantlab.dataset.nbbo.NbboPanelDataset``) downloads every
 NBBO record and resamples it locally. Over the slow link to WRDS a decade of

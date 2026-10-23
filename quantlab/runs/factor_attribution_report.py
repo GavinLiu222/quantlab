@@ -446,7 +446,7 @@ def _risk_over_time(attribution: xr.Dataset, groups: tuple, scale: float) -> go.
 
 
 def _ticked_range(low: float, high: float, ticks: int = 8) -> tuple[list[float], float]:
-    """An axis range from ``low`` <= 0 to ``high`` >= 0 and its round tick spacing (#216).
+    """An axis range from ``low`` <= 0 to ``high`` >= 0 and its round tick spacing.
 
     A part below 0 (a hedge) is small beside the market's spikes, so the range reaches a whole
     tick below 0 and the hedge gets a labelled tick; rounding noise below 0 does not count.

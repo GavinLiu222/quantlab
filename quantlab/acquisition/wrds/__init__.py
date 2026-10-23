@@ -9,7 +9,7 @@ acquisition class.
 millisecond data, specifically the NBBO (National Best Bid and Offer: the
 highest bid and lowest ask across all US exchanges at each instant), through
 ``WrdsTaqNbboAcquisition``. ``quantlab.acquisition.wrds.taq_bars`` downloads
-the same quotes already resampled into bars on the WRDS server (ADR 0027),
+the same quotes already resampled into bars on the WRDS server,
 through ``WrdsTaqNbboBarsAcquisition``, with the statement built by
 ``quantlab.acquisition.wrds.nbbo_bars_sql``. ``quantlab.acquisition.wrds.crsp`` downloads CRSP
 (Center for Research in Security Prices) Stock v2 daily bars through

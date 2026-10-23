@@ -1,30 +1,10 @@
-"""Abstract factor layer: ``Factor``, the backend-agnostic base class of every factor.
+"""Compute, save and read factor panels.
 
-A *factor* turns market data into engineered features, for example a
-20-day momentum or a moving-average deviation. It reads a *panel* of
-a dataset (an ``xarray.Dataset`` indexed by ``timestamp`` and ``symbol``)
-and produces a panel of the same shape. A label is a factor wrapped in
-``quantlab.label.forward.Forward``, which shifts it forward to make a
-prediction target such as a forward return.
-
-``Factor`` is the backend-agnostic contract the model layer programs
-against. Its two computation backends live in the factor layer:
-``quantlab.factor.kunquant.FactorKunQuant`` (a KunQuant operator graph, batch
-and streaming) and ``quantlab.factor.polars.FactorPolars`` (a Polars
-expression chain, batch only). Shipped factor sets live under
-``quantlab/factor/predefined`` and labels under ``quantlab/label``.
-
-Rolling operators need history before the first bar they report. That extra
-history is the *warm-up*. ``compute(start, end)`` reads ``config.warmup_bars``
-bars before ``start``, counted on the input dataset's own calendar, and trims
-them off again.
-
-A factor's output is not always on its dataset's bars: a factor made with
-``Factor.resample`` is on the resampled bars. The *factor calendar*, the
-bars of the output panel, is what ``calendar``, ``bar_before`` and
-``bar_after`` answer on (ADR 0051); a consumer counting bars of a factor
-(a model's warm-up, a label's lookahead) counts on them, never on
-``config.dataset``, whose calendar only the factor's own warm-up reads.
+A factor produces one or more feature variables on ``(timestamp, symbol)``.
+``compute`` returns values in memory; ``build`` saves a date range;
+``read`` loads saved values; ``extend`` adds later bars. Configurations
+specify inputs and calculation options, while method arguments specify
+dates. Rolling calculations can request earlier bars through ``warmup_bars``.
 """
 
 import contextlib
@@ -101,22 +81,18 @@ def _on_panel_axes(data: xr.Dataset) -> xr.Dataset:
 
 
 class Factor(Component, ABC):
-    """Backend-agnostic base class for factors and labels.
+    """Compute factor values or read previously saved values.
 
-    A ``Factor`` holds a config whose ``dataset`` attribute is the dataset it
-    reads from. Asked for a date range, it answers ``compute(start, end)``
-    from its inputs or ``read(start, end)`` from its own store, which
-    ``build(start, end)`` writes and ``extend(end)`` lengthens. None of these
-    holds a panel or changes a config, the factor's or its dataset's, so one
-    dataset object can feed several factors. The returned panel is what the
-    model layer consumes as features; to use a factor as a label, wrap it in
-    ``quantlab.label.forward.Forward``. Subclasses implement
-    ``_get_factor_names`` and ``_compute_panel`` (both backends here do).
+    A factor produces named variables on a ``(timestamp, symbol)`` panel.
+    Use ``compute`` for an in-memory result, ``build`` to compute and save a
+    date range, ``read`` to load saved values, and ``extend`` to append later
+    bars. Each method takes its date range explicitly.
 
-    Assigning ``config`` runs the property setter, which sets ``name`` and
-    resolves ``factor_names`` when they are not pinned, so factor names are
-    known as soon as the object is constructed, before anything is
-    computed.
+    The configuration supplies the input dataset and calculation settings.
+    ``warmup_bars`` controls how much earlier data rolling calculations read.
+    To use future factor values as a training target, wrap the factor in
+    ``Forward``. To define a new factor, implement ``_get_factor_names`` and
+    ``_compute_panel`` in a subclass.
 
     Parameters
     ----------
@@ -330,29 +306,16 @@ class Factor(Component, ABC):
         end: "str | datetime.date | pd.Timestamp",
         symbols: "Sequence | None" = None,
     ) -> xr.Dataset:
-        """Return the factor store from ``start`` to ``end``, both inclusive.
+        """Read saved factor values between two dates, including both endpoints.
 
-        The stored panel is opened lazily; the factor holds nothing
-        afterwards. The range must lie inside the one recorded beside the
-        store by ``build`` and ``extend`` (see ``store_range``). A resampled
-        factor reads its own store when one has been built, otherwise it
-        resamples on read as a resampled dataset's ``panel`` does
-        (``quantlab.backend.resample.resample_on_read``): the part of the
-        source factor's store the range needs, cut to ``symbols`` first, is
-        aggregated, and those source bars are what is recorded.
+        The requested range must be covered by an earlier ``build`` or ``extend``.
+        Only this factor's named outputs are returned, even when the saved store
+        contains additional variables. ``symbols`` selects a subset in the order
+        given.
 
-        Only the factor's own outputs (``get_factor_names()``) are returned,
-        so a factor pinned to some outputs of a store shared with a factor
-        of more outputs reads just those (ADR 0029). ``symbols`` is a pure
-        query, like ``BaseDataset.panel``'s; a model reads a store on a
-        roster through ``quantlab.factor.predefined.roster.RosterFactor``.
-
-        This is the factor read seam: inside an open
-        ``quantlab.runs.record.DataRecorder`` the request, its symbols
-        included, is logged and fingerprinted, over every returned
-        variable, when the recorder closes (over the source bars, keyed by
-        the source store when the factor is not mapped, for a resample on
-        read).
+        Data is opened lazily. A resampled factor reads its own saved store when
+        available; otherwise it aggregates the required source bars. During a
+        recorded run, the inputs read are tracked automatically.
 
         Parameters
         ----------
@@ -455,7 +418,7 @@ class Factor(Component, ABC):
         """Return the factor's bars from ``start`` to ``end``, both inclusive, timestamps only.
 
         The *factor calendar*: the bars of the factor's output panel, which
-        ``bar_before`` and ``bar_after`` count on (ADR 0051). A factor that
+        ``bar_before`` and ``bar_after`` count on. A factor that
         is not resampled answers with its dataset's calendar
         (``BaseDataset.calendar``). A factor made with ``resample`` answers
         with its resampled bars: the dataset's bars over the range, bucketed
@@ -621,18 +584,15 @@ class Factor(Component, ABC):
         start: "str | datetime.date | pd.Timestamp",
         end: "str | datetime.date | pd.Timestamp",
     ) -> xr.Dataset:
-        """Compute the factor from ``start`` to ``end``, both inclusive.
+        """Compute factor values for a date range without saving them.
 
-        The inputs are requested from the dataset from ``warmup_bars`` bars
-        before ``start`` up to ``end``, so rolling operators are warm on the
-        first requested bar; the result holds only the requested range. A
-        resampled factor is computed on its dataset's own bars and returned
-        on its resampled bars. Neither this factor's config nor its
-        dataset's config changes, and the factor holds nothing afterwards.
+        Both endpoints are included. The calculation also reads ``warmup_bars``
+        earlier bars so rolling windows can use history before ``start``; these
+        extra bars are removed from the result.
 
-        If the dataset holds fewer than ``warmup_bars`` bars before
-        ``start``, a ``UserWarning`` states the shortfall in bars and the
-        computation starts from the first bar there is.
+        If there is not enough earlier history, computation starts at the first
+        available bar and emits a ``UserWarning``. A resampled factor computes on
+        its input dataset's frequency, then returns aggregated output bars.
 
         Parameters
         ----------
@@ -788,17 +748,15 @@ class Factor(Component, ABC):
         start: "str | datetime.date | pd.Timestamp",
         end: "str | datetime.date | pd.Timestamp",
     ) -> Self:
-        """Compute ``start`` to ``end`` and write it as the factor store.
+        """Compute a date range and replace the factor's saved store.
 
-        The store at ``store_path`` is replaced by ``compute(start, end)``,
-        its symbol axis in ``sort_symbol_axis`` order as ``extend`` keeps it,
-        and the range is recorded beside it, in
-        ``<store_path>.range.json``, for ``store_range``, ``read`` and
-        ``extend``. The factor holds nothing afterwards and no config
-        changes. Only the store's owner builds it (see ``owns_store``). The
-        store and its range are written through
-        ``quantlab.backend.ranged.RangedStore``, as a factor risk model's
-        stores are.
+        Calls ``compute(start, end)`` and writes the result to ``store_path``.
+        Both endpoints are included. The covered range is saved alongside the
+        data so ``read`` can validate requests and ``extend`` can append later
+        bars. Use ``compute`` instead when you only need an in-memory result.
+
+        A factor that reads another factor's store cannot overwrite that store;
+        only the factor that owns it may build it.
 
         Parameters
         ----------
@@ -824,18 +782,15 @@ class Factor(Component, ABC):
         return self
 
     def extend(self, end: "str | datetime.date | pd.Timestamp") -> Self:
-        """Append the bars after the recorded range, up to ``end``.
+        """Compute and append later bars to an existing factor store.
 
-        The bars are computed with ``compute``, so they are warmed from the
-        dataset's history, then appended to the store; its timestamp, symbol
-        and variable axes widen to fit, and cells created by widening are
-        filled from ``_widen_fill_values()``.
-        The recorded range then ends at ``end``.
+        New bars start after the previously recorded range and continue through
+        ``end``. Calculations read the required warm-up history automatically.
+        New timestamps, symbols and variables are added as needed; missing cells
+        use the factor's fill values.
 
-        A resampled factor appends resampled bars. ``compute`` reads every
-        source bar a resampled bar covers, past the range's ends too, so each
-        stored bar is whole and a store built in pieces equals one built at
-        once: a minute factor's daily store can be built a quarter at a time.
+        For resampled output, each appended bar includes all of its source bars.
+        Build the initial date range with ``build`` before calling this method.
 
         Parameters
         ----------
@@ -1052,7 +1007,7 @@ class Factor(Component, ABC):
 
         A store is written only by its owner, the factor whose outputs are
         every variable of it; a factor pinned to some of them reads it but
-        never writes it (ADR 0029). A store that does not exist yet belongs
+        never writes it. A store that does not exist yet belongs
         to whoever writes it first.
 
         Examples

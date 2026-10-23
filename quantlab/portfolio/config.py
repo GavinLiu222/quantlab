@@ -197,7 +197,7 @@ class MeanVarianceConfig(FrozenConfig):
     #: Risk aversion ``lambda`` of the variance penalty.
     risk_aversion: float
     #: How ``expected_return_label``'s prediction becomes the expected
-    #: return ``mu`` (an ``ExpectedReturnModel``, ADR 0046):
+    #: return ``mu`` (an ``ExpectedReturnModel``):
     #: ``GrinoldExpectedReturn`` (``ic * sigma * z``),
     #: ``ZScoreExpectedReturn`` (``ic * median(sigma) * z``),
     #: ``RawExpectedReturn`` (the prediction, in return units) or

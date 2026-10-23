@@ -1,4 +1,4 @@
-"""Massive's daily short volume as a panel on the permaticker axis (#356).
+"""Massive's daily short volume as a panel on the permaticker axis.
 
 Massive's ``/stocks/v1/short-volume`` records (FINRA's daily short sale
 volume, one record per ticker and day, from 2024-02-06), as

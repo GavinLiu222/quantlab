@@ -943,7 +943,7 @@ class BarraStyle(FactorKunQuant):
         Without ``risk_free_symbol`` every bar of the dataset counts. With
         it, ``_broadcast_risk_free`` keeps only the bars where another
         symbol has a price (``_priced_bars``), so the count goes back until
-        it holds ``warmup_bars`` of those (#252), or to the dataset's first
+        it holds ``warmup_bars`` of those, or to the dataset's first
         bar, warning with the shortfall.
         """
         params = self._parameters()

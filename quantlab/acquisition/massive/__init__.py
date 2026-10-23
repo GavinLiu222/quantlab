@@ -8,14 +8,14 @@ so importing the client also registers the source.
 ``quantlab.acquisition.registry`` so an operator surface lists it: one
 ``Capability`` per data type of the raw tier (``quantlab.dataset.massive.raw.DATA_TYPES``),
 the credential variables, and the dataset classes that build Trade bars from
-the trade files (ADR 0030) and the Day aggregate store ``massive_day_bars_1d``
-from the day aggregates (#352), and the dividend panel ``massive_dividends_1d``
-from the REST dividends and splits (#351), the news panel ``massive_news_1d`` from the
-REST news articles (#357), the short interest panel
-``massive_short_interest_1d`` from the REST short interest (#355), the short volume panel
-``massive_short_volume_1d`` from the REST short volume (#356), the 8-K disclosure panel
-``massive_disclosures_1d`` from the REST 8-K disclosures (#358), and the IPO panel
-``massive_ipos_1d`` from the REST IPOs (#359). The minute aggregates are raw only: they are
+the trade files and the Day aggregate store ``massive_day_bars_1d``
+from the day aggregates, and the dividend panel ``massive_dividends_1d``
+from the REST dividends and splits, the news panel ``massive_news_1d`` from the
+REST news articles, the short interest panel
+``massive_short_interest_1d`` from the REST short interest, the short volume panel
+``massive_short_volume_1d`` from the REST short volume, the 8-K disclosure panel
+``massive_disclosures_1d`` from the REST 8-K disclosures, and the IPO panel
+``massive_ipos_1d`` from the REST IPOs. The minute aggregates are raw only: they are
 kept to check Trade bars against.
 
 Massive's raw tier is one vendor file per data type and trading day, pulled by

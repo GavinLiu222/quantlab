@@ -11,7 +11,7 @@ forwards every member of the backtester's ``Predictor`` protocol
 views compose.
 
 The protocol lives in the backtest layer, which the model layer does not
-import (ADR 0022): the view forwards it structurally, and
+import: the view forwards it structurally, and
 ``tests/test_predictor_view.py`` checks it forwards every protocol member.
 """
 

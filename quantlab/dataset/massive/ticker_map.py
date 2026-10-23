@@ -1,7 +1,7 @@
 """The Ticker map: each day's Massive ticker to the permaticker that traded under it.
 
 The Trade bar store's symbol axis is the Massive ticker, the ticker a
-security traded under that day (ADR 0031). A ticker is not a security: one
+security traded under that day. A ticker is not a security: one
 ticker can belong to different securities on different days. The Ticker map
 says, for each day and Massive ticker, which Sharadar permaticker traded
 under it, or none, with the evidence for the choice. It is the only way

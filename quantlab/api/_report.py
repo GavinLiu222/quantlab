@@ -1,9 +1,8 @@
-"""``BacktestReport``, the result ``quantlab.api.backtest`` returns.
+"""Tabular results returned by ``quantlab.api.backtest``.
 
-The library's ``BacktestResult`` holds xarray objects; the report turns them into frames
-of the caller's library, once, here (ADR 0011), and keeps the result itself as ``raw``.
-Its figure and its run directory come from the backtester that produced it, through that
-backtester's public methods; plotly and vectorbt are not imported by this module.
+``BacktestReport`` provides portfolio values, returns, weights, orders and
+trades in the input DataFrame library. Use ``plot`` to view performance,
+``save`` to keep a reproducible run, and ``raw`` for the xarray result.
 """
 
 import dataclasses
@@ -38,11 +37,12 @@ TRADE_COLUMNS = {
 
 
 class BacktestReport:
-    """The outcome of one ``quantlab.api.backtest`` call, as frames.
+    """Inspect portfolio performance and trades returned by ``backtest``.
 
-    Every frame is of the library the prices came in as: pandas in, pandas out; polars
-    in, polars out. For prices given as an ``xarray.Dataset`` panel the members are the
-    library's own ``xarray.Dataset`` objects instead.
+    Tables use the same DataFrame library as the input prices. For xarray
+    price inputs, outputs remain xarray datasets. Use ``plot`` for the
+    performance chart and ``save`` to write a reproducible backtest run.
+    ``raw`` provides the underlying ``BacktestResult``.
 
     Attributes
     ----------

@@ -1,54 +1,10 @@
-"""The root classes of portfolio construction: the rule from one bar's scores to weights.
+"""Interfaces for converting predictions into target portfolio weights.
 
-A *portfolio construction* rule turns the scores of one bar, and the weights
-currently held, into the weights to hold after that bar (ADR 0012). Every
-rule derives from ``PortfolioConstructor``, whose one abstract method,
-``construct(context)``, is handed a ``PortfolioContext`` holding only what is
-known at that bar. ``decide`` runs ``construct``, checks the row and holds
-a bar the rule cannot solve. A rule only decides: its contexts are
-assembled by ``quantlab.portfolio.decision_inputs.DecisionInputs``, for the
-vectorised backtest (a whole panel, the holdings replayed between
-rebalances) and for an event-driven executor (one bar, with the holdings it
-really has).
-
-The output follows the weights contract (D-03): on a rebalance bar every
-symbol gets a finite weight, an unselected one exactly 0.0, with gross
-exposure at most one; an all-NaN row means "hold the current position". A
-*locked position*, a symbol held but not tradable at the bar, keeps its
-current weight, and a symbol neither tradable nor held gets 0.0 (ADR 0014);
-the loop checks both. A rule holds no state between bars. A bar the rule
-cannot solve raises ``PortfolioConstructionError``, and the loop holds it
-instead.
-
-The approximate backtest (``quantlab.backtest.approximate``, ADR 0045) reads
-the same rules' configs and decides a block of bars at once with its own
-implementations (``quantlab.portfolio.predefined.approximate``, chosen by
-``quantlab.portfolio.approximate``); a rule here knows
-nothing of them. ``DecisionPanel`` is what
-``DecisionInputs.panel`` reads for it: a block of bars' decision inputs.
-
-A *covariance estimator* (``CovarianceEstimator``) estimates the covariance
-of one-bar returns at a bar, as a ``quantlab.risk.base.ReturnCovariance``
-(the dense ``CovarianceEstimate`` here, or ``LowRankCovarianceEstimate``,
-low rank plus a diagonal, which Ledoit-Wolf returns); a rule that prices
-risk, such as a mean-variance optimiser, holds one. It is not a factor risk
-model (``quantlab.risk``), which is estimated ahead as stores; one estimator,
-``FactorRiskStoreEstimator``, reads those stores: its estimate is the
-model's forecast (``quantlab.risk.base.FactorRiskForecast``), whose
-``factor_form()`` lets an optimiser build a low-rank risk term and whose
-``factor_exposure`` gives a risk factor's exposures, and it
-declares its risk model, whose exposures at the bar the decision inputs take
-from the model itself (read or computed per its ``exposure_data_strategy``)
-and put in each bar's context beside the bar's row of its estimate store, so
-the estimator reads nothing but the context.
-
-What a rule reads at each bar besides its predictions and holdings is one
-value, its ``InputDeclaration`` (``declared_inputs()``): the return window
-and the prices behind it, the ``Factor`` panels, the factor risk model. A
-rule holding a covariance estimator merges the estimator's into its own.
-
-Shipped rules and covariance estimators live in
-``quantlab/portfolio/predefined``; this module imports no solver.
+A ``PortfolioConstructor`` reads one bar's scores and holdings from a
+``PortfolioContext`` and returns a ``Decision``. Expected-return models and
+covariance estimators supply the return and risk inputs used by optimizers.
+Weights are fractions of portfolio value; negative weights are short
+positions.
 """
 
 import dataclasses
@@ -87,10 +43,10 @@ class PortfolioConstructionError(RuntimeError):
 
 @dataclass(frozen=True)
 class PortfolioContext:
-    """Everything a portfolio construction rule may read at one bar.
+    """Inputs available to a portfolio rule at one decision bar.
 
-    Nothing in it reaches past the bar it describes, so a rule handed a
-    context cannot look ahead.
+    Contains the scores, current holdings and other inputs assembled for that
+    bar. Data is limited to information available by the decision time.
 
     Attributes
     ----------
@@ -349,7 +305,10 @@ class DecisionPanel:
 
 @dataclass(frozen=True)
 class Decision:
-    """What a rule decided at one bar: ``PortfolioConstructor.decide``'s result.
+    """Target portfolio weights and diagnostics for one decision bar.
+
+    Returned by ``PortfolioConstructor.decide``. The weights describe the
+    positions to hold after trading; diagnostics record how they were chosen.
 
     Attributes
     ----------
@@ -879,7 +838,7 @@ class ExpectedReturnModel(_Configured, ABC):
     A mean-variance rule (``MeanVarianceOptimizer``) holds one as
     ``expected_return`` and reads ``expected_return_label``'s prediction,
     each candidate's volatility on the label's span and the candidates; the
-    model decides how they become the expected return (ADR 0046). It works
+    model decides how they become the expected return. It works
     on ``[bars, symbols]`` arrays, so the same model serves the per-bar rule
     (one row) and the approximate backtest. Shipped models live in
     ``quantlab.portfolio.predefined.expected_return``.
@@ -960,17 +919,17 @@ class ExpectedReturnModel(_Configured, ABC):
 
 
 class PortfolioConstructor(_Configured, ABC):
-    """Base class of every rule that turns one bar's scores into target weights.
+    """Convert signal scores and current holdings into target portfolio weights.
 
-    Subclass it, set ``config_cls`` to a dataclass of the rule's parameters
-    and implement ``construct``; override ``bind`` to check the label specs
-    and read what the rule needs from them, and ``declared_inputs`` when it
-    reads a return window, factor panels or a factor risk model's exposures.
-    ``decide`` makes the one-bar decision on a context ``DecisionInputs``
-    assembles.
-    ``get_config`` and ``from_config`` serialise the rule as its config's
-    fields plus the class's import path under ``"name"``, which a
-    backtest's ``config.json`` records.
+    At each rebalance bar, ``decide`` returns a ``Decision`` based on a
+    ``PortfolioContext``. Weights are fractions of portfolio value; negative
+    weights represent short positions. Use a predefined rule such as
+    ``TopNConstructor`` or ``MeanVarianceOptimizer`` for common strategies.
+
+    To create a custom rule, set ``config_cls`` and implement ``construct``.
+    Override ``bind`` to validate prediction labels and ``declared_inputs`` to
+    request price history, factors or risk-model inputs. Configuration is
+    saved automatically with a backtest run.
 
     Parameters
     ----------

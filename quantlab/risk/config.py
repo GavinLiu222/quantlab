@@ -115,7 +115,7 @@ class Use4RiskConfig(FactorRiskConfig):
     windows of three half-lives, 756). The Newey-West lags of the factor
     volatilities and correlations are USE4's (5 and 2); two defaults are
     our choice, measured on the Sharadar history with bias statistics over
-    1- and 21-bar returns (#197): the factor volatilities' autocorrelations
+    1- and 21-bar returns: the factor volatilities' autocorrelations
     use a 504-bar half-life (with the volatilities' own 84 the multiplier is
     so noisy that calibration worsens), and the specific volatilities have
     no Newey-West adjustment (USE4: 5 lags, half-life 252; it worsened the

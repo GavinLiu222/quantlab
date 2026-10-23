@@ -1,29 +1,9 @@
-"""The root class of the risk layer: ``FactorRiskModel``, the contract of a factor risk model.
+"""Estimate and query factor-based return covariance.
 
-A *factor risk model* explains each bar's stock returns by a few factors and
-forecasts their risk from that (ADR 0024). It is estimated ahead of any
-backtest, over the whole history, as stores of one row per bar, and each row
-uses nothing later than its bar. The portfolio layer reads the stores; it
-does not estimate anything itself.
-
-A store is a ``RiskStore``. It follows the factor lifecycle: ``compute(start,
-end)`` returns the rows of a range, ``build`` writes them, ``extend`` appends
-the bars after the recorded range and ``read`` returns a range of the store,
-which must lie inside the range recorded beside it. Its rows are not a
-``(timestamp, symbol)`` panel (factor returns are on ``(timestamp, factor)``),
-so the store opens its rows itself; the range, ``build`` and ``extend`` are
-``quantlab.backend.ranged.RangedStore``'s, as a factor's are. Every row depends only
-on a bounded window of bars ending at its own, so a store built in one go and
-one built and then extended are identical.
-
-``FactorRiskModel`` fixes what every factor risk model produces, whatever its
-method: two stores of one-bar quantities (``REGRESSION_VARIABLES`` and
-``ESTIMATE_VARIABLES``), the factor axis (``factor_names``) and each symbol's
-exposures to it at a bar (``exposure_matrix``). The portfolio side
-(``FactorRiskStoreEstimator``) and the bias statistics (``quantlab.risk.bias``)
-read only that. How the factor returns and the forecasts are estimated is a
-subclass's; shipped models live in ``quantlab.risk.predefined`` (USE4 on the
-``BarraStyle`` exposures).
+``FactorRiskModel`` estimates historical factor returns and forecasts risk.
+``FactorRiskForecast`` combines symbol exposures, factor covariance and
+symbol-specific variance for one decision bar. ``RiskStore`` reads and
+builds the model's regression and estimate data.
 """
 
 import dataclasses
@@ -74,7 +54,7 @@ class ReturnCovariance(Protocol):
     """The covariance of one-bar returns at a bar, over the symbols it covers: what a covariance estimator returns.
 
     What a rule holding a covariance estimator may ask of its estimate, whatever
-    the estimator. Three types satisfy it and stay separate types (ADR 0028):
+    the estimator. Three types satisfy it and stay separate types:
     the dense ``quantlab.portfolio.base.CovarianceEstimate``, the low-rank
     ``quantlab.portfolio.base.LowRankCovarianceEstimate`` (Ledoit-Wolf) and a
     factor risk model's ``FactorRiskForecast``. A rule asks the estimate and
@@ -137,18 +117,15 @@ class ReturnCovariance(Protocol):
 
 @dataclasses.dataclass(frozen=True)
 class FactorRiskForecast:
-    """A factor risk model's forecast at one bar: the covariance of the next bar's returns.
+    """Forecast return covariance for a set of symbols at one bar.
 
-    ``B F B' + diag(D)`` over the ``n`` symbols the forecast covers, with
-    ``k`` factors: ``B`` holds each symbol's exposures, ``F`` the factor
-    covariance and ``D`` each symbol's specific variance, all of one-bar
-    returns. ``FactorRiskModel.forecast`` builds it, and decides which
-    symbols and factors it covers, for every user: the portfolio's
-    covariance estimator (an optimiser prices risk as ``|F^(1/2) B' w|^2 +
-    w' diag(D) w`` from ``factor_form()``, never building the dense matrix),
-    factor attribution and the bias statistics. A book's risk is read with
-    ``exposure``, ``portfolio_variance`` and ``risk_contributions``, its
-    weights on ``symbols``.
+    Covariance is represented as ``B @ F @ B.T + diag(D)``: ``B`` contains
+    symbol exposures, ``F`` is factor covariance, and ``D`` is symbol-specific
+    variance. Every quantity describes one-bar returns.
+
+    Use ``covariance`` for the full matrix, ``portfolio_variance`` for the risk
+    of supplied weights, and ``risk_contributions`` to attribute that risk.
+    Weight arrays must follow the order in ``symbols``.
 
     Attributes
     ----------
@@ -662,40 +639,20 @@ FACTOR_GROUPS = ("country", "industry", "style")
 
 
 class FactorRiskModel(Component, ABC):
-    """A factor risk model: the stores estimated ahead of a backtest.
+    """Estimate factor returns and forecast the covariance of future returns.
 
-    The interface every factor risk model presents, whatever its method:
+    Build ``regression`` to estimate each bar's factor and symbol-specific
+    returns. Then build ``estimate`` to forecast next-bar factor covariance
+    and symbol-specific volatility. ``forecast`` combines these estimates with
+    symbol exposures for portfolio optimization and risk analysis.
 
-    - ``factor_names``: the factor axis, and ``factor_groups``: each
-      factor's group (country, industry or style; style by default);
-    - ``exposure_names`` and ``exposure_matrix(exposures)``: the outputs of
-      the exposures factor (``config.exposures``) it reads, and each
-      symbol's exposures to ``factor_names`` at a bar, with whether it has
-      them all;
-    - the regression store (``regression``), one row per bar ``t``:
-      ``factor_return`` on ``(timestamp, factor)``, the factor returns over
-      the bar ending at ``t``, and ``specific_return`` on ``(timestamp,
-      symbol)``, each symbol's return over that bar less its factor part,
-      the exposures being those of the bar before;
-    - the estimate store (``estimate``), one row per bar ``t``:
-      ``factor_covariance`` on ``(timestamp, factor_i, factor_j)`` and
-      ``specific_risk`` on ``(timestamp, symbol)``, forecasts made at ``t``
-      of the next bar's factor covariance and specific volatilities;
-    - ``prices`` and ``exposures``: its inputs over a date range.
+    Stored outputs use ``timestamp`` plus symbol or factor axes. All returns
+    and risk estimates refer to one bar. A row uses information available by
+    that bar; missing history or uncovered factors produce NaN values.
 
-    Every quantity is of one-bar returns, a row uses nothing later than its
-    bar, and a store may add its own diagnostics. The ``factor`` axes are
-    ``factor_names``. A missing value is NaN: a factor without a return on
-    a bar, a forecast without enough history.
-
-    A subclass implements the method: ``factor_names``,
-    ``exposure_names``, ``exposure_matrix``, ``_compute_regression`` and
-    ``_compute_estimate`` (the rows of a date range, its warm-up read
-    before it), and the warm-ups ``regression_warmup_bars`` and
-    ``estimate_warmup_bars``; it sets ``config_cls`` to its config, a
-    ``FactorRiskConfig``, and checks its parameters in ``_validate``
-    (calling this class's). The rows it computes are checked against the
-    stores' variables before they are returned or written.
+    Use a concrete implementation such as ``Use4RiskModel``. Custom models
+    provide exposures, regression and covariance calculations, and declare the
+    history each calculation needs.
 
     Parameters
     ----------
@@ -848,14 +805,12 @@ class FactorRiskModel(Component, ABC):
         """
 
     def forecast(self, estimate: xr.Dataset, exposures: xr.Dataset) -> FactorRiskForecast:
-        """Return the forecast at one bar from its estimate row and the exposures at the bar.
+        """Build a one-bar covariance forecast from saved estimates and exposures.
 
-        The one coverage rule of the model's forecasts. A symbol of
-        ``exposures`` is covered when ``exposure_matrix`` gives it every
-        exposure, finite on the kept factors, and the row a specific risk. A
-        factor without a covariance at the bar (``covered_factors``: no
-        variance, or too few common bars with another) is left out of the
-        forecast, and so is every symbol exposed to it.
+        Include symbols with finite exposures to all required factors and an
+        available specific-risk estimate. A factor without an estimable covariance
+        is excluded, along with symbols exposed to that factor. The returned
+        forecast records the covered symbols and factor names.
 
         Parameters
         ----------

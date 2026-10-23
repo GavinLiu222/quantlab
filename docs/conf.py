@@ -36,7 +36,11 @@ myst_heading_anchors = 3
 myst_substitutions = {"release": release}
 
 autosummary_generate = True
-autosummary_generate_overwrite = False
+autosummary_generate_overwrite = True
+# Component and component otherwise collide on case-insensitive filesystems.
+autosummary_filename_map = {
+    "quantlab.core.component.component": "quantlab.core.component_field",
+}
 autodoc_default_options = {"members": True, "inherited-members": False, "show-inheritance": True}
 autodoc_typehints = "none"
 numpydoc_show_class_members = False
@@ -63,8 +67,15 @@ html_theme_options = {
     ],
     "navbar_align": "left",
     "show_toc_level": 2,
+    "navigation_depth": 2,
+    "show_nav_level": 1,
     "navigation_with_keys": False,
     "footer_start": ["copyright"],
     "footer_end": ["sphinx-version", "theme-version"],
 }
 html_context = {"default_mode": "auto"}
+
+# Keep package names in signatures and page titles, not in every table entry.
+add_module_names = False
+html_show_sourcelink = False
+html_sidebars = {"**": ["sidebar-nav-bs"]}

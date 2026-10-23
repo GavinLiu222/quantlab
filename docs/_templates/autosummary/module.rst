@@ -3,6 +3,8 @@
 .. automodule:: {{ fullname }}
    :no-members:
 
+.. currentmodule:: {{ fullname }}
+
 {% block classes %}
 {% if classes %}
 .. rubric:: Classes

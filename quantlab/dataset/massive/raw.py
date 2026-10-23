@@ -2,7 +2,7 @@
 
 Massive (Stocks Developer) serves every SIP trade of the US market, and its
 own minute and day aggregates, as one gzipped CSV per data type and trading
-day in the S3 bucket ``flatfiles`` at ``files.massive.com`` (ADR 0030). The
+day in the S3 bucket ``flatfiles`` at ``files.massive.com``. The
 raw tier keeps those files exactly as downloaded, under the Massive
 directory of the download root::
 

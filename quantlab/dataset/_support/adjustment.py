@@ -3,7 +3,7 @@
 SEP (``quantlab.dataset.sharadar.stock``) adjusts its raw prices from
 Sharadar's ACTIONS, and Massive's Day aggregates on permatickers
 (``quantlab.dataset.massive.mapped_bars``) from Massive's own splits and
-dividends (ADR 0048). Both chain the same variables by the same rule, the
+dividends. Both chain the same variables by the same rule, the
 CRSP path's convention, here once:
 
 - ``divCash`` is the cash paid per share held on the ex-date (0.0 on other

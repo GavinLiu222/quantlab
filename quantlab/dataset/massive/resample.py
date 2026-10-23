@@ -1,7 +1,7 @@
 """Resample SIP trades onto Trade bars, by the SIP's rules per trade condition.
 
 A *Trade bar* is quantlab's own bar built from every trade of the
-consolidated tape (ADR 0030), not the vendor's minute aggregate.
+consolidated tape, not the vendor's minute aggregate.
 ``TradeBarResampler`` turns one or more sessions of trade records into one
 row per ``(symbol, bar label)``. It is pure polars with no file access, as
 ``quantlab.dataset.nbbo.resample.NbboResampler`` is;

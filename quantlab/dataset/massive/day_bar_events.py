@@ -1,4 +1,4 @@
-"""Massive's own splits and dividends as the events of its Day aggregates on permatickers (ADR 0048).
+"""Massive's own splits and dividends as the events of its Day aggregates on permatickers.
 
 The permaticker Day aggregate store (``MappedDayBarDataset``,
 ``quantlab.dataset.massive.mapped_bars``) chains its adjusted prices from

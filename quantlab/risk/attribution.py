@@ -1,4 +1,4 @@
-"""Factor attribution: a book's per-bar return split over a factor risk model (ADR 0026).
+"""Factor attribution: a book's per-bar return split over a factor risk model.
 
 Given the holdings at the start of each bar, as signed fractions of the NAV,
 ``factor_attribution`` splits each bar's NAV return into five terms that sum to
@@ -42,7 +42,7 @@ exposures, the top and bottom industries, the ex-ante and ex-post risk
 contributions and the coverage.
 
 The module reads a ``FactorRiskModel``'s ``forecast_window`` only; it builds
-nothing (ADR 0024) and imports nothing of the portfolio, backtest or runs
+nothing and imports nothing of the portfolio, backtest or runs
 layers.
 
 Examples

@@ -4,33 +4,82 @@ Every output is a characteristic from the accounting, 13F or Form 4 data
 rather than from prices alone, signed so that a higher value predicts a
 higher return in its source paper:
 
-==========================  ==============================================  ==========================
-output                      formula                                         reference
-==========================  ==============================================  ==========================
-``accruals``                ``-(netinc - ncfo) / assetsavg``                Sloan (1996)
-``cash_profitability``      ``ncfo / assetsavg``                            Ball et al. (2016)
-``roe``                     ``netinc / equityavg`` (positive equity)        Hou, Xue and Zhang (2015)
-``ebit_to_ev``              ``ebit / ev`` (positive EV)                     Loughran and Wellman (2011)
-``fcf_yield``               ``fcf / marketcap``                             Lakonishok et al. (1994)
-``net_payout_yield``        ``-(ncfdiv + ncfcommon) / marketcap``           Boudoukh et al. (2007)
-``composite_issuance``      ``-(log ME growth - log total return)``         Daniel and Titman (2006)
-``rd_to_market``            ``rnd / marketcap``                             Chan et al. (2001)
-``roa_change``              ``ROA - ROA four reports ago``                  Balakrishnan et al. (2010)
-``f_score``                 nine binary signals summed                      Piotroski (2000)
-``earnings_sue``            ``dE / std(dE over 8 quarters)``                Foster et al. (1984)
-``revenue_sue``             the same on revenue                             Jegadeesh and Livnat (2006)
-``breadth_change``          ``holders - holders a quarter ago``             Chen, Hong and Stein (2002)
-``institutional_ownership`` ``value_held / marketcap at the quarter end``   Gompers and Metrick (2001)
-``io_change``               ownership less ownership a quarter ago          Sias et al. (2006)
-``insider_npr``             ``(P + S) / (P - S)``, shares, 126 bars         Lakonishok and Lee (2001)
-``insider_net_buy``         ``sum net_value / marketcap``, 252 bars         Seyhun (1986)
-``insider_breadth``         ``sum(buyers - sellers)``, 126 bars             Lakonishok and Lee (2001)
-``operating_profitability`` ``(revenue - cor - sgna - intexp) / equityavg``  Fama and French (2015)
-``investment_to_assets``    ``-(dPPE + dinventory) / assetsavg``, a year    Lyandres et al. (2008)
-``insider_purchase``        ``sum net_value_P / marketcap``, 252 bars       Jeng et al. (2003)
-``insider_buyers``          ``sum buyers``, 126 bars                        Jeng et al. (2003)
-``holders_growth``          ``log(holders / holders a year ago)``           Chen, Hong and Stein (2002)
-==========================  ==============================================  ==========================
+.. list-table::
+   :header-rows: 1
+   :widths: 24 50 26
+
+   * - Output
+     - Formula
+     - Reference
+   * - ``accruals``
+     - ``-(netinc - ncfo) / assetsavg``
+     - Sloan (1996)
+   * - ``cash_profitability``
+     - ``ncfo / assetsavg``
+     - Ball et al. (2016)
+   * - ``roe``
+     - ``netinc / equityavg`` (positive equity)
+     - Hou, Xue and Zhang (2015)
+   * - ``ebit_to_ev``
+     - ``ebit / ev`` (positive EV)
+     - Loughran and Wellman (2011)
+   * - ``fcf_yield``
+     - ``fcf / marketcap``
+     - Lakonishok et al. (1994)
+   * - ``net_payout_yield``
+     - ``-(ncfdiv + ncfcommon) / marketcap``
+     - Boudoukh et al. (2007)
+   * - ``composite_issuance``
+     - ``-(log ME growth - log total return)``
+     - Daniel and Titman (2006)
+   * - ``rd_to_market``
+     - ``rnd / marketcap``
+     - Chan et al. (2001)
+   * - ``roa_change``
+     - ``ROA - ROA four reports ago``
+     - Balakrishnan et al. (2010)
+   * - ``f_score``
+     - nine binary signals summed
+     - Piotroski (2000)
+   * - ``earnings_sue``
+     - ``dE / std(dE over 8 quarters)``
+     - Foster et al. (1984)
+   * - ``revenue_sue``
+     - the same on revenue
+     - Jegadeesh and Livnat (2006)
+   * - ``breadth_change``
+     - ``holders - holders a quarter ago``
+     - Chen, Hong and Stein (2002)
+   * - ``institutional_ownership``
+     - ``value_held / marketcap at the quarter end``
+     - Gompers and Metrick (2001)
+   * - ``io_change``
+     - ownership less ownership a quarter ago
+     - Sias et al. (2006)
+   * - ``insider_npr``
+     - ``(P + S) / (P - S)``, shares, 126 bars
+     - Lakonishok and Lee (2001)
+   * - ``insider_net_buy``
+     - ``sum net_value / marketcap``, 252 bars
+     - Seyhun (1986)
+   * - ``insider_breadth``
+     - ``sum(buyers - sellers)``, 126 bars
+     - Lakonishok and Lee (2001)
+   * - ``operating_profitability``
+     - ``(revenue - cor - sgna - intexp) / equityavg``
+     - Fama and French (2015)
+   * - ``investment_to_assets``
+     - ``-(dPPE + dinventory) / assetsavg``, a year
+     - Lyandres et al. (2008)
+   * - ``insider_purchase``
+     - ``sum net_value_P / marketcap``, 252 bars
+     - Jeng et al. (2003)
+   * - ``insider_buyers``
+     - ``sum buyers``, 126 bars
+     - Jeng et al. (2003)
+   * - ``holders_growth``
+     - ``log(holders / holders a year ago)``
+     - Chen, Hong and Stein (2002)
 
 ``ROA`` is ``netinc / assetsavg``; ``dE`` is the change of a quarter's value
 from the same quarter a year before, which on the trailing-twelve-month

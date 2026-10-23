@@ -1,7 +1,7 @@
 """Resample a panel, and resample on read: one copy for datasets and factors.
 
 A resampled dataset or factor whose own ``<stem>_resample_<freq>.zarr`` store
-has not been saved answers a request by *resampling on read* (ADR 0002): it
+has not been saved answers a request by *resampling on read*: it
 opens its source bars over the request widened by ``resample_padding(freq)``,
 aggregates them onto ``freq`` bars and cuts the request's window.
 ``BaseDataset.panel`` and ``Factor.read`` both do it through

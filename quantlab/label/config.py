@@ -1,7 +1,7 @@
-"""The config of the label layer.
+"""Configuration for using future factor values as prediction targets.
 
-A label (a forward-shifted factor, ADR 0005) is constructed from a ``ForwardConfig``;
-its ``factor`` is declared with ``component()`` and written as its own config.
+``ForwardConfig`` selects a factor and the number of output bars to shift.
+Pass it to ``Forward`` to create a training label.
 """
 
 from dataclasses import dataclass
@@ -16,13 +16,11 @@ if TYPE_CHECKING:
 
 @dataclass(kw_only=True, frozen=True)
 class ForwardConfig(FrozenConfig):
-    """Config of a ``Forward`` label: the factor it shifts and by how much.
+    """Configure the factor and future-bar offset used by a ``Forward`` label.
 
-    The label at bar t is ``factor`` at bar t + ``delay`` + ``span``. A
-    ``Forward`` owns no store, so the config has no path or warm-up of its
-    own; the wrapped factor keeps its config. ``factor`` is a component
-    field, so ``to_dict()`` nests the factor's config dict under it and
-    ``Forward.from_config`` rebuilds it.
+    The label at bar ``t`` reads the factor at ``t + delay + span``.
+    ``span`` must be at least one and ``delay`` must be nonnegative. The
+    wrapped factor supplies the input data and optional saved store.
 
     Examples
     --------

@@ -6,53 +6,88 @@ SPAC mergers and exchange changes of Sharadar ACTIONS, and signed so the
 source paper expects a higher value to predict a higher return. Windows,
 return frequencies and signs are the papers'; none was tuned.
 
-=============================  ================================================================  ===================================
-output                         formula                                                           reference
-=============================  ================================================================  ===================================
-*Predictable demand and supply: the calendar*
-``earnings_month``             1 if an 8-K item 2.02 was filed 231-251 or 42-62 bars ago         Frazzini and Lamont (2007);
-                               (an announcement expected in the next 21 bars), else 0            Barber et al. (2013)
-``earnings_delay``             -1 if last year's announcement date plus 252 bars has passed      Johnson and So (2018)
-                               within 21 bars and no item 2.02 came in the last 42, else 0
-``dividend_month``             1 if a dividend went ex 231-251 or 42-62 bars ago, else 0         Hartzmark and Solomon (2013)
-``return_seasonality``         mean 21-bar return over the same 21 bars of the last 5 years      Heston and Sadka (2008)
-``lockup_expiry``              -1 from 104 to 129 bars after a stock's first price (the          Field and Hanka (2001)
-                               180-day IPO lock-up ends near bar 124), else 0
-*Systematic risk beyond the linear beta*
-``coskewness``                 minus ``E[e m'^2] / (sd(e) var(m))`` of 21-bar returns over       Harvey and Siddique (2000)
-                               1260 bars (60 months), ``e`` the market-model residual
-``downside_beta_gap``          beta on the bars the market fell, less the beta, daily, 252 bars  Ang, Chen and Xing (2006)
-*Investor behaviour and information diffusion*
-``frog_in_pan``                ``sign(R) * (%positive - %negative)`` over bars 252..21 back,     Da, Gurun and Warachka (2014)
-                               ``R`` that period's return (minus information discreteness)
-``daytime_reversal``           share of the last 21 bars with a positive overnight and a         Akbas, Boehmer, Jiang and Koch
-                               negative daytime return, over that share's 252-bar mean           (2022)
-``news_drift_gap``             sum of the returns on 8-K bars less that on the others, 63 bars   Chan (2003)
-``earnings_volume``            log abnormal volume of the 3 bars to the one after an item 2.02,  Lerman, Livnat and Mendenhall
-                               against the 63 bars before, the last 63 bars' announcement        (2008)
-*Corporate actions*
-``split_signal``               forward splits less reverse splits, 252 bars                      Ikenberry, Rankine and Stice
-                                                                                                 (1996); Desai and Jain (1997)
-``dividend_change``            log of the last dividend over the one before, split-adjusted,     Michaely, Thaler and Womack
-                               for 252 bars after its ex-date, else 0                            (1995)
-``dividend_initiation``        1 for 252 bars after a dividend that follows none in 504 bars     Asquith and Mullins (1983);
-                               (or none since the read began), else 0                            Michaely, Thaler and Womack
-                                                                                                 (1995)
-``debt_issuance_8k``           minus the 8-K item 2.03 (new direct financial obligation)         Spiess and Affleck-Graves (1999)
-                               filings, 252 bars
-``acquisition_payment``        acquisitions paid in cash less those paid in stock (or stock and  Loughran and Vijh (1997)
-                               cash), on the acquirer, 1260 bars
-``exchange_switch``            -1 for 756 bars after the security moves to another exchange,     Dharan and Ikenberry (1995)
-                               else 0
-``despac``                     -1 for 756 bars after the security's SPAC merger, else 0          Klausner, Ohlrogge and Ruan
-                                                                                                 (2022); Gahng, Ritter and Zhang
-                                                                                                 (2023)
-*Life cycle and liquidity over time*
-``listing_age``                bars with a price in the last 756 over 756: a stock listed less   Ritter (1991); Loughran and
-                               than three years ago scores below 1                               Ritter (1995)
-``turnover_volatility``        minus the coefficient of variation of daily turnover, 252 bars    Chordia, Subrahmanyam and
-                                                                                                 Anshuman (2001)
-=============================  ================================================================  ===================================
+.. list-table::
+   :header-rows: 1
+   :widths: 24 50 26
+
+   * - Output
+     - Formula
+     - Reference
+   * - *Predictable demand and supply: the calendar*
+     -
+     -
+   * - ``earnings_month``
+     - 1 if an 8-K item 2.02 was filed 231-251 or 42-62 bars ago (an announcement expected in the next 21 bars), else 0
+     - Frazzini and Lamont (2007); Barber et al. (2013)
+   * - ``earnings_delay``
+     - -1 if last year's announcement date plus 252 bars has passed within 21 bars and no item 2.02 came in the last 42, else 0
+     - Johnson and So (2018)
+   * - ``dividend_month``
+     - 1 if a dividend went ex 231-251 or 42-62 bars ago, else 0
+     - Hartzmark and Solomon (2013)
+   * - ``return_seasonality``
+     - mean 21-bar return over the same 21 bars of the last 5 years
+     - Heston and Sadka (2008)
+   * - ``lockup_expiry``
+     - -1 from 104 to 129 bars after a stock's first price (the 180-day IPO lock-up ends near bar 124), else 0
+     - Field and Hanka (2001)
+   * - *Systematic risk beyond the linear beta*
+     -
+     -
+   * - ``coskewness``
+     - minus ``E[e m'^2] / (sd(e) var(m))`` of 21-bar returns over 1260 bars (60 months), ``e`` the market-model residual
+     - Harvey and Siddique (2000)
+   * - ``downside_beta_gap``
+     - beta on the bars the market fell, less the beta, daily, 252 bars
+     - Ang, Chen and Xing (2006)
+   * - *Investor behaviour and information diffusion*
+     -
+     -
+   * - ``frog_in_pan``
+     - ``sign(R) * (%positive - %negative)`` over bars 252..21 back, ``R`` that period's return (minus information discreteness)
+     - Da, Gurun and Warachka (2014)
+   * - ``daytime_reversal``
+     - share of the last 21 bars with a positive overnight and a negative daytime return, over that share's 252-bar mean
+     - Akbas, Boehmer, Jiang and Koch (2022)
+   * - ``news_drift_gap``
+     - sum of the returns on 8-K bars less that on the others, 63 bars
+     - Chan (2003)
+   * - ``earnings_volume``
+     - log abnormal volume of the 3 bars to the one after an item 2.02, against the 63 bars before, the last 63 bars' announcement
+     - Lerman, Livnat and Mendenhall (2008)
+   * - *Corporate actions*
+     -
+     -
+   * - ``split_signal``
+     - forward splits less reverse splits, 252 bars
+     - Ikenberry, Rankine and Stice (1996); Desai and Jain (1997)
+   * - ``dividend_change``
+     - log of the last dividend over the one before, split-adjusted, for 252 bars after its ex-date, else 0
+     - Michaely, Thaler and Womack (1995)
+   * - ``dividend_initiation``
+     - 1 for 252 bars after a dividend that follows none in 504 bars (or none since the read began), else 0
+     - Asquith and Mullins (1983); Michaely, Thaler and Womack (1995)
+   * - ``debt_issuance_8k``
+     - minus the 8-K item 2.03 (new direct financial obligation) filings, 252 bars
+     - Spiess and Affleck-Graves (1999)
+   * - ``acquisition_payment``
+     - acquisitions paid in cash less those paid in stock (or stock and cash), on the acquirer, 1260 bars
+     - Loughran and Vijh (1997)
+   * - ``exchange_switch``
+     - -1 for 756 bars after the security moves to another exchange, else 0
+     - Dharan and Ikenberry (1995)
+   * - ``despac``
+     - -1 for 756 bars after the security's SPAC merger, else 0
+     - Klausner, Ohlrogge and Ruan (2022); Gahng, Ritter and Zhang (2023)
+   * - *Life cycle and liquidity over time*
+     -
+     -
+   * - ``listing_age``
+     - bars with a price in the last 756 over 756: a stock listed less than three years ago scores below 1
+     - Ritter (1991); Loughran and Ritter (1995)
+   * - ``turnover_volatility``
+     - minus the coefficient of variation of daily turnover, 252 bars
+     - Chordia, Subrahmanyam and Anshuman (2001)
 
 ``r`` is the close-to-close return of ``adjClose``, ``m`` the market's: the
 mean of ``r`` over every symbol of the panel weighted by the previous bar's

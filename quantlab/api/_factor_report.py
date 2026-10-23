@@ -1,7 +1,8 @@
-"""``FactorReport``, the result ``quantlab.api.analyze_factors`` returns.
+"""Results returned by ``quantlab.api.analyze_factors``.
 
-The library's ``FactorAnalysis`` returns pandas tables; the report hands its summary back
-in the caller's library, here (ADR 0011), and keeps the analysis itself as ``raw``.
+``FactorReport.summary`` returns signal metrics in the input DataFrame
+library. ``figures`` contains charts, ``save`` writes the report, and
+``raw`` exposes the detailed analysis.
 """
 
 from pathlib import Path
@@ -12,7 +13,11 @@ from quantlab.dataset._support.frame import Library
 
 
 class FactorReport:
-    """The outcome of one ``quantlab.api.analyze_factors`` call.
+    """Inspect the signal evaluation returned by ``analyze_factors``.
+
+    ``summary`` returns one row of metrics per factor and return target.
+    ``figures`` provides charts when plotting is enabled, ``save`` writes
+    tables and charts, and ``raw`` exposes the detailed ``FactorAnalysis``.
 
     Attributes
     ----------

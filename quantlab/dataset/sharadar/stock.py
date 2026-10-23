@@ -1,6 +1,6 @@
 """Sharadar daily price panel with permatickers as the symbol axis.
 
-Sharadar is the primary US-equity vendor (ADR 0023). Its price tables (SEP for
+Sharadar is the primary US-equity vendor. Its price tables (SEP for
 stocks) are keyed by ticker, and when a delisted company's ticker is reused
 Sharadar renames that company's whole history to a suffixed ticker. The
 ticker is therefore not a stable axis. The *permaticker*, Sharadar's

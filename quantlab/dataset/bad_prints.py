@@ -1,4 +1,4 @@
-"""Several datasets merged into one panel, with their bad prints masked (#223).
+"""Several datasets merged into one panel, with their bad prints masked.
 
 A *bad print* is a vendor's wrong price for one bar: Sharadar SEP holds
 closes of $0.01 between two of $7 and $9 (CNYD on 2009-06-19), a one-bar

@@ -1,31 +1,9 @@
-"""Backtester base class and the result types every backtest run produces.
+"""Backtest interfaces, market conventions and simulation results.
 
-This module sits at the end of the pipeline: a trained return model and a
-price dataset go in, and a run directory holding target weights, an equity
-curve, metrics and an HTML report comes out. ``BaseBacktester`` owns the
-three public entry points, ``run()`` (backtest one model), ``run_cv()``
-(replay every fold of a cross-validation run as one continuous curve) and
-``run_weights()`` (backtest a precomputed target-weight panel, no model),
-and every step between them that does not depend on the simulation engine, plus
-``report_figure()``, the report chart of a result held in memory. Engine
-layers such as ``VectorBtBacktester`` implement the simulation hooks, and
-concrete classes add a ``MarketSpec`` and a signal generator.
-
-A few terms are used throughout. A *panel* is an ``xarray.Dataset`` indexed
-by ``timestamp`` and ``symbol``, and a *bar* is one timestamp of it. *Target
-weights* are the fraction of portfolio value each symbol should hold after
-a rebalance. The *warm-up* is the stretch of bars before the backtest window
-that factors need to fill their rolling windows. *In-sample* bars are bars
-the model was trained on (including the bars its labels looked ahead into),
-and *out-of-sample* bars are bars it never saw; results are reported for
-both separately. A *fold* is one train/test split of a walk-forward
-cross-validation run (``train_cv``), and the *stitched* curve simulates the
-test segments of all folds back to back. A *fingerprint* is a hash of the
-data a run read, stored so that a later rebuild of the run can tell whether
-the data has changed. The backtester does not decide what is fingerprinted:
-it opens a ``quantlab.runs.record.DataRecorder`` around each run, each
-``run_cv`` fold and the stitched pass, and every dataset or factor store read
-inside it is recorded under its component path.
+``BaseBacktester`` runs model-driven strategies or supplied target weights.
+``MarketSpec`` defines price columns and annualization conventions.
+``SimulationResult`` contains execution outputs; ``BacktestResult`` adds
+predictions, target weights, metrics and saved-run information.
 """
 
 import dataclasses
@@ -395,16 +373,16 @@ class SimulationResult:
 
 @dataclass
 class BacktestResult:
-    """Return value of ``BaseBacktester.run()`` and ``BaseBacktester.run_weights()``.
+    """Results of a model-driven or target-weight backtest.
 
-    ``run_dir`` is the directory this run wrote its artifacts to, or ``None``
-    when ``config.output_dir`` is ``None`` and nothing was written.
-    ``predictions`` and ``weights`` are panels on ``(timestamp, symbol)``
-    covering exactly the backtest window; ``predictions`` is ``None`` for a
-    ``run_weights()`` run, which has no model. ``metrics`` is the same
-    mapping written to ``metrics.json``. ``benchmark`` is the buy-and-hold
-    simulation of ``config.benchmark_dataset`` on the same bars, or ``None``
-    when no benchmark is configured.
+    Contains simulated portfolio performance, target weights, predictions and
+    summary metrics. Weight and prediction panels cover the backtest window on
+    ``(timestamp, symbol)``. ``predictions`` is ``None`` for ``run_weights``.
+
+    ``run_dir`` points to saved files when an output directory was configured;
+    otherwise it is ``None``. ``metrics`` matches the saved ``metrics.json``.
+    ``benchmark`` contains a buy-and-hold simulation when a benchmark was
+    configured, using the same bars.
 
     Examples
     --------
@@ -453,8 +431,7 @@ class CVBacktestResult:
     ``weights`` are built in one pass over the concatenated fold
     predictions, as one account whose holdings carry across fold
     boundaries, and ``simulation`` is the single continuous simulation of
-    them; a fold's metrics are that account over its test segment (ADR
-    0033). ``metrics`` mirrors ``metrics.json`` with the keys ``stitched``,
+    them; a fold's metrics are that account over its test segment. ``metrics`` mirrors ``metrics.json`` with the keys ``stitched``,
     ``folds`` and ``notes``. ``benchmark`` is the buy-and-hold benchmark
     simulated over the stitched span, or ``None`` without a benchmark.
 
@@ -476,25 +453,18 @@ class CVBacktestResult:
     benchmark: SimulationResult | None = None
 
 class BaseBacktester(Component, ABC):
-    """Abstract base of every backtester: the public entry points and shared steps.
+    """Simulate portfolios and collect performance statistics.
 
-    The engine varies by inheritance and the market and selection logic by
-    composition. The hierarchy is ``BaseBacktester`` (this class), then an
-    engine layer such as ``VectorBtBacktester`` that implements
-    ``_simulate``, ``_simulate_benchmark`` and ``_engine_stats`` and sets
-    ``fill_delay_bars``, then a named concrete class that composes a
-    ``MarketSpec`` (the ``MARKET`` class attribute) and a signal generator
-    (``_generate_signals``) onto that engine. Concrete classes also set
-    ``config_cls``, the config class the ``config`` setter accepts.
+    ``run`` predicts model returns, constructs target weights, simulates
+    trades and returns a ``BacktestResult``. ``run_cv`` replays saved
+    walk-forward models across their test windows. ``run_weights`` starts from
+    supplied target weights and requires no model.
 
-    The public entry points ``run()``, ``run_cv()`` and ``run_weights()``
-    are defined here and never overridden. ``run()`` and ``run_cv()`` run the
-    same fixed sequence of steps and call the hooks above along the way:
-    prepare the model, request the factor panels for the window and predict,
-    generate signals, simulate, compute metrics, then write the run
-    directory. ``run_weights()`` starts from given target weights, so it
-    skips the model and ``_generate_signals`` and needs no model on the
-    config.
+    Configure the price dataset, date range, costs and optional output
+    directory through ``BacktestConfig``. A concrete backtester supplies the
+    execution engine and market conventions. The model label's entry delay
+    must match the engine's fill delay so training targets reflect the
+    returns the strategy can trade.
 
     Parameters
     ----------
@@ -916,22 +886,17 @@ class BaseBacktester(Component, ABC):
         return pd.Timestamp(value)
 
     def run(self) -> BacktestResult:
-        """Backtest one model over the configured window and write a run directory.
+        """Backtest model predictions over the configured date range.
 
-        Subclasses do not override this method. In train mode the
-        model is trained on its own dates first; in load mode the checkpoint
-        is restored and the training dates recorded beside it define the
-        in-sample split (a warning is logged if they select different bars
-        than ``config.model``'s dates). Each factor is computed (or read)
-        for the window, warming itself up by its own ``warmup_bars``; no
-        dataset, factor or label config is changed. The model predicts the
-        window, the concrete class turns the predictions into target weights, the engine simulates them, metrics
-        are computed for the whole window and for the in-sample and
-        out-of-sample parts, and everything is written to a new directory
-        under ``config.output_dir``. The data the window reads is recorded
-        (see ``data_fingerprint``) and compared with
-        ``expected_fingerprint`` when one is set, also on the failure path;
-        training reads are the trained unit's, not the backtest's.
+        In train mode, fit the model first; in load mode, restore its checkpoint.
+        Then gather features, predict scores, construct target weights and simulate
+        trades. Metrics cover the full window and its in-sample and out-of-sample
+        portions. In load mode, the saved training dates determine that split.
+
+        When ``output_dir`` is set, save results in a new run directory. Input
+        data is recorded for reproducibility and compared with a previous run's
+        record when one is supplied. Reading features does not change dataset,
+        factor or label configurations.
 
         Returns
         -------
@@ -994,39 +959,18 @@ class BaseBacktester(Component, ABC):
         return self._run_window(_model_window, kind="run")
 
     def run_cv(self) -> CVBacktestResult:
-        """Replay a ``train_cv`` run fold by fold and simulate the stitched weights.
+        """Backtest saved walk-forward models with one continuous portfolio.
 
-        Subclasses do not override this method. It opens the walk-forward
-        unit ``config.cv_project_dir`` with
-        ``quantlab.runs.trained_run.TrainedRun``, keeps the
-        folds whose test segment meets the backtest window, cutting a fold
-        that straddles ``start_date`` or ``end_date`` to the window (so the
-        account can start from cash on any bar, #301), and checks
-        on the price calendar that those test segments are contiguous and
-        non-overlapping before any model is loaded (a stitched curve with a
-        gap or an overlap corresponds to no real trading path). Each fold's
-        checkpoint then predicts its own test segment, and the fold's
-        in-sample split uses that fold's training dates. A label looks a
-        few bars ahead (its *lookahead*), so the training labels of a fold
-        already saw the bars after ``train_end``. ``train_cv`` purges those
-        bars from every training window and each fold records its fitted
-        window, so a test bar counts as in-sample only if a label reads
-        further than the purge removed.
+        Read the training run at ``cv_project_dir`` and restore each fold's model
+        to predict its own test window. Keep only test bars within the configured
+        backtest range. The test windows must be contiguous and non-overlapping.
+        Training-window boundaries account for labels that use future prices.
 
-        The fold predictions are then concatenated and turned into weights
-        in one pass of ``_generate_signals`` over the prices from the first
-        ``test_start`` to the last ``test_end``, so the holdings a rule is
-        handed, locked positions included, carry across fold boundaries and
-        the rebalance schedule runs on from the first bar; the weights are
-        simulated once, with capital carried across as well, and the
-        ``stitched`` metrics record the pass's ``portfolio_construction``.
-        A fold is that account over its test segment, never a second account
-        started from cash (ADR 0033): its metrics are the stitched curve's
-        over its bars, its first bar's return included, so the folds'
-        returns chain to the stitched total. Each fold records the data its
-        prediction reads, compared with that fold's expected fingerprint (the
-        warning names the fold); the run's own fingerprint is what the
-        stitched pass reads.
+        Combine fold predictions, construct weights over the full test period and
+        simulate once. Holdings, capital and the rebalance schedule carry across
+        fold boundaries. Each fold's reported performance is a slice of this
+        continuous account, rather than a separate portfolio restarted from cash.
+        Input-data records are kept for the overall simulation and each fold.
 
         Returns
         -------
@@ -1237,22 +1181,17 @@ class BaseBacktester(Component, ABC):
         )
 
     def run_weights(self, weights: xr.Dataset | xr.DataArray) -> BacktestResult:
-        """Backtest a precomputed target-weight panel over the configured window.
+        """Simulate supplied target weights without training or loading a model.
 
-        Subclasses do not override this method. No model is involved:
-        ``config.model`` and ``config.model_mode`` are ignored and may both
-        be ``None``, and ``_generate_signals`` is not called. The fill and
-        valuation prices of ``config.price_dataset`` are read for the window
-        ``config.start_date``..``config.end_date``, the weights are checked
-        against the target-weight contract on exactly those bars, and the
-        engine simulates them (a weight formed at bar t fills at bar t+1's
-        fill price). The benchmark, when configured, is simulated and
-        compared as in ``run()``. There is no training window, so the metrics
-        cover the whole window only: ``whole`` (plus ``benchmark`` and
-        ``relative``, each with a ``whole`` block, when a benchmark ran) and
-        ``notes``, with no in-sample or out-of-sample block. The run
-        directory is written like ``run()``'s when ``config.output_dir`` is
-        set; the data fingerprints cover the prices and the benchmark.
+        Read fill and valuation prices over ``start_date`` through ``end_date``
+        and validate weights against those bars. A target formed at bar ``t``
+        trades at the engine's fill delay; the standard engine fills at the next
+        bar's open. ``model`` and ``model_mode`` are ignored.
+
+        Metrics cover the whole window. An optional benchmark adds benchmark and
+        relative performance statistics. There is no training-based in-sample or
+        out-of-sample split. Set ``output_dir`` to save the run and its recorded
+        price and benchmark inputs.
 
         Parameters
         ----------
@@ -1692,7 +1631,7 @@ class BaseBacktester(Component, ABC):
         """Keep the folds whose test segment meets the backtest window, cut to it.
 
         A fold whose test segment straddles ``config.start_date`` starts on
-        it, and one straddling ``config.end_date`` ends on it (#301), so the
+        it, and one straddling ``config.end_date`` ends on it, so the
         stitched account can start from cash on any bar; the cut fold still
         predicts with its own checkpoint and keeps its training dates. ISO
         date strings compare in time order. An info line lists the selection
@@ -2399,7 +2338,7 @@ class BaseBacktester(Component, ABC):
         ``split`` ``in_sample`` and ``out_of_sample`` over the same ranges
         as the other metrics (None for a slice without a bar). A year is
         the market's year over the bar interval, as the ``attribution``
-        block annualizes (ADR 0026).
+        block annualizes.
         """
         valuation = (
             prices[self.MARKET.valuation_price_column]  # type: ignore[union-attr]
@@ -2590,7 +2529,7 @@ class BaseBacktester(Component, ABC):
         holdings, with ``config.init_cash`` and the market's year
         (``MARKET.year_freq``) over the simulation's bar interval.
         ``quantlab.runs.run_metrics.run_metrics`` of it and the engine's own
-        whole-window rows are the run's metric blocks (ADR 0034).
+        whole-window rows are the run's metric blocks.
 
         Parameters
         ----------
@@ -2637,7 +2576,7 @@ class BaseBacktester(Component, ABC):
         """Return ``run_metrics`` of ``simulation``'s account record.
 
         Over the whole simulation the engine's rows (``_engine_stats``) open
-        ``whole``; ``within`` (a ``run_cv()`` fold, ADR 0033) measures a
+        ``whole``; ``within`` (a ``run_cv()`` fold) measures a
         stretch instead. The benchmark is named as of the last bar measured.
         """
         return run_metrics(
@@ -2792,7 +2731,7 @@ class BaseBacktester(Component, ABC):
         ``stitched``, ``folds`` and ``notes``, the report reads
         ``metrics["stitched"]`` and its fold rows from ``metrics["folds"]``, and each record is
         written as a child run of kind ``"fold"`` (its metrics and what its
-        prediction read; its curves are the run's over its window, ADR 0033),
+        prediction read; its curves are the run's over its window),
         with ``units`` giving each fold's trained unit and ``fold_bars`` its
         bars, in record order.
 

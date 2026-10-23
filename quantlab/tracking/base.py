@@ -1,7 +1,7 @@
 """The root classes of experiment tracking: where a run's records are sent.
 
 A *tracker* decides where the records of a training or a backtest go: to
-Weights & Biases, to MLflow, or nowhere (ADR 0015). It is named in a config
+Weights & Biases, to MLflow, or nowhere. It is named in a config
 and serialised into ``config.json`` by class path, like a portfolio
 constructor, so a rebuilt run tracks the same way. The default is the
 ``NullTracker``, which sends nothing.

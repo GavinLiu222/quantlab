@@ -1,7 +1,7 @@
 """Check a day of one-minute Trade bars against Massive's own minute aggregates.
 
 Massive's minute aggregates are kept only to check quantlab's Trade bars
-against (ADR 0030). ``check_minute_bars`` compares one session's bars with
+against. ``check_minute_bars`` compares one session's bars with
 the vendor's bars of the same day, after two alignments:
 
 - **Labels.** Massive labels a bar at its start (``window_start``); Trade
@@ -12,7 +12,7 @@ the vendor's bars of the same day, after two alignments:
   close bars on opposite sides: Massive's bar is ``[t, t + 1m)``, a Trade
   bar ``(t, t + 1m]``, so a trade stamped exactly on a minute (to the
   nanosecond) falls in neighbouring bars on the two sides.
-- **Symbols.** Both sides are keyed by the Massive ticker (ADR 0031). A
+- **Symbols.** Both sides are keyed by the Massive ticker. A
   vendor ticker off the conversion's roster is counted as
   ``vendor_off_roster`` and not compared.
 

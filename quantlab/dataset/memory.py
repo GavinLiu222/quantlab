@@ -1,12 +1,8 @@
-"""A market dataset held in memory, built from a caller's frame or panel.
+"""Use pandas, polars or xarray data in the research pipeline.
 
-``FrameDataset`` is the one seam a caller's own data enters the library through (ADR
-0011). It is a real ``MarketDataset``: a factor, label or backtester that reads a dataset
-reads it through the same public requests (``panel``, ``bar_before``, ``head``,
-``to_kunquant``), answered from the panel it holds instead of from a Zarr store. The frame
-is converted by ``quantlab.dataset._support.frame.to_panel``, the same rules ``quantlab.api`` applies.
-A ``FrameDatasetConfig`` naming a store instead reads that store into memory once, at
-construction: this is how a saved run's inputs come back when the run is rebuilt.
+``FrameDataset`` holds market data in memory and supports the same panel
+queries as stored datasets. It can supply data to factors, labels and
+backtests without an initial download or conversion step.
 """
 
 import dataclasses
@@ -26,27 +22,22 @@ from quantlab.dataset.base import MarketDataset
 from quantlab.dataset._support.frame import to_panel
 
 class FrameDataset(MarketDataset):
-    """A market dataset whose panel is held in memory.
+    """Use a DataFrame or xarray panel as an in-memory market dataset.
 
-    Built from a long pandas or polars frame (one row per ``timestamp`` and ``symbol``) or
-    from an ``xarray.Dataset`` panel. The input rules of ``quantlab.dataset._support.frame`` apply: a
-    pandas ``(timestamp, symbol)`` MultiIndex is reset, ``columns`` renames first, a
-    repeated ``(timestamp, symbol)`` raises, timezone-aware timestamps become naive UTC,
-    symbols become ``str`` and missing cells become NaN. Every other column becomes a
-    variable under its own name, and ``to_kunquant`` exports the variables as they are
-    named, so name them as the factor reading them expects (``adjClose`` for the stock
-    factors, ``close`` for the crypto ones).
+    Pass long-form data with ``timestamp`` and ``symbol`` keys. Each remaining
+    column becomes a panel variable under the same name. The ``columns``
+    argument renames input columns first; a pandas MultiIndex with the two
+    key names is also accepted.
 
-    Built from a frame or panel, nothing is read from or written to disk. Built from a
-    ``FrameDatasetConfig`` whose ``zarr_file_path`` names a store (one ``to_zarr``
-    wrote, for example), the store is read into memory once, at construction, and
-    resampled there when the config carries ``resample_freq``; the store is never
-    written. This is the form ``quantlab.core.component.rebuild``
-    rebuilds from ``get_config()``. Either way there are no raw files and no store of
-    its own, so it has no build path (no ``from_raw_data``, ``save`` or ``update``),
-    and a stream-mode factor refuses it, since a stream is fed live bars rather than
-    a held panel. ``resample()`` returns a dataset holding the resampled
-    panel, and ``to_zarr(path)`` writes the held panel to a new store.
+    Duplicate key pairs raise an error. Missing cells become NaN, symbols
+    become strings, and timezone-aware timestamps become naive UTC.
+
+    Construction from a frame or panel performs no disk I/O. Alternatively,
+    pass ``FrameDatasetConfig`` to load an existing Zarr store into memory.
+    ``to_zarr`` saves the held panel, and ``resample`` returns a new dataset.
+    Stream-mode factors are not supported. For stock factors, use the variable
+    names they expect, such as ``adjOpen`` and ``adjClose``; ``quantlab.api``
+    handles this renaming when using its predefined stock factor names.
 
     Parameters
     ----------
@@ -192,12 +183,10 @@ class FrameDataset(MarketDataset):
 
     @property
     def store_path(self) -> str | None:
-        """Return the store the panel was read from, or ``None``.
+        """Return the source Zarr path, or ``None`` for unsaved in-memory data.
 
-        ``None`` for a panel handed over at construction, and for a resampled
-        dataset, whose bars are resampled in memory with no store of their own
-        beside the source (ADR 0011, an exception to ADR 0002's resampled-store
-        cache).
+        A dataset constructed from a frame has no source store. A resampled
+        dataset also returns ``None`` because its bars are aggregated in memory.
 
         Examples
         --------

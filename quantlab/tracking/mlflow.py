@@ -1,4 +1,4 @@
-"""The MLflow tracker; the only module that imports mlflow (ADR 0015).
+"""The MLflow tracker; the only module that imports mlflow.
 
 mlflow is an optional extra (``uv sync --extra mlflow`` or
 ``pip install 'quantlab-py[mlflow]'``) and is imported only when an

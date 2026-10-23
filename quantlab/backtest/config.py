@@ -1,16 +1,9 @@
-"""The configs of the backtest layer.
+"""Configure backtest inputs, costs, portfolio rules and output files.
 
-A backtester is constructed from a ``BacktestConfig`` subclass and exposes it as
-``self.config``. Unlike the dataset, factor and model configs these are not frozen;
-``ApproximateBacktestConfig``, which configures no backtester run, is.
-The price dataset, the model, the portfolio construction rule, the benchmark and
-the tracker are declared with ``component()``, so ``to_dict()`` writes each as its
-own config and the backtester can be rebuilt from the run's ``config.json`` (see
-``quantlab.core.component``). The execution settings (sizing basis, fees, slippage)
-are those of ``quantlab.execution.rules``.
-
-Fields are documented with ``#:`` comments so the meaning of each one sits beside
-its definition.
+Use ``CrossSectionBacktestConfig`` for portfolios selected from prediction
+scores and ``WeightsBacktestConfig`` for supplied weights. Shared fields
+include the price dataset, simulation dates, execution settings and optional
+benchmark. Saved runs include the configuration needed to rebuild them.
 """
 
 from dataclasses import dataclass
@@ -30,11 +23,11 @@ if TYPE_CHECKING:
 
 @dataclass(kw_only=True)
 class BacktestConfig:
-    """Fields every backtester shares.
+    """Configure the data, dates, trading costs and output of a backtest.
 
-    Selection parameters are not here but on subclasses such as
-    ``CrossSectionBacktestConfig``, so a time-series backtester does not carry
-    cross-sectional fields. See ``docs/user-guide/backtesting.md``.
+    Shared by backtest engines. For a strategy that ranks symbols by model
+    predictions, use ``CrossSectionBacktestConfig`` and provide a portfolio
+    constructor. For supplied target weights, use ``WeightsBacktestConfig``.
 
     Examples
     --------
@@ -133,7 +126,7 @@ class BacktestConfig:
 
     #: A factor risk model (``quantlab.risk.base.FactorRiskModel``) whose
     #: factors the run's return and risk are attributed to (factor
-    #: attribution, ADR 0026): each bar's NAV return split into factor,
+    #: attribution): each bar's NAV return split into factor,
     #: specific, uncovered, risk-free and trading terms over the holdings the
     #: engine held at the start of the bar, the book's forecast (ex-ante) and
     #: realized (ex-post) volatility split over factors and specific risk,
@@ -146,7 +139,7 @@ class BacktestConfig:
     #: them and never builds them. ``None`` (the default) attributes nothing.
     risk_model: "FactorRiskModel | None" = component(default=None)
 
-    #: Where each run's metrics and report are tracked (ADR 0015); the
+    #: Where each run's metrics and report are tracked; the
     #: default ``NullTracker`` sends nothing anywhere.
     tracker: Tracker = component(default_factory=NullTracker)
 
@@ -184,10 +177,10 @@ class BacktestConfig:
 
 @dataclass(kw_only=True)
 class CrossSectionBacktestConfig(BacktestConfig):
-    """Config of a cross-sectional backtest: a predictor's scores turned into weights.
+    """Configure a backtest that selects a portfolio from prediction scores.
 
-    On every rebalance bar ``constructor``, a portfolio construction rule,
-    turns the predictions of that bar into the weights to hold after it.
+    On each rebalance bar, ``constructor`` turns the model's predictions into
+    target weights. The execution engine then simulates trading those weights.
 
     Examples
     --------

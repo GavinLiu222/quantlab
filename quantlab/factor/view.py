@@ -2,8 +2,7 @@
 
 A **factor view** wraps another factor and answers from that factor's store:
 it has no store of its own (``store_path`` is ``None``; ``store_uses``
-names the wrapped store), only the store's owner writes the store (ADR
-0029), and the view changes only what it says it changes about the panel,
+names the wrapped store), only the store's owner writes the store, and the view changes only what it says it changes about the panel,
 such as which symbols it keeps (``RosterFactor``) or which cells it masks
 (``MembershipMaskedFactor``). ``FactorView`` holds the rules for every
 store query a factor answers, so views of views compose: a roster over a
@@ -34,7 +33,7 @@ class FactorView(Factor):
     ``store_path``         ``None``: a view has no store of its own
     ``store_uses()``       the wrapped factor's store, this view its handle
     ``store_range()``      the wrapped factor's
-    ``calendar``           the wrapped factor's (its output bars, ADR 0051)
+    ``calendar``           the wrapped factor's (its output bars)
     ``bar_before``         the wrapped factor's
     ``bar_after``          the wrapped factor's
     ``owns_store()``       ``False``: a view has no store of its own
@@ -140,7 +139,7 @@ class FactorView(Factor):
 
     @property
     def store_path(self) -> str | None:
-        """Return ``None``: a view keeps no store of its own (ADR 0029).
+        """Return ``None``: a view keeps no store of its own.
 
         The store ``read`` reads is the wrapped factor's, declared by
         ``store_uses``.
@@ -172,7 +171,7 @@ class FactorView(Factor):
         )
 
     def owns_store(self) -> bool:
-        """Return ``False``: a view has no store of its own, so it writes none (ADR 0029).
+        """Return ``False``: a view has no store of its own, so it writes none.
 
         Examples
         --------
@@ -396,7 +395,7 @@ class FactorView(Factor):
         raise self._no_store("extend")
 
     def refuse_unless_owner(self, method: str) -> None:
-        """Raise: a view never owns a store, so every write is refused (ADR 0029).
+        """Raise: a view never owns a store, so every write is refused.
 
         A chunked build (``quantlab.factor.chunking.ChunkedBuilder``) asks
         this when it is handed a factor, so a view is refused before

@@ -1,27 +1,9 @@
-"""Model layer: the training lifecycle shared by every model head.
+"""Shared workflow for feature collection, model training and prediction.
 
-A *head* is one concrete predictive model, for example a torch network or an XGBoost
-regressor. It reads *features* (factor values) and learns *labels* (the
-targets to predict, typically forward returns). Both arrive as *panels*: an
-``xarray.Dataset`` indexed by ``timestamp`` and ``symbol``, with one data
-variable per feature or label.
-
-The model layer is a three-level class hierarchy; this module holds its root. ``BaseModel`` holds
-everything that does not depend on the training framework: config
-validation, requesting the factor and label panels over the model's date
-range and collecting them into one dataset, the public ``train`` /
-``train_cv`` / ``load`` / ``predict`` / ``predict_panel`` methods, and
-the directory layout of a training run, whose files are written and read
-through ``quantlab.runs.trained_run``. The fold boundaries of rolling
-cross-validation come from ``quantlab.model.split``. It imports no training
-framework. The two variants live in the model layer:
-``quantlab.model.torch_model.TorchModel`` (PyTorch: one cross-section of
-symbols per training step, each with its own window of past bars, ``.pth``
-checkpoints) and ``quantlab.model.library_model.LibraryModel`` (tree models and
-other libraries that train themselves, ``.joblib`` checkpoints), which share
-the training target of ``quantlab.model.training_target``. Both take one
-``ModelConfig``; the reserved keys of its ``hyperparameters`` are listed in
-``RESERVED_HYPERPARAMETERS``. Shipped heads live in ``quantlab/model/predefined``.
+Models combine factor features with training labels, save fitted checkpoints
+and return predictions on ``(timestamp, symbol)``. ``BaseModel`` defines the
+workflow; ``LibraryModel`` and ``TorchModel`` support external estimators
+and PyTorch models respectively.
 """
 
 import dataclasses
@@ -110,29 +92,19 @@ def record_training_reads(model) -> dict:
 
 
 class BaseModel(Component, ABC):
-    """Framework-agnostic base class of every model head.
+    """Train a return model from factor features and target labels.
 
-    A head is configured with a list of factor objects (its features) and
-    a list of label objects (its targets). ``collect()`` pulls both into one
-    panel indexed by ``(timestamp, symbol)``; ``train()`` fits the head on the
-    ``train_*`` dates of its config and writes a checkpoint; ``load()`` restores
-    one; ``predict()`` and ``predict_panel()`` run inference. Those public entry
-    points are implemented once, here, and are not overridden by any head.
+    Configure the model with ``ModelConfig``. Call ``collect`` to gather its
+    features and labels, then ``train`` to fit and save a checkpoint. Use
+    ``load`` to restore a fitted model and ``predict_panel`` to generate
+    predictions indexed by ``(timestamp, symbol)``.
 
-    The training framework is the job of the two variants. ``TorchModel`` is the
-    torch variant and ``LibraryModel`` the numpy variant. Both accept the one
-    ``ModelConfig``, named by the class attribute ``config_cls``: the
-    ``config`` setter checks it first, and the config loader reads it from
-    the class before creating an instance. Each variant declares
-    ``checkpoint_suffix``, the checkpoint file suffix. ``train`` and
-    ``train_cv`` use it to name files, and ``load()`` uses it to reject a
-    file of the wrong kind before building any model.
+    Training writes a new directory under ``model_save_dir`` containing the
+    checkpoint, configuration, evaluation results and a record of the data
+    used. ``TrainedRun`` reads those saved results.
 
-    ``train`` writes a trained unit (``quantlab.runs.trained_run``) under
-    ``config.model_save_dir`` as ``{class}_trial_{timestamp}/``: the
-    checkpoint ``{class}_total{suffix}``, the ``config.json`` that rebuilds
-    the model, the evaluation files and ``run.json``, which records the
-    windows, the metrics and what the head was trained on.
+    Use a concrete estimator, such as ``XGBoostRegressor``, for training.
+    Custom estimators inherit from ``LibraryModel`` or ``TorchModel``.
 
     Parameters
     ----------
@@ -558,7 +530,7 @@ class BaseModel(Component, ABC):
     def _feature_start(self, factor, strategy: str, start):
         """Return ``start`` moved ``warmup_bars`` bars back on ``factor``'s calendar.
 
-        The bars are the factor's own (``Factor.bar_before``, ADR 0051): the
+        The bars are the factor's own (``Factor.bar_before``): the
         bars of its output panel, which for a daily factor computed from
         intraday bars are days, not its dataset's bars. With fewer bars
         before ``start`` on that calendar, or, under ``"read"``, in the
@@ -599,25 +571,17 @@ class BaseModel(Component, ABC):
     def collect(
         self,
     ) -> Self:
-        """Read the features and labels into the model's collected panel.
+        """Gather feature and label data before training a model.
 
-        The hyperparameters are checked first (``check_hyperparameters``),
-        so an invalid one fails before any data is read. Each factor and label is asked for its panel from ``start_date`` to
-        ``end_date``: ``read(start, end)`` from its store under the
-        ``"read"`` strategy, ``compute(start, end)`` from its inputs under
-        ``"cal"``. Factor panels start ``warmup_bars`` bars earlier (see
-        ``_collect_all_features``); labels do not, so they are NaN on those
-        bars. The factor panels are merged on the union of their
-        ``(timestamp, symbol)`` coordinates, and the labels are joined onto
-        the features' bars and symbols (``CollectedPanel.assemble``: a
-        label's symbol or bar without features is dropped); the panel is
-        kept, sorted on both axes, as ``collected_panel``. Call this before
-        ``train()`` or ``train_cv()``.
+        Data is collected over ``start_date`` through ``end_date``. A data strategy
+        of ``"read"`` loads saved factor values; ``"cal"`` computes them from
+        inputs. Feature data includes the warm-up bars required by the model.
+        Labels are aligned to the feature timestamps and symbols; labels without
+        matching features are dropped.
 
-        What it reads is recorded by a ``DataRecorder`` keyed by component
-        path within the model (``factors.0.dataset``), and written into the
-        ``run.json`` of the unit ``train()`` or ``train_cv()`` writes next
-        (see ``training_record``).
+        The result is retained in ``collected_panel``, sorted by timestamp and
+        symbol. Input data is recorded for the next saved training run.
+        Hyperparameters are validated before data is read.
 
         Returns
         -------
@@ -1253,20 +1217,14 @@ class BaseModel(Component, ABC):
         return self._predict(data)
 
     def predict_panel(self, features: xr.Dataset) -> xr.Dataset:
-        """Predict from a feature panel and return a panel of the same shape.
+        """Predict labels from a feature panel and return an aligned output panel.
 
-        The result has one variable per label name, on ``("timestamp",
-        "symbol")``, with coordinates taken from the sorted panel that was
-        actually fed to ``to_array``, so values and coordinates cannot drift
-        apart. Positions where every feature is NaN get NaN for every label:
-        a head that fills NaN with zero would otherwise produce finite
-        predictions for symbols that do not exist yet. Any symbol may be
-        present, including ones the model never saw in training.
+        The result has one variable per label on ``(timestamp, symbol)``, using the
+        input panel's sorted coordinates. Rows with all features missing have NaN
+        predictions. Symbols need not have appeared in the training data.
 
-        The variant hook ``_predict_panel_array`` performs the numeric
-        prediction. A torch head predicts bar t from the bars before it in
-        ``features``, so pass ``warmup_bars`` bars before the first bar you
-        need.
+        For models that use historical windows, include ``warmup_bars`` earlier
+        bars in ``features`` so the first prediction has enough history.
 
         Parameters
         ----------
@@ -1388,15 +1346,14 @@ class BaseModel(Component, ABC):
         )
 
     def train(self) -> Path:
-        """Train once on the config's ``train_*`` / ``test_*`` dates and save.
+        """Fit the model for its configured training window and save a checkpoint.
 
-        A new trial directory is created under ``model_save_dir`` and is the
-        trained unit: ``train_into`` trains into it under a tracking run
-        ``{class}_total``, grouped by the directory's name, and writes the
-        checkpoint, ``config.json``, the evaluation files and ``run.json``.
-        Returning the path lets a caller record exactly which model was
-        trained and reload it later instead of retraining; ``TrainedRun.open``
-        reads the rest of the run from it.
+        Call ``collect`` first to prepare features and labels. Each call creates a
+        new trial directory under ``model_save_dir`` containing the fitted model,
+        configuration, evaluation results and training record.
+
+        The returned checkpoint path can be passed to ``load`` to restore this
+        fit. ``TrainedRun.open`` reads its metrics and metadata.
 
         Returns
         -------

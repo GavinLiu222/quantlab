@@ -62,7 +62,7 @@ class RangedStore:
     guard : callable, optional
         ``guard(method)`` raises when the store may not be written
         (``method`` is ``"build"`` or ``"extend"``); it runs before
-        anything is computed or written. A factor's owner rule (ADR 0029).
+        anything is computed or written. A factor's owner rule.
     fill_values : mapping, optional
         Per-variable fill values for cells a widening creates (see
         ``XrBackend.widen_and_append``).

@@ -162,7 +162,7 @@ def _dataset_fingerprint(
     have ``factor`` axes (``(timestamp, factor)``, ``(timestamp, factor_i,
     factor_j)``). Every axis is hashed in the order it is stored, never sorted
     first, so a store whose symbol axis grew at its end is read once and not
-    copied (ADR 0032); the same values in another order give another digest.
+    copied; the same values in another order give another digest.
     Each variable has its own sha256 over its values, ``timestamp`` first
     and its other axes in their own order, in the dtype they are stored in,
     never up-cast: a float variable after NaN and signed-zero canonicalisation in

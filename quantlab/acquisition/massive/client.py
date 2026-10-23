@@ -2,7 +2,7 @@
 
 Massive (Stocks Developer, personal use) serves every SIP trade and its own
 minute and day aggregates as one gzipped CSV per data type and trading day
-in the S3 bucket ``flatfiles`` at ``files.massive.com`` (ADR 0030), and
+in the S3 bucket ``flatfiles`` at ``files.massive.com``, and
 reference data over REST at ``api.massive.com``. ``MassiveClient`` makes a
 day's file present and verified in the raw tier
 (``quantlab.dataset.massive.raw``) and stores the condition table beside

@@ -1,4 +1,4 @@
-"""Massive's IPOs as a daily panel on the permaticker axis (#359).
+"""Massive's IPOs as a daily panel on the permaticker axis.
 
 Massive's ``/vX/reference/ipos`` records, as ``MassiveClient.pull`` keeps
 them in the REST raw tier (``quantlab.dataset.massive.raw.read_rest_records``),

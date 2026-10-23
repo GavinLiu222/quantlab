@@ -213,7 +213,7 @@ def bad_print_mask(
     from its last bar is flagged as well when it is a candidate, since the
     bar before it is not.
 
-    The defaults are our choice (#223). On the Sharadar SEP history (adjusted
+    The defaults are our choice. On the Sharadar SEP history (adjusted
     close and adjusted volume, 7,233 daily bars across 17,067 permatickers)
     they flag 535 bars of 321 permatickers. Of the 75 one-bar moves of more
     than 5 times that return within 0.8 to 1.25 times the previous close

@@ -1,4 +1,4 @@
-"""Massive's news as a daily count and sentiment panel on the permaticker axis (#357).
+"""Massive's news as a daily count and sentiment panel on the permaticker axis.
 
 Massive's ``/v2/reference/news`` articles, as ``MassiveClient.pull`` keeps
 them in the REST raw tier (``quantlab.dataset.massive.raw.rest_page_files``),

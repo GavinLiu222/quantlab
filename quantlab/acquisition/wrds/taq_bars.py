@@ -1,4 +1,4 @@
-"""Download of NBBO bars resampled on the WRDS server (ADR 0027).
+"""Download of NBBO bars resampled on the WRDS server.
 
 ``WrdsTaqNbboBarsAcquisition`` is the ``nbbo_bars`` data type of the WRDS
 vendor. Like the tick download (``quantlab.acquisition.wrds.taq``) it splits

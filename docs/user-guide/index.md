@@ -1,9 +1,12 @@
 # User guide
 
-The guide follows the pipeline: data comes in, becomes panels, is restricted to a universe,
-turned into factors and labels, learned by a model, converted into portfolio weights and
-backtested. Start with *Concepts*; the [API reference](../reference/index.rst) holds every
-signature and option.
+Learn the research workflow here; use the [API reference](../reference/index.rst)
+for signatures, parameters and return values.
+
+- **Already have DataFrames?** Start with the [Frame API](frame-api.md).
+- **Building a complete pipeline?** Run the [quickstart](../getting-started/quickstart.md),
+  then read [concepts](concepts.md).
+- **Working on one stage?** Choose a topic below.
 
 ```{toctree}
 :caption: Fundamentals

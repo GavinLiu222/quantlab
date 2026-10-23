@@ -3,15 +3,14 @@
 ``MassiveTradeBarDataset`` reads the raw tier the Massive client writes
 (``quantlab.dataset.massive.raw``) one trading day at a time, resamples the
 trades with ``quantlab.dataset.massive.resample.TradeBarResampler``, and
-returns the dense ``(timestamp, symbol)`` panel the store holds (ADRs 0030,
-0031).
+returns the dense ``(timestamp, symbol)`` panel the store holds.
 
 - **Sessions** are the XNYS calendar's, half days included; the window is
   ``session_start`` to ``session_end``, the regular session by default. A
   raw day that is not a session is refused.
 - **The symbol axis is the Massive ticker**, exactly as the trade files
   spell it (``BRK.A``, ``AApB``), every ticker kept, exchange test symbols
-  included (ADR 0031). Conversion reads no Sharadar data. A column is a
+  included. Conversion reads no Sharadar data. A column is a
   ticker, not a security: one ticker can belong to different securities on
   different days, so reading the store as securities goes through the
   Ticker map (``quantlab.dataset.massive.ticker_map``). ``tickers``
@@ -31,10 +30,9 @@ returns the dense ``(timestamp, symbol)`` panel the store holds (ADRs 0030,
   raised.
 - **The store grows a day at a time.** A config whose range holds the
   next day, passed to ``update(granularity="day")``, appends that day: the
-  day's new tickers are appended at the end of the store's axis in place
-  (ADR 0032), with zero volume and NaN prices over the days before, so a
+  day's new tickers are appended at the end of the store's axis in place, with zero volume and NaN prices over the days before, so a
   backfill and a daily update are the same operation. Raw trade files are
-  kept (ADR 0031).
+  kept.
 - **The settings are the store's identity.** The bar interval, the session
   window, the roster and the counting rules (``_build_settings``) are
   recorded in the sidecar and in every read's data fingerprint; a
@@ -516,7 +514,7 @@ class MassiveTradeBarDataset(StockDataset):
         Every day of the range the store lacks is converted (and kept for
         the windows), so the axis is every ticker that traded on one of
         them, with the store's own; ``from_raw_data_chunked`` then pins the
-        store's axis followed by the new ones (ADR 0032).
+        store's axis followed by the new ones.
 
         Raises
         ------

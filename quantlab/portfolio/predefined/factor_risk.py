@@ -1,6 +1,6 @@
 """A covariance estimator turning a factor risk model's context into its forecast: ``B F B' + diag(D)`` at each bar.
 
-``FactorRiskStoreEstimator`` estimates nothing itself (ADR 0024) and reads
+``FactorRiskStoreEstimator`` estimates nothing itself and reads
 nothing itself: the decision inputs put the bar's row of the model's
 estimate store (the factor covariance ``F`` and the specific risks,
 ``context.risk_estimate``) and the bar's exposures as the model gives them

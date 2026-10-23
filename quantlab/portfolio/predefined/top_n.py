@@ -18,24 +18,22 @@ from quantlab.runs.prediction_panel import LabelSpec
 
 
 class TopNConstructor(PortfolioConstructor):
-    """Equal-weight top-n selection on each rebalance bar.
+    """Allocate equal weights to the highest-scoring tradable symbols.
 
-    A locked position (held, not tradable at the bar) keeps its current
-    weight and is never picked. The picks come from the other symbols that
-    are tradable with a finite score, ranked with a stable sort, so ties
-    resolve by symbol order. When the cut of a book that picks falls inside
-    a group of equal scores, the row's ``attrs["events"]["tie_at_cutoff"]``
-    counts the tied symbols left out, so a run records how often its picks
-    were decided by symbol order rather than by the scores. With
-    ``direction="long_only"`` each of the ``k`` highest-scoring picks gets ``(1 - L) / k``, ``L`` the sum of the
-    locked weights; with nothing locked that is ``1/k``, for a gross
-    exposure of 100%. With ``direction="long_short"`` the top ``k`` get
-    ``(0.5 - L_long) / k`` each and the bottom ``k`` get ``-(0.5 - L_short)
-    / k`` each, ``L_long`` and ``L_short`` the locked long and short
-    exposure; the two books never share a symbol. A side with no budget
-    left adds nothing. ``k`` is ``top_n``, reduced when fewer symbols can
-    be picked, and a warning names the bar. With no pick the row is the
-    locked positions and 0.0 elsewhere.
+    In long-only mode, select up to ``top_n`` symbols and share the available
+    portfolio budget equally. In long-short mode, allocate half the gross
+    budget to the highest scores and half to shorting the lowest scores.
+    The long and short selections never overlap.
+
+    Existing positions that cannot trade keep their weights and reduce the
+    budget available for new positions. Other candidates need a finite score;
+    ties follow symbol order. If fewer than ``top_n`` symbols are available,
+    use the available symbols and issue a warning. Unselected tradable
+    positions are closed. With no candidates, only untradable existing
+    positions remain.
+
+    A decision records tied symbols excluded at the selection boundary in
+    ``attrs["events"]["tie_at_cutoff"]``.
 
     Parameters
     ----------

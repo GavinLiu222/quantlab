@@ -32,20 +32,17 @@ from quantlab.utils.timer import Timer
 
 
 class StockDataset(RawMarketDataset):
-    """US-equity dataset over a single vendor's hive-partitioned raw tree.
+    """Read US-equity prices or convert a vendor's downloaded files to a panel.
 
-    The raw root must be the vendor's own directory and hold only that
-    vendor's files (*shards*). Two vendors under one root would silently
-    merge into a blended price series, so the root name, the ``vendor``
-    column and the parquet schema are all checked before any row is used.
-    Daily (``1d``) data is partitioned by ``month``, minute (``1m``) data by
-    trading-session ``date``, and ``tick`` data by ``date`` and ``symbol``.
-    A vendor that names its data types (``bars``, ``quotes``, ``trades``,
-    ``crsp_daily``, ``nbbo``) keeps each one in its own directory beneath the
-    vendor root, and the scan starts there; ``kwargs["data_type"]`` names
-    it, which the registry's ``convert()`` fills in from the capability.
-    Tick data has no dense-panel form and can only be read with
-    ``_scan_raw``.
+    Use ``panel`` to read an existing Zarr store. To build one from raw files,
+    set ``raw_data_dir_path`` to a single vendor's download directory, then
+    call ``from_raw_data().save()``.
+
+    Daily files are partitioned by month, minute files by trading-session
+    date, and tick files by date and symbol. When a vendor supplies several
+    data types, ``kwargs["data_type"]`` selects the subdirectory, such as
+    ``"bars"`` or ``"quotes"``. Files from different vendors cannot be mixed
+    in one directory. Tick data cannot be converted to a dense price panel.
 
     Parameters
     ----------

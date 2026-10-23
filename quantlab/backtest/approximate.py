@@ -2,8 +2,7 @@
 
 A backtest run (``BaseBacktester.run()``) decides its rebalances one bar at
 a time with the holdings replayed under the Execution rules, and pays a
-fixed cost for its report and run directory. The *approximate backtest*
-(ADR 0045) is a second backtest for parameter sweeps: built once over a price dataset
+fixed cost for its report and run directory. The *approximate backtest* is a second backtest for parameter sweeps: built once over a price dataset
 (its window's prices are read once), it is run many times on (predictions,
 rule) pairs and returns each account in memory, writing nothing.
 
@@ -45,7 +44,7 @@ as a backtest run's is: its fills, rebalance record and value. Its metric
 blocks are ``run_metrics`` of it and its ``attribution`` block
 ``quantlab.runs.backtest_attribution.attribution_metrics`` of it, the
 functions a backtest run assembles its own blocks with, so the numbers mean
-what a run's ``metrics.json`` rows mean (ADR 0034). Given a
+what a run's ``metrics.json`` rows mean. Given a
 ``benchmark_dataset``, the account is measured against the benchmark bought
 and held.
 """

@@ -17,7 +17,7 @@ must not read it as a missing value.
 
 The wrapper is a factor view (``quantlab.factor.view``): it reads the
 wrapped factor's store, and only the factor owning every variable of that
-store writes it (ADR 0029).
+store writes it.
 """
 
 import pandas as pd

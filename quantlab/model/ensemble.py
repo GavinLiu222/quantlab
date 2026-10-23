@@ -7,7 +7,7 @@ combining the members' predictions, and the ``"ensemble"`` trained unit
 (``quantlab.runs.trained_run``) that ``train()`` writes and ``load`` and
 ``check_checkpoint`` read.
 
-Each label is combined over the members that predict it (ADR 0013): the
+Each label is combined over the members that predict it: the
 ensemble's labels are the union of the members' labels in first-appearance
 order, a label several members predict is standardised per bar and
 averaged, and a label only one member predicts is passed through unchanged.

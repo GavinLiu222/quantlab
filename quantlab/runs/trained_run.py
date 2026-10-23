@@ -1,61 +1,9 @@
-"""Trained runs: the files a training run leaves on disk, and how they are read back.
+"""Read saved model-training results.
 
-Training writes one directory per trained unit, a run of the run layer
-(``quantlab.runs.directory``): it holds its files and, written last,
-``run.json``, which describes the unit under the shared header. There are
-three kinds:
-
-- ``"model"``: one checkpoint, the ``config.json`` that rebuilds the model,
-  and, when the fit was evaluated, the per-bar IC series ``ic_series.csv``
-  and the test-segment predictions ``test_predictions.zarr``. ``run.json``
-  holds the training window as configured and as fitted after the purge,
-  the test window, what the model was trained on, the metrics and, for a
-  library model that reports them, the hyperparameters the library actually
-  trained with, ``resolved_hyperparameters``.
-- ``"ensemble"``: its members, each a ``"model"`` unit in ``member_{k}/``,
-  and the evaluation files of the combined prediction. ``run.json`` holds
-  the members (directory and seed), the three windows and the metrics. Its
-  load-mode checkpoint is its ``run.json``.
-- ``"walk_forward"``: its folds, each a ``"model"`` or ``"ensemble"`` unit
-  in ``fold_{i}/``. ``run.json`` holds the folds (directory, index, three
-  windows, metrics) and the fold means of the metrics, ``cv_mean``.
-
-Every unit's ``run.json`` also holds ``data_fingerprint``: what the unit's
-``collect()`` read, as its ``DataRecorder`` recorded it, keyed by component
-path within the model; and ``code``, the code record of the model
-(``quantlab.runs.record``). Only the top unit records them: the trained
-model, or the ensemble or walk-forward unit; its members and folds hold none.
-An ensemble or walk-forward unit assembled from members trained separately
-(``BaseEnsemble.assemble``) also records ``assembled_from``: each source
-run's directory and code record.
-
-``train`` writes a unit at ``{model_save_dir}/{Class}_trial_{timestamp}/``,
-``train_cv`` a ``"walk_forward"`` unit there. Paths inside ``run.json`` are
-relative to the unit, so a unit copied elsewhere still opens.
-
-``TrainedRun.open`` (or ``quantlab.runs.directory.open_run``) is how a run
-is read: from the unit's directory, its ``run.json``, or a model's
-checkpoint; members and folds are opened with it, as child ``TrainedRun``
-objects. A unit without ``run.json``, or written in another
-``format_version``, is refused with a message to retrain it. The writing
-functions are for the model layer.
-
-This module imports no quantlab module outside ``quantlab.utils`` and the run
-layer.
-
-Examples
---------
->>> run = TrainedRun.open("models/MyHead_trial_20240601_120000_000000")
->>> run.kind, run.checkpoint.name
-('model', 'MyHead_total.joblib')
->>> run.train_window, run.fitted_train_window
-(('2024-01-01', '2024-02-09'), ('2024-01-01', '2024-02-07T00:00:00.000000000'))
-
-A walk-forward run opens the same way; its folds are units of their own:
-
->>> cv = TrainedRun.open("models/MyHead_trial_20240601_130000_000000")
->>> cv.kind, len(cv.folds), cv.folds[0].kind, cv.folds[0].index
-('walk_forward', 4, 'model', 0)
+``TrainedRun.open`` accepts a checkpoint or run directory. It exposes metrics,
+training and test windows, prediction files and recorded inputs. Saved runs
+have one of three kinds: a single model, an ensemble of member models, or a
+walk-forward sequence of training and test folds.
 """
 
 import dataclasses
@@ -85,11 +33,16 @@ _TEST_PREDICTIONS_FILE = "test_predictions.zarr"
 
 @dataclass(frozen=True)
 class TrainedRun:
-    """One trained unit, as its ``run.json`` describes it.
+    """Inspect a saved model, ensemble or walk-forward training run.
 
-    Every window is ``(start, end)``, both ends inclusive, with ``None`` for a
-    date the model was not given. A ``"walk_forward"`` unit has no windows of
-    its own (``None``); its folds have.
+    Open a checkpoint or run directory with ``TrainedRun.open``. The result
+    provides training and test dates, evaluation metrics, checkpoint paths and
+    a record of the data used. Ensembles expose ``members``; walk-forward runs
+    expose ``folds``.
+
+    Date windows include both endpoints. An unspecified date is ``None``.
+    A walk-forward run has a window for each fold rather than one overall
+    training or test window.
 
     Attributes
     ----------

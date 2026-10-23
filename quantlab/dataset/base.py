@@ -1,31 +1,14 @@
-"""Dataset base classes: the read interface every dataset answers.
+"""Dataset interfaces for reading market and other panel data.
 
-This module is the first layer of the pipeline (data, then factors, models
-and backtests). Every layer exchanges data as a *panel*: an
-``xarray.Dataset`` indexed by ``timestamp`` and ``symbol``, with one data
-variable per field (``open``, ``close``, ``volume`` and so on). Panels are
-stored on disk as Zarr directories (a chunked array format), called *stores*
-below.
+A panel is an ``xarray.Dataset`` indexed by ``timestamp`` and ``symbol``,
+with a variable for each field, such as open price or volume. ``BaseDataset``
+provides date-range queries and calendar operations. ``MarketDataset`` adds
+trading rules and array conversion for factor calculation.
 
-``BaseDataset`` is the read interface shared by every dataset: a config with
-normalised ISO dates, ``panel(start, end, symbols, variables)`` (the one read
-seam of every leaf dataset, recorded in an open ``DataRecorder``),
-``calendar``, ``bar_before`` and ``bar_after``, resampling, the shared
-variable names, and each dataset's declaration of the stores it reads
-(``inputs``, ``store_uses``, ``stores``). ``MarketDataset`` adds the market rules
-(tradable and delisting bars) and the ``to_kunquant`` export (arrays for the
-KunQuant factor engine).
-
-Neither holds a build path. A dataset converted from a vendor's raw files
-into a store it owns derives from ``quantlab.dataset.raw.RawDataset`` or
-``RawMarketDataset`` and implements ``_raw_data_to_xr``; a view (a roster
-cut, a merge, a mapping) and a panel held in memory derive from the classes
-here and have no build methods. The factor layer asks a dataset for a date
-range with ``panel(start, end)`` and counts warm-up with
-``bar_before(date, n)``.
-
-``TickerLookup`` names a dataset's symbol ids as of a day (ticker and
-company); a dataset says which one applies with ``ticker_lookup()``.
+Use ``RawDataset`` or ``RawMarketDataset`` subclasses to build stored panels
+from vendor files. Use ``FrameDataset`` for data already in memory.
+``TickerLookup`` resolves stored symbol identifiers to tickers and company
+names as of a given date.
 """
 
 import copy
@@ -370,25 +353,16 @@ class TickerLookup(ABC):
 
 
 class BaseDataset(Component, ABC):
-    """The read interface shared by every dataset in quantlab.
+    """Read date ranges and selected fields from a dataset.
 
-    Reading is a query: ``panel(start, end, symbols, variables)`` opens the
-    store lazily per request and holds nothing, so one dataset object serves
-    any number of requests and consumers; ``calendar``, ``bar_before`` and
-    ``bar_after`` count bars on the same calendar. ``panel`` is the one read
-    seam of every *leaf*, a dataset reading a store (or a panel held in
-    memory) of its own: a leaf says only how it opens its bars
-    (``_open_bars``, by default the Zarr store at ``store_path``). A *view*
-    reads other datasets, its ``inputs()``, and keeps no store. Every
-    dataset declares which stores its panel reads (``stores``); the live day
-    and the data fingerprint ask that declaration.
+    ``panel(start, end)`` returns an ``xarray.Dataset`` indexed by
+    ``(timestamp, symbol)``. Use ``symbols`` and ``variables`` to select a
+    subset. Date ranges include both endpoints; reading does not change the
+    configuration.
 
-    This class has no build path: a dataset converted from raw files into
-    a store it owns derives from ``quantlab.dataset.raw.RawDataset`` (or
-    ``RawMarketDataset``), which adds ``from_raw_data``, ``save``,
-    ``from_raw_data_chunked`` and ``update``. A view or a panel held in
-    memory derives from this class or ``MarketDataset`` and simply has none
-    of them.
+    ``calendar``, ``bar_before`` and ``bar_after`` help select trading bars.
+    ``resample`` provides a dataset at a different frequency. To convert raw
+    vendor files into a new store, use a ``RawDataset`` subclass instead.
 
     Parameters
     ----------
@@ -924,7 +898,7 @@ class BaseDataset(Component, ABC):
         """Return ``data`` cut to ``symbols`` and ``variables``, in the order given.
 
         Both are pure queries: a name ``data`` lacks raises instead of
-        reading as an empty column (ADR 0029).
+        reading as an empty column.
 
         Raises
         ------
@@ -951,26 +925,15 @@ class BaseDataset(Component, ABC):
         symbols: "Sequence | None" = None,
         variables: "Sequence[str] | None" = None,
     ) -> xr.Dataset:
-        """Return the stored panel from ``start`` to ``end``, both inclusive.
+        """Read a panel between two dates, including both endpoints.
 
-        The store is opened lazily on every call: no variable is loaded
-        until it is used, and the dataset holds nothing afterwards, so one
-        dataset object can answer several requests with different ranges
-        and serve several consumers at once. The config is not changed.
+        Select symbols and variables without changing the dataset configuration.
+        A date-only ``end``, such as ``"2024-01-05"``, includes every bar that day.
 
-        This is the dataset read seam, one implementation for every leaf
-        dataset: a leaf only says how its bars are opened (``_open_bars``).
-        Inside an open ``quantlab.runs.record.DataRecorder`` the request is
-        logged after the cut to ``symbols`` and ``variables``, and
-        fingerprinted when the recorder closes, together with the store's
-        ``_build_settings``; outside one nothing is recorded.
-
-        A date-only ``end`` such as ``"2024-01-05"`` includes every bar of
-        that day. A resampled dataset answers on its resampled bars: from
-        its own store when one has been saved (see ``store_path``),
-        otherwise by resampling the part of the source store the range
-        needs, which loads that part into memory; the source bars read are
-        what is recorded.
+        Stored data is opened lazily. A resampled dataset reads its saved resampled
+        store when available; otherwise it loads and aggregates the required
+        source bars. During a recorded run, the data read is tracked automatically
+        so later runs can detect changed inputs.
 
         Parameters
         ----------
@@ -1438,18 +1401,15 @@ class BaseDataset(Component, ABC):
 
 
 class MarketDataset(BaseDataset):
-    """Dataset of market price bars, with a KunQuant export.
+    """Read market prices and the trading rules used by a backtest.
 
-    A *bar* is one period's open, high, low, close and volume for a symbol.
-    On top of ``BaseDataset`` this class adds the market rules a backtest
-    trades by (``tradable_bars``, ``delisting_bars``) and ``to_kunquant``,
-    which returns contiguous ``[time, symbol]`` float32 arrays for KunQuant
-    (the compiled factor engine). A subclass implements ``_to_kunquant`` and
-    sets ``COLUMN_MAP`` (inherited from ``BaseDataset``) when its variable
-    names differ from the shared ones. A market dataset converted from raw
-    files derives from ``quantlab.dataset.raw.RawMarketDataset``; the market
-    views (``RosterDataset``, ``MergedDataset``, the Trade bar views) and
-    ``FrameDataset`` derive from this class and build nothing.
+    In addition to the date-range queries on ``BaseDataset``, this class
+    identifies tradable bars and delistings. ``to_kunquant`` converts selected
+    fields to float32 arrays of shape ``(timestamp, symbol)`` for factor
+    computation.
+
+    Use a concrete dataset such as ``StockDataset`` for stored price data, or
+    ``FrameDataset`` for data already held in a DataFrame.
 
     Parameters
     ----------
@@ -1479,7 +1439,7 @@ class MarketDataset(BaseDataset):
         """Mark, in a price panel, which symbols can be traded at each bar.
 
         Judged from nothing later than the bar, so a backtest and a live
-        engine agree (ADR 0014). The default: a real, not forward-filled,
+        engine agree. The default: a real, not forward-filled,
         ``fill_column`` price at the bar. A dataset that knows more, such as
         a halt flag, overrides this.
 

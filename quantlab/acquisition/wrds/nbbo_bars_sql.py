@@ -1,6 +1,6 @@
 """The SQL statement that resamples TAQ NBBO records into bars on the WRDS server.
 
-ADR 0027: over the slow link to WRDS, downloading every NBBO record and
+over the slow link to WRDS, downloading every NBBO record and
 resampling locally takes weeks for a decade of S&P 500 data, so the
 resampling runs in SQL and only bars cross the network. ``NbboBarsQuery``
 builds that statement for one day table and one batch of symbols. It

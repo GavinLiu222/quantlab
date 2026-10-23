@@ -893,7 +893,7 @@ class RawDataset(BaseDataset):
     def _pinned_symbol_axis(self, symbols: list) -> list:
         """Return the axis a write pins: the stored one, then the new symbols.
 
-        A store's symbol axis grows at its end (ADR 0032): when every stored
+        A store's symbol axis grows at its end: when every stored
         symbol is among ``symbols`` (the raw axis, sorted), the pinned axis
         is the stored axis followed by the symbols it lacks, sorted among
         themselves, so a new listing extends the store in place and a run

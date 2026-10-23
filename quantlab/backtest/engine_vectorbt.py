@@ -83,7 +83,7 @@ class VectorBtBacktester(BaseBacktester):
     - No borrow or short-financing cost is modelled, so short-side returns
       are optimistic.
 
-    Execution at the fill bar (ADR 0014): both price columns are
+    Execution at the fill bar: both price columns are
     forward-filled before they reach vectorbt, which would otherwise keep a
     NaN-priced holding at its last value and silently skip every later
     rebalance of the whole group. On each fill bar the engine then does what
