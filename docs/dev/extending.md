@@ -671,7 +671,10 @@ needs a C++ compiler; a compiled graph is cached in the process and on disk and 
 
 - **Operators.** Reuse the compositions in {py:mod}`quantlab.factor.kunquant_ts`
   (time-series) and {py:mod}`quantlab.factor.kunquant_cs` (cross-sectional), and the
-  graphs in `quantlab/factor/predefined/alpha101.py` and `alpha158.py`.
+  graphs in `quantlab/factor/predefined/alpha101.py` and `alpha158.py`. Where a graph uses
+  `SetInfOrNanToValue`, `Clip`, `Max`, `Min` or `Select`, take them from
+  {py:mod}`quantlab.factor.kunquant_nan` and build inside `missing_bars_only(inputs)`, so a
+  bar with no data stays NaN.
 - **Extra inputs.** A graph that needs inputs beyond the dataset's `data_columns` overrides
   `_kunquant_inputs(inputs)`: call the parent, then add `[time, symbol]` float32 arrays to
   the returned dict, as `quantlab/factor/predefined/residual_momentum.py` does with the

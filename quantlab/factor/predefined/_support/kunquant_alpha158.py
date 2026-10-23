@@ -3,7 +3,7 @@
 Copied from ``KunQuant/predefined/Alpha158.py`` of KunQuant 0.1.11
 (https://github.com/Menooker/KunQuant), licensed under the Apache License 2.0;
 see ``KUNQUANT_LICENSE`` beside this file. The one change is the import of
-``quantlab.factor.predefined._support.nan_preserving_ops`` below KunQuant's, which
+``quantlab.factor.kunquant_nan`` below KunQuant's, which
 replaces ``SetInfOrNanToValue``, ``Clip``, ``Max``, ``Min`` and ``Select``
 with versions that are NaN on a bar with no data inside ``missing_bars_only``;
 the formulas are unchanged. ``Alpha158Stock``
@@ -13,7 +13,7 @@ builds its graph from this module, the spot-kline class from KunQuant's.
 from KunQuant.Op import *
 from KunQuant.ops import *
 # quantlab change: stand-ins that keep a bar with no data NaN inside missing_bars_only.
-from quantlab.factor.predefined._support.nan_preserving_ops import Clip, Max, Min, Select, SetInfOrNanToValue  # noqa: E402,F401
+from quantlab.factor.kunquant_nan import Clip, Max, Min, Select, SetInfOrNanToValue  # noqa: E402,F401
 
 def _bool_to_10(v: OpBase) -> OpBase:
     return Select(v, ConstantOp(1), ConstantOp(0))
