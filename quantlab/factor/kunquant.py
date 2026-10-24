@@ -317,6 +317,27 @@ class FactorKunQuant(Factor):
             )
         return super().compute(start, end)
 
+    def graph(self) -> Function:
+        """Return the KunQuant graph this factor compiles, one ``Output`` per factor name.
+
+        The graph is built afresh on every call and reads no data, so it
+        can be inspected (or compared with another factor's) without a
+        dataset on disk.
+
+        Examples
+        --------
+        >>> from KunQuant.Op import Output
+        >>> factor = Alpha158Stock(FactorConfig(
+        ...     warmup_bars=60, dataset=dataset, mode="batch",
+        ...     data_columns=["adjOpen", "adjHigh", "adjLow", "adjClose",
+        ...                   "adjVolume"],
+        ...     factor_names=["KMID", "STD5"],
+        ... ))
+        >>> [op.attrs["name"] for op in factor.graph().ops if isinstance(op, Output)]
+        ['KMID', 'STD5']
+        """
+        return self._get_factor_func()
+
     @property
     def num_symbols(self) -> int:
         """Number of symbols the streaming graph runs over.

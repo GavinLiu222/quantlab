@@ -23,7 +23,7 @@ from typing import Callable
 import numpy as np
 import pytest
 import xarray as xr
-from KunQuant.Op import Input
+from KunQuant.Op import Input, Output
 
 from conftest import compute_all
 
@@ -269,6 +269,24 @@ def test_alpha158_stock_graph_reads_only_adjusted_inputs(
 
     names = {op.attrs["name"] for op in func.ops if isinstance(op, Input)}
     assert names == set(_ADJUSTED_STOCK_COLUMNS)
+
+
+def test_graph_returns_one_output_per_factor_name_without_reading_data(
+    tmp_path: Path,
+) -> None:
+    dataset = StockDataset(DatasetConfig(
+        zarr_file_path=str(tmp_path / "missing.zarr"),
+        raw_data_dir_path=str(tmp_path), market="us_equity", frequency="1d",
+    ))
+    factor = Alpha158Stock(FactorConfig(
+        warmup_bars=60, dataset=dataset, mode="batch",
+        data_columns=list(_ADJUSTED_STOCK_COLUMNS), factor_names=["KMID", "STD5"],
+    ))
+
+    outputs = [op for op in factor.graph().ops if isinstance(op, Output)]
+
+    assert [op.attrs["name"] for op in outputs] == ["KMID", "STD5"]
+    assert factor.graph() is not factor.graph()
 
 
 # The method that actually emits each class's `Output(...)` calls. For the
