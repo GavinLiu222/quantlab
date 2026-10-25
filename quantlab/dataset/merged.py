@@ -346,6 +346,53 @@ class MergedDataset(MarketDataset):
                 tradable = tradable & dataset.tradable_bars(prices, fill_column)
         return tradable
 
+    def delisting_bars(self, prices: xr.Dataset, valuation_column: str) -> xr.DataArray:
+        """Mark the last bar of each symbol that delisted: the default, or an input's own rule.
+
+        The default (``MarketDataset.delisting_bars``) judges this view's
+        panel and reads this view after it, so a symbol whose prices move
+        from one input to another is not delisted between them. A market
+        input whose class has a delisting rule of its own (a vendor's
+        delisting dates, a view passing its inputs' rules on) also judges
+        the symbols it holds, on the panel cut to them, and a bar either
+        marks is marked: a rule can delist a symbol before its prices stop
+        (OTC prints after the delisting), and the backtest settles on the
+        first mark. An input with the default rule is not asked, since its
+        default sees only its own prices.
+
+        Parameters
+        ----------
+        prices : xr.Dataset
+            A panel of this view on ``(timestamp, symbol)``.
+        valuation_column : str
+            The price the portfolio is valued at.
+
+        Returns
+        -------
+        xr.DataArray
+            Booleans on the panel's ``(timestamp, symbol)``.
+
+        Examples
+        --------
+        With ``sep`` a Sharadar SEP dataset (the default rule), the merge
+        marks what the default marks::
+
+            prices = BadPrintMaskedDataset([sep])
+            prices.delisting_bars(prices.panel("2023-03-01", "2023-03-31"), "adjClose")
+        """
+        marks = super().delisting_bars(prices, valuation_column)
+        symbols = pd.Index(prices.symbol.values)
+        for dataset in self.datasets:
+            if not isinstance(dataset, MarketDataset) or (
+                type(dataset).delisting_bars is MarketDataset.delisting_bars
+            ):
+                continue
+            held = symbols[symbols.isin(dataset.stored_symbols())]
+            if len(held):
+                own = dataset.delisting_bars(prices.sel(symbol=held), valuation_column)
+                marks = marks | own.reindex(symbol=symbols, fill_value=False)
+        return marks
+
     def own_names(self, names) -> list[str]:
         """Return ``names`` as they are: the merged panel holds the shared names.
 
