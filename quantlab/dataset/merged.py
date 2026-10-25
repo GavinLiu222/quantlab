@@ -313,10 +313,11 @@ class MergedDataset(MarketDataset):
     def tradable_bars(self, prices: xr.Dataset, fill_column: str) -> xr.DataArray:
         """Mark which symbols can be traded at each bar: tradable for every input.
 
-        Each input market dataset judges this view's panel by its own rule
-        (``MarketDataset.tradable_bars``: a real fill price at the bar, plus
-        what the input knows, such as SEP's halted bars), and a bar is
-        tradable only when every input says so. On a view that masks prices
+        The default (``MarketDataset.tradable_bars``: a real fill price at
+        the bar) judges this view's panel; an input whose leaf has a rule of
+        its own (``_has_own_rule``, such as SEP's halted bars) judges the
+        symbols it holds, on the panel cut to them, and a bar is tradable
+        only when the default and every such input say so. On a view that masks prices
         (``BadPrintMaskedDataset``) a masked fill price is therefore no fill
         price, and an input's own rule still holds.
 
@@ -341,10 +342,72 @@ class MergedDataset(MarketDataset):
             prices.tradable_bars(prices.panel("2023-03-10", "2023-03-28"), "adjOpen")
         """
         tradable = super().tradable_bars(prices, fill_column)
-        for dataset in self.datasets:
-            if isinstance(dataset, MarketDataset):
-                tradable = tradable & dataset.tradable_bars(prices, fill_column)
+        for own, _ in self._own_rules(prices, "tradable_bars", fill_column, off=True):
+            tradable = tradable & own
         return tradable
+
+    def delisting_bars(self, prices: xr.Dataset, valuation_column: str) -> xr.DataArray:
+        """Mark the last bar of each symbol that delisted: by its input's own rule, if it has one.
+
+        The default (``MarketDataset.delisting_bars``) judges this view's
+        panel and reads this view after it, so on a view that masks prices
+        a masked price is no price. An input whose leaf has a delisting
+        rule of its own (``_has_own_rule``) judges the symbols it holds
+        instead, on this view's panel cut to them; a symbol two such inputs
+        hold is marked where either marks it.
+
+        Parameters
+        ----------
+        prices : xr.Dataset
+            A panel of this view on ``(timestamp, symbol)``.
+        valuation_column : str
+            The price the portfolio is valued at.
+
+        Returns
+        -------
+        xr.DataArray
+            Booleans on the panel's ``(timestamp, symbol)``.
+
+        Examples
+        --------
+        With ``sep`` a Sharadar SEP dataset (no rule of its own), the merge
+        marks what the default marks::
+
+            prices = BadPrintMaskedDataset([sep])
+            prices.delisting_bars(prices.panel("2023-03-01", "2023-03-31"), "adjClose")
+        """
+        marks = super().delisting_bars(prices, valuation_column)
+        owns = list(self._own_rules(prices, "delisting_bars", valuation_column, off=False))
+        if not owns:
+            return marks
+        ruled = xr.concat([own for own, _ in owns], dim="input").any("input")
+        judged = xr.concat([held for _, held in owns], dim="input").any("input")
+        return marks.where(~judged, ruled)
+
+    def _own_rules(self, prices: xr.Dataset, method: str, column: str, *, off: bool):
+        """Yield each input's own ``method`` on the symbols it holds, and which those are.
+
+        Only a market input whose leaf has a rule of its own
+        (``_has_own_rule``) is asked, on the panel cut to the symbols its
+        store holds; its answer is put back on the whole panel's labels,
+        ``off`` on the symbols it does not hold.
+
+        Yields
+        ------
+        tuple of xr.DataArray
+            The input's answer on ``(timestamp, symbol)`` and a boolean on
+            ``symbol``: the symbols it judged.
+        """
+        symbols = pd.Index(prices.symbol.values)
+        for dataset in self.datasets:
+            if not (isinstance(dataset, MarketDataset) and _has_own_rule(dataset, method)):
+                continue
+            held = symbols.isin(dataset.stored_symbols())
+            if not held.any():
+                continue
+            own = getattr(dataset, method)(prices.sel(symbol=symbols[held]), column)
+            own = own.transpose("timestamp", "symbol").reindex(symbol=symbols, fill_value=off)
+            yield own, xr.DataArray(held, dims="symbol", coords={"symbol": symbols})
 
     def own_names(self, names) -> list[str]:
         """Return ``names`` as they are: the merged panel holds the shared names.
@@ -403,6 +466,22 @@ def _own_names(dataset: BaseDataset, variables) -> "list[str] | None":
     names = dataset.head(0).collect_schema().names()
     shared, wanted = dataset.shared_name_map(names), set(variables)
     return [name for name in names if shared.get(name, name) in wanted]
+
+
+def _has_own_rule(dataset: BaseDataset, method: str) -> bool:
+    """Whether a leaf under ``dataset`` overrides the ``MarketDataset`` rule ``method``.
+
+    A view (a dataset with ``inputs()``) only passes a rule through, so its
+    market inputs are asked instead; a leaf has one when its class overrides
+    the default.
+    """
+    if dataset.inputs():
+        return any(
+            _has_own_rule(source, method)
+            for source in dataset.inputs()
+            if isinstance(source, MarketDataset)
+        )
+    return getattr(type(dataset), method) is not getattr(MarketDataset, method)
 
 
 def _describe(dataset: BaseDataset) -> str:
