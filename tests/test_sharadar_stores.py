@@ -66,7 +66,7 @@ def test_every_store_has_one_entry_and_its_place_under_the_data_root(roots):
 
     _, data = roots
     names = [s.name for s in STORES]
-    assert len(names) == len(set(names)) == 16
+    assert len(names) == len(set(names)) == 15
     assert store("sharadar_sep_1d").path(data) == (
         data / "market" / "sharadar" / "sharadar_sep_1d" / "sharadar_sep_1d.zarr")
     assert store("sharadar_sp500_membership").path(data) == (

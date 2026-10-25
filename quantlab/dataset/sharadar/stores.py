@@ -30,7 +30,7 @@ Examples
 --------
 >>> from pathlib import Path
 >>> [s.name for s in STORES][:4]
-['sharadar_sep_1d', 'sharadar_sfp_1d', 'sharadar_sp500_1d', 'sharadar_spy_1d']
+['sharadar_sep_1d', 'sharadar_sfp_1d', 'sharadar_spy_1d', 'sharadar_sp500_membership']
 >>> store("sharadar_sp500_membership").path(Path("/data/quantlab")).as_posix()
 '/data/quantlab/universe/sharadar/sharadar_sp500_membership/sharadar_sp500_membership.zarr'
 """
@@ -172,8 +172,7 @@ def _panel(name: str, description: str, config_cls: type, dataset_cls: type) -> 
 
 
 #: Every Sharadar store, in the order they are built and updated: the price
-#: stores (the whole SEP and SFP tables, every permaticker ever an S&P 500
-#: member with all its bars, SPY alone), the S&P 500 membership, the
+#: stores (the whole SEP and SFP tables, SPY alone), the S&P 500 membership, the
 #: point-in-time fundamentals (as-reported SF1 dimensions), the DAILY
 #: valuations, then the panels.
 STORES: tuple[SharadarStore, ...] = (
@@ -186,11 +185,6 @@ STORES: tuple[SharadarStore, ...] = (
         "sharadar_sfp_1d", MARKET_FOLDER,
         "Sharadar SFP fund prices (ETFs and the like), every category, on the permaticker axis.",
         SharadarDatasetConfig, SharadarStockDataset, {"table": "sfp"},
-    ),
-    SharadarStore(
-        "sharadar_sp500_1d", MARKET_FOLDER,
-        "Sharadar SEP prices of every permaticker ever an S&P 500 member, with all its bars.",
-        SharadarDatasetConfig, SharadarStockDataset, {"table": "sep", "roster_universe": "sp500"},
     ),
     SharadarStore(
         "sharadar_spy_1d", MARKET_FOLDER,
