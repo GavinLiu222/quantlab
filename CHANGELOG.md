@@ -18,7 +18,10 @@ compatibility shims or config migrations.
   (`kwargs={"ranked": True}`, `PriceVolumeIntradayConfig.ranked`) giving market-wide percentile
   ranks, the input `NeutralizedFactor` should wrap.
   `examples/sharadar_us_equity/price_volume_factors.py` builds the whole-market stores, raw and
-  size-neutral, and `price_volume_us3000_report.py` reports them on the point-in-time us3000.
+  size-neutral, `price_volume_us3000_report.py` reports them on the point-in-time us3000, and
+  `price_volume_us3000_xgb.py` trains a walk-forward XGBoost on them and
+  backtests top-N and TopkDropout books over the test folds (`run_cv`), without a risk
+  model.
 
 ### Changed
 

@@ -1,6 +1,6 @@
 # Sharadar US equity: Barra style exposures, a USE4 factor risk model and the price-volume factors
 
-Scripts on Sharadar data ([docs/user-guide/sharadar.md](../../docs/user-guide/sharadar.md)), each importing only quantlab so it can be copied out and edited on its own: `barra_style.py` builds the Barra USE4-style exposures of every Sharadar common stock, `risk_model.py` the USE4 factor risk model on them, and `price_volume_factors.py` the 192 price-volume factors, which `price_volume_us3000_report.py` reports on the point-in-time us3000.
+Scripts on Sharadar data ([docs/user-guide/sharadar.md](../../docs/user-guide/sharadar.md)), each importing only quantlab so it can be copied out and edited on its own: `barra_style.py` builds the Barra USE4-style exposures of every Sharadar common stock, `risk_model.py` the USE4 factor risk model on them, and `price_volume_factors.py` the 192 price-volume factors, which `price_volume_us3000_report.py` reports on the point-in-time us3000 and `price_volume_us3000_xgb.py` trains a walk-forward XGBoost on.
 
 ## Prerequisites
 
@@ -57,3 +57,29 @@ On the training server (2026-10-26, through 2026-10-22) the four stores took abo
 ```bash
 QUANTLAB_DATA_DIR=/data/quantlab uv run python examples/sharadar_us_equity/price_volume_us3000_report.py --variant size_neutral
 ```
+
+`price_volume_us3000_xgb.py` trains a walk-forward XGBoost on the 192 factors, without a risk model: the point-in-time us3000 universe and roster, the 5-bar open-to-open return of the shared `labels/market/ret_5` recipe masked by membership, an `XGBoostRegressor` (depth-3 trees on the cross-sectional rank, early stopping) in a walk-forward CV (expanding folds from 2017-01-03, seven test folds of 242 bars from 2020-01-02 to 2026-09-29), then `run_cv`: each fold's checkpoint predicts its own test segment, masked by membership, and one `TopNConstructor` account (the 100 best-predicted members, equal weights, long only, rebalanced every 5 bars, 5 bp fees and 5 bp slippage) runs over all of them against the VT price-return benchmark. `--variant` picks the raw or the size-neutral stores; `--top-n` and `--direction long_short` change the book. The CV (`models/`, `cv.json`) and the backtests go to `<PRICE_VOLUME_RUN_DIR>/xgb_<variant>/` (default `~/quantlab_data/runs/price_volume_us3000/`).
+
+```bash
+QUANTLAB_DATA_DIR=/data/quantlab uv run python examples/sharadar_us_equity/price_volume_us3000_xgb.py --variant raw train-cv
+QUANTLAB_DATA_DIR=/data/quantlab uv run python examples/sharadar_us_equity/price_volume_us3000_xgb.py --variant raw backtest
+```
+
+On the training server (2026-10-26) each variant's CV took about 12 minutes (the collection most of it; XGBoost fits on the GPU in seconds a fold) and each backtest about 3 minutes. The out-of-sample results, 2020-01-02 to 2026-09-29, before borrow costs:
+
+| | CV mean test rank IC | Annualized return | Sharpe | Max drawdown | Excess over VT (annualized) | Information ratio | Turnover per rebalance |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| raw | 0.042 (positive in every fold) | 12.1% | 0.58 | 43.7% | +1.4% | 0.20 | 97% |
+| size-neutral | 0.040 (positive in every fold) | 9.1% | 0.47 | 47.3% | -1.3% | 0.01 | 131% |
+
+VT made 10.5% a year with a Sharpe of 0.61 and a 34.5% drawdown. The attribution block splits the raw book's excess over the equal-weighted universe into selection (+7.8% a year, gross) and costs (-4.9%): the model ranks (the top score decile grew 13.9% a year against the bottom's -5.0%), but an equal-weight top-100 book that replaces about half its names every five bars gives most of it back at 10 bp a side.
+
+`--n-drop` swaps the rule for qlib's TopkDropout (`TopkDropoutConstructor`): the same 100 names, but at most `n_drop` of them replaced per rebalance and the kept ones left at their weights. On the raw model, from the same checkpoints:
+
+| Book | Annualized return | Volatility | Sharpe | Max drawdown | Excess over VT | Information ratio | Turnover per rebalance | Selection / costs (a year) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| top-100 equal weight | 12.1% | 25.2% | 0.58 | 43.7% | +1.4% | 0.20 | 97% | +7.8% / -4.9% |
+| TopkDropout 100, drop 20 | 14.0% | 22.3% | 0.70 | 37.2% | +3.1% | 0.35 | 41% | +6.6% / -2.1% |
+| TopkDropout 100, drop 10 | 14.6% | 21.1% | 0.75 | 36.5% | +3.7% | 0.40 | 21% | +6.2% / -1.0% |
+
+Capping the turnover loses a fifth of the selection return but four fifths of the costs, and the slower book also beats VT in five of the seven folds instead of four.
