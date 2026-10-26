@@ -270,7 +270,8 @@ def analyze_factors(
     quantiles : int, default 5
         Buckets per bar, at least 2 and at most the largest cross-section (the most
         symbols on one bar with both a factor value and a return). A bar with fewer
-        symbols than buckets has no bucket returns.
+        symbols than buckets has no bucket returns. Tied factor values share the bucket
+        of their average rank, so a discrete factor can leave buckets empty.
     plot : bool, default True
         Draw one figure per factor into ``FactorReport.figures``. Drawing dominates the
         cost of a large report (all of Alpha158 on 50 bars x 300 symbols: about 19 s
