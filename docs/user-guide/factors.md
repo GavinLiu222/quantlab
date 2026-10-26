@@ -803,6 +803,14 @@ variables the result also carries `correlation`, a
 variables' rank correlations, clustered so near-duplicate factors fall
 together.
 
+Buckets hold equal counts when the factor has no ties. Tied values share the
+bucket of their average rank rather than being split by symbol order, so a
+discrete factor can leave buckets empty: an event dummy that is 0 for 80% of
+the symbols puts them all in bucket 2 of 5 and the 1s in bucket 5, and the
+top-minus-bottom spread and the long-short statistics are then NaN; analyse it with `quantiles=2`, or read
+its bucket means. Infinite factor or return values are treated as missing,
+like NaN.
+
 With `output_dir`, the tables are written as CSV, the scalar metrics as
 `summary.json`, one figure per pair as `<factor>__<fret>.png`, and the
 factor's and labels' configs beside them. `plot=False` draws no figure, which

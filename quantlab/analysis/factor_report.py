@@ -13,8 +13,9 @@ library:
   standard deviation, IR (mean over standard deviation), t-statistic and
   p-value against zero, skew, excess kurtosis and monthly means.
 - Returns analysis. At every timestamp the symbols are split into equal-count
-  quantile buckets by factor value (bucket 1 holds the lowest values). The
-  report gives the mean forward return per bucket and period, the top-minus-
+  quantile buckets by factor value (bucket 1 holds the lowest values); tied
+  values share the bucket of their average rank, so a discrete factor can
+  leave buckets empty. The report gives the mean forward return per bucket and period, the top-minus-
   bottom spread, and cumulative returns per bucket and for the long-short
   spread.
 - Turnover analysis. Quantile turnover is the fraction of symbols in a bucket
@@ -84,7 +85,7 @@ def most_common_spacing(timestamps: xr.DataArray | pd.Index | np.ndarray) -> np.
     Parameters
     ----------
     timestamps : xarray.DataArray, pandas.Index or numpy.ndarray
-        Sorted ``datetime64`` timestamps; at least two.
+        ``datetime64`` timestamps, in any order; at least two.
 
     Returns
     -------
@@ -101,13 +102,19 @@ def most_common_spacing(timestamps: xr.DataArray | pd.Index | np.ndarray) -> np.
     >>> most_common_spacing(pd.date_range("2024-01-01", periods=10, freq="B"))
     np.timedelta64(86400000000,'us')
     """
-    values = pd.DatetimeIndex(np.asarray(timestamps))
+    values = pd.DatetimeIndex(np.sort(np.asarray(timestamps)))
     if len(values) < 2:
         raise ValueError(
             f"need at least two timestamps to infer a bar spacing, got {len(values)}"
         )
     diffs = pd.Series(values[1:] - values[:-1])
     return diffs.mode().to_numpy()[0]
+
+
+def _finite_or_nan(values: np.ndarray) -> np.ndarray:
+    """Return ``values`` as float64 with every infinite value replaced by NaN."""
+    values = np.asarray(values, dtype=np.float64)
+    return np.where(np.isfinite(values), values, np.nan)
 
 
 def _per_bar_rate(returns: pd.DataFrame | pd.Series, horizon: int):
@@ -201,7 +208,8 @@ def long_short_statistics(rate: pd.Series) -> dict[str, float]:
     ----------
     rate : pandas.Series
         Per-bar long-short return, indexed by ``timestamp``; missing
-        periods count as 0.
+        periods count as 0, and every statistic is NaN when no period has
+        a return (a bucket that is always empty).
 
     Returns
     -------
@@ -219,7 +227,7 @@ def long_short_statistics(rate: pd.Series) -> dict[str, float]:
     >>> sorted(stats_)
     ['long_short_annual_return', 'long_short_annual_volatility', 'long_short_max_drawdown', 'long_short_sharpe', 'periods_per_year']
     """
-    rate = rate.fillna(0.0).astype(np.float64)
+    rate = rate.astype(np.float64)
     n = len(rate)
     nan = {
         "periods_per_year": math.nan,
@@ -228,8 +236,9 @@ def long_short_statistics(rate: pd.Series) -> dict[str, float]:
         "long_short_sharpe": math.nan,
         "long_short_max_drawdown": math.nan,
     }
-    if n < 2:
+    if n < 2 or not rate.notna().any():
         return nan
+    rate = rate.fillna(0.0)
     years = (rate.index[-1] - rate.index[0]) / pd.Timedelta(days=365.25)
     if not years > 0:
         return nan
@@ -296,9 +305,11 @@ class PairAnalysis:
     spread : pandas.Series
         Top-bucket minus bottom-bucket mean forward return per period.
     cumulative_quantile_returns : pandas.DataFrame
-        Compounded per-bar return of each bucket.
+        Compounded per-bar return of each bucket, a missing period earning
+        0; NaN throughout for a bucket that is always empty.
     cumulative_long_short : pandas.Series
-        Compounded per-bar return of long the top bucket, short the bottom.
+        Compounded per-bar return of long the top bucket, short the bottom;
+        NaN throughout when either bucket is always empty.
     turnover : pandas.DataFrame
         Fraction of each bucket's symbols that were not in it the period
         before.
@@ -810,7 +821,11 @@ class FactorAnalyzer:
     ----------
     quantiles : int, default 5
         Number of equal-count buckets per timestamp. Timestamps with fewer
-        usable symbols than buckets get no bucket returns.
+        usable symbols than buckets get no bucket returns. Tied factor
+        values share the bucket of their average rank, so a discrete
+        factor (an event dummy, say) can leave buckets empty, and a spread
+        or long-short over an empty bucket is NaN. Infinite values are
+        missing cells, like NaN.
     rolling_window : int, default 22
         Window, in periods, of the rolling mean IC drawn in the figure.
     plot : bool, default True
@@ -1122,8 +1137,9 @@ class FactorAnalyzer:
         ----------
         features, labels : xarray.Dataset
             Aligned ``(timestamp, symbol)`` panels: the factor variables and
-            the forward-return variables. Only cells finite in both a factor
-            and a fret are used for that pair.
+            the forward-return variables, in any timestamp order. Only cells
+            finite in both a factor and a fret are used for that pair; an
+            infinite value is a missing cell, like NaN.
         horizon : int, default 1
             Bars the forward returns span.
 
@@ -1138,8 +1154,9 @@ class FactorAnalyzer:
         >>> [pair.key for pair in pairs]
         ['signal__ret_1', 'noise__ret_1']
         """
-        features = features.transpose("timestamp", "symbol")
-        labels = labels.transpose("timestamp", "symbol")
+        # Shifts within a symbol read the previous period, so rows go in time order.
+        features = features.transpose("timestamp", "symbol").sortby("timestamp")
+        labels = labels.transpose("timestamp", "symbol").sortby("timestamp")
         timestamps = pd.DatetimeIndex(features["timestamp"].values, name="timestamp")
         n_symbols = features.sizes["symbol"]
         names = list(features.data_vars)
@@ -1149,14 +1166,14 @@ class FactorAnalyzer:
         }
         pairs = []
         for fret_name in labels.data_vars:
-            r = labels[fret_name].values.astype(np.float64)
+            r = _finite_or_nan(labels[fret_name].values)
             for start in range(0, len(names), self.chunk_size):
                 chunk = names[start : start + self.chunk_size]
                 data = dict(base)
                 data[FRET_COLUMN] = r.ravel()
                 counts = {}
                 for i, name in enumerate(chunk):
-                    f = features[name].values.astype(np.float64)
+                    f = _finite_or_nan(features[name].values)
                     data[f"f{i}"] = f.ravel()
                     counts[name] = int((np.isfinite(f) & np.isfinite(r)).any(axis=0).sum())
                 table = self._collect(pl.DataFrame(data).lazy(), len(chunk))
@@ -1172,9 +1189,14 @@ class FactorAnalyzer:
         """Run the per-period plan of ``n_factors`` factor columns and collect it.
 
         The frame is timestamp-major, so a shift within a symbol is the
-        previous period. NaN cells are nulls, buckets are assigned per
-        period by ordinal rank, and every aggregation of every factor is one
-        ``group_by("timestamp")`` plan collected once.
+        previous period. NaN cells are nulls, and every aggregation of every
+        factor is one ``group_by("timestamp")`` plan collected once.
+
+        Buckets are assigned per period from the average rank: bucket
+        ``floor((rank - 1) * quantiles / n) + 1`` of ``n`` valid symbols.
+        Without ties that is ``quantiles`` equal-count buckets; tied values
+        share the bucket of their average rank, so a discrete factor can
+        leave buckets empty rather than split equal values by symbol order.
         """
         q_count = self.quantiles
         fret = pl.col(FRET_COLUMN)
@@ -1185,9 +1207,9 @@ class FactorAnalyzer:
             both = f.is_not_null() & fret.is_not_null()
             fv = pl.when(both).then(f)
             n_valid = fv.count().over("timestamp")
-            bucket = (
-                (fv.rank(method="ordinal").over("timestamp").cast(pl.Int64) - 1) * q_count
-            ) // n_valid + 1
+            # Twice the average rank is an integer, so the bucket is exact integer arithmetic.
+            twice_rank = (fv.rank(method="average").over("timestamp") * 2).cast(pl.Int64)
+            bucket = ((twice_rank - 2) * q_count) // (2 * n_valid) + 1
             row_exprs += [
                 fv.alias(f"fv{i}"),
                 pl.when(both).then(fret).alias(f"rv{i}"),
@@ -1272,11 +1294,15 @@ class FactorAnalyzer:
 
         spread = (quantile_returns[self.quantiles] - quantile_returns[1]).rename("spread")
         per_bar = _per_bar_rate(quantile_returns, horizon)
+        # A missing period earns 0; a bucket that is never filled has no return at all.
         cumulative_quantile = (1.0 + per_bar.fillna(0.0)).cumprod() - 1.0
-        long_short_rate = (per_bar[self.quantiles] - per_bar[1]).fillna(0.0)
-        cumulative_long_short = ((1.0 + long_short_rate).cumprod() - 1.0).rename(
+        cumulative_quantile.loc[:, per_bar.isna().all()] = np.nan
+        long_short_rate = per_bar[self.quantiles] - per_bar[1]
+        cumulative_long_short = ((1.0 + long_short_rate.fillna(0.0)).cumprod() - 1.0).rename(
             "cumulative_long_short"
         )
+        if not long_short_rate.notna().any():
+            cumulative_long_short[:] = np.nan
         pair = PairAnalysis(
             factor_name=factor_name,
             fret_name=fret_name,
