@@ -25,7 +25,8 @@ __all__ = ["write_json_atomically", "write_parquet_atomically"]
 def write_json_atomically(path: str | Path, payload: object, **json_kwargs) -> None:
     """Serialise ``payload`` as JSON to ``path`` with an atomic replace.
 
-    Missing parent directories are created. ``json_kwargs`` is forwarded
+    Missing parent directories are created, and the file gets the
+    permissions a plain write would (``0o666`` less the umask). ``json_kwargs`` is forwarded
     unchanged to ``json.dump``, so each caller keeps its own formatting
     (compact, ``indent=2``, ``sort_keys=True`` and so on).
 
@@ -69,10 +70,22 @@ def write_json_atomically(path: str | Path, payload: object, **json_kwargs) -> N
             # cache, and a power loss after the rename could otherwise publish
             # an empty file over a good one.
             os.fsync(handle.fileno())
+        _give_plain_mode(handle.name)
         os.replace(handle.name, destination)
     except BaseException:
         Path(handle.name).unlink(missing_ok=True)
         raise
+
+
+def _give_plain_mode(path: str) -> None:
+    """Give a temporary file the mode a plain write would (``0o666`` less the umask).
+
+    ``NamedTemporaryFile`` creates it owner-only, and ``os.replace`` keeps
+    that mode; a file in the shared data tier must stay readable by others.
+    """
+    umask = os.umask(0)
+    os.umask(umask)
+    os.chmod(path, 0o666 & ~umask)
 
 
 def write_parquet_atomically(path: str | Path, frame) -> None:
@@ -106,11 +119,7 @@ def write_parquet_atomically(path: str | Path, frame) -> None:
     handle.close()
     try:
         frame.write_parquet(handle.name)
-        # The temporary file is created owner-only; give it the mode a plain
-        # write would (0o666 less the umask), as shared stores expect.
-        umask = os.umask(0)
-        os.umask(umask)
-        os.chmod(handle.name, 0o666 & ~umask)
+        _give_plain_mode(handle.name)
         os.replace(handle.name, destination)
     except BaseException:
         Path(handle.name).unlink(missing_ok=True)

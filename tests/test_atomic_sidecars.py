@@ -28,6 +28,7 @@ no test is named for a selector a later plan owns.
 
 import ast
 import json
+import os
 import tempfile
 from pathlib import Path
 
@@ -172,6 +173,21 @@ def test_write_json_atomically_leaves_no_temp_file(tmp_path: Path) -> None:
     assert json.loads(destination.read_text(encoding="utf-8")) == {
         "last_date": "2024-02-29"
     }
+
+
+def test_write_json_atomically_gives_the_permissions_a_plain_write_would(tmp_path: Path) -> None:
+    """A sidecar beside a shared store is as readable as the store.
+
+    The temporary file `NamedTemporaryFile` creates is owner-only (0600), and
+    `os.replace` keeps its mode. On the shared data tier that made every
+    rewritten ledger and map sidecar unreadable to other users, whose reads of
+    the minute bars then failed with PermissionError.
+    """
+    plain = tmp_path / "plain.json"
+    plain.write_text("{}", encoding="utf-8")
+    atomic = tmp_path / "atomic.json"
+    write_json_atomically(atomic, {})
+    assert os.stat(atomic).st_mode == os.stat(plain).st_mode
 
 
 def test_write_json_atomically_honours_json_kwargs(tmp_path: Path) -> None:
