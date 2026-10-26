@@ -6,6 +6,23 @@ compatibility shims or config migrations.
 
 ## Unreleased
 
+### Added
+
+- The 192 factors of the price-volume factor list. `PriceVolumeDailyAlpha`
+  (`quantlab.factor.predefined.price_volume_daily`) computes its 102 daily factors in one
+  double-precision KunQuant graph: SEP computes `SEP_OUTPUTS`, the Massive day bars the
+  trade-count `HIGH_DEAL_REVERSE` family, and `IDIO_VOL_FF3` reads a Fama-French CSV.
+  `PriceVolumeIntradayStats` (`quantlab.factor.predefined.price_volume_intraday`) computes 15 session
+  statistics of one-minute bars, and `PriceVolumeIntradayAlpha` (config `PriceVolumeIntradayConfig`) their
+  1- to 60-session means, the list's 90 minute-bar factors. Both take a `ranked` option
+  (`kwargs={"ranked": True}`, `PriceVolumeIntradayConfig.ranked`) giving market-wide percentile
+  ranks, the input `NeutralizedFactor` should wrap.
+  `examples/sharadar_us_equity/price_volume_factors.py` builds the whole-market stores, raw and
+  size-neutral, `price_volume_us3000_report.py` reports them on the point-in-time us3000, and
+  `price_volume_us3000_xgb.py` trains a walk-forward XGBoost on them and
+  backtests top-N and TopkDropout books over the test folds (`run_cv`), without a risk
+  model.
+
 ### Changed
 
 - `cache_dir` moves off `ConstituentDatasetConfig` onto a new subclass,
