@@ -266,7 +266,12 @@ def test_an_update_widens_a_store_whose_staleness_column_is_not_a_variable(tmp_p
     # which the panel does not show. 202's first row comes in the update.
     spec = ReleaseSpec(variables={"value": {"unit": "USD"}})
     _releases(tmp_path / "updated", ROWS, DAYS[:4], spec).update()
-    _releases(tmp_path / "updated", ROWS, spec=spec).update()
+    dataset = _releases(tmp_path / "updated", ROWS, spec=spec)
+    store = dataset.config.zarr_file_path
+    # Over the stored days 101 shows its 2024-01-03 row and 202 nothing, so 202 widens the store.
+    assert dataset._added_symbols_with_raw_history([101, 202], DAYS[0], DAYS[3]) == {"101": 3}
+    assert dataset._resolve_new_listing_strategy([202], [], store, "timestamp") == "widen"
+    dataset.update()
     updated = _releases(tmp_path / "updated", ROWS, spec=spec).panel("2024-01-01", "2024-12-31").load()
     _releases(tmp_path / "rebuilt", ROWS, spec=spec).update()
     rebuilt = _releases(tmp_path / "rebuilt", ROWS, spec=spec).panel("2024-01-01", "2024-12-31").load()
