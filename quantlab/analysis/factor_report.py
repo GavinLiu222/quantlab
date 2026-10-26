@@ -85,7 +85,7 @@ def most_common_spacing(timestamps: xr.DataArray | pd.Index | np.ndarray) -> np.
     Parameters
     ----------
     timestamps : xarray.DataArray, pandas.Index or numpy.ndarray
-        Sorted ``datetime64`` timestamps; at least two.
+        ``datetime64`` timestamps, in any order; at least two.
 
     Returns
     -------
@@ -102,7 +102,7 @@ def most_common_spacing(timestamps: xr.DataArray | pd.Index | np.ndarray) -> np.
     >>> most_common_spacing(pd.date_range("2024-01-01", periods=10, freq="B"))
     np.timedelta64(86400000000,'us')
     """
-    values = pd.DatetimeIndex(np.asarray(timestamps))
+    values = pd.DatetimeIndex(np.sort(np.asarray(timestamps)))
     if len(values) < 2:
         raise ValueError(
             f"need at least two timestamps to infer a bar spacing, got {len(values)}"
@@ -208,7 +208,8 @@ def long_short_statistics(rate: pd.Series) -> dict[str, float]:
     ----------
     rate : pandas.Series
         Per-bar long-short return, indexed by ``timestamp``; missing
-        periods count as 0.
+        periods count as 0, and every statistic is NaN when no period has
+        a return (a bucket that is always empty).
 
     Returns
     -------
@@ -226,7 +227,7 @@ def long_short_statistics(rate: pd.Series) -> dict[str, float]:
     >>> sorted(stats_)
     ['long_short_annual_return', 'long_short_annual_volatility', 'long_short_max_drawdown', 'long_short_sharpe', 'periods_per_year']
     """
-    rate = rate.fillna(0.0).astype(np.float64)
+    rate = rate.astype(np.float64)
     n = len(rate)
     nan = {
         "periods_per_year": math.nan,
@@ -235,8 +236,9 @@ def long_short_statistics(rate: pd.Series) -> dict[str, float]:
         "long_short_sharpe": math.nan,
         "long_short_max_drawdown": math.nan,
     }
-    if n < 2:
+    if n < 2 or not rate.notna().any():
         return nan
+    rate = rate.fillna(0.0)
     years = (rate.index[-1] - rate.index[0]) / pd.Timedelta(days=365.25)
     if not years > 0:
         return nan
@@ -303,9 +305,11 @@ class PairAnalysis:
     spread : pandas.Series
         Top-bucket minus bottom-bucket mean forward return per period.
     cumulative_quantile_returns : pandas.DataFrame
-        Compounded per-bar return of each bucket.
+        Compounded per-bar return of each bucket, a missing period earning
+        0; NaN throughout for a bucket that is always empty.
     cumulative_long_short : pandas.Series
-        Compounded per-bar return of long the top bucket, short the bottom.
+        Compounded per-bar return of long the top bucket, short the bottom;
+        NaN throughout when either bucket is always empty.
     turnover : pandas.DataFrame
         Fraction of each bucket's symbols that were not in it the period
         before.
@@ -1290,11 +1294,15 @@ class FactorAnalyzer:
 
         spread = (quantile_returns[self.quantiles] - quantile_returns[1]).rename("spread")
         per_bar = _per_bar_rate(quantile_returns, horizon)
+        # A missing period earns 0; a bucket that is never filled has no return at all.
         cumulative_quantile = (1.0 + per_bar.fillna(0.0)).cumprod() - 1.0
-        long_short_rate = (per_bar[self.quantiles] - per_bar[1]).fillna(0.0)
-        cumulative_long_short = ((1.0 + long_short_rate).cumprod() - 1.0).rename(
+        cumulative_quantile.loc[:, per_bar.isna().all()] = np.nan
+        long_short_rate = per_bar[self.quantiles] - per_bar[1]
+        cumulative_long_short = ((1.0 + long_short_rate.fillna(0.0)).cumprod() - 1.0).rename(
             "cumulative_long_short"
         )
+        if not long_short_rate.notna().any():
+            cumulative_long_short[:] = np.nan
         pair = PairAnalysis(
             factor_name=factor_name,
             fret_name=fret_name,

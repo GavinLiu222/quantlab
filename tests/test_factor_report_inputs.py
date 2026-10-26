@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from quantlab.analysis.factor_report import FactorAnalyzer
+from quantlab.analysis.factor_report import FactorAnalyzer, Fret
 
 T, S = 60, 30
 
@@ -117,3 +117,36 @@ def test_the_timestamp_order_of_the_panels_does_not_change_the_metrics(signal_an
     )
 
     _assert_same_pair(sorted_pair, shuffled)
+
+
+def test_an_always_empty_bucket_gives_nan_cumulative_and_long_short_metrics():
+    # A dummy that is 0 for 80% of the symbols: the 0s fill bucket 2 of 5, so
+    # bucket 1 never holds a symbol and the long-short has no period at all.
+    rng = np.random.default_rng(5)
+    row = np.r_[np.zeros(24), np.ones(6)]
+    f = np.array([rng.permutation(row) for _ in range(T)])
+    r = rng.normal(size=(T, S)) * 0.01
+
+    pair = FactorAnalyzer(plot=False).analyze_pair(_da(f), _da(r), "dummy", "ret_1")
+
+    assert pair.quantile_returns[1].isna().all()
+    assert pair.cumulative_quantile_returns[1].isna().all()
+    assert pair.cumulative_quantile_returns[[2, 5]].notna().all().all()
+    assert pair.cumulative_long_short.isna().all()
+    for key in ("mean_spread", "cumulative_long_short", "long_short_annual_return",
+                "long_short_annual_volatility", "long_short_sharpe", "long_short_max_drawdown"):
+        assert np.isnan(pair.summary[key]), key
+
+
+def test_panels_of_the_same_cadence_in_different_timestamp_orders_are_analyzed(signal_and_return):
+    f, r = signal_and_return
+    order = np.random.default_rng(6).permutation(T)
+    features = _da(f).to_dataset(name="f")
+
+    analyzer = FactorAnalyzer(plot=False)
+    plain = analyzer.analyze_panels(features, [Fret(_da(r).to_dataset(name="ret_1"))])
+    shuffled = analyzer.analyze_panels(
+        features, [Fret(_da(r).isel(timestamp=order).to_dataset(name="ret_1"))]
+    )
+
+    _assert_same_pair(plain.pairs["f__ret_1"], shuffled.pairs["f__ret_1"])

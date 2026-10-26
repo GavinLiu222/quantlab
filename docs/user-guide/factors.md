@@ -807,7 +807,7 @@ Buckets hold equal counts when the factor has no ties. Tied values share the
 bucket of their average rank rather than being split by symbol order, so a
 discrete factor can leave buckets empty: an event dummy that is 0 for 80% of
 the symbols puts them all in bucket 2 of 5 and the 1s in bucket 5, and the
-top-minus-bottom spread is then NaN; analyse it with `quantiles=2`, or read
+top-minus-bottom spread and the long-short statistics are then NaN; analyse it with `quantiles=2`, or read
 its bucket means. Infinite factor or return values are treated as missing,
 like NaN.
 
