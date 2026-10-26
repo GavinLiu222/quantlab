@@ -1,6 +1,6 @@
-# Sharadar US equity: Barra style exposures and a USE4 factor risk model
+# Sharadar US equity: Barra style exposures, a USE4 factor risk model and the price-volume factors
 
-Two scripts on Sharadar data ([docs/user-guide/sharadar.md](../../docs/user-guide/sharadar.md)), each importing only quantlab so it can be copied out and edited on its own: `barra_style.py` builds the Barra USE4-style exposures of every Sharadar common stock, and `risk_model.py` the USE4 factor risk model on them.
+Scripts on Sharadar data ([docs/user-guide/sharadar.md](../../docs/user-guide/sharadar.md)), each importing only quantlab so it can be copied out and edited on its own: `barra_style.py` builds the Barra USE4-style exposures of every Sharadar common stock, `risk_model.py` the USE4 factor risk model on them, and `price_volume_factors.py` the 192 price-volume factors, which `price_volume_us3000_report.py` reports on the point-in-time us3000.
 
 ## Prerequisites
 
@@ -8,7 +8,7 @@ Download the Sharadar tables and build the stores once (this needs a Sharadar su
 
 The data is licensed for personal use: the data root must be outside the repository (the scripts refuse one inside it).
 
-Both scripts write shared stores: `factors/market/barra_style/` and `risk/use4/`, which the daily data update keeps current. Re-running either rewrites them, so point `QUANTLAB_DATA_DIR` elsewhere to try them out.
+`barra_style.py` and `risk_model.py` write shared stores: `factors/market/barra_style/` and `risk/use4/`, which the daily data update keeps current. Re-running either rewrites them, so point `QUANTLAB_DATA_DIR` elsewhere to try them out.
 
 ## Barra style exposures
 
@@ -31,3 +31,29 @@ QUANTLAB_DATA_DIR=/data/quantlab uv run python examples/sharadar_us_equity/risk_
 On the training server the whole script takes about 25 minutes: the regression store 2.6 minutes, the estimate store 19.5 minutes in 32 processes (mostly the eigenfactor simulations), the bias statistics about 3 minutes.
 
 See [Factor risk model](../../docs/dev/risk-model.md) for the method and the numbers.
+
+## The price-volume factors
+
+`price_volume_factors.py` builds the 192 factors of the price-volume factor list on every SEP domestic common stock, in four stores (and three size-neutral ones) under `PRICE_VOLUME_FACTOR_DIR` (default `~/quantlab_data/factors/market/`), each in its own folder beside a README.md and component.json:
+
+| Store | Factor | Outputs | From |
+| --- | --- | --- | --- |
+| `price_volume_daily` | `PriceVolumeDailyAlpha` on SEP, bad prints masked | the 97 daily outputs SEP computes (`SEP_OUTPUTS`) | 2000-03-16 |
+| `price_volume_deal` | `PriceVolumeDailyAlpha` on the Massive day bars | `HIGH_DEAL_REVERSE_*`, which read the trade count | 2016-10-11 |
+| `price_volume_intraday_stats` | `PriceVolumeIntradayStats` of the one-minute Trade bars, one value per session | the 15 session statistics | 2016-10-11 |
+| `price_volume_intraday` | `PriceVolumeIntradayAlpha` | their 1- to 60-session means, `<STATISTIC>_<N>D` (90) | 2016-10-11 |
+| `price_volume_daily_size_neutral`, `price_volume_deal_size_neutral`, `price_volume_intraday_size_neutral` | `NeutralizedFactor` against size | every output's market-wide rank (`ranked`), its residual on log market cap each day, z-scored | as above |
+
+It reads the shared stores (`QUANTLAB_DATA_DIR`) and writes nothing there; `IDIO_VOL_FF3_*` reads `downloads/fama_french/ff3_daily.csv` and is NaN after its last day. The formulas are in the docstrings of `quantlab/factor/predefined/price_volume_daily.py` and `price_volume_intraday.py`. Running the script again extends each store to `END`.
+
+```bash
+QUANTLAB_DATA_DIR=/data/quantlab uv run python examples/sharadar_us_equity/price_volume_factors.py
+```
+
+On the training server (2026-10-26, through 2026-10-22) the four stores took about 19 minutes: `price_volume_daily` 494 s as one chunk (17076 symbols, 23 GB on disk), `price_volume_deal` 74 s, `price_volume_intraday_stats` 547 s in 12 workers of 4 threads (a whole-market month peaks near 10 GB), `price_volume_intraday` 21 s; the size-neutral ones 1525 s (yearly chunks, each recomputing its ranks with their warm-up), 84 s and 31 s. Each store equals a fresh `compute()` of a range inside it, NaN positions included.
+
+`price_volume_us3000_report.py` then reports all 192 on the point-in-time us3000: each store read with `MembershipMaskedFactor(RosterFactor(...))`, the 1-, 5- and 21-bar open-to-open returns of the shared label recipes masked with `MembershipMaskedLabel`, and every factor against every return in one `FactorAnalyzer` run (2017-01-03 to 2026-09-18), so its correlation clusters span the daily and minute-bar factors. It writes the standard report tables and figures under `PRICE_VOLUME_REPORT_DIR` (default `~/quantlab_data/runs/price_volume_us3000/`), in `report/`, or in `report_size_neutral/` with `--variant size_neutral`; on the training server each took about 25 minutes and 150 GB.
+
+```bash
+QUANTLAB_DATA_DIR=/data/quantlab uv run python examples/sharadar_us_equity/price_volume_us3000_report.py --variant size_neutral
+```

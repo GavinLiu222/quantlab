@@ -17,6 +17,8 @@ compatibility shims or config migrations.
   1- to 60-session means, the list's 90 minute-bar factors. Both take a `ranked` option
   (`kwargs={"ranked": True}`, `PriceVolumeIntradayConfig.ranked`) giving market-wide percentile
   ranks, the input `NeutralizedFactor` should wrap.
+  `examples/sharadar_us_equity/price_volume_factors.py` builds the whole-market stores, raw and
+  size-neutral, and `price_volume_us3000_report.py` reports them on the point-in-time us3000.
 
 ### Changed
 
