@@ -207,6 +207,7 @@ class _Releases(ReleasePanelDataset):
 
     ROWS: list[tuple[int, str, float]] = []
     CALENDAR_DAYS: list = DAYS
+    SPEC: ReleaseSpec = SPEC
 
     def _trading_calendar(self) -> TradingCalendar:
         return _calendar(self.CALENDAR_DAYS, self.config.start_date, self.config.end_date)
@@ -215,16 +216,16 @@ class _Releases(ReleasePanelDataset):
         return _released(self.ROWS, self._trading_calendar())
 
     def _spec(self) -> ReleaseSpec:
-        return SPEC
+        return self.SPEC
 
     def _nothing_shown(self) -> str:
         return "no row is shown"
 
 
-def _releases(tmp_path, rows, days=DAYS):
+def _releases(tmp_path, rows, days=DAYS, spec=SPEC):
     from quantlab.dataset.config import SharadarDatasetConfig
 
-    cls = type("Releases", (_Releases,), {"ROWS": rows, "CALENDAR_DAYS": days})
+    cls = type("Releases", (_Releases,), {"ROWS": rows, "CALENDAR_DAYS": days, "SPEC": spec})
     return cls(
         SharadarDatasetConfig(
             zarr_file_path=str(tmp_path / "releases.zarr"),
@@ -258,6 +259,26 @@ def test_an_update_appends_the_days_a_rebuild_would_hold(tmp_path):
     assert updated["symbol"].values.tolist() == [101, 202]
     np.testing.assert_array_equal(updated["value"].values, rebuilt["value"].values)
     np.testing.assert_array_equal(updated["release_date"].values, rebuilt["release_date"].values)
+
+
+def test_an_update_widens_a_store_whose_staleness_column_is_not_a_variable(tmp_path):
+    # The 10-K changes panel's shape: staleness is measured from release_date,
+    # which the panel does not show. 202's first row comes in the update.
+    spec = ReleaseSpec(variables={"value": {"unit": "USD"}})
+    _releases(tmp_path / "updated", ROWS, DAYS[:4], spec).update()
+    dataset = _releases(tmp_path / "updated", ROWS, spec=spec)
+    store = dataset.config.zarr_file_path
+    # Over the stored days 101 shows its 2024-01-03 row and 202 nothing, so 202 widens the store.
+    assert dataset._added_symbols_with_raw_history([101, 202], DAYS[0], DAYS[3]) == {"101": 3}
+    assert dataset._resolve_new_listing_strategy([202], [], store, "timestamp") == "widen"
+    dataset.update()
+    updated = _releases(tmp_path / "updated", ROWS, spec=spec).panel("2024-01-01", "2024-12-31").load()
+    _releases(tmp_path / "rebuilt", ROWS, spec=spec).update()
+    rebuilt = _releases(tmp_path / "rebuilt", ROWS, spec=spec).panel("2024-01-01", "2024-12-31").load()
+
+    assert list(updated.data_vars) == ["value"]
+    assert updated["symbol"].values.tolist() == [101, 202]
+    np.testing.assert_array_equal(updated["value"].values, rebuilt["value"].values)
 
 
 def test_an_empty_window_is_refused_with_the_datasets_words(tmp_path):
