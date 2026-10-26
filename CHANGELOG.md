@@ -6,6 +6,19 @@ compatibility shims or config migrations.
 
 ## Unreleased
 
+### Added
+
+- Volume-increment regression factor (`quantlab.factor.predefined.dvol_regression`),
+  contributed by @ Jiafan (Gavin) Liu. `DvolRegressionStats` (config `DvolRegressionStatsConfig`) regresses, for every symbol and
+  session of one-minute bars, the minute return on the current and five lagged volume
+  increments and emits the intercept's t-statistic, the F statistic and the row count on the
+  session's last bar; `DvolRegressionFactors` (config `DvolRegressionConfig`) turns its daily
+  store into the 20-session `flipped_intercept_t` factor, optionally as market-wide
+  percentile ranks (`ranked`) for `NeutralizedFactor`.
+  `examples/sharadar_us_equity/dvol_regression_factors.py` builds the whole-market stores, raw
+  and industry-and-size-neutral, and `dvol_regression_us3000_report.py` reports them on the
+  point-in-time us3000, every session and at month-ends.
+
 ### Changed
 
 - `cache_dir` moves off `ConstituentDatasetConfig` onto a new subclass,

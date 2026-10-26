@@ -67,3 +67,42 @@ QUANTLAB_DATA_DIR=/data/quantlab uv run python examples/sharadar_us_equity/sp500
 ```
 
 On the training server the whole script took about 9 minutes with a peak of about 38 GB of memory, most of it the factor-model backtest computing `BarraStyle` over its window; that was measured before the backtest read the exposures from their store (#230). Running it again gives the same backtests.
+
+## The volume-increment regression factor
+
+`dvol_regression_factors.py` builds the volume-increment regression factor of @ Jiafan (Gavin) Liu on every SEP domestic common stock, in three stores under `~/quantlab_data/factors/market/`, each in its own folder beside a README.md and component.json:
+
+| Store | Factor | Outputs | From |
+| --- | --- | --- | --- |
+| `dvol_regression_stats` | `DvolRegressionStats` of the one-minute Trade bars, one value per session | `t_intercept`, `f_stat` and `n_obs` of each session's OLS of minute returns on the current and five lagged volume increments | 2016-10-11 |
+| `dvol_regression` | `DvolRegressionFactors` | `flipped_intercept_t`: the absolute intercept t-statistic, negative when `f_stat` is below the day's market mean, averaged over 20 sessions (at least 10 present); lower is better | 2016-10-11 |
+| `dvol_regression_neutral` | `NeutralizedFactor` against industry and size | the factor's market-wide rank (`ranked`), its residual on Fama-French 48 industry dummies and log market cap each day, z-scored | 2016-10-11 |
+
+It reads the shared stores (`QUANTLAB_DATA_DIR`) and writes nothing there. The definitions and the implementation choices are in the docstring of `quantlab/factor/predefined/dvol_regression.py`. Running the script again extends each store to `END`; `--smoke START END` computes the statistics over a short range and prints their coverage without writing.
+
+```bash
+QUANTLAB_DATA_DIR=/data/quantlab uv run python examples/sharadar_us_equity/dvol_regression_factors.py
+```
+
+`dvol_regression_us3000_report.py` then reports a store on the point-in-time us3000: read with `MembershipMaskedFactor(RosterFactor(...))`, against the 1-, 5- and 21-bar open-to-open returns of the shared label recipes masked with `MembershipMaskedLabel`, in one `FactorAnalyzer` run over every session from 2017-01-03 to 2026-09-18, and a second run on the last session of each calendar month against the 21-bar return (`month_end/`), a monthly rebalance. It writes the standard report tables and figures under `~/quantlab_data/runs/dvol_regression_us3000/`, in `report/` or, with `--variant neutral`, `report_neutral/`.
+
+```bash
+QUANTLAB_DATA_DIR=/data/quantlab uv run python examples/sharadar_us_equity/dvol_regression_us3000_report.py --variant neutral
+```
+
+On the training server (2026-10-27, through 2026-10-22, 8734 roster symbols) the three stores took under three minutes: `dvol_regression_stats` 154 s in 12 workers, `dvol_regression` 2 s and `dvol_regression_neutral` 11 s. Each store equals a fresh `compute()` of a range inside it, NaN positions included. Each report took about 33 s.
+
+`flipped_intercept_t` on the us3000, 2017-01-03 to 2026-09-18 (rank IC, its Newey-West t-statistic and the share of periods with a positive IC; the long-short book is the top quintile minus the bottom, so this lower-is-better factor shows a negative return):
+
+| Variant | Sample | Horizon (bars) | Rank IC | NW t | IC > 0 | Long-short return a year | Sharpe | Top-quintile turnover |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| raw | every session | 1 | -0.009 | -7.4 | 44% | -4.5% | -0.48 | 12% |
+| raw | every session | 5 | -0.016 | -6.2 | 42% | -3.8% | -0.99 | 12% |
+| raw | every session | 21 | -0.024 | -5.2 | 37% | -3.0% | -1.58 | 12% |
+| raw | month-end | 21 | -0.021 | -3.6 | 35% | -3.1% | -0.34 | 58% |
+| neutral | every session | 1 | -0.003 | -2.2 | 49% | -4.3% | -0.47 | 14% |
+| neutral | every session | 5 | -0.004 | -1.7 | 48% | -2.3% | -0.63 | 14% |
+| neutral | every session | 21 | -0.007 | -1.4 | 48% | -1.0% | -0.59 | 14% |
+| neutral | month-end | 21 | -0.005 | -0.9 | 49% | -1.7% | -0.18 | 64% |
+
+The bottom-minus-top book made about 3% a year, with a Sharpe of 1.6 on every session at the 21-bar horizon and 0.3 at month-ends, where the top quintile turns over by 58% a month. Neutralized against industry and size, the rank IC falls to about a quarter and its t-statistic below 1.5 at the 21-bar horizon, so most of the raw signal is explained by the size and industry exposures of the ranks.

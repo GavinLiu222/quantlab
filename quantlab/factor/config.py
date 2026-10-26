@@ -404,3 +404,62 @@ class IntradayCompositeConfig(BaseFactorConfig):
     composites: dict = field(default_factory=dict)
     #: Threads used by the KunQuant executor.
     njobs: int = 128
+
+
+@dataclass(kw_only=True, frozen=True)
+class DvolRegressionStatsConfig(BaseFactorConfig):
+    """Config of ``quantlab.factor.predefined.dvol_regression.DvolRegressionStats``.
+
+    ``dataset`` holds one-minute bars with ``close`` and ``volume``. A
+    session's regression reads nothing outside the session, so
+    ``warmup_bars`` is 0 and anything else is refused. ``min_traded_bars``
+    is a robustness guard: a session with fewer bars of positive volume gets
+    NaN statistics.
+
+    Examples
+    --------
+    With ``minute`` a one-minute bar dataset:
+
+    >>> cfg = DvolRegressionStatsConfig(dataset=minute, file_path="factors/dvol_regression_stats.zarr")
+    >>> cfg.warmup_bars, cfg.min_traded_bars
+    (0, 60)
+    """
+
+    #: A session's regression reads nothing outside the session; anything but 0 is refused.
+    warmup_bars: int = 0
+    #: Fewest bars with a positive volume a session needs for its statistics.
+    min_traded_bars: int = 60
+
+
+@dataclass(kw_only=True, frozen=True)
+class DvolRegressionConfig(BaseFactorConfig):
+    """Config of ``quantlab.factor.predefined.dvol_regression.DvolRegressionFactors``.
+
+    ``factor`` is the factor whose stored daily statistics are read, a
+    ``DvolRegressionStats`` resampled to ``"1d"``; it keeps its own config
+    and store, which must cover the range asked for. ``window`` is the
+    sessions the factor's mean looks back over, ``min_count`` the fewest
+    present sessions it needs. ``dataset`` is filled with the wrapped
+    factor's dataset.
+
+    Examples
+    --------
+    With ``stats`` a ``DvolRegressionStats`` resampled to ``"1d"``:
+
+    >>> cfg = DvolRegressionConfig(factor=stats, file_path="factors/dvol_regression.zarr")
+    >>> cfg.warmup_bars, cfg.window, cfg.min_count, cfg.ranked
+    (0, 20, 10, False)
+    """
+
+    #: The window's history is read from the wrapped store; anything but 0 is refused.
+    warmup_bars: int = 0
+    #: Filled with the wrapped factor's dataset by the factor's config setter.
+    dataset: "MarketDataset | None" = component(default=None)
+    #: The factor whose stored statistics are read.
+    factor: "Factor" = component()
+    #: Sessions the factor's mean looks back over, the current one included.
+    window: int = 20
+    #: Fewest present sessions a window needs; fewer gives NaN.
+    min_count: int = 10
+    #: Emit the factor's cross-sectional percentile rank, the input ``NeutralizedFactor`` should wrap.
+    ranked: bool = False

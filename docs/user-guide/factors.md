@@ -197,6 +197,7 @@ A model chooses between computing and reading with `factor_data_strategy` and
 | {py:class}`~quantlab.factor.predefined.market.MarketFeatures` | xarray | 21 return and amount features per index or ETF series, the same for every symbol with a bar |
 | {py:class}`~quantlab.factor.predefined.benchmark_beta.BenchmarkBeta` | xarray | each symbol's rolling OLS beta on a single-symbol benchmark |
 | {py:class}`~quantlab.factor.predefined.membership_cap_weight.MembershipCapWeight` | xarray | an index's capitalization weights from point-in-time membership |
+| {py:class}`~quantlab.factor.predefined.dvol_regression.DvolRegressionStats`, {py:class}`~quantlab.factor.predefined.dvol_regression.DvolRegressionFactors` | xarray | each session's OLS of minute returns on the current and five lagged volume increments (intercept t-statistic, F, row count), and the 20-session mean of the intercept t-statistic sign-flipped by the day's market mean F |
 
 Each class docstring shows its config and the columns it reads. A few notes:
 
@@ -235,6 +236,19 @@ docstring defines each and cites its paper. Selecting a subset with
 layer owns point-in-time correctness: accounting fields become visible only
 after their filing is public, and the earnings columns freeze the actual EPS,
 the consensus before the announcement and the scale price at the event.
+
+### Volume-increment regression factor
+
+`DvolRegressionStats` and `DvolRegressionFactors`, contributed by
+@ Jiafan (Gavin) Liu, compute `flipped_intercept_t` from one-minute bars:
+each session's OLS of the minute return on the current and five lagged
+volume increments gives the intercept's t-statistic and the F statistic of
+the six slopes, and the factor is the absolute intercept t-statistic,
+negated when the session's F is below the day's market mean, averaged over
+20 sessions. A large value marks sessions where the volume flow or noise
+dominates the price, a very negative one a steady drift the volume flow does
+not explain; lower is better. The module docstring defines the regression,
+the guards and the scaling, all choices of the implementation.
 
 ## Compute on the whole market, read on a universe
 
