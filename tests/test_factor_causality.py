@@ -15,8 +15,8 @@ identical; the outputs after t must change, or the scrambling tested nothing.
 The scrambled inputs are every Zarr store and CSV file the factor's config
 names, at any depth, but the factor's own store: the datasets' stores, the
 store of a wrapped factor it reads (``IntradayAverage``,
-``IntradayComposite``), the Fama-French CSV of ``ResidualMomentumFF3``'s CSV
-mode. The config rather than ``walk_store_uses`` finds them, since a panel
+``IntradayComposite``, ``PriceVolumeIntradayAlpha``), the Fama-French CSV of
+``ResidualMomentumFF3``'s CSV mode and of ``PriceVolumeDailyAlpha``. The config rather than ``walk_store_uses`` finds them, since a panel
 held in memory (``FrameDataset``) declares no store path. The stores are scrambled on disk, not in a reader, so a factor that
 reads a store some other way than ``dataset.panel`` is caught too. The factor
 is rebuilt from its config with the copies' paths; the fixtures stay as they
@@ -49,6 +49,8 @@ import tests.test_fundamental_alpha as fundamental_fixture
 import tests.test_intraday_composite as composite_fixture
 import tests.test_intraday_factor as intraday_fixture
 import tests.test_membership_masked_factor as masked_fixture
+import tests.test_price_volume_daily as price_volume_daily_fixture
+import tests.test_price_volume_intraday as price_volume_intraday_fixture
 import tests.test_short_horizon as short_fixture
 from quantlab.core.component import rebuild
 from quantlab.dataset.memory import FrameDataset
@@ -59,6 +61,7 @@ from quantlab.factor.config import (
     IntradayAverageConfig,
     IntradayCompositeConfig,
     PolarsFactorConfig,
+    PriceVolumeIntradayConfig,
 )
 from quantlab.factor.polars import FactorPolars
 from quantlab.factor.predefined.alternative_alpha import (
@@ -78,6 +81,15 @@ from quantlab.factor.predefined.intraday import (
     IntradayAverage,
     IntradayComposite,
     IntradayStats,
+)
+from quantlab.factor.predefined.price_volume_daily import (
+    PRICE_VOLUME_DAILY_COLUMNS,
+    PriceVolumeDailyAlpha,
+)
+from quantlab.factor.predefined.price_volume_intraday import (
+    PRICE_VOLUME_INTRADAY_COLUMNS,
+    PriceVolumeIntradayAlpha,
+    PriceVolumeIntradayStats,
 )
 from quantlab.factor.predefined.short_horizon import (
     SHORT_HORIZON_COLUMNS,
@@ -276,6 +288,52 @@ def _intraday_composite(request):
     return make, "2024-01-22", "2024-03-22"
 
 
+def _price_volume_daily(request):
+    """Every daily output, ``IDIO_VOL_FF3`` included: the Fama-French CSV is scrambled too."""
+    folder = request.getfixturevalue("root") / "price_volume_daily"
+    store = FrameDataset(price_volume_daily_fixture._panel()).to_zarr(folder / "prices.zarr")
+    rng = np.random.default_rng(11)
+    dates = pd.bdate_range("2021-12-01", price_volume_daily_fixture.END)
+    pd.DataFrame({
+        "date": dates.strftime("%Y-%m-%d"),
+        "mkt_rf": rng.normal(0, 0.01, len(dates)), "smb": rng.normal(0, 0.005, len(dates)),
+        "hml": rng.normal(0, 0.005, len(dates)), "risk_free": np.full(len(dates), 1e-4),
+    }).to_csv(folder / "ff3_daily.csv", index=False)
+
+    def make(path: Path) -> Factor:
+        return PriceVolumeDailyAlpha(FactorConfig(
+            warmup_bars=0, dataset=store, mode="batch", data_columns=PRICE_VOLUME_DAILY_COLUMNS, njobs=2,
+            kwargs={"fama_french_csv": str(folder / "ff3_daily.csv")}, file_path=str(path),
+        ))
+    return make, price_volume_daily_fixture.START, price_volume_daily_fixture.END
+
+
+def _price_volume_intraday_stats(request):
+    store = FrameDataset(price_volume_intraday_fixture._minute_panel()).to_zarr(
+        request.getfixturevalue("root") / "price_volume_intraday_stats" / "minutes.zarr")
+
+    def make(path: Path) -> Factor:
+        return PriceVolumeIntradayStats(FactorConfig(
+            warmup_bars=390, dataset=store, mode="batch", data_columns=PRICE_VOLUME_INTRADAY_COLUMNS,
+            njobs=2, file_path=str(path),
+        ))
+    return make, "2024-11-26", "2024-11-29"
+
+
+def _price_volume_intraday_alpha(request):
+    folder = request.getfixturevalue("root") / "price_volume_intraday_alpha"
+    source = price_volume_intraday_fixture.Identity(FactorConfig(
+        warmup_bars=0, dataset=_daily_close("price_volume_intraday_alpha", request), mode="batch",
+        data_columns=("close",), file_path=str(folder / "source.zarr"), njobs=2,
+    )).build("2024-01-01", "2024-03-22")
+
+    def make(path: Path) -> Factor:
+        return PriceVolumeIntradayAlpha(PriceVolumeIntradayConfig(
+            factor=source, windows=(1, 5, 10), njobs=2, file_path=str(path),
+        ))
+    return make, "2024-01-15", "2024-03-22"
+
+
 def _membership_cap_weight(request):
     folder = request.getfixturevalue("root") / "cap_weight"
     folder.mkdir(exist_ok=True)
@@ -309,6 +367,9 @@ _MORE_CASES: dict = {
     "IntradayAverage": _intraday_average,
     "IntradayComposite": _intraday_composite,
     "MembershipCapWeight": _membership_cap_weight,
+    "PriceVolumeDailyAlpha": _price_volume_daily,
+    "PriceVolumeIntradayStats": _price_volume_intraday_stats,
+    "PriceVolumeIntradayAlpha": _price_volume_intraday_alpha,
 }
 _ALL_CASES = {**_CASES, **_MORE_CASES}
 
