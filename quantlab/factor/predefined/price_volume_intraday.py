@@ -1,5 +1,7 @@
 """The 90 minute-bar factors of the price-volume factor list: 15 session statistics, each averaged over 6 horizons.
 
+Author: @Jiafan (Gavin) Liu
+
 ``PriceVolumeIntradayStats`` reads one-minute bars (the Massive Trade bars, on the
 permaticker axis) and computes, at every bar, a statistic of the session so
 far, as ``intraday.IntradayStats`` does and with its session inputs

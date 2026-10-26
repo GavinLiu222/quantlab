@@ -34,6 +34,8 @@ See [Factor risk model](../../docs/dev/risk-model.md) for the method and the num
 
 ## The price-volume factors
 
+Author: @Jiafan (Gavin) Liu
+
 `price_volume_factors.py` builds the 192 factors of the price-volume factor list on every SEP domestic common stock, in four stores (and three size-neutral ones) under `PRICE_VOLUME_FACTOR_DIR` (default `~/quantlab_data/factors/market/`), each in its own folder beside a README.md and component.json:
 
 | Store | Factor | Outputs | From |

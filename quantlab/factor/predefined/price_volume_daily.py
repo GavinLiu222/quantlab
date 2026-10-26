@@ -1,5 +1,7 @@
 """The 102 daily factors of the price-volume factor list, in one KunQuant graph.
 
+Author: @Jiafan (Gavin) Liu
+
 The list names 20 families of daily factors, each over a few horizons. They
 are computed here as the list defines them, unsigned: a reversal factor is
 the return itself, not its negative. ``r`` is the close-to-close return of
@@ -44,8 +46,9 @@ adjusted ``adjOpen`` to ``adjVolume``.
      - mean over ``N`` bars of ``(r - m)^2``, ``m`` the equal-weight mean
        ``r`` of every symbol on the bar
    * - ``ILLIQ_<N>D``, ``ILLIQ_POS_<N>D``, ``ILLIQ_NEG_<N>D``
-     - log of the ``N``-bar mean of ``|r| / (close * volume)`` (Amihud 2002);
-       ``POS`` with the negative ``r`` set to 0, ``NEG`` the positive
+     - log of the ``N``-bar mean of ``|r| / (close * volume)`` (Amihud 2002),
+       NaN where that mean is 0; ``POS`` counts only the positive ``r``,
+       ``NEG`` only the negative ones (by size), the others as 0
    * - ``TRVP<N>``, ``DTRVP<N>``, ``VWPRD<N>``, ``VWSRD<N>``, ``VIWSR<N>``,
        ``UDBVR<N>``, ``VRC<N>``, ``VSR<N>``
      - the list's Qlib expressions with ``%d = N``; see ``_qlib_family``
@@ -70,8 +73,8 @@ does not cover is NaN.
 
 ``RANK_MOM`` and ``ATTENTION``, and every output under ``kwargs={"ranked":
 True}``, are taken over every symbol of the panel, so build it on the whole
-market and read it on a roster. The factor is batch
-only; the graph runs in double precision.
+market and read it on a roster. The factor is batch only; the graph runs in
+double precision.
 
 References
 ----------
