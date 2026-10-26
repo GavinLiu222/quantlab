@@ -5,16 +5,18 @@ at a time, each chunk warmed up with the factor's own ``warmup_bars``. That only
 reproduces the whole build when every operator of the factor looks back at
 most ``warmup_bars`` bars: an operator with unbounded memory (a running
 total, an exponential average, an expanding statistic) gives a different
-value after a chunk boundary. Here every factor class under
-``quantlab/factor/predefined/`` (except the views, which have no
-store) is built twice on two store paths, once whole and once through
+value after a chunk boundary. Here every factor class of ``_CASES``
+below (not every class under ``quantlab/factor/predefined/``; the views
+have no store, and ``tests/test_factor_causality.py`` keeps its own list of
+every other class) is built twice on two store paths, once whole and once through
 ``ChunkedBuilder(factor, granularity="month")``, with
 ALL its outputs and the warm-up its docstring asks for, and the two stores
 are compared under the dtype tolerance of ``tests/test_chunked_builder.py``.
 
 A chunk reads its inputs only up to its own end, so this also catches a
-factor that looks ahead across a chunk boundary; the direct check, bar by
-bar and on every input store, is ``tests/test_factor_causality.py``.
+factor that looks ahead across a chunk boundary; the direct check, at a
+bar and on every input store, of every shipped factor, is
+``tests/test_factor_causality.py``.
 
 Each panel has several months after the warm-up, so the chunked build is
 at least three chunks; the panels carry a late listing, a delisting and a
