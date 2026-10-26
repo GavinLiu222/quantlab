@@ -652,13 +652,7 @@ optimum rather than the exact one: on us3000 its books shared 83% of the exact r
 on average, at the same volatility. A us3000-shaped problem of 67 daily rebalances took 1.0 s
 against a backtest run's 532 s.
 
-## Examples
-
-`examples/sharadar_us_equity/sp500_xgb_mvo.py` runs the S&P 500 pipeline into
-`MeanVarianceOptimizer`, once with `LedoitWolfEstimator` and once with
-`FactorRiskStoreEstimator` over the USE4 model, and compares the two.
-`examples/sharadar_us_equity/us3000_h1_mvo.py` is a daily us3000 mean-variance recipe with
-exposure bounds on the Barra styles.
+## Extending
 
 To write a rule or a covariance estimator of your own, including rules built on the
 mean-variance extension points, see [Extending quantlab](../dev/extending.md).
