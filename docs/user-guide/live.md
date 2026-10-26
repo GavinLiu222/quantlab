@@ -75,7 +75,7 @@ crash leaves a row without a record, never a record without a row.
 import xarray as xr
 from quantlab.runs.live_predictions import LivePredictionStore
 
-store = LivePredictionStore("/data/quantlab/live/sp500_xgb_mvo/live_predictions.zarr")
+store = LivePredictionStore("/data/quantlab/live/my_strategy/live_predictions.zarr")
 store.has("2026-10-07")                 # True once the job has run
 row = store.row("2026-10-07")           # Dataset: ret_5 on (symbol,)
 store.record("2026-10-07")["checkpoint"]
@@ -93,7 +93,7 @@ from quantlab.backtest.live import predict_live_bar
 
 done = predict_live_bar(
     run_dir,
-    "/data/quantlab/live/sp500_xgb_mvo/live_predictions.zarr",
+    "/data/quantlab/live/my_strategy/live_predictions.zarr",
     may_lag=["/data/quantlab/market/fred/fred_dtb3_1d/fred_dtb3_1d.zarr"],
 )
 done.timestamp, list(done.row.data_vars)

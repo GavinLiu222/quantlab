@@ -4,7 +4,7 @@ Two scripts on Sharadar data ([docs/user-guide/sharadar.md](../../docs/user-guid
 
 ## Prerequisites
 
-Download the Sharadar tables and build the stores once (this needs a Sharadar subscription and `SHARADAR_API_KEY`): `refresh_raw_tier` fills the raw tier and `quantlab.dataset.sharadar.stores.build_stores` builds the stores from it, as in [Keeping the stores current](../../docs/user-guide/sharadar.md#keeping-the-stores-current). Point the scripts at that root: `QUANTLAB_DATA_DIR=/data/quantlab`. Every store sits in its own folder, `<category>/<group>/<stem>/<stem>.zarr`, beside a short `README.md`.
+Download the Sharadar tables and build the stores once (this needs a Sharadar subscription and `SHARADAR_API_KEY`). The first download is a bulk pull of every table with `SharadarClient.bulk_table` ([The raw tier](../../docs/user-guide/sharadar.md#the-raw-tier)); `quantlab.dataset.sharadar.stores.build_stores` then builds the stores from it. Afterwards `refresh_raw_tier` and `update_stores` keep them current ([Keeping the stores current](../../docs/user-guide/sharadar.md#keeping-the-stores-current)); `refresh_raw_tier` needs the bulk pull and refuses a table that has none. Point the scripts at that root: `QUANTLAB_DATA_DIR=/data/quantlab`. Every store sits in its own folder, `<category>/<group>/<stem>/<stem>.zarr`, beside a short `README.md`.
 
 The data is licensed for personal use: the data root must be outside the repository (the scripts refuse one inside it).
 
