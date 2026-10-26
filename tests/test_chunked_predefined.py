@@ -12,6 +12,10 @@ store) is built twice on two store paths, once whole and once through
 ALL its outputs and the warm-up its docstring asks for, and the two stores
 are compared under the dtype tolerance of ``tests/test_chunked_builder.py``.
 
+A chunk reads its inputs only up to its own end, so this also catches a
+factor that looks ahead across a chunk boundary; the direct check, bar by
+bar and on every input store, is ``tests/test_factor_causality.py``.
+
 Each panel has several months after the warm-up, so the chunked build is
 at least three chunks; the panels carry a late listing, a delisting and a
 missing bar so NaN handling across a boundary is exercised too.
