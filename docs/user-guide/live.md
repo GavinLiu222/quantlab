@@ -41,14 +41,15 @@ holds the checkpoint.
    under a {py:class}`~quantlab.runs.record.DataRecorder`; the row and its record are
    appended.
 
-For the S&P 500 mean-variance run over the USE4 risk model
-(`examples/sharadar_us_equity/sp500_xgb_mvo.py` with `FactorRiskStoreEstimator`):
+For an S&P 500 mean-variance run over the USE4 risk model (`FactorRiskStoreEstimator`), whose
+prices are SEP on the S&P 500 roster and whose alphas are the whole-market stores read on it
+(`RosterFactor`):
 
 | Store (each `<stem>/<stem>.zarr` under the data root) | How |
 |-------|-----|
-| `market/sharadar/`: `sharadar_sp500_1d` (price dataset), `sharadar_sep_1d`, `sharadar_daily_1d`, `sharadar_sf1_art`, `sharadar_sf1_fiscal_years`, `sharadar_industry_1d`, `sharadar_share_class_1d`; `universe/sharadar/sharadar_sp500_membership` | must hold t |
+| `market/sharadar/`: `sharadar_sep_1d` (the price dataset's), `sharadar_daily_1d`, `sharadar_sf1_art`, `sharadar_sf1_fiscal_years`, `sharadar_industry_1d`, `sharadar_share_class_1d`; `universe/sharadar/sharadar_sp500_membership` | must hold t |
 | `market/fred/fred_dtb3_1d` | `may_lag` |
-| `factors/sp500/alpha101`, `factors/sp500/alpha158` | `Factor.extend` |
+| `factors/market/alpha101`, `factors/market/alpha158` (read through `RosterFactor`, which owns no store) | must hold t |
 | `factors/market/barra_style` | `Factor.extend` |
 | `risk/use4/regression`, then `risk/use4/estimate` | `RiskStore.extend` |
 

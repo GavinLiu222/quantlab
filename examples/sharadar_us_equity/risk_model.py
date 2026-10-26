@@ -13,8 +13,8 @@ as JSON and plotted.
 
 Every setting is a constant or a quantlab config object at the top of the
 file; edit them and run ``uv run python examples/sharadar_us_equity/risk_model.py``
-or step through the ``# %%`` cells. Prerequisite: the stores of
-``scripts/sharadar/download.py`` and the exposures of ``barra_style.py``
+or step through the ``# %%`` cells. Prerequisite: the Sharadar stores of
+``quantlab.dataset.sharadar.stores.build_stores`` and the exposures of ``barra_style.py``
 (see README.md). The data is licensed for personal use, so the data root must
 be outside the repository.
 """

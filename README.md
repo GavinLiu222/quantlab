@@ -223,10 +223,10 @@ uv run python examples/quickstart.py
 ```
 
 [examples/](https://github.com/ZhaorongDai/quantlab/blob/main/examples/README.md) has one runnable script per topic (building panels, training
-models, backtesting, data sources) and, for point-in-time research,
-[`wrds_us_equity/`](https://github.com/ZhaorongDai/quantlab/blob/main/examples/wrds_us_equity/README.md) (CRSP via WRDS) and
-[`sharadar_us_equity/`](https://github.com/ZhaorongDai/quantlab/blob/main/examples/sharadar_us_equity/README.md) (Sharadar). The factor report
-below is on Sharadar data, the backtest report from the WRDS examples.
+models, backtesting, data sources), a pipeline on free Yahoo Finance data, and
+[`sharadar_us_equity/`](https://github.com/ZhaorongDai/quantlab/blob/main/examples/sharadar_us_equity/README.md), the Barra style exposures
+and USE4 factor risk model on Sharadar data. The factor report below is on Sharadar data, the
+backtest report from an earlier CRSP example.
 
 ### Factor report
 
@@ -248,7 +248,7 @@ The factor is computed on the whole market and read on the members of the day
 
 ### Backtest report
 
-This is `sp500_xgb_td.py`: a long-only top-50 portfolio on the point-in-time S&P 500,
+This is a long-only top-50 portfolio on the point-in-time S&P 500 (CRSP daily data),
 rebalanced every 5 bars from an XGBoost model trained on 2012 to 2019, backtested out of
 sample on 2020 to 2024 against buy-and-hold SPY. Over this window the strategy trails SPY;
 the figure is here to show the report, not a result to copy.

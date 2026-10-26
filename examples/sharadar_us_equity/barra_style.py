@@ -10,8 +10,8 @@ forward open-to-open return.
 
 Every setting is a constant or a quantlab config object at the top of the
 file; edit them and run ``uv run python examples/sharadar_us_equity/barra_style.py``
-or step through the ``# %%`` cells. Prerequisite: the stores written by
-``scripts/sharadar/download.py`` (see README.md). FRED needs no key; the
+or step through the ``# %%`` cells. Prerequisite: the Sharadar stores that
+``quantlab.dataset.sharadar.stores.build_stores`` writes (see README.md). FRED needs no key; the
 first cell downloads DTB3. The data is licensed for personal use, so the
 data root must be outside the repository.
 """
