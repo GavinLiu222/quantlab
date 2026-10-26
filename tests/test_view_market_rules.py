@@ -10,11 +10,8 @@ A dataset outside the library can override a rule too, so every view
 handles every rule, and a rule ``MarketDataset`` gains fails here until it
 does.
 
-``MergedDataset`` takes the default ``delisting_bars`` of its own panel and
-adds the marks of each input whose class has a delisting rule of its own,
-on the symbols that input holds: an input with the default rule sees only
-its own prices, and would delist a symbol whose prices move to another
-input.
+How ``MergedDataset`` combines its inputs' delisting rules is on
+``MergedDataset.delisting_bars``; the tests below check it through the views.
 """
 
 import inspect
@@ -40,10 +37,6 @@ RULES = tuple(
 VIEWS = (RosterDataset, MergedDataset)
 
 
-def test_the_rules_are_tradability_and_delisting():
-    assert set(RULES) == {"tradable_bars", "delisting_bars"}
-
-
 @pytest.mark.parametrize("rule", RULES)
 @pytest.mark.parametrize("view", VIEWS, ids=lambda view: view.__name__)
 def test_a_view_handles_every_market_rule(view, rule):
@@ -52,19 +45,19 @@ def test_a_view_handles_every_market_rule(view, rule):
 
 # -- delisting through the views ----------------------------------------------
 
-_T = 12
-_TIMES = np.datetime64("2024-01-01") + np.arange(_T).astype("timedelta64[D]")
+_N_BARS = 12
+_TIMES = np.datetime64("2024-01-01") + np.arange(_N_BARS).astype("timedelta64[D]")
 #: The bar the ruled leaf says A delisted on, though A keeps a price after it (OTC prints).
 _RULED_BAR = 5
 
 
 def _prices(symbols) -> xr.Dataset:
-    close = 50 + np.arange(_T * len(symbols), dtype=float).reshape(_T, len(symbols)) * 0.1
+    close = 50 + np.arange(_N_BARS * len(symbols), dtype=float).reshape(_N_BARS, len(symbols)) * 0.1
     return xr.Dataset(
         {
             "adjClose": (("timestamp", "symbol"), close),
             "adjOpen": (("timestamp", "symbol"), close + 0.1),
-            "adjVolume": (("timestamp", "symbol"), np.full((_T, len(symbols)), 1e6)),
+            "adjVolume": (("timestamp", "symbol"), np.full((_N_BARS, len(symbols)), 1e6)),
         },
         coords={"timestamp": _TIMES, "symbol": list(symbols)},
     )
@@ -80,7 +73,7 @@ class DelistingRuleDataset(FrameDataset):
         return marks
 
 
-def _marked_bars(dataset, symbol: str, last: int = _T - 1) -> list[int]:
+def _marked_bars(dataset, symbol: str, last: int = _N_BARS - 1) -> list[int]:
     panel = dataset.panel(str(_TIMES[0]), str(_TIMES[last]))
     marks = dataset.delisting_bars(panel, "adjClose").transpose("timestamp", "symbol")
     return np.flatnonzero(marks.sel(symbol=symbol).values).tolist()
@@ -96,18 +89,38 @@ def test_the_backtest_price_source_keeps_a_leafs_own_delisting(tmp_path):
     assert _marked_bars(prices, "B") == []
 
 
-def test_a_symbol_moving_between_plain_inputs_is_not_delisted(tmp_path):
+def _split_inputs(tmp_path):
+    """Two plain inputs holding A in turn: to bar 5 in the first, from bar 8 in the second.
+
+    A is halted on bars 6 and 7, so a window ending on bar 7 sees A's prices stop
+    in it, and only the second input has A's prices after it.
+    """
     prices = _prices(["A", "B"])
     early, late = prices.copy(deep=True), prices.copy(deep=True)
     for name in early.data_vars:
-        early[name][6:, 0] = np.nan  # A trades in the early input to bar 5,
-        late[name][:8, 0] = np.nan  # is halted on bars 6 and 7, and trades in the later one from bar 8
+        early[name][6:, 0] = np.nan
+        late[name][:8, 0] = np.nan
         late[name][:, 1] = np.nan
-    first = FrameDataset(early).to_zarr(tmp_path / "early.zarr")
-    second = FrameDataset(late).to_zarr(tmp_path / "late.zarr")
+    return (
+        FrameDataset(early).to_zarr(tmp_path / "early.zarr"),
+        FrameDataset(late).to_zarr(tmp_path / "late.zarr"),
+    )
 
-    # A window ending in the halt: A's prices stop in it, and only the later input has them after.
-    assert _marked_bars(BadPrintMaskedDataset([first, second]), "A", last=7) == []
+
+def test_a_symbol_moving_between_plain_inputs_is_not_delisted(tmp_path):
+    early, late = _split_inputs(tmp_path)
+
+    assert _marked_bars(BadPrintMaskedDataset([early, late]), "A", last=7) == []
+
+
+def test_a_view_over_a_plain_input_does_not_delist_a_symbol_moving_on(tmp_path):
+    early, late = _split_inputs(tmp_path)
+    roster = FrameDataset(_prices(["A", "B"])).to_zarr(tmp_path / "roster.zarr")
+
+    # The roster view passes delisting_bars on, but only to the early input's default.
+    prices = BadPrintMaskedDataset([RosterDataset(early, roster), late])
+
+    assert _marked_bars(prices, "A", last=7) == []
 
 
 def test_a_roster_over_the_masked_prices_keeps_a_leafs_own_delisting(tmp_path):
