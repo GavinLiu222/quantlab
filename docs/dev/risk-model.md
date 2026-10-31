@@ -401,8 +401,8 @@ exposures and the risk model read their prices through
 
 ## Mean-variance with Ledoit-Wolf and with the factor model
 
-`examples/sharadar_us_equity/sp500_xgb_mvo.py` backtests one return model
-twice over 2020-2024 on the point-in-time S&P 500. The model is XGBoost on
+A script, since removed with the S&P 500 roster price store it read,
+backtested one return model twice over 2020-2024 on the point-in-time S&P 500. The model is XGBoost on
 Alpha101 and Alpha158, predicting the 5-bar return and trained on
 2012-2019. Both backtests use the same `MeanVarianceOptimizer` (Grinold
 expected return with `ic=0.02`, risk aversion 10, turnover penalty 0.001,
@@ -415,7 +415,7 @@ failed a rebalance. Both backtests also pass `Use4RiskModel` as their
 the training server the factor-model backtest took 5.5 minutes, most of it
 computing `BarraStyle` over the window (measured when the backtest still
 computed the exposures instead of reading their store), and the Ledoit-Wolf one 3.1
-minutes; the whole script takes 11 minutes.
+minutes; the whole script took 11 minutes.
 
 | | Ledoit-Wolf | USE4 factor model |
 |---|---|---|

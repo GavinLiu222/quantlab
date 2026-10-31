@@ -513,13 +513,14 @@ class ReleasePanelDataset(RawDataset):
         """Count the cells each added permaticker shows between ``start`` and ``end``.
 
         A permaticker whose first row is available after the store's last
-        day shows nothing in it, so it is a new one and widens the store.
+        day shows nothing in it, so it is a new one and widens the store. A
+        cell counts when any variable shows a value: the staleness column
+        (``spec.stamp``) need not be one of the panel's variables.
         """
         if not added:
             return {}
-        stamp = self._spec().stamp
         window = self._raw_data_to_xr_window(start, end, symbols=[int(s) for s in added])
-        counts = window[stamp].notnull().sum("timestamp")
+        counts = window.notnull().to_dataarray().any("variable").sum("timestamp")
         return {
             str(symbol): int(count)
             for symbol, count in zip(window["symbol"].values.tolist(), counts.values.tolist())

@@ -1532,6 +1532,20 @@ class MarketDataset(BaseDataset):
             },
         )
 
+    def _own_delisting_symbols(self) -> list:
+        """Return the symbols this dataset delists by a rule of its own, not the default.
+
+        All of its stored symbols when its class overrides
+        ``delisting_bars``, else none. A view that passes the rule on
+        answers for its inputs instead (``RosterDataset``,
+        ``MergedDataset``), so a view over a dataset with the default rule
+        declares none; ``MergedDataset.delisting_bars`` asks an input only
+        on these symbols.
+        """
+        if type(self).delisting_bars is MarketDataset.delisting_bars:
+            return []
+        return self.stored_symbols()
+
     def _priced_after(self, end: pd.Timestamp, column: str, symbols) -> np.ndarray:
         """Whether each of ``symbols`` has a valid ``column`` price after ``end`` in the dataset.
 

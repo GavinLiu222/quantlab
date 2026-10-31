@@ -34,7 +34,6 @@ from quantlab.acquisition.symbol_batch import SymbolBatchAcquisition
 from quantlab.utils.progress import CallbackProgressReporter, CancelToken
 from quantlab.acquisition.config import stock_acquisition_config
 from quantlab.config import set_data_root, stock_kline_config
-from quantlab.dataset.stock import StockDataset
 from quantlab.acquisition.base import Capability, DataSourceRegistry, SourceDescriptor
 from quantlab.acquisition.registry import convert, credential_status, download_symbols
 

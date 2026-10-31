@@ -203,9 +203,9 @@ Rebuilt from its run directory, same equity curve: True
 uv run python examples/quickstart.py
 ```
 
-[examples/](examples/README.md) 里每个主题一个可运行的脚本（构建面板、训练模型、回测、数据源）；
-做时点研究请看 [`wrds_us_equity/`](examples/wrds_us_equity/README.zh-CN.md)（WRDS 上的 CRSP）和
-[`sharadar_us_equity/`](examples/sharadar_us_equity/README.md)（Sharadar）。下面的因子报告用的是 Sharadar 数据，回测报告来自 WRDS 示例。
+[examples/](examples/README.md) 里每个主题一个可运行的脚本（构建面板、训练模型、回测、数据源），一个基于免费 Yahoo Finance 数据的完整流程，
+以及 [`sharadar_us_equity/`](examples/sharadar_us_equity/README.md)：基于 Sharadar 数据的 Barra 风格暴露和 USE4 因子风险模型。
+下面的因子报告用的是 Sharadar 数据，回测报告来自早先的 CRSP 示例。
 
 ### 因子报告
 
@@ -223,7 +223,7 @@ Sharadar 日线，时间为 2000 年 2 月至 2026 年 10 月。因子在全市�
 
 ### 回测报告
 
-下图来自 `sp500_xgb_td.py`：在时点 S&P 500 上做多前 50 只股票，每 5 根 bar 调仓一次，
+下图是在时点 S&P 500（CRSP 日线）上做多前 50 只股票，每 5 根 bar 调仓一次，
 所用 XGBoost 模型在 2012 至 2019 年训练，在 2020 至 2024 年做样本外回测，以买入持有 SPY 为基准。
 这段时间里策略跑输 SPY；这张图用来展示报告的样子，不是可以照搬的结果。
 

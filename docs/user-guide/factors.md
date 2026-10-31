@@ -194,6 +194,8 @@ A model chooses between computing and reading with `factor_data_strategy` and
 | {py:class}`~quantlab.factor.predefined.alternative_alpha.AlternativeAlpha` | KunQuant | short selling, news, 8-K events and 10-K text changes |
 | {py:class}`~quantlab.factor.predefined.daily_anomaly_alpha.DailyAnomalyAlpha` | KunQuant | 20 daily anomalies: calendar effects, coskewness and downside beta, investor behaviour, corporate actions, listing age |
 | {py:class}`~quantlab.factor.predefined.intraday.IntradayStats`, {py:class}`~quantlab.factor.predefined.intraday.IntradayAverage`, {py:class}`~quantlab.factor.predefined.intraday.IntradayComposite` | KunQuant | session statistics of one-minute bars, their trailing means, and rank composites of them |
+| {py:class}`~quantlab.factor.predefined.price_volume_daily.PriceVolumeDailyAlpha` | KunQuant | the 102 daily factors of the price-volume factor list: amplitude- and trade-size-cut momentum, rank momentum, anchored and MAX reversal, volatility shapes, FF3 idiosyncratic volatility, attention, Amihud illiquidity and eight Qlib-expression families |
+| {py:class}`~quantlab.factor.predefined.price_volume_intraday.PriceVolumeIntradayStats`, {py:class}`~quantlab.factor.predefined.price_volume_intraday.PriceVolumeIntradayAlpha` | KunQuant | the list's 90 minute-bar factors: 15 session statistics of one-minute bars (amplitude, VWAP deviation, return semi-deviations, high-volume bars) and their 1- to 60-session means |
 | {py:class}`~quantlab.factor.predefined.market.MarketFeatures` | xarray | 21 return and amount features per index or ETF series, the same for every symbol with a bar |
 | {py:class}`~quantlab.factor.predefined.benchmark_beta.BenchmarkBeta` | xarray | each symbol's rolling OLS beta on a single-symbol benchmark |
 | {py:class}`~quantlab.factor.predefined.membership_cap_weight.MembershipCapWeight` | xarray | an index's capitalization weights from point-in-time membership |
@@ -816,6 +818,14 @@ variables the result also carries `correlation`, a
 {py:class}`~quantlab.analysis.factor_correlation.FactorCorrelation` of the
 variables' rank correlations, clustered so near-duplicate factors fall
 together.
+
+Buckets hold equal counts when the factor has no ties. Tied values share the
+bucket of their average rank rather than being split by symbol order, so a
+discrete factor can leave buckets empty: an event dummy that is 0 for 80% of
+the symbols puts them all in bucket 2 of 5 and the 1s in bucket 5, and the
+top-minus-bottom spread and the long-short statistics are then NaN; analyse it with `quantiles=2`, or read
+its bucket means. Infinite factor or return values are treated as missing,
+like NaN.
 
 With `output_dir`, the tables are written as CSV, the scalar metrics as
 `summary.json`, one figure per pair as `<factor>__<fret>.png`, and the

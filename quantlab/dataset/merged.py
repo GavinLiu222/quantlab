@@ -346,6 +346,65 @@ class MergedDataset(MarketDataset):
                 tradable = tradable & dataset.tradable_bars(prices, fill_column)
         return tradable
 
+    def delisting_bars(self, prices: xr.Dataset, valuation_column: str) -> xr.DataArray:
+        """Mark the last bar of each symbol that delisted: the default plus the inputs' own rules.
+
+        The default (``MarketDataset.delisting_bars``) judges this view's
+        panel and reads this view after it, so a symbol whose prices move
+        from one input to another is not delisted between them. A market
+        input that delists some symbols by a rule of its own (a vendor's
+        delisting dates; ``_own_delisting_symbols``, which a view answers
+        for its inputs) also judges those symbols, on the panel cut to
+        them, and a bar either marks is marked: a rule can delist a symbol
+        before its prices stop (OTC prints after the delisting), and the
+        backtest settles on the first mark. No input is asked about a
+        symbol it has no rule for, since its default sees only its own
+        prices.
+
+        Parameters
+        ----------
+        prices : xr.Dataset
+            A panel of this view on ``(timestamp, symbol)``.
+        valuation_column : str
+            The price the portfolio is valued at.
+
+        Returns
+        -------
+        xr.DataArray
+            Booleans on the panel's ``(timestamp, symbol)``.
+
+        Examples
+        --------
+        With ``vendor`` a dataset whose own rule delists permaticker 1
+        on 2024-01-08 though OTC prints follow, and ``sep`` a Sharadar SEP
+        dataset (the default rule)::
+
+            prices = BadPrintMaskedDataset([vendor, sep])
+            marks = prices.delisting_bars(prices.panel("2024-01-02", "2024-01-31"), "adjClose")
+            marks.sel(symbol=1).values.nonzero()  # the bar of 2024-01-08
+        """
+        marks = super().delisting_bars(prices, valuation_column)
+        symbols = pd.Index(prices.symbol.values)
+        for dataset in self.datasets:
+            if not isinstance(dataset, MarketDataset):
+                continue
+            ruled = symbols[symbols.isin(dataset._own_delisting_symbols())]
+            if len(ruled):
+                own = dataset.delisting_bars(prices.sel(symbol=ruled), valuation_column)
+                marks = marks | own.reindex_like(marks, fill_value=False)
+        return marks
+
+    def _own_delisting_symbols(self) -> list:
+        """Return the symbols an input delists by a rule of its own, in this view's axis order."""
+        symbols = pd.Index(self.stored_symbols())
+        ruled = [
+            symbol
+            for dataset in self.datasets
+            if isinstance(dataset, MarketDataset)
+            for symbol in dataset._own_delisting_symbols()
+        ]
+        return symbols[symbols.isin(ruled)].tolist()
+
     def own_names(self, names) -> list[str]:
         """Return ``names`` as they are: the merged panel holds the shared names.
 

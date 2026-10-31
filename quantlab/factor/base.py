@@ -1302,7 +1302,9 @@ class Factor(Component, ABC):
             each rebuildable with ``rebuild``. With ``plot=False`` no PNG is
             written. When None, nothing is written.
         quantiles : int, default 5
-            Number of equal-count factor buckets per timestamp.
+            Number of equal-count factor buckets per timestamp; tied values
+            share the bucket of their average rank, so a discrete factor can
+            leave buckets empty.
         data_strategy : {"cal", "read"}, default "cal"
             Whether the panels are computed or read from the stores
             ``build`` wrote, for the factor and every fret alike.

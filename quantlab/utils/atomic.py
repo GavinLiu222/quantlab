@@ -25,7 +25,8 @@ __all__ = ["write_json_atomically", "write_parquet_atomically"]
 def write_json_atomically(path: str | Path, payload: object, **json_kwargs) -> None:
     """Serialise ``payload`` as JSON to ``path`` with an atomic replace.
 
-    Missing parent directories are created. ``json_kwargs`` is forwarded
+    Missing parent directories are created, and the file gets the
+    permissions a plain write would (``0o666`` less the umask). ``json_kwargs`` is forwarded
     unchanged to ``json.dump``, so each caller keeps its own formatting
     (compact, ``indent=2``, ``sort_keys=True`` and so on).
 
@@ -65,14 +66,33 @@ def write_json_atomically(path: str | Path, payload: object, **json_kwargs) -> N
         with handle:
             json.dump(payload, handle, **json_kwargs)
             handle.flush()
-            # fsync before the rename: `flush()` only reaches the OS page
-            # cache, and a power loss after the rename could otherwise publish
-            # an empty file over a good one.
+            os.fchmod(handle.fileno(), _PLAIN_MODE)
+            # fsync before the rename, and after the mode change so the mode is
+            # durable too: `flush()` only reaches the OS page cache, and a power
+            # loss after the rename could otherwise publish an empty file over a
+            # good one.
             os.fsync(handle.fileno())
         os.replace(handle.name, destination)
     except BaseException:
         Path(handle.name).unlink(missing_ok=True)
         raise
+
+
+def _plain_mode() -> int:
+    """Return the mode a plain write gives a file: ``0o666`` less the umask.
+
+    Read once, at import: setting the process umask to read it back is not
+    thread-safe, so no write does it.
+    """
+    umask = os.umask(0)
+    os.umask(umask)
+    return 0o666 & ~umask
+
+
+#: The mode both writers give their file before the rename. ``NamedTemporaryFile``
+#: creates it owner-only and ``os.replace`` keeps that mode, while a file in the
+#: shared data tier must stay as readable as a plain write leaves it.
+_PLAIN_MODE = _plain_mode()
 
 
 def write_parquet_atomically(path: str | Path, frame) -> None:
@@ -103,14 +123,11 @@ def write_parquet_atomically(path: str | Path, frame) -> None:
     handle = tempfile.NamedTemporaryFile(
         dir=str(destination.parent), prefix=destination.name + ".", suffix=".tmp", delete=False
     )
-    handle.close()
     try:
+        with handle:
+            # Through the descriptor, before the frame is written over the file.
+            os.fchmod(handle.fileno(), _PLAIN_MODE)
         frame.write_parquet(handle.name)
-        # The temporary file is created owner-only; give it the mode a plain
-        # write would (0o666 less the umask), as shared stores expect.
-        umask = os.umask(0)
-        os.umask(umask)
-        os.chmod(handle.name, 0o666 & ~umask)
         os.replace(handle.name, destination)
     except BaseException:
         Path(handle.name).unlink(missing_ok=True)

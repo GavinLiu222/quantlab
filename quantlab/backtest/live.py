@@ -429,15 +429,15 @@ def predict_live_bar(
 
     Examples
     --------
-    After ``scripts/sharadar/update.py`` has appended 2026-10-07:
+    After the vendor stores' update has appended 2026-10-07:
 
     >>> done = predict_live_bar(
-    ...     run_dir, "/data/quantlab/live/sp500_xgb_mvo/live_predictions.zarr",
+    ...     run_dir, "/data/quantlab/live/my_strategy/live_predictions.zarr",
     ...     may_lag=["/data/quantlab/market/fred/fred_dtb3_1d/fred_dtb3_1d.zarr"],
     ... )
     >>> done.timestamp
     Timestamp('2026-10-07 00:00:00')
-    >>> predict_live_bar(run_dir, "/data/quantlab/live/sp500_xgb_mvo/live_predictions.zarr")
+    >>> predict_live_bar(run_dir, "/data/quantlab/live/my_strategy/live_predictions.zarr")
     Traceback (most recent call last):
     LivePredictionRefused: 2026-10-07 is already predicted in ...
     """

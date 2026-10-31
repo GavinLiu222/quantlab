@@ -263,9 +263,7 @@ hyperparameters = {
 
 The training target mattered most: on the Nasdaq-100 every `cs_rank`
 candidate beat every `cs_zscore` one, and the tree parameters moved the
-result by less than the noise. `examples/wrds_us_equity/nasdaq100_xgb.py`
-uses this configuration; the S&P 500 and whole-market examples keep the
-defaults.
+result by less than the noise.
 
 ### Share one collected panel between models
 

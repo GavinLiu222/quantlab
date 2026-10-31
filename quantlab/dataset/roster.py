@@ -251,6 +251,11 @@ class RosterDataset(MarketDataset):
         """
         return self.dataset.delisting_bars(prices, valuation_column)
 
+    def _own_delisting_symbols(self) -> list:
+        """Return the roster's symbols the wrapped dataset delists by a rule of its own."""
+        kept = pd.Index(self.stored_symbols())
+        return kept[kept.isin(self.dataset._own_delisting_symbols())].tolist()
+
     def ticker_lookup(self) -> TickerLookup | None:
         """Return the wrapped dataset's ticker lookup.
 
