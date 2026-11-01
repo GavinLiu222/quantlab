@@ -124,7 +124,7 @@ class SharadarListingDataset(SpellPanelDataset):
 
     Parameters
     ----------
-    dataset_config : SharadarListingConfig
+    config : SharadarListingConfig
         ``raw_data_dir_path`` is ``<download-dir>/sharadar``, holding the
         ``tickers``, ``actions`` and ``sep`` (the calendar) raw tables.
 

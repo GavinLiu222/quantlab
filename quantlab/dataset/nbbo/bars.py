@@ -460,7 +460,7 @@ class NbboBarsDataset(NbboPanelBase):
 
     Parameters
     ----------
-    dataset_config : NbboBarsDatasetConfig
+    config : NbboBarsDatasetConfig
         ``frequency`` is the bar size and must be a ``BAR_INTERVAL_SECONDS``
         key; ``reference_dir`` holds the CRSP reference tables.
 

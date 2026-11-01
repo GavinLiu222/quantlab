@@ -37,8 +37,9 @@ class ModelConfig(FrozenConfig):
         Enable early stopping for supported external estimators and set its
         patience. Defaults are disabled and 5 rounds, respectively.
     ``training_target``
-        For external estimators, ``"cs_rank"`` ranks labels across symbols and
-        ``"cs_zscore"`` standardizes them per bar. Omit it to use raw labels.
+        For external estimators, ``"cs_rank"`` ranks labels across symbols,
+        ``"cs_rank_gauss"`` maps those ranks to normal scores and ``"cs_zscore"``
+        standardizes them per bar. Omit it to use raw labels.
         Evaluation always uses the original labels.
     ``batch_size``, ``num_workers``, ``pin_memory``, ``prefetch``, ``panel_device``, ``panel_dtype``
         PyTorch data loading and training-panel settings.

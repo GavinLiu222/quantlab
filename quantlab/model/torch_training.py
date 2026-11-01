@@ -4,7 +4,7 @@ The data a head is fed (the training panel, ``Batch`` and the datasets)
 lives in ``quantlab.model.torch_data``. This module holds the pieces of a
 head's learning strategy:
 
-- ``cs_rank_norm``, ``cs_zscore`` and ``drop_extreme`` are target transforms
+- ``cs_rank_norm``, ``cs_rank_gauss``, ``cs_zscore`` and ``drop_extreme`` are target transforms
   for a head's ``_transform_target``.
 - ``masked_mse`` is a loss for a head's ``_loss``.
 - ``TrainLossThreshold`` is MASTER's stopping rule, a helper for a head's
@@ -16,6 +16,7 @@ scratch.
 
 import numpy as np
 import torch
+from scipy.special import ndtri
 from scipy.stats import rankdata
 
 
@@ -53,6 +54,42 @@ def cs_rank_norm(y: torch.Tensor) -> torch.Tensor:
         rows = np.isfinite(values[:, col])
         if rows.any():
             out[rows, col] = (rankdata(values[rows, col]) / rows.sum() - 0.5) * RANK_SCALE
+    return torch.as_tensor(out, dtype=y.dtype, device=y.device)
+
+
+def cs_rank_gauss(y: torch.Tensor) -> torch.Tensor:
+    """The rank-Gauss (van der Waerden) score of one bar's ``[S_t, L]`` labels, column by column.
+
+    Each finite label's rank among the column's ``n`` finite labels (ties
+    averaged) is mapped through the standard normal quantile function,
+    ``Phi^-1(rank / (n + 1))``: the cross-section becomes roughly standard
+    normal, with tails a squared-error fit still tells apart, where
+    ``cs_rank_norm``'s uniform scores squeeze them. NaN stays NaN.
+
+    Parameters
+    ----------
+    y : torch.Tensor
+        One bar's labels, ``[S_t, L]``.
+
+    Returns
+    -------
+    torch.Tensor
+        The scores, same shape, device and dtype.
+
+    Examples
+    --------
+    >>> cs_rank_gauss(torch.tensor([[0.3], [float("nan")], [0.1], [0.2]]))
+    tensor([[ 0.6745],
+            [    nan],
+            [-0.6745],
+            [ 0.0000]])
+    """
+    values = y.detach().cpu().numpy().astype(np.float64)
+    out = np.full(values.shape, np.nan)
+    for col in range(values.shape[1]):
+        rows = np.isfinite(values[:, col])
+        if rows.any():
+            out[rows, col] = ndtri(rankdata(values[rows, col]) / (rows.sum() + 1))
     return torch.as_tensor(out, dtype=y.dtype, device=y.device)
 
 

@@ -190,7 +190,7 @@ class MassiveNewsDataset(MassiveRestEventPanel):
 
     Parameters
     ----------
-    dataset_config : MassiveNewsConfig
+    config : MassiveNewsConfig
         Sharadar's raw tier (calendar, universe), Massive's raw tier and the
         Ticker map.
 

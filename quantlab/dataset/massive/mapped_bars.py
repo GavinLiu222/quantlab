@@ -43,7 +43,6 @@ With ``bars`` the permaticker view of the whole-market Trade bar store and
     ))
     mapped.update(workers=8)                       # build, or catch up
     panel = mapped.panel("2020-03-02", "2020-03-03")
-    daily = mapped.resample("1d").panel("2020-03-02", "2020-03-06")
     mapped_days = MappedDayBarDataset(MappedDayBarsConfig(
         source=days, zarr_file_path="/data/massive_permaticker_day_bars_1d.zarr",
     )).update()
@@ -71,7 +70,6 @@ from quantlab.dataset._support.adjustment import ADJUSTED_VARIABLES, CARRY_SCHEM
 from quantlab.dataset.base import MarketDataset
 from quantlab.dataset.config import MappedDayBarsConfig, MappedTradeBarsConfig
 from quantlab.dataset.massive.day_bar_events import EVENT_ENDPOINTS, day_bar_events, session_days
-from quantlab.dataset.massive.day_bars import DAY_BAR_RESAMPLE_HOW
 from quantlab.dataset.massive.permaticker_bars import (
     PermatickerDataset,
     PermatickerDayBarDataset,
@@ -80,7 +78,6 @@ from quantlab.dataset.massive.permaticker_bars import (
 from quantlab.dataset.massive.placement import UNPLACED_SUFFIX
 from quantlab.dataset.massive.raw import read_rest_watermark
 from quantlab.dataset.massive.ticker_map import RULES_VERSION
-from quantlab.dataset.massive.trade_bars import TRADE_BAR_RESAMPLE_HOW
 from quantlab.utils.atomic import write_json_atomically
 from quantlab.utils.date_range import last_moment
 
@@ -195,19 +192,9 @@ class MappedPermatickerDataset(MarketDataset):
                 f"{self.class_name}: source must be a {self.SOURCE_CLS.__name__}, got "
                 f"{type(config.source).__name__}."
             )
-        if config.source.config.resample_freq is not None:
-            raise ValueError(
-                f"{self.class_name}: source must read its store's own bars; resample this dataset instead."
-            )
         return dataclasses.replace(
-            config,
-            zarr_file_path=str(config.zarr_file_path),
-            resample_how=None if config.resample_how is None else dict(config.resample_how),
-            name=self.import_path,
+            super()._normalize_config(config), zarr_file_path=str(config.zarr_file_path)
         )
-
-    def _on_config_installed(self) -> None:
-        """Nothing to set up: the store is opened per read."""
 
     @property
     def source(self) -> PermatickerDataset:
@@ -221,19 +208,6 @@ class MappedPermatickerDataset(MarketDataset):
             # True
         """
         return self.config.source
-
-    @property
-    def store_path(self) -> str:
-        """The store of the mapped bars.
-
-        Examples
-        --------
-        With ``mapped`` the mapped store of the class example::
-
-            mapped.store_path
-            # 'mapped.zarr'
-        """
-        return self.config.zarr_file_path
 
     @property
     def sidecar_path(self) -> Path:
@@ -257,8 +231,7 @@ class MappedPermatickerDataset(MarketDataset):
     def _open_store(self, path: str) -> xr.Dataset:
         """Open the store at ``path`` lazily, refusing a store ``update()`` has not written.
 
-        The read root opens its calendar through this, so a resampled
-        dataset's calendar is its store's bars resampled.
+        The read root opens its calendar through this.
         """
         if not Path(path).exists():
             raise FileNotFoundError(f"{self.class_name}: no store at {path}; write it with update().")
@@ -358,30 +331,14 @@ class MappedPermatickerDataset(MarketDataset):
         """Return the store's bars of ``start`` to ``end``, refusing a day mapped by a map since changed.
 
         The read seam's bars (``BaseDataset.panel``): the store's own
-        one-minute bars, lazily, which a resampled dataset resamples on read.
+        bars, lazily.
         """
         self._check_map(pd.Timestamp(start), last_moment(end))
         return self._open().sel(timestamp=slice(start, end))
 
-    def _resamples_on_read(self) -> bool:
-        """Return whether the dataset is resampled: it keeps no resampled store."""
-        return self.config.resample_freq is not None
-
     def _build_settings(self) -> dict:
         """The Ticker map rules the stored days were mapped with."""
         return {"rules_version": RULES_VERSION}
-
-    def resample(self, freq: str, how: dict[str, str] | None = None) -> Self:
-        """Return this dataset on ``freq`` bars, aggregated per session as the Trade bars are.
-
-        Examples
-        --------
-        With ``mapped`` the mapped store of the class example::
-
-            mapped.resample("1h").panel("2024-11-27", "2024-11-30").sizes["timestamp"]
-            # 11
-        """
-        return type(self)(dataclasses.replace(self.config, resample_freq=freq, resample_how=how))
 
     def copy(self) -> Self:
         """Return a dataset over a copy of the view and the same store.
@@ -445,7 +402,7 @@ class MappedPermatickerDataset(MarketDataset):
         Raises
         ------
         ValueError
-            If the dataset is resampled.
+            If the store has no map sidecar.
 
         Examples
         --------
@@ -456,8 +413,6 @@ class MappedPermatickerDataset(MarketDataset):
             mapped.update().stored_days()[-1]          # the last day both hold
             # datetime.date(2024, 11, 29)
         """
-        if self.config.resample_freq is not None:
-            raise ValueError(f"{self.class_name}.update(): update the unresampled dataset.")
         if Path(self.store_path).exists() and not self.sidecar_path.exists():
             raise ValueError(
                 f"{self.class_name}.update(): {self.store_path} has no {MAP_SIDECAR} sidecar, so its "
@@ -561,9 +516,6 @@ class MappedTradeBarDataset(MappedPermatickerDataset):
     #: The config class used to rebuild this dataset from a saved config.
     config_cls = MappedTradeBarsConfig
 
-    #: ``resample(freq)`` aggregates each variable as the Trade bars do.
-    DEFAULT_RESAMPLE_HOW = TRADE_BAR_RESAMPLE_HOW
-
     SOURCE_CLS = PermatickerTradeBarDataset
 
     #: Session days mapped and appended per write: a whole-market day is
@@ -646,9 +598,6 @@ class MappedDayBarDataset(MappedPermatickerDataset):
 
     #: The config class used to rebuild this dataset from a saved config.
     config_cls = MappedDayBarsConfig
-
-    #: ``resample(freq)`` aggregates each variable as the Day aggregates do.
-    DEFAULT_RESAMPLE_HOW = DAY_BAR_RESAMPLE_HOW
 
     SOURCE_CLS = PermatickerDayBarDataset
 

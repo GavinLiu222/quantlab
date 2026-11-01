@@ -46,6 +46,7 @@ from quantlab.dataset.spot import SpotKlineDataset
 from quantlab.model.torch_data import Batch, SymbolSequenceDataset
 from quantlab.model.torch_training import (
     TrainLossThreshold,
+    cs_rank_gauss,
     cs_rank_norm,
     cs_zscore,
     drop_extreme,
@@ -386,6 +387,19 @@ def test_a_read_store_shorter_than_the_warm_up_warns_and_starts_at_the_store(war
 # ---------------------------------------------------------------------------
 # Target transforms
 # ---------------------------------------------------------------------------
+
+
+def test_rank_gauss_is_the_normal_quantile_of_the_rank_over_n_plus_one():
+    """Independent source: the standard library's NormalDist on pandas' average ranks."""
+    import statistics
+
+    y = np.array([[0.4, 1.0], [np.nan, 2.0], [0.1, 2.0], [0.4, np.nan], [0.9, 7.0]])
+    frame = pd.DataFrame(y)
+    ranks, counts = frame.rank().to_numpy(), frame.notna().sum().to_numpy()
+    inverse = statistics.NormalDist().inv_cdf
+    expected = np.array([[inverse(r / (counts[j] + 1)) if np.isfinite(r) else np.nan
+                          for j, r in enumerate(row)] for row in ranks])
+    np.testing.assert_allclose(cs_rank_gauss(torch.tensor(y)).numpy(), expected, rtol=1e-9)
 
 
 def test_rank_is_qlib_csranknorm_and_zscore_is_the_sample_zscore():

@@ -15,6 +15,7 @@ def main() -> None:
     from quantlab import api
     from quantlab.analysis import factor_report
     from quantlab.api import _factor_report, _report
+    from quantlab.dataset import factor_store
 
     runner = doctest.DocTestRunner(
         optionflags=doctest.ELLIPSIS | doctest.NORMALIZE_WHITESPACE
@@ -25,7 +26,7 @@ def main() -> None:
         "quantlab.analysis.factor_report.FactorAnalysis.summary",
     }
     finder = doctest.DocTestFinder()
-    for module in (api, _factor_report, _report, factor_report):
+    for module in (api, _factor_report, _report, factor_report, factor_store):
         for example in finder.find(module):
             if module is factor_report and example.name not in selected:
                 continue

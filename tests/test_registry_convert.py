@@ -700,7 +700,7 @@ def test_neither_handle_is_ever_written_onto_the_config(
 ) -> None:
     """T-03.5-21: both are CALL ARGUMENTS, and `to_dict()` lands on disk.
 
-    `BaseDatasetConfig.to_dict()` is `asdict(self)` and is serialised beside
+    `RawDatasetConfig.to_dict()` is `asdict(self)` and is serialised beside
     model checkpoints. A `threading.Event` cannot be serialised at all, and a
     live reporter object is not reproducible configuration -- a config that
     round-trips through JSON only when nobody watched the run is worse than

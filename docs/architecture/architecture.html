@@ -554,7 +554,7 @@ Each layer's root class is the layer's contract, and implementations derive from
 <tr><th style="width:36%">Not adopted</th><th>Reason</th></tr>
 <tr><td>A protocol per layer, the root class as its default implementation</td><td>Every other seam has one implementation. A protocol there would restate the root class's public methods: one more declaration to keep in step.</td></tr>
 <tr><td>All protocols in one <code>protocols.py</code></td><td>A protocol owned by no caller drifts towards a copy of the implementing class's public surface.</td></tr>
-<tr><td>Protocols at the level of the template methods</td><td>Root classes are not just signatures; they <b>carry invariants</b>. The dataset and factor roots own reading, warm-up, resampling and the store; <code>PortfolioConstructor.decide</code> owns the no-look-ahead and locked-position checks (chapter 7). A protocol there would hand the invariants to every implementer.</td></tr>
+<tr><td>Protocols at the level of the template methods</td><td>Root classes are not just signatures; they <b>carry invariants</b>. The dataset and factor roots own reading, warm-up and the store, and the factor root resampling; <code>PortfolioConstructor.decide</code> owns the no-look-ahead and locked-position checks (chapter 7). A protocol there would hand the invariants to every implementer.</td></tr>
 </table></div>
 
 <div class="keep"><h2>6.3 Ensembles: composition, not inheritance</h2>

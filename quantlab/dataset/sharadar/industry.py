@@ -62,7 +62,7 @@ class SharadarIndustryDataset(SpellPanelDataset):
 
     Parameters
     ----------
-    dataset_config : SharadarIndustryConfig
+    config : SharadarIndustryConfig
         ``raw_data_dir_path`` is ``<download-dir>/sharadar``, holding the
         ``tickers``, ``actions`` and ``sep`` (the calendar) raw tables.
 

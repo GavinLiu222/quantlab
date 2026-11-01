@@ -146,7 +146,7 @@ class MassiveDividendDataset(MassiveRestEventPanel):
 
     Parameters
     ----------
-    dataset_config : MassiveDividendsConfig
+    config : MassiveDividendsConfig
         Sharadar's raw tier (calendar, universe), Massive's raw tier and the
         Ticker map.
 

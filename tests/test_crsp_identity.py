@@ -1862,7 +1862,7 @@ def test_a_none_permnos_roster_converts_the_whole_raw_tier(
 # RULING 3: `config.symbols` is REFUSED on a CRSP panel
 # ---------------------------------------------------------------------------
 #
-# `symbols` is a BASE-class field (`BaseDatasetConfig.symbols`) with a dozen
+# `symbols` is a BASE-class field (`RawDatasetConfig.symbols`) with a dozen
 # non-CRSP readers -- Alpaca and WRDS TAQ key on a ticker and have no PERMNO at
 # all -- so it is neither deleted nor renamed. What changes is what it means on
 # THIS vendor: the CRSP panel's symbol axis is the int64 PERMNO (D-01), so a
@@ -1927,7 +1927,7 @@ def test_a_non_crsp_dataset_still_accepts_config_symbols(tmp_path):
     """CONTROL ARM: the base field is unchanged for every other vendor.
 
     PERMNO is a CRSP-only identifier. Binance and Alpaca will never have one,
-    so a refusal installed on `BaseDatasetConfig` -- or a rename of the field,
+    so a refusal installed on `RawDatasetConfig` -- or a rename of the field,
     or of the `symbol` DIMENSION -- would break a dozen readers to tidy up one
     vendor. This test is what makes that regression loud.
     """

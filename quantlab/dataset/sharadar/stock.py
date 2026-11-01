@@ -140,7 +140,7 @@ class SharadarStockDataset(RawMarketDataset):
 
     Parameters
     ----------
-    dataset_config : SharadarDatasetConfig
+    config : SharadarDatasetConfig
         ``raw_data_dir_path`` is ``<download-dir>/sharadar``; ``table`` names
         the price table (``"sep"``); ``permatickers`` optionally restricts the
         conversion. The ticker-based ``symbols`` field must be unset.

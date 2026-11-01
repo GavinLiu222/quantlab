@@ -68,7 +68,7 @@ for _class in (
 ):
     autosummary_context["common_inherited_api"][_class] = [
         f"quantlab.dataset.base.BaseDataset.{method}"
-        for method in ("panel", "calendar", "resample")
+        for method in ("panel", "calendar", "bar_before")
     ]
 autosummary_context["common_inherited_api"]["quantlab.label.predefined.fret.Return"] = [
     f"quantlab.label.forward.Forward.{method}"

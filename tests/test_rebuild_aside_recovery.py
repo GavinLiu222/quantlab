@@ -36,7 +36,7 @@ import pytest
 import xarray as xr
 from loguru import logger
 
-from quantlab.dataset.config import BaseDatasetConfig
+from quantlab.dataset.config import RawDatasetConfig
 from quantlab.dataset.raw import RawDataset
 
 # ---------------------------------------------------------------------------
@@ -53,7 +53,7 @@ class _TrivialDataset(RawDataset):
     by this module. Defined locally rather than imported across test files.
     """
 
-    def __init__(self, config: BaseDatasetConfig, panel: xr.Dataset):
+    def __init__(self, config: RawDatasetConfig, panel: xr.Dataset):
         self._panel = panel
         super().__init__(config)
 
@@ -71,7 +71,7 @@ def _dataset(tmp_path: Path) -> _TrivialDataset:
         },
         coords={"timestamp": dates, "symbol": ["A", "B"]},
     )
-    config = BaseDatasetConfig(zarr_file_path=str(tmp_path / "panel.zarr"))
+    config = RawDatasetConfig(zarr_file_path=str(tmp_path / "panel.zarr"))
     return _TrivialDataset(config, panel)
 
 

@@ -35,7 +35,7 @@ import zarr
 from loguru import logger
 
 from quantlab.dataset._support.ledger import ChunkLedger, TimeChunkPlanner
-from quantlab.dataset.config import BaseDatasetConfig, DatasetConfig
+from quantlab.dataset.config import RawDatasetConfig, DatasetConfig
 from quantlab.dataset.raw import RawDataset
 from quantlab.utils.progress import CancelToken, ProgressEvent, ProgressReporter
 from quantlab.backend.zarr import XrBackend
@@ -1698,7 +1698,7 @@ class _UnboundedDataset(RawDataset):
     constructed.
     """
 
-    def __init__(self, config: BaseDatasetConfig, panel: xr.Dataset):
+    def __init__(self, config: RawDatasetConfig, panel: xr.Dataset):
         self._panel = panel
         super().__init__(config)
 
@@ -1739,7 +1739,7 @@ def test_default_windowed_seam_is_silent_for_a_non_market_dataset(
     What survives unchanged is the part that always mattered: the default is
     correct, so the store is complete.
     """
-    config = BaseDatasetConfig(zarr_file_path=str(tmp_path / "unbounded.zarr"))
+    config = RawDatasetConfig(zarr_file_path=str(tmp_path / "unbounded.zarr"))
 
     messages, sink_id = _captured_warnings()
     try:
@@ -2611,7 +2611,7 @@ def test_base_raw_axes_pins_an_int64_axis_in_numeric_order(tmp_path: Path) -> No
     back in the panel's own arrival order because this site did not sort at
     all -- it leaned on whatever `_raw_data_to_xr()` happened to produce.
     """
-    config = BaseDatasetConfig(zarr_file_path=str(tmp_path / "pinned.zarr"))
+    config = RawDatasetConfig(zarr_file_path=str(tmp_path / "pinned.zarr"))
     dataset = _UnboundedDataset(
         config, _permno_ohlcv_panel([10107, 7000, 14593])
     )
@@ -2634,7 +2634,7 @@ def test_a_chunked_int64_run_does_not_densify_a_window_of_nan(
     empty, with no exception and no log line. The same failure shape 03.11-02
     measured inside `widen_symbol_axis`, reached through a different door.
     """
-    config = BaseDatasetConfig(zarr_file_path=str(tmp_path / "chunked.zarr"))
+    config = RawDatasetConfig(zarr_file_path=str(tmp_path / "chunked.zarr"))
     _UnboundedDataset(
         config, _permno_ohlcv_panel([10107, 7000, 14593])
     ).from_raw_data_chunked()
@@ -2706,7 +2706,7 @@ def test_ticker_pinning_is_unchanged(
     assert stock_symbols == ["A", "B", "C"]
     assert stock_symbols == sorted(stock_symbols)
 
-    base_config = BaseDatasetConfig(zarr_file_path=str(tmp_path / "base.zarr"))
+    base_config = RawDatasetConfig(zarr_file_path=str(tmp_path / "base.zarr"))
     base_symbols, _ = _UnboundedDataset(
         base_config, _ohlcv_panel()
     )._raw_axes_in_range()
@@ -2746,7 +2746,7 @@ class _RecordsTheDrift(_UnboundedDataset):
     branch logs and returns the ledger untouched.
     """
 
-    def __init__(self, config: BaseDatasetConfig, panel: xr.Dataset):
+    def __init__(self, config: RawDatasetConfig, panel: xr.Dataset):
         super().__init__(config, panel)
         self.drift_calls: list[tuple[list, list]] = []
 
@@ -2772,7 +2772,7 @@ def _drift_against(tmp_path: Path, name: str, stored: list, pinned: list):
     """
     path = _axis_store(tmp_path, name, stored)
     dataset = _RecordsTheDrift(
-        BaseDatasetConfig(zarr_file_path=path),
+        RawDatasetConfig(zarr_file_path=path),
         _small_panel(_AXIS_DATES, stored, 0.0),
     )
     sentinel = object()

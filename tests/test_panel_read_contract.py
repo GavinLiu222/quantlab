@@ -1,22 +1,19 @@
 """Every leaf dataset answers ``panel`` by one read contract (ADR 0004, 0021, 0029).
 
-A leaf dataset is one that holds or opens its own bars: a Zarr store, a store
-read through its source and resampled on read, a resampled sibling store, a
-panel held in memory, and the mapped Trade bar store, plain and resampled. The
-same requests are put to each of them:
+A leaf dataset is one that holds or opens its own bars: a Zarr store, a panel
+held in memory, and the mapped Trade bar store. The same requests are put to
+each of them:
 
 - ``symbols`` and ``variables`` are pure queries: kept in the order given, and
   a name the bars lack raises ``KeyError`` instead of reading as an empty column;
 - a start after the end raises ``ValueError``;
 - inside a ``DataRecorder`` the read is recorded after the cut, naming the
-  requested symbols and variables; a dataset resampled on read records the
-  source bars it read, not the resampled panel.
+  requested symbols and variables.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -24,25 +21,13 @@ import pytest
 import xarray as xr
 
 from quantlab.dataset.base import BaseDataset
-from quantlab.dataset.config import DatasetConfig, MappedTradeBarsConfig
+from quantlab.dataset.config import MappedTradeBarsConfig
 from quantlab.dataset.massive.mapped_bars import MappedTradeBarDataset
 from quantlab.dataset.memory import FrameDataset
-from quantlab.dataset.spot import SpotKlineDataset
 from quantlab.dataset.stock import StockDataset
 from quantlab.runs.record import DataRecorder
 from tests.backtest_fixtures import write_price_store
 from tests.test_massive_permaticker_bars import built  # noqa: F401  (fixture of the mapped leaves)
-
-#: Every kline variable, aggregated onto daily bars.
-KLINE_HOW = {
-    "Open": "first",
-    "High": "max",
-    "Low": "min",
-    "Close": "last",
-    "Volume": "sum",
-    "Quote asset volume": "sum",
-}
-
 
 @dataclass
 class Leaf:
@@ -54,40 +39,11 @@ class Leaf:
     symbols: list
     unknown: object
     variables: list[str]
-    resamples_on_read: bool
-
-
-def _minute_spot(tmp_path: Path) -> SpotKlineDataset:
-    """Five days of four minute bars of two symbols."""
-    timestamps = pd.DatetimeIndex(np.concatenate([
-        pd.date_range(f"2024-01-0{d} 00:00", periods=4, freq="min").values for d in range(1, 6)
-    ]))
-    values = np.arange(1.0, 2 * len(timestamps) + 1.0).reshape(len(timestamps), 2)
-    store = tmp_path / "klines.zarr"
-    xr.Dataset(
-        {name: (["timestamp", "symbol"], values) for name in KLINE_HOW},
-        coords={"timestamp": timestamps, "symbol": ["AUSDT", "BUSDT"]},
-    ).to_zarr(store, mode="w")
-    return SpotKlineDataset(DatasetConfig(
-        raw_data_dir_path=str(tmp_path / "raw"), zarr_file_path=str(store), market="crypto_spot", frequency="1m",
-    ))
 
 
 def _stock(tmp_path, request) -> Leaf:
     return Leaf(StockDataset(write_price_store(tmp_path / "stock")), "2024-01-03", "2024-01-10",
-                ["CCC", "AAA"], "NOPE", ["adjClose", "adjOpen"], False)
-
-
-def _resampled_from_source(tmp_path, request) -> Leaf:
-    return Leaf(_minute_spot(tmp_path).resample("1d", KLINE_HOW), "2024-01-02", "2024-01-04",
-                ["BUSDT", "AUSDT"], "NOPE", ["Volume", "Close"], True)
-
-
-def _resampled_sibling(tmp_path, request) -> Leaf:
-    daily = _minute_spot(tmp_path).resample("1d", KLINE_HOW)
-    daily.save()
-    return Leaf(type(daily)(daily.config), "2024-01-02", "2024-01-04",
-                ["BUSDT", "AUSDT"], "NOPE", ["Volume", "Close"], False)
+                ["CCC", "AAA"], "NOPE", ["adjClose", "adjOpen"])
 
 
 def _frame(tmp_path, request) -> Leaf:
@@ -97,21 +53,16 @@ def _frame(tmp_path, request) -> Leaf:
         {"close": (["timestamp", "symbol"], values), "volume": (["timestamp", "symbol"], values + 100.0)},
         coords={"timestamp": timestamps, "symbol": ["AAA", "BBB", "CCC"]},
     )
-    return Leaf(FrameDataset(panel), "2024-01-02", "2024-01-08", ["CCC", "AAA"], "NOPE", ["volume", "close"], False)
+    return Leaf(FrameDataset(panel), "2024-01-02", "2024-01-08", ["CCC", "AAA"], "NOPE", ["volume", "close"])
 
 
 def _mapped(tmp_path, request) -> Leaf:
     view = request.getfixturevalue("built")[2]
     mapped = MappedTradeBarDataset(MappedTradeBarsConfig(source=view, zarr_file_path=str(tmp_path / "mapped.zarr")))
-    return Leaf(mapped.update(), "2024-11-27", "2024-11-30", [505, 101], 999, ["volume", "close"], False)
+    return Leaf(mapped.update(), "2024-11-27", "2024-11-30", [505, 101], 999, ["volume", "close"])
 
 
-def _mapped_resampled(tmp_path, request) -> Leaf:
-    leaf = _mapped(tmp_path, request)
-    return Leaf(leaf.dataset.resample("1d"), leaf.start, leaf.end, leaf.symbols, leaf.unknown, leaf.variables, True)
-
-
-@pytest.fixture(params=[_stock, _resampled_from_source, _resampled_sibling, _frame, _mapped, _mapped_resampled],
+@pytest.fixture(params=[_stock, _frame, _mapped],
                 ids=lambda make: make.__name__.lstrip("_"))
 def leaf(request, tmp_path) -> Leaf:
     return request.param(tmp_path, request)
@@ -148,8 +99,4 @@ def test_the_read_is_recorded_after_the_cut(leaf):
     assert entry["request"]["symbols"] == leaf.symbols
     assert entry["request"]["variables"] == sorted(leaf.variables)
     assert entry["n_symbols"] == len(leaf.symbols)
-    # A dataset resampled on read records the finer source bars it read.
-    if leaf.resamples_on_read:
-        assert entry["n_timestamps"] > panel.sizes["timestamp"]
-    else:
-        assert entry["n_timestamps"] == panel.sizes["timestamp"]
+    assert entry["n_timestamps"] == panel.sizes["timestamp"]

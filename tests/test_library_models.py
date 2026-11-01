@@ -17,6 +17,7 @@ results are read through `TrainedRun`.
 """
 
 from pathlib import Path
+import statistics
 import warnings
 
 import joblib
@@ -336,10 +337,13 @@ def _expected_target(training_target, y_raw):
     y = y_raw[:, 0].astype(np.float64)
     if training_target == "cs_rank":
         return (rankdata(y) / len(y) - 0.5) * 3.46
+    if training_target == "cs_rank_gauss":
+        inverse = statistics.NormalDist().inv_cdf
+        return np.array([inverse(r / (len(y) + 1)) for r in rankdata(y)])
     return (y - y.mean()) / y.std(ddof=1)
 
 
-@pytest.mark.parametrize("training_target", ["cs_rank", "cs_zscore"])
+@pytest.mark.parametrize("training_target", ["cs_rank", "cs_rank_gauss", "cs_zscore"])
 def test_a_training_target_hyperparameter_reaches_the_rows_and_metrics_stay_raw(
     tmp_path, training_target
 ):
@@ -368,7 +372,7 @@ def test_a_training_target_hyperparameter_reaches_the_rows_and_metrics_stay_raw(
     assert not any(key.endswith(("mse", "mae", "r2")) for key in metrics)
 
 
-@pytest.mark.parametrize("training_target", ["cs_rank", "cs_zscore"])
+@pytest.mark.parametrize("training_target", ["cs_rank", "cs_rank_gauss", "cs_zscore"])
 def test_a_training_target_makes_every_label_standardized_also_after_load(
     tmp_path, training_target
 ):

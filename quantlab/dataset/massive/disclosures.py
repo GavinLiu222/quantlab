@@ -83,7 +83,7 @@ class MassiveDisclosureDataset(MassiveRestPanel, FilingPanelDataset):
 
     Parameters
     ----------
-    dataset_config : MassiveDisclosuresConfig
+    config : MassiveDisclosuresConfig
         Sharadar's raw tier (calendar, universe), Massive's raw tier and the
         Ticker map.
 

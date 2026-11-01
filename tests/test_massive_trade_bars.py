@@ -305,6 +305,19 @@ def test_a_rebuild_is_refused_and_a_left_over_sidecar_too(tmp_path):
         _dataset(tmp_path, start=HALF_DAY, end=HALF_DAY).from_raw_data_chunked(granularity="day")
 
 
+def _coarser(ds, freq: str):
+    """The store's bars aggregated onto ``freq``, cut by ``resample_labels`` as a factor resample cuts them."""
+    from quantlab.backend.resample import resample_panel
+    from quantlab.dataset.massive.resample import TRADE_BAR_SUMS
+
+    how = {
+        "open": "first", "high": "max", "low": "min", "close": "last",
+        "open_auction_price": "first", "close_auction_price": "last",
+        **{name: "sum" for name in TRADE_BAR_SUMS},
+    }
+    return resample_panel(ds.panel("2024-11-27", "2024-11-30").load(), freq, how, ds.resample_labels, ds.class_name)
+
+
 def test_coarser_bars_are_cut_with_the_stores_session_window(tmp_path):
     from dataclasses import replace
 
@@ -313,9 +326,9 @@ def test_coarser_bars_are_cut_with_the_stores_session_window(tmp_path):
     from quantlab.dataset.massive.trade_bars import MassiveTradeBarDataset
 
     ds = _converted(tmp_path, "1m")
-    expected = ds.resample("1h").panel("2024-11-27", "2024-11-30").load()
+    expected = _coarser(ds, "1h")
     reader = MassiveTradeBarDataset(replace(ds.config, session_start="10:00"))
-    xr.testing.assert_identical(reader.resample("1h").panel("2024-11-27", "2024-11-30").load(), expected)
+    xr.testing.assert_identical(_coarser(reader, "1h"), expected)
 
 
 def _converted(tmp_path, interval):
@@ -328,7 +341,7 @@ def _converted(tmp_path, interval):
 def test_one_minute_bars_resampled_equal_a_direct_conversion(tmp_path, freq):
     import xarray as xr
 
-    resampled = _converted(tmp_path, "1m").resample(freq).panel("2024-11-27", "2024-11-30").load()
+    resampled = _coarser(_converted(tmp_path, "1m"), freq)
     expected = _converted(tmp_path, freq).panel("2024-11-27", "2024-11-30").load()
     xr.testing.assert_identical(resampled, expected)
 
@@ -337,8 +350,8 @@ def test_hourly_bars_end_with_the_half_hour_up_to_the_close(tmp_path):
     import xarray as xr
 
     # Conversions stop at 30m; an hour from 1m bars equals an hour from 30m bars.
-    hourly = _converted(tmp_path, "1m").resample("1h").panel("2024-11-27", "2024-11-30").load()
-    from_30m = _converted(tmp_path, "30m").resample("1h").panel("2024-11-27", "2024-11-30").load()
+    hourly = _coarser(_converted(tmp_path, "1m"), "1h")
+    from_30m = _coarser(_converted(tmp_path, "30m"), "1h")
     xr.testing.assert_identical(hourly, from_30m)
     # 09:30-16:00 is 6.5 hours: the last bar is the half hour up to the close.
     labels = pd.DatetimeIndex(hourly.timestamp.values)
@@ -348,7 +361,7 @@ def test_hourly_bars_end_with_the_half_hour_up_to_the_close(tmp_path):
 
 
 def test_daily_bars_are_one_per_session(tmp_path):
-    daily = _converted(tmp_path, "1m").resample("1d").panel("2024-11-27", "2024-11-30").load()
+    daily = _coarser(_converted(tmp_path, "1m"), "1d")
     assert pd.DatetimeIndex(daily.timestamp.values).tolist() == [pd.Timestamp(FULL_DAY), pd.Timestamp(HALF_DAY)]
     bar = _cell(daily, "AAA", pd.Timestamp(HALF_DAY))
     assert (bar["open"], bar["high"], bar["low"], bar["close"], bar["volume"]) == (10.0, 13.0, 10.0, 13.0, 157.0)
@@ -487,7 +500,7 @@ def test_the_auctions_reach_the_store_and_a_daily_resample_gives_the_official_cl
     assert (last["close"], last["volume"]) == (13.0, 30.0)
     assert (last["close_auction_price"], last["close_auction_volume"]) == (13.5, 5000.0)
 
-    daily = _cell(ds.resample("1d").panel("2024-11-29", "2024-11-30").load(), "AAA", pd.Timestamp(HALF_DAY))
+    daily = _cell(_coarser(ds, "1d"), "AAA", pd.Timestamp(HALF_DAY))
     assert (daily["close"], daily["close_auction_price"], daily["open_auction_price"]) == (13.0, 13.5, 10.0)
     assert (daily["volume"], daily["close_auction_volume"]) == (2030.0, 5000.0)
 

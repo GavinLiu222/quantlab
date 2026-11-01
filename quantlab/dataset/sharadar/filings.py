@@ -43,7 +43,7 @@ class FilingPanelDataset(ReleasePanelDataset):
 
     Parameters
     ----------
-    dataset_config : SharadarDatasetConfig
+    config : SharadarDatasetConfig
         ``raw_data_dir_path`` is ``<download-dir>/sharadar``, holding the
         filing table, ``sep`` (the calendar) and ``tickers``.
     """

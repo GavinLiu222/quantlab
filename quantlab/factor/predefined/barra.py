@@ -82,6 +82,7 @@ from __future__ import annotations
 import platform
 import warnings
 from dataclasses import dataclass, fields
+from typing import Self
 
 import numpy as np
 import pandas as pd
@@ -100,7 +101,13 @@ from KunQuant.ops import (
 )
 from KunQuant.Stage import Function
 
-from quantlab.dataset.base import InsufficientHistoryError
+from quantlab.dataset.base import (
+    InsufficientHistoryError,
+    bar_after_on,
+    bar_before_on,
+    stores_text,
+)
+from quantlab.dataset.merged import MergedDataset
 from quantlab.factor.config import FactorConfig
 from quantlab.factor.kunquant import BATCH_OPTIONS, FactorKunQuant
 from quantlab.factor.kunquant_compile import compile_graphs
@@ -120,6 +127,7 @@ from quantlab.factor.kunquant_ts import (
     EWSum,
     EWVar,
 )
+from quantlab.utils.date_range import check_range
 
 #: Name of the graph input holding each symbol's running product of split
 #: factors, derived from ``split_column`` before the graph runs.
@@ -133,6 +141,11 @@ INDUSTRY_INPUT = "_industry"
 #: secondary share class takes its firm's: the estimation universe ranks on
 #: it, so a secondary class, having none, is never ranked.
 OWN_CAP = "_own_cap"
+
+#: The ends of the range the price inputs' calendars are read over: before
+#: any market data and after any, inside what a nanosecond timestamp holds.
+_EARLIEST = pd.Timestamp("1700-01-01")
+_LATEST = pd.Timestamp("2200-01-01")
 
 #: The regression weights an orthogonalization may use, by config name.
 ORTHOGONALIZATION_WEIGHTINGS = ("sqrt_cap", "cap", "equal")
@@ -163,8 +176,9 @@ class BarraStyleParameters:
         When set, the risk-free rate is the ``risk_free_column`` of this one
         symbol (``FredRateDataset``'s ``"DTB3"``, merged in as is) and the
         factor broadcasts it across the other symbols: the symbol is
-        dropped, the bars kept are those where any other symbol has a
-        ``price_column``, and a bar without a published rate (a bond-market
+        dropped, the bars kept are those of the inputs holding
+        ``price_column`` (the factor calendar, ``BarraStyle.calendar``),
+        and a bar without a published rate (a bond-market
         holiday on a trading day) takes the last rate before it (our
         choice). ``None`` reads the column on every symbol, already
         broadcast.
@@ -609,19 +623,29 @@ def _present(value: OpBase) -> OpBase:
     return SetInfOrNanToValue(value * 0.0 + 1.0, 0.0)
 
 
-def _priced_bars(panel: xr.Dataset, params: BarraStyleParameters) -> xr.DataArray:
-    """Return, per bar, whether a symbol other than ``risk_free_symbol`` has a price."""
-    prices = panel[params.price_column].drop_sel(symbol=[params.risk_free_symbol], errors="ignore")
-    return prices.notnull().any("symbol")
+def _leaves(dataset) -> list:
+    """Return the inputs of ``dataset`` that are not merges, merges opened recursively."""
+    if isinstance(dataset, MergedDataset):
+        return [leaf for one in dataset.datasets for leaf in _leaves(one)]
+    return [dataset]
 
 
-def _broadcast_risk_free(panel: xr.Dataset, params: BarraStyleParameters) -> xr.Dataset:
+def _holds(dataset, name: str) -> bool:
+    """Return whether ``dataset`` holds the shared variable ``name``, read from its store schema."""
+    names = dataset.head(0).collect_schema().names()
+    shared = dataset.shared_name_map(names)
+    return any(shared.get(own, own) == name for own in names)
+
+
+def _broadcast_risk_free(
+    panel: xr.Dataset, params: BarraStyleParameters, bars: pd.DatetimeIndex
+) -> xr.Dataset:
     """Return ``panel`` with the rate of ``risk_free_symbol`` on every other symbol.
 
-    The rate symbol is dropped, the bars kept are those where another
-    symbol has a price, and the rate is forward-filled over the panel's
-    bars before those are kept, so a trading day without a published rate
-    takes the last one.
+    The rate symbol is dropped, the bars kept are those of ``bars`` (the
+    factor calendar), and the rate is forward-filled over the panel's bars
+    before those are kept, so a trading day without a published rate takes
+    the last one.
 
     Raises
     ------
@@ -636,7 +660,7 @@ def _broadcast_risk_free(panel: xr.Dataset, params: BarraStyleParameters) -> xr.
     rate = panel[params.risk_free_column].sel(symbol=symbol, drop=True).ffill("timestamp")
     others = panel.drop_sel(symbol=[symbol])
     others = others.assign_coords(symbol=np.asarray(others["symbol"].values.tolist()))
-    others = others.sel(timestamp=_priced_bars(panel, params))
+    others = others.sel(timestamp=others["timestamp"].isin(bars.values))
     return others.assign(
         {params.risk_free_column: rate.sel(timestamp=others["timestamp"]).broadcast_like(
             others[params.price_column]
@@ -866,10 +890,11 @@ class BarraStyle(FactorKunQuant):
         ``BarraStyleParameters.panel_columns``, ``factor_names`` may pick any
         subset of the outputs, and ``warmup_bars`` should be at least
         ``BarraStyleParameters.warmup_bars`` (526 by default). With
-        ``risk_free_symbol`` the warm-up is counted in bars where some
-        symbol has a price: a date only the rate has (FRED's DTB3 has one
-        on 2025-01-09, when NYSE was closed) is dropped before the graph
-        runs, so it does not count.
+        ``risk_free_symbol`` the warm-up is counted in the bars of the
+        inputs holding ``price_column``: a date only the rate has (FRED's
+        DTB3 has one on 2025-01-09, when NYSE was closed) is dropped before
+        the graph runs, so it does not count, and it is not a bar of
+        ``calendar``, ``bar_before`` or ``bar_after`` either.
 
     Raises
     ------
@@ -937,50 +962,107 @@ class BarraStyle(FactorKunQuant):
         """Return the validated parameters for the current config."""
         return BarraStyleParameters.from_config(self.config)
 
-    def _warm_start(self, first: pd.Timestamp, start) -> pd.Timestamp:
-        """Return the bar ``warmup_bars`` bars with a price before ``first``.
+    def calendar(self, start, end) -> pd.DatetimeIndex:
+        """Return the factor's bars from ``start`` to ``end``, both inclusive.
 
-        Without ``risk_free_symbol`` every bar of the dataset counts. With
-        it, ``_broadcast_risk_free`` keeps only the bars where another
-        symbol has a price (``_priced_bars``), so the count goes back until
-        it holds ``warmup_bars`` of those, or to the dataset's first
-        bar, warning with the shortfall.
+        Without ``risk_free_symbol`` the dataset's calendar, as
+        ``Factor.calendar``. With it, the output drops the dates only the
+        rate has, so the calendar is that of the price inputs: the union of
+        the bars of every input holding ``price_column``. Only timestamps
+        are read.
+
+        Examples
+        --------
+        FRED's DTB3 has a rate on 2025-01-09, when NYSE was closed:
+
+        >>> barra.calendar("2025-01-08", "2025-01-10")
+        DatetimeIndex(['2025-01-08', '2025-01-10'], dtype='datetime64[ns]', freq=None)
         """
-        params = self._parameters()
-        if params.risk_free_symbol is None:
+        if self._parameters().risk_free_symbol is None:
+            return super().calendar(start, end)
+        first, last = check_range(start, end, f"{self.class_name}.calendar()")
+        bars = self._price_bars()
+        return bars[(bars >= first) & (bars <= last)]
+
+    def bar_before(self, date, n: int) -> pd.Timestamp:
+        """Return the bar ``n`` bars before ``date`` on the factor calendar.
+
+        See ``Factor.bar_before`` for the rules and errors; with
+        ``risk_free_symbol`` the bars counted are ``calendar``'s.
+
+        Examples
+        --------
+        >>> barra.bar_before("2025-01-10", 1)  # the rate's 2025-01-09 is not a bar
+        Timestamp('2025-01-08 00:00:00')
+        """
+        if self._parameters().risk_free_symbol is None:
+            return super().bar_before(date, n)
+        return bar_before_on(
+            lambda _target: self._price_bars(), date, n, self.class_name,
+            lambda: stores_text(self.config.dataset.stores()),
+        )
+
+    def bar_after(self, date, n: int) -> pd.Timestamp:
+        """Return the bar ``n`` bars after ``date`` on the factor calendar, or the last bar there is.
+
+        See ``Factor.bar_after`` for the rules; with ``risk_free_symbol``
+        the bars counted are ``calendar``'s.
+
+        Examples
+        --------
+        >>> barra.bar_after("2025-01-08", 1)  # the rate's 2025-01-09 is not a bar
+        Timestamp('2025-01-10 00:00:00')
+        """
+        if self._parameters().risk_free_symbol is None:
+            return super().bar_after(date, n)
+        return bar_after_on(lambda _target: self._price_bars(), date, n, self.class_name)
+
+    def _price_bars(self) -> pd.DatetimeIndex:
+        """Return the bars of the inputs holding ``price_column``, every one, sorted.
+
+        The inputs are the dataset's leaves, a merge inside a merge opened
+        too, so an input merged beside the prices does not add its dates;
+        the dataset itself when it is not a merge. They are found by their
+        store schemas and only their timestamps are read.
+        """
+        price = self._parameters().price_column
+        inputs = [one for one in _leaves(self.config.dataset) if _holds(one, price)]
+        calendars = [one.calendar(_EARLIEST, _LATEST).values for one in inputs]
+        return pd.DatetimeIndex(np.unique(np.concatenate(calendars)) if calendars else [])
+
+    def _warm_start(self, first: pd.Timestamp, start) -> pd.Timestamp:
+        """Return the bar ``warmup_bars`` bars before ``first``, or the earliest.
+
+        Without ``risk_free_symbol`` the dataset's bars are counted, as
+        ``Factor._warm_start``. With it, ``_broadcast_risk_free`` keeps only
+        the bars of the factor calendar, so those are counted, and the dates
+        only the rate has do not shorten the warm-up. Warns with the
+        shortfall when there are fewer.
+        """
+        if self._parameters().risk_free_symbol is None:
             return super()._warm_start(first, start)
-        dataset = self.config.dataset
         needed = self.warmup_bars
-        source_start, priced = first, 0
-        while priced < needed:
-            try:
-                earlier = dataset.bar_before(source_start, needed - priced)
-            except InsufficientHistoryError as exc:
-                if not exc.available:
-                    warnings.warn(
-                        f"{self.class_name}.compute(): {needed} warm-up bar(s) with a "
-                        f"price are needed before {start!r} but {dataset.class_name} holds "
-                        f"only {priced}; the first bars are short by {needed - priced} "
-                        f"bar(s) of warm-up.",
-                        UserWarning,
-                        stacklevel=4,
-                    )
-                    return source_start
-                earlier = dataset.bar_before(source_start, exc.available)
-            last = dataset.bar_before(source_start, 1)
-            panel = dataset.to_shared_names(dataset.panel(
-                earlier, last, variables=dataset.own_names([params.price_column])
-            ))
-            priced += int(_priced_bars(panel, params).sum())
-            source_start = earlier
-        return source_start
+        try:
+            return self.bar_before(first, needed)
+        except InsufficientHistoryError as exc:
+            warnings.warn(
+                f"{self.class_name}.compute(): {needed} warm-up bar(s) with a "
+                f"price are needed before {start!r} but the price inputs hold "
+                f"only {exc.available}; the first bars are short by "
+                f"{needed - exc.available} bar(s) of warm-up.",
+                UserWarning,
+                stacklevel=4,
+            )
+            return self.bar_before(first, exc.available)
 
     def _get_factor_names(self) -> tuple[str, ...]:
         """Return every output."""
         return self._OUTPUTS
 
     def _validate_config(self) -> None:
-        """Refuse stream mode, and columns or outputs the parameters do not produce."""
+        """Refuse stream mode, resampling, and columns or outputs the parameters do not produce."""
+        if self.config.resample_freq is not None:
+            self._refuse_resample()
         if self.config.mode != "batch":
             raise ValueError(
                 f"{self.class_name} is batch only: its exposures are standardized "
@@ -997,6 +1079,30 @@ class BarraStyle(FactorKunQuant):
         unknown = sorted(set(self.get_factor_names()) - set(self._OUTPUTS))
         if unknown:
             raise ValueError(f"{self.class_name} received unknown factor_names: {unknown}")
+
+    def resample(self, freq: str, how: dict[str, str] | str) -> Self:
+        """Refuse: the inputs are daily, and no bar coarser than a day exists.
+
+        Raises
+        ------
+        ValueError
+            Always.
+
+        Examples
+        --------
+        >>> barra.resample("1d", "last")
+        Traceback (most recent call last):
+        ValueError: BarraStyle cannot be resampled: ...
+        """
+        self._refuse_resample()
+
+    def _refuse_resample(self) -> None:
+        """Raise the error a resampled BarraStyle is refused with."""
+        raise ValueError(
+            f"{self.class_name} cannot be resampled: its inputs (fundamentals, "
+            f"market cap) are daily and no bar coarser than a day exists, and "
+            f"its calendar counts the price inputs' bars as they are."
+        )
 
     def init_stream(self):
         """Refuse: ``BarraStyle`` has no streaming graph.
@@ -1251,7 +1357,7 @@ class BarraStyle(FactorKunQuant):
         params = self._parameters()
         panel = self.config.dataset.to_shared_names(inputs)
         if params.risk_free_symbol is not None:
-            panel = _broadcast_risk_free(panel, params)
+            panel = _broadcast_risk_free(panel, params, self._price_bars())
         panel = panel.sortby(["timestamp", "symbol"])
         arrays = {
             column: np.ascontiguousarray(

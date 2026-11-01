@@ -71,7 +71,7 @@ class SharadarShareClassDataset(SpellPanelDataset):
 
     Parameters
     ----------
-    dataset_config : SharadarShareClassConfig
+    config : SharadarShareClassConfig
         ``raw_data_dir_path`` is ``<download-dir>/sharadar``, holding the
         ``tickers`` and ``sep`` (the calendar) raw tables.
 

@@ -8,12 +8,13 @@ axis, so a universe reads the shared store instead of keeping a copy of it
 cut to the roster. The roster is read on every call and follows its store:
 a universe's membership store gains a symbol the day it first enters.
 
-The wrapper is a drop-in ``MarketDataset``: a factor, a label or a backtest
-given it in place of the wrapped dataset changes nothing else. Its calendar,
-variable names, KunQuant export, tradable and delisting bars and ticker
-lookup are the wrapped dataset's. It has no store of its own and no build
-path: its inputs are the wrapped and the roster datasets (``inputs()``), whose
-stores are updated by their own vendor updates. Who is a member on a
+The wrapper is a dataset view (``DatasetView``): a factor, a label or a
+backtest given it in place of the wrapped dataset changes nothing else. It
+defines only its panel cut and its symbols; its calendar, variable names,
+KunQuant export, tradable and delisting bars and ticker lookup are the
+wrapped dataset's. It has no store of its own and no build path: its inputs
+are the wrapped and the roster datasets (``inputs()``), whose stores are
+updated by their own vendor updates. Who is a member on a
 given date is the membership a label or a predictor is masked with.
 
 The wrapped dataset records the read in an open ``DataRecorder``, asked
@@ -23,18 +24,17 @@ roster's cells only.
 
 from typing import Self, Sequence
 
-import numpy as np
 import pandas as pd
-import polars as pl
 import xarray as xr
 from loguru import logger
 
-from quantlab.dataset.base import BaseDataset, MarketDataset, TickerLookup
+from quantlab.dataset.base import BaseDataset, MarketDataset
 from quantlab.dataset.config import RosterDatasetConfig
+from quantlab.dataset.view import DatasetView
 from quantlab.utils.symbol_axis import on_roster
 
 
-class RosterDataset(MarketDataset):
+class RosterDataset(DatasetView):
     """``config.dataset`` on the symbols of ``config.roster``.
 
     The roster is the symbol axis of the roster dataset's store. It is cast
@@ -95,6 +95,10 @@ class RosterDataset(MarketDataset):
         True
         """
         return (self.dataset, self.config.roster)
+
+    def _source(self) -> MarketDataset:
+        """Return the wrapped dataset: the roster is read for its symbols only."""
+        return self.dataset
 
     @property
     def dataset(self) -> MarketDataset:
@@ -195,88 +199,10 @@ class RosterDataset(MarketDataset):
             kept = list(symbols)
         return self.dataset.panel(start, end, symbols=kept, variables=variables)
 
-    def _calendar(self) -> pd.DatetimeIndex:
-        """Return the wrapped dataset's calendar."""
-        return self.dataset._calendar()
-
-    def resample_labels(self, timestamps: np.ndarray, freq: str) -> np.ndarray:
-        """Return the bars the wrapped dataset cuts ``timestamps`` into."""
-        return self.dataset.resample_labels(timestamps, freq)
-
-    def own_names(self, names) -> list[str]:
-        """Return the wrapped dataset's own names of the shared ``names``.
-
-        Examples
-        --------
-        >>> prices.own_names(["adjClose"])
-        ['adjClose']
-        """
-        return self.dataset.own_names(names)
-
-    def shared_name_map(self, names) -> dict[str, str]:
-        """Return the wrapped dataset's renaming of ``names`` onto the shared names.
-
-        Examples
-        --------
-        >>> prices.shared_name_map(["adjClose"])
-        {}
-        """
-        return self.dataset.shared_name_map(names)
-
-    def _to_kunquant(
-        self, data: xr.Dataset, data_columns: tuple[str, ...]
-    ) -> tuple[dict, np.ndarray, np.ndarray]:
-        """Export the columns as the wrapped dataset does."""
-        return self.dataset._to_kunquant(data, data_columns)
-
-    def tradable_bars(self, prices: xr.Dataset, fill_column: str) -> xr.DataArray:
-        """Return the wrapped dataset's tradable bars of a panel of this view.
-
-        Examples
-        --------
-        >>> panel = prices.panel("2024-01-02", "2024-01-05")
-        >>> prices.tradable_bars(panel, "adjOpen").equals(sep.tradable_bars(panel, "adjOpen"))
-        True
-        """
-        return self.dataset.tradable_bars(prices, fill_column)
-
-    def delisting_bars(self, prices: xr.Dataset, valuation_column: str) -> xr.DataArray:
-        """Return the wrapped dataset's delisting bars of a panel of this view.
-
-        Examples
-        --------
-        >>> panel = prices.panel("2024-01-02", "2024-01-05")
-        >>> prices.delisting_bars(panel, "adjClose").equals(sep.delisting_bars(panel, "adjClose"))
-        True
-        """
-        return self.dataset.delisting_bars(prices, valuation_column)
-
     def _own_delisting_symbols(self) -> list:
         """Return the roster's symbols the wrapped dataset delists by a rule of its own."""
         kept = pd.Index(self.stored_symbols())
         return kept[kept.isin(self.dataset._own_delisting_symbols())].tolist()
-
-    def ticker_lookup(self) -> TickerLookup | None:
-        """Return the wrapped dataset's ticker lookup.
-
-        Examples
-        --------
-        With ``sep`` a Sharadar SEP dataset whose ticker sidecar names permaticker 199059 AAPL:
-
-        >>> RosterDataset(sep, membership).ticker_lookup().label([199059], date(2024, 1, 2))
-        ['AAPL']
-        """
-        return self.dataset.ticker_lookup()
-
-    def head(self, n: int) -> pl.LazyFrame:
-        """Return up to ``n`` rows of the wrapped dataset, for its column names and dtypes.
-
-        Examples
-        --------
-        >>> prices.head(0).collect_schema().names() == sep.head(0).collect_schema().names()
-        True
-        """
-        return self.dataset.head(n)
 
     def copy(self) -> Self:
         """Return a roster view over copies of the wrapped and roster datasets.

@@ -176,6 +176,47 @@ def test_a_store_whose_symbol_left_the_axis_is_rebuilt_when_asked(roots):
     assert path.with_name("sharadar_sep_1d.zarr.pre20240109.chunks.json").exists()
 
 
+def _update_script():
+    """The data update script, imported from its file (``scripts/`` is not importable)."""
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "data_update" / "update.py"
+    if not path.exists():
+        pytest.skip("scripts/ is not tracked; the data update script is only in local checkouts")
+    spec = importlib.util.spec_from_file_location("data_update_script", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules.setdefault(spec.name, module)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_an_update_step_rebuilds_a_store_whose_symbol_left_the_axis_only_when_asked(roots):
+    from quantlab.dataset.base import ResumeRefused
+    from quantlab.dataset.sharadar.stores import build_stores, store
+
+    downloads, data = roots
+    vendor = _vendor(DAYS[:3])
+    _pull(vendor, downloads)
+    build_stores(downloads, data, stores=["sharadar_sep_1d"])
+    _drop_bbb(vendor, downloads)
+    path = store("sharadar_sep_1d").path(data)
+    step = _update_script().Update({}, data, downloads, dry_run=False)
+    folder = str(path.parent.relative_to(data))
+
+    with pytest.raises(ResumeRefused):
+        step.update(folder)
+    assert _symbols(path) == [101, 202]
+
+    result = step.update(folder, rebuild_dropped=True)
+
+    assert _symbols(path) == [101, 303]
+    assert result.startswith("rebuilt") and "1 symbol(s) removed [202], 1 added" in result
+    with xr.open_zarr(path) as rebuilt:
+        assert str(rebuilt["timestamp"].values[-1])[:10] == DAYS[3]
+
+
 def test_the_refusal_is_typed(roots):
     from quantlab.dataset.base import ResumeRefused
     from quantlab.dataset.sharadar.stores import build_stores, store

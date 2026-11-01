@@ -17,7 +17,6 @@ import numpy as np
 import polars as pl
 import xarray as xr
 
-from quantlab.dataset.config import DatasetConfig
 from quantlab.dataset.raw import RawMarketDataset
 from quantlab.dataset._support.cleaning import dedup_raw_frame, flag_anomalies, validate_schema
 from quantlab.enums.data import BinanceCSVHeaders
@@ -37,7 +36,7 @@ class SpotKlineDataset(RawMarketDataset):
 
     Parameters
     ----------
-    dataset_config : DatasetConfig
+    config : DatasetConfig
         Paths (raw CSV directory, Zarr store, Nautilus catalog), market,
         frequency and date range of the dataset.
 
@@ -67,10 +66,6 @@ class SpotKlineDataset(RawMarketDataset):
         "Volume": "volume",
         "Quote asset volume": "amount",
     }
-
-    def __init__(self, dataset_config: DatasetConfig):
-        """Initialize the dataset; see the class docstring for parameters."""
-        super().__init__(dataset_config)
 
     def _clean(self, data: xr.Dataset) -> xr.Dataset:
         """Check the Title-Case OHLCV columns exist and add ``anomaly_flag``.

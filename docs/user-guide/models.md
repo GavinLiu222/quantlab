@@ -138,7 +138,7 @@ read them themselves
 |---|---|---|
 | `epochs`, `lr` | `TorchModel` | the cap on training epochs (100) and the default optimizer's learning rate (`1e-3`); the shipped torch heads have their own defaults |
 | `early_stopping`, `early_stopping_patience` | the shipped library heads | turn on the library's native early stopping (off), and the rounds without improvement before it stops (5) |
-| `training_target` | `LibraryModel` | fit each bar's `"cs_rank"` or `"cs_zscore"` of the label instead of the raw label (unset) |
+| `training_target` | `LibraryModel` | fit each bar's `"cs_rank"`, `"cs_rank_gauss"` or `"cs_zscore"` of the label instead of the raw label (unset) |
 | `batch_size`, `num_workers`, `pin_memory`, `prefetch` | `TorchModel` | the default data loader and batch prefetching |
 | `panel_device`, `panel_dtype` | `TorchModel` | where the training panel lives and in what precision (see [Keep the training panel on the GPU](#keep-the-training-panel-on-the-gpu)) |
 
@@ -224,8 +224,9 @@ validate, and all 80 test bars are scored.
 
 A library head fits the raw label unless `hyperparameters["training_target"]`
 names a per-bar cross-sectional transform: `"cs_rank"` (Qlib's `CSRankNorm`,
-{py:func}`~quantlab.model.torch_training.cs_rank_norm`) or `"cs_zscore"`
-({py:func}`~quantlab.model.torch_training.cs_zscore`). It applies to every
+{py:func}`~quantlab.model.torch_training.cs_rank_norm`), `"cs_rank_gauss"`
+(the rank-Gauss score, {py:func}`~quantlab.model.torch_training.cs_rank_gauss`) or
+`"cs_zscore"` ({py:func}`~quantlab.model.torch_training.cs_zscore`). It applies to every
 label on the training, validation and test bars alike, so early stopping
 watches the validation loss on the transformed target, where an outlier
 return weighs no more than any other symbol. The model then predicts on that

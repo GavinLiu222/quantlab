@@ -18,14 +18,14 @@ from loguru import logger
 
 from quantlab.model.base import LIBRARY_RESERVED_HYPERPARAMETERS, BaseModel
 from quantlab.model.torch_data import TrainingPanel
-from quantlab.model.torch_training import cs_rank_norm, cs_zscore
+from quantlab.model.torch_training import cs_rank_gauss, cs_rank_norm, cs_zscore
 from quantlab.model.training_target import TrainingTargetMixin
 from quantlab.utils.timer import Timer
 
 
 #: The accepted values of ``hyperparameters["training_target"]`` and the
 #: per-bar cross-sectional transform each one applies.
-TRAINING_TARGETS = {"cs_rank": cs_rank_norm, "cs_zscore": cs_zscore}
+TRAINING_TARGETS = {"cs_rank": cs_rank_norm, "cs_rank_gauss": cs_rank_gauss, "cs_zscore": cs_zscore}
 
 
 class Rows(NamedTuple):
@@ -82,8 +82,8 @@ class LibraryModel(TrainingTargetMixin, BaseModel):
     in ``where`` (see ``Rows``).
 
     ``hyperparameters["training_target"]`` picks the training target without
-    a subclass: ``"cs_rank"`` (``cs_rank_norm``) or ``"cs_zscore"``
-    (``cs_zscore``), applied on the training, validation and test bars
+    a subclass: ``"cs_rank"`` (``cs_rank_norm``), ``"cs_rank_gauss"``
+    (``cs_rank_gauss``) or ``"cs_zscore"`` (``cs_zscore``), applied on the training, validation and test bars
     alike, so early stopping watches the validation loss on the training
     target; unset trains on the raw label. ``label_scales`` then reports
     ``"standardized"`` for every label. A head that overrides
@@ -158,7 +158,8 @@ class LibraryModel(TrainingTargetMixin, BaseModel):
         Raises
         ------
         ValueError
-            If it is set to anything but ``"cs_rank"`` or ``"cs_zscore"``.
+            If it is set to anything but ``"cs_rank"``, ``"cs_rank_gauss"`` or
+            ``"cs_zscore"``.
 
         Examples
         --------

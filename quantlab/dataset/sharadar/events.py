@@ -52,7 +52,7 @@ class SharadarEventsDataset(FilingPanelDataset):
 
     Parameters
     ----------
-    dataset_config : SharadarEventsConfig
+    config : SharadarEventsConfig
         ``raw_data_dir_path`` is ``<download-dir>/sharadar``, holding the
         ``events``, ``sep`` (the calendar), ``tickers`` and ``indicators``
         raw tables.

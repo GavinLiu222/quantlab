@@ -100,25 +100,6 @@ def test_too_little_history_raises_the_library_error(store):
         FrameDataset(store).bar_before("2024-01-03", 5)
 
 
-def test_resample_aggregates_in_memory_and_writes_nothing(tmp_path):
-    timestamps = pd.date_range("2024-01-01", periods=48, freq="h")
-    frame = pd.DataFrame(
-        {
-            "timestamp": np.repeat(timestamps, 2),
-            "symbol": ["AAA", "BBB"] * 48,
-            "close": np.arange(96, dtype=float),
-        }
-    )
-
-    daily = FrameDataset(frame).resample("1d", "last")
-
-    panel = daily.panel("2024-01-01", "2024-01-02")
-    assert panel.sizes["timestamp"] == 2
-    np.testing.assert_array_equal(panel["close"].sel(symbol="AAA").values, [46.0, 94.0])
-    assert daily.bar_before("2024-01-02", 1) == pd.Timestamp("2024-01-01")
-    assert list(tmp_path.iterdir()) == []
-
-
 @pytest.mark.parametrize(
     "call",
     [
@@ -231,17 +212,6 @@ def test_to_zarr_refuses_an_existing_path(tmp_path, store):
         FrameDataset(store).to_zarr(tmp_path / "held.zarr")
 
 
-def test_to_zarr_of_a_resample_stores_the_resampled_bars(tmp_path):
-    daily = FrameDataset(_hourly_frame()).resample("1d", "last")
-
-    on_disk = daily.to_zarr(tmp_path / "daily.zarr")
-
-    assert on_disk.config.resample_freq is None
-    xr.testing.assert_equal(
-        on_disk.panel("2024-01-01", "2024-01-02"), daily.panel("2024-01-01", "2024-01-02")
-    )
-
-
 def test_a_path_backed_frame_dataset_round_trips_through_the_loader(tmp_path, store):
     on_disk = FrameDataset(store).to_zarr(tmp_path / "held.zarr")
 
@@ -256,37 +226,10 @@ def test_the_loader_refuses_a_frame_dataset_held_only_in_memory(store):
         rebuild(FrameDataset(store).get_config())
 
 
-def test_a_path_backed_resample_stays_in_memory(tmp_path):
-    path = tmp_path / "hourly.zarr"
-    FrameDataset(_hourly_frame()).to_zarr(path)
-    # A store where a Zarr-backed dataset would look for its resampled cache
-    # (ADR 0002), holding different values: it must never be read.
-    decoy = tmp_path / "hourly_resample_1d.zarr"
-    FrameDataset(_hourly_frame().assign(close=-1.0)).resample("1d", "last").to_zarr(decoy)
-    before = _files_under(tmp_path)
+@pytest.mark.parametrize("key", ["start_date", "end_date"])
+def test_a_saved_config_holding_a_date_field_is_refused(tmp_path, store, key):
+    """The dates bound only a raw build; a held panel has none, so a stale saved one fails loudly."""
+    saved = FrameDataset(store).to_zarr(tmp_path / "held.zarr").get_config()
 
-    daily = FrameDataset(FrameDatasetConfig(zarr_file_path=str(path))).resample("1d", "last")
-
-    assert daily.store_path is None
-    panel = daily.panel("2024-01-01", "2024-01-02")
-    np.testing.assert_array_equal(panel["close"].sel(symbol="AAA").values, [46.0, 94.0])
-    assert daily.bar_before("2024-01-02", 1) == pd.Timestamp("2024-01-01")
-    assert not hasattr(daily, "save")
-    assert _files_under(tmp_path) == before
-
-
-def test_a_path_with_resample_fields_resamples_the_store_in_memory(tmp_path):
-    path = tmp_path / "hourly.zarr"
-    FrameDataset(_hourly_frame()).to_zarr(path)
-
-    daily = FrameDataset(
-        FrameDatasetConfig(
-            zarr_file_path=str(path), resample_freq="1d", resample_how="last"
-        )
-    )
-
-    assert daily.store_path is None
-    np.testing.assert_array_equal(
-        daily.panel("2024-01-01", "2024-01-02")["close"].sel(symbol="BBB").values,
-        [47.0, 95.0],
-    )
+    with pytest.raises(ValueError, match=rf"unknown key\(s\) '{key}'"):
+        rebuild({**saved, key: "2024-01-02"})

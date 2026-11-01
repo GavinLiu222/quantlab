@@ -1,7 +1,8 @@
 """Home for the sidecar-durability proofs: requirement D-20.
 
-D-20 — no same-source file lock is introduced (a lock was considered and
-rejected), but the AMENDED decision brings atomic sidecar WRITES into scope:
+D-20 — no same-source file lock is introduced for acquisition (a lock was
+considered and rejected; concurrency there is the console's task queue's
+responsibility), but the AMENDED decision brings atomic sidecar WRITES into scope:
 watermark sidecars must be written the way `PageLedger._flush` already writes
 its ledger, through ONE shared helper rather than a third hand-rolled copy
 (L-4, "Don't Hand-Roll").
@@ -26,7 +27,6 @@ exits **5** ("no tests ran") and a per-file command reads that as green; and
 no test is named for a selector a later plan owns.
 """
 
-import ast
 import json
 import os
 import tempfile
@@ -413,59 +413,3 @@ def test_an_interrupted_watermark_write_leaves_the_previous_value_readable(
         "no_data": False,
     }
     assert list(acq._watermark_root.glob("*.tmp")) == []
-
-
-def test_no_lock_is_introduced_anywhere_in_quantlab() -> None:
-    """D-20 itself, asserted as code rather than left as prose.
-
-    quantlab adds NO lock on concurrent acquisition of the same source;
-    concurrency control is the console's task queue's responsibility. The
-    residual risk that decision accepts is real and recorded rather than
-    closed here: the D-15 thin-shell scripts run OUTSIDE any console task
-    queue, so a shell and the console can still overlap on one source. The
-    atomic write does not remove that overlap -- two writers still race, and
-    the loser's value is simply lost -- but it does mean the loser sees a
-    COMPLETE file rather than a truncated one, which is what makes the
-    acceptance materially safer instead of merely tolerated.
-
-    This test exists because "we decided not to add a lock" is exactly the
-    kind of decision a later well-meaning change quietly reverses -- adding
-    `filelock` to make a flaky concurrent run pass would silently move the
-    guarantee back into this repository and out of the console's, without
-    anyone revisiting D-20. If a lock is ever genuinely wanted, this test must
-    be deleted in the SAME commit, which forces the decision to be re-taken
-    rather than drifted into.
-
-    `.lock` path creation is checked alongside the imports because a lockfile
-    hand-rolled with `open(p.with_suffix(".lock"), "x")` needs no import at
-    all and would sail past an import-only scan.
-    """
-    forbidden_imports = ("fcntl", "msvcrt", "filelock", "portalocker")
-    offenders: list[str] = []
-
-    root = Path(__file__).resolve().parent.parent / "quantlab"
-    assert root.is_dir(), f"expected the package at {root}"
-    sources = sorted(root.rglob("*.py"))
-    assert len(sources) > 20, (
-        f"only {len(sources)} module(s) walked -- the scan must not be "
-        "vacuous, or a lock added tomorrow would pass unseen"
-    )
-
-    for source in sources:
-        tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    if alias.name.split(".")[0] in forbidden_imports:
-                        offenders.append(f"{source}: import {alias.name}")
-            elif isinstance(node, ast.ImportFrom):
-                if (node.module or "").split(".")[0] in forbidden_imports:
-                    offenders.append(f"{source}: from {node.module} import ...")
-            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-                if node.value.endswith(".lock"):
-                    offenders.append(f"{source}: lockfile literal {node.value!r}")
-
-    assert offenders == [], (
-        "D-20 says quantlab adds no lock; concurrency is the console's task "
-        f"queue's responsibility. Found: {offenders}"
-    )

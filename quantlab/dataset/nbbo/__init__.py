@@ -82,7 +82,7 @@ class NbboPanelDataset(NbboPanelBase):
 
     Parameters
     ----------
-    dataset_config : NbboDatasetConfig
+    config : NbboDatasetConfig
         Must have ``frequency="tick"``, a ``bar_interval`` from
         ``BAR_INTERVAL_SECONDS`` and a ``reference_dir`` holding the CRSP
         reference tables; also sets the session window, the quote filters

@@ -1,16 +1,15 @@
-"""Resampling a dataset or factor panel onto coarser bars.
+"""Resampling a factor panel onto coarser bars.
 
 A *resample* aggregates a ``(timestamp, symbol)`` panel onto a coarser
 regular time grid, one aggregation method per variable. ``resample()`` on a
-dataset or factor returns a copy whose config carries ``resample_freq`` and
+factor returns a copy whose config carries ``resample_freq`` and
 ``resample_how``; the copy shares no memory with its source, reads its own
 store beside the source store when one was saved, and otherwise resamples the
 source on read. The backend does the grouping; the dataset decides how bars
 are cut (``resample_labels``), and a factor cuts them the way its dataset
-does.
+does. A dataset is not resampled.
 """
 
-import dataclasses
 import json
 from pathlib import Path
 
@@ -20,12 +19,11 @@ import polars as pl
 import pytest
 import xarray as xr
 
-from conftest import WHOLE_STORE, compute_all
+from conftest import compute_all
 from quantlab.backend.parquet import PlBackend
 from quantlab.backend.zarr import XrBackend
 from quantlab.factor.config import FactorConfig, PolarsFactorConfig
 from quantlab.dataset.config import DatasetConfig
-from quantlab.dataset.memory import FrameDataset
 from quantlab.dataset.spot import SpotKlineDataset
 from quantlab.factor.predefined.alpha158 import Alpha158SpotKline
 from quantlab.factor.predefined.momentum import Momentum
@@ -145,6 +143,46 @@ def test_xr_backend_resample_count_and_mean():
     assert backend.data["Close"].values[0].tolist() == [3.5, 35.0]
 
 
+def test_xr_backend_resample_an_all_nan_bar():
+    panel = _minute_panel()[["Close"]]
+    panel["Close"][:BARS_PER_DAY, 0] = np.nan  # every bar of day one, first symbol
+    labels = _labels(panel["timestamp"].values)
+
+    for method in ("first", "last", "max", "min", "mean"):
+        daily = XrBackend().to_internal(panel).resample(labels, {"Close": method}).data
+        assert np.isnan(daily["Close"].values[0, 0]), method
+        assert not np.isnan(daily["Close"].values[0, 1]), method
+    daily = XrBackend().to_internal(panel).resample(labels, {"Close": "sum"}).data
+    assert daily["Close"].values[0].tolist() == [0.0, 210.0]
+    daily = XrBackend().to_internal(panel).resample(labels, {"Close": "count"}).data
+    assert daily["Close"].values[0].tolist() == [0, 6]
+    assert daily["Close"].dtype == np.dtype("int64")
+
+
+def test_xr_backend_resample_keeps_layout_attrs_and_untimed_variables():
+    panel = _minute_panel()[["Close"]]
+    panel["Close"].attrs["unit"] = "usd"
+    panel["Weight"] = ("symbol", [0.25, 0.75])
+    panel["Close_T"] = panel["Close"].transpose("symbol", "timestamp")
+    panel.attrs["source"] = "demo"
+    labels = _labels(panel["timestamp"].values)
+
+    daily = XrBackend().to_internal(panel).resample(
+        labels, {"Close": "last", "Weight": "last", "Close_T": "last"}
+    ).data
+
+    assert daily["Close"].attrs == {"unit": "usd"}
+    assert daily.attrs == {"source": "demo"}
+    assert daily["Weight"].values.tolist() == [0.25, 0.75]
+    assert tuple(daily["Close_T"].dims) == ("timestamp", "symbol")
+    assert daily["Close_T"].values[:, 1].tolist() == [60.0, 120.0, 180.0]
+    assert daily["symbol"].values.tolist() == SYMBOLS
+
+    untimed = panel[["Weight"]].assign_coords(timestamp=panel["timestamp"])
+    daily = XrBackend().to_internal(untimed).resample(labels, {"Weight": "last"}).data
+    assert daily.sizes == {"symbol": 2, "timestamp": DAYS}
+
+
 def test_xr_backend_resample_refuses_a_missing_label_or_method():
     panel = _minute_panel()[["Close"]]
     backend = XrBackend().to_internal(panel)
@@ -167,134 +205,6 @@ def test_pl_backend_resample_matches_the_xarray_result():
 
     for name in OHLCV_HOW:
         np.testing.assert_allclose(got[name].values, expected[name].values)
-
-
-# -- dataset --------------------------------------------------------------------
-
-
-def test_resample_returns_an_independent_copy(minute_config: DatasetConfig):
-    minute = SpotKlineDataset(minute_config)
-
-    daily = minute.resample("1d", OHLCV_HOW)
-
-    assert daily is not minute
-    assert daily.config is not minute.config
-    assert daily.data_backend is not minute.data_backend
-    assert daily.config.resample_freq == "1d"
-    assert daily.config.resample_how == OHLCV_HOW
-    assert minute.config.resample_freq is None
-    assert minute.panel(*WHOLE_STORE).sizes["timestamp"] == DAYS * BARS_PER_DAY
-
-    panel = daily.panel(*WHOLE_STORE)
-    assert dict(panel.sizes) == {"timestamp": DAYS, "symbol": 2}
-    assert panel["Close"].values[:, 0].tolist() == [6.0, 12.0, 18.0]
-    assert (np.diff(panel["timestamp"].values) == np.timedelta64(1, "D")).all()
-    # Resampling built a new config; the source's is unchanged.
-    assert (minute.config.resample_freq, minute.config.resample_how) == (None, None)
-
-
-def test_a_resampled_dataset_answers_requests_from_the_source_store(
-    minute_config: DatasetConfig,
-):
-    daily = SpotKlineDataset(minute_config).resample("1d", "last")
-
-    panel = daily.panel(*WHOLE_STORE)
-
-    assert panel.sizes["timestamp"] == DAYS
-    assert panel["Close"].values[:, 1].tolist() == [60.0, 120.0, 180.0]
-    # A second request answers the same way; nothing is held in between.
-    assert daily.panel(*WHOLE_STORE).sizes["timestamp"] == DAYS
-    with pytest.raises(AttributeError):
-        daily.get_xarray_dataset()
-
-
-def test_a_resampled_request_covers_only_the_requested_range(minute_config: DatasetConfig):
-    daily = SpotKlineDataset(minute_config).resample("1d", "last")
-
-    panel = daily.panel("2024-01-02", "2024-01-03")
-
-    assert panel["timestamp"].values.astype("datetime64[D]").tolist() == [
-        pd.Timestamp("2024-01-02").date(),
-        pd.Timestamp("2024-01-03").date(),
-    ]
-
-
-def test_resampled_dataset_saves_beside_the_source_and_reads_it_back(
-    minute_config: DatasetConfig,
-):
-    daily = SpotKlineDataset(minute_config).resample("1d", OHLCV_HOW)
-    expected_path = str(Path(minute_config.zarr_file_path).with_name("klines_resample_1d.zarr"))
-    assert daily.store_path == expected_path
-    assert SpotKlineDataset(minute_config).store_path == minute_config.zarr_file_path
-
-    daily.save()
-
-    assert Path(expected_path).is_dir()
-    stored = xr.open_zarr(expected_path)
-    assert stored.sizes["timestamp"] == DAYS
-    # The source store is untouched.
-    assert xr.open_zarr(minute_config.zarr_file_path).sizes["timestamp"] == DAYS * BARS_PER_DAY
-
-    # A dataset built with the resample fields reads the saved store.
-    config = dataclasses.replace(minute_config, resample_freq="1d", resample_how=OHLCV_HOW)
-    reader = SpotKlineDataset(config)
-    assert reader.panel(*WHOLE_STORE)["Close"].values[:, 0].tolist() == [6.0, 12.0, 18.0]
-    assert reader.head(2).collect().height == 2
-
-
-def test_a_resampled_save_keeps_the_config_range(minute_config: DatasetConfig):
-    config = dataclasses.replace(minute_config, start_date="2024-01-02")
-
-    SpotKlineDataset(config).resample("1d", "last").save()
-
-    stored = xr.open_zarr(str(Path(config.zarr_file_path).with_name("klines_resample_1d.zarr")))
-    assert stored.sizes["timestamp"] == DAYS - 1
-
-
-def test_resampled_dataset_refuses_to_build_from_raw_files(minute_config: DatasetConfig):
-    daily = SpotKlineDataset(minute_config).resample("1d", "last")
-    with pytest.raises(ValueError, match="from_raw_data"):
-        daily.from_raw_data()
-    with pytest.raises(ValueError, match="from_raw_data_chunked"):
-        daily.update()
-
-
-def test_resample_validates_freq_how_and_coverage(minute_config: DatasetConfig):
-    minute = SpotKlineDataset(minute_config)
-    with pytest.raises(ValueError, match="resample_freq '2d' is not one of"):
-        minute.resample("2d", "last")
-    with pytest.raises(ValueError, match="unknown method"):
-        minute.resample("1d", "median")
-    # Coverage of the panel's variables and bars is checked on a request.
-    with pytest.raises(ValueError, match="does not name"):
-        minute.resample("1d", {"Close": "last"}).panel(*WHOLE_STORE)
-    with pytest.raises(ValueError, match="which the panel does not have"):
-        minute.resample("1d", {**OHLCV_HOW, "Adj": "last"}).panel(*WHOLE_STORE)
-    with pytest.raises(ValueError, match="is not coarser"):
-        minute.resample("1m", "last").panel(*WHOLE_STORE)
-    with pytest.raises(ValueError, match="needs resample_how"):
-        SpotKlineDataset(dataclasses.replace(minute_config, resample_freq="1d"))
-    with pytest.raises(ValueError, match="resample_freq is None"):
-        SpotKlineDataset(dataclasses.replace(minute_config, resample_how="last"))
-
-
-def test_resampled_dataset_config_round_trips(minute_config: DatasetConfig):
-    daily = SpotKlineDataset(minute_config).resample("1d", OHLCV_HOW)
-    saved = json.loads(json.dumps(daily.get_config()))
-    assert saved["resample_freq"] == "1d"
-    assert saved["resample_how"] == OHLCV_HOW
-
-    rebuilt = rebuild(saved)
-    assert rebuilt.config.resample_freq == "1d"
-    assert rebuilt.panel(*WHOLE_STORE).sizes["timestamp"] == DAYS
-
-
-def test_resample_chains_onto_a_coarser_grid(minute_config: DatasetConfig):
-    minute = SpotKlineDataset(minute_config)
-    five = minute.resample("5m", OHLCV_HOW)
-    assert five.panel(*WHOLE_STORE).sizes["timestamp"] == 2 * DAYS
-    daily = five.resample("1d", OHLCV_HOW)
-    assert daily.panel(*WHOLE_STORE)["Volume"].values[:, 0].tolist() == [6.0] * DAYS
 
 
 # -- factor ---------------------------------------------------------------------
@@ -320,7 +230,6 @@ def test_factor_resample_aggregates_the_computed_panel(
     daily = minute.resample("1d", "last")
 
     assert daily.config.dataset is not minute.config.dataset
-    assert daily.config.dataset.config.resample_freq is None  # computed on minute bars
     assert compute_all(minute).sizes["timestamp"] == DAYS * BARS_PER_DAY
     panel = compute_all(daily)
     assert dict(panel.sizes) == {"timestamp": DAYS, "symbol": 2}
@@ -371,7 +280,6 @@ def test_factor_resample_config_round_trips(minute_config: DatasetConfig, tmp_pa
     daily = _momentum(minute_config, tmp_path).resample("1d", "last")
     saved = json.loads(json.dumps(daily.get_config()))
     assert saved["resample_freq"] == "1d"
-    assert saved["dataset"]["resample_freq"] is None
 
     rebuilt = rebuild(saved)
     assert rebuilt.config.resample_freq == "1d"
@@ -398,114 +306,6 @@ def test_kunquant_factor_resample_and_stream_refusal(
     assert compute_all(factor).sizes["timestamp"] == DAYS * BARS_PER_DAY
     with pytest.raises(ValueError, match="init_stream"):
         daily.init_stream()
-
-
-# -- in-memory dataset ----------------------------------------------------------
-
-
-def _frame_of(config: DatasetConfig) -> FrameDataset:
-    """A ``FrameDataset`` holding the same bars as the store, handed over as a long frame."""
-    long = xr.open_zarr(config.zarr_file_path).load().to_dataframe().reset_index()
-    return FrameDataset(long)
-
-
-def _files_under(*roots: Path) -> set[Path]:
-    return {path for root in roots for path in root.rglob("*")}
-
-
-@pytest.mark.parametrize(
-    ("freq", "how"),
-    [
-        ("5m", OHLCV_HOW),
-        ("1h", "mean"),
-        ("1d", OHLCV_HOW),
-        ("1d", "count"),
-        ("1d", {**OHLCV_HOW, "Close": "min", "Volume": "max"}),
-    ],
-    ids=["5m-ohlcv", "1h-mean", "1d-ohlcv", "1d-count", "1d-mixed"],
-)
-def test_a_resampled_frame_dataset_equals_the_zarr_backed_resample(
-    minute_config: DatasetConfig, freq, how
-):
-    stored = SpotKlineDataset(minute_config).resample(freq, how)
-
-    held = _frame_of(minute_config).resample(freq, how)
-
-    xr.testing.assert_identical(held.panel(*WHOLE_STORE), stored.panel(*WHOLE_STORE))
-    last = stored.panel(*WHOLE_STORE)["timestamp"].values[-1]
-    assert held.bar_before(last, 1) == stored.bar_before(last, 1)
-    assert (held.config.resample_freq, held.config.resample_how) == (freq, how)
-
-
-def test_a_chained_frame_resample_equals_the_zarr_backed_chain(minute_config: DatasetConfig):
-    stored = SpotKlineDataset(minute_config).resample("5m", OHLCV_HOW).resample("1d", OHLCV_HOW)
-
-    held = _frame_of(minute_config).resample("5m", OHLCV_HOW).resample("1d", OHLCV_HOW)
-
-    xr.testing.assert_identical(held.panel(*WHOLE_STORE), stored.panel(*WHOLE_STORE))
-
-
-def test_a_frame_resample_writes_no_file(
-    minute_config: DatasetConfig, tmp_path: Path, monkeypatch
-):
-    cwd = tmp_path / "cwd"
-    cwd.mkdir()
-    monkeypatch.chdir(cwd)
-    source = _frame_of(minute_config)
-    before = _files_under(tmp_path)
-
-    daily = source.resample("5m", OHLCV_HOW).resample("1d", OHLCV_HOW)
-    daily.panel(*WHOLE_STORE)
-    daily.bar_before("2024-01-03", 1)
-    daily.head(2).collect()
-
-    assert daily.store_path is None
-    assert _files_under(tmp_path) == before
-    assert list(cwd.iterdir()) == []
-
-
-def test_a_frame_resample_leaves_the_source_unchanged(minute_config: DatasetConfig):
-    source = _frame_of(minute_config)
-    held = source.panel(*WHOLE_STORE)
-
-    source.resample("1d", OHLCV_HOW)
-
-    assert source.config.resample_freq is None
-    xr.testing.assert_identical(source.panel(*WHOLE_STORE), held)
-
-
-@pytest.mark.parametrize(
-    "call",
-    [
-        lambda d: d.from_raw_data(),
-        lambda d: d.from_raw_data_chunked(),
-        lambda d: d.update(),
-        lambda d: d.save(),
-    ],
-    ids=["from_raw_data", "from_raw_data_chunked", "update", "save"],
-)
-def test_a_resampled_frame_dataset_has_no_build_path(
-    minute_config: DatasetConfig, call
-):
-    daily = _frame_of(minute_config).resample("1d", OHLCV_HOW)
-    with pytest.raises(AttributeError, match="'FrameDataset' object has no attribute"):
-        call(daily)
-
-
-def test_a_stream_mode_factor_refuses_a_resampled_frame_dataset(
-    minute_config_8: DatasetConfig,
-):
-    daily = _frame_of(minute_config_8).resample("1d", OHLCV_HOW)
-    with pytest.raises(ValueError, match="stream.*FrameDataset"):
-        Alpha158SpotKline(
-            FactorConfig(
-                warmup_bars=0,
-                dataset=daily,
-                mode="stream",
-                data_columns=["open", "close", "volume"],
-                factor_names=["KMID"],
-            )
-        )
 
 
 # -- session-based labels -------------------------------------------------------

@@ -280,7 +280,7 @@ class SharadarActionsDataset(FilingPanelDataset):
 
     Parameters
     ----------
-    dataset_config : SharadarActionsConfig
+    config : SharadarActionsConfig
         ``raw_data_dir_path`` is ``<download-dir>/sharadar``, holding the
         ``actions``, ``sep`` (the calendar) and ``tickers`` raw tables.
 

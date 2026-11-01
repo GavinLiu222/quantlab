@@ -23,7 +23,6 @@ import pandas as pd
 import polars as pl
 import xarray as xr
 
-from quantlab.dataset.config import DatasetConfig
 from quantlab.dataset.raw import RawMarketDataset
 from quantlab.dataset._support.cleaning import dedup_raw_frame
 from quantlab.enums.data import RAW_HIVE_KEYS
@@ -46,7 +45,7 @@ class StockDataset(RawMarketDataset):
 
     Parameters
     ----------
-    dataset_config : DatasetConfig
+    config : DatasetConfig
         Paths, market, frequency, vendor and date range of the dataset. For
         tick data, ``kwargs["data_type"]`` must be set (``"quotes"`` or
         ``"trades"`` for Alpaca).
@@ -84,10 +83,6 @@ class StockDataset(RawMarketDataset):
     #: Filename suffix of one raw shard. The scan glob and ``has_raw_data``
     #: both use it, so they always look at the same set of files.
     RAW_SHARD_SUFFIX = ".pqt"
-
-    def __init__(self, dataset_config: DatasetConfig):
-        """Initialize the dataset; see the class docstring for parameters."""
-        super().__init__(dataset_config)
 
     @property
     def _hive_keys(self) -> tuple[str, ...]:

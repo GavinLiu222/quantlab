@@ -375,7 +375,7 @@ def record_read(
         ``reread_range`` is given.
     store : str, optional
         The store actually read, for the fallback key of an unmapped source;
-        defaults to ``source.store_path``. A resampled dataset reading its
+        defaults to ``source.store_path``. A resampled factor reading its
         source store passes that store.
     part : str, optional
         The part of ``source`` read, appended to its key as ``<key>.<part>``:

@@ -3,8 +3,7 @@
 ``panel(start, end, symbols)`` opens the store lazily on every call and holds
 nothing afterwards, so one dataset object can feed several consumers with
 different ranges. ``bar_before(date, n)`` answers which bar lies ``n`` bars
-before ``date`` on the dataset's own calendar, the resampled one when the
-dataset is resampled.
+before ``date`` on the dataset's own calendar.
 """
 
 import copy
@@ -210,9 +209,10 @@ def test_bar_after_skips_calendar_gaps(tmp_path):
     assert ds.bar_after("2024-01-05", 1) == pd.Timestamp("2024-01-08")
 
 
-# -- resampled datasets -----------------------------------------------------------
+# -- minute bars ------------------------------------------------------------------
 
-HOW = {
+#: The minute store's variables.
+VARIABLES = {
     "Open": "first",
     "High": "max",
     "Low": "min",
@@ -236,7 +236,7 @@ def minute_dataset(tmp_path: Path) -> SpotKlineDataset:
     close = np.arange(1.0, len(timestamps) + 1.0)[:, None]
     store = tmp_path / "klines.zarr"
     xr.Dataset(
-        {name: (["timestamp", "symbol"], close) for name in HOW},
+        {name: (["timestamp", "symbol"], close) for name in VARIABLES},
         coords={"timestamp": timestamps, "symbol": ["AUSDT"]},
     ).to_zarr(store, mode="w")
     return SpotKlineDataset(
@@ -249,60 +249,10 @@ def minute_dataset(tmp_path: Path) -> SpotKlineDataset:
     )
 
 
-def test_resampled_panel_is_on_resampled_bars(minute_dataset):
-    daily = minute_dataset.resample("1d", HOW)
-
-    panel = daily.panel("2024-01-02", "2024-01-04")
-
-    assert _days(panel) == ["2024-01-02", "2024-01-03", "2024-01-04"]
-    assert panel["Close"].values[:, 0].tolist() == [8.0, 12.0, 16.0]
-    assert panel["Open"].values[:, 0].tolist() == [5.0, 9.0, 13.0]
-    assert panel["Volume"].values[:, 0].tolist() == [26.0, 42.0, 58.0]
-
-
-def test_resampled_panel_reads_the_sibling_store_when_present(minute_dataset):
-    daily = minute_dataset.resample("1d", HOW)
-    days = pd.date_range("2024-01-01", periods=5, freq="D")
-    xr.Dataset(
-        {name: (["timestamp", "symbol"], np.full((5, 1), -1.0)) for name in HOW},
-        coords={"timestamp": days, "symbol": ["AUSDT"]},
-    ).to_zarr(daily.store_path, mode="w")
-
-    panel = daily.panel("2024-01-02", "2024-01-04")
-
-    assert not panel["Close"].variable._in_memory
-    assert panel["Close"].values[:, 0].tolist() == [-1.0, -1.0, -1.0]
-
-
-def test_resampled_bar_before_counts_resampled_bars(minute_dataset):
-    daily = minute_dataset.resample("1d", HOW)
-
-    assert daily.bar_before("2024-01-04", 2) == pd.Timestamp("2024-01-02")
-    with pytest.raises(ValueError, match=r"only 3 bar"):
-        daily.bar_before("2024-01-04", 4)
-
-
-def test_resampled_bar_after_counts_resampled_bars(minute_dataset):
-    daily = minute_dataset.resample("1d", HOW)
-
-    assert daily.bar_after("2024-01-02", 2) == pd.Timestamp("2024-01-04")
-    assert daily.bar_after("2024-01-04", 3) == pd.Timestamp("2024-01-05")
-
-
 def test_intraday_start_inside_a_date_only_end_day_is_accepted(minute_dataset):
     panel = minute_dataset.panel("2024-01-04 00:02", "2024-01-04")
 
     assert panel["Close"].values[:, 0].tolist() == [15.0, 16.0]
-
-
-def test_resampled_request_leaves_source_and_config_unchanged(minute_dataset):
-    daily = minute_dataset.resample("1d", HOW)
-    before = copy.deepcopy(daily.config)
-
-    daily.panel("2024-01-02", "2024-01-04")
-
-    assert daily.config == before
-    assert minute_dataset.panel("2024-01-01", "2024-01-05").sizes["timestamp"] == 20
 
 
 def test_panel_selects_integer_symbol_labels(tmp_path):
@@ -368,21 +318,3 @@ def test_panel_and_bar_before_read_through_the_dataset_backend(pickled):
     assert pickled.bar_before("2024-01-10", 2) == pd.Timestamp("2024-01-08")
     with pytest.raises(AttributeError):
         pickled.get_xarray_dataset()
-
-
-def test_a_resampled_copy_reads_its_source_through_the_same_backend(
-    stock_zarr, tmp_path
-):
-    config = stock_zarr()
-    hourly = xr.open_zarr(config.zarr_file_path).load().assign_coords(
-        timestamp=pd.date_range("2024-01-01", periods=60, freq="h")
-    )
-    store = tmp_path / "hourly.pkl"
-    PickleBackend().to_internal(hourly).write(str(store))
-    dataset = PickleStockDataset(dataclasses.replace(config, zarr_file_path=str(store)))
-
-    daily = dataset.resample("1d", "last")
-
-    assert type(daily.data_backend) is PickleBackend
-    assert daily.panel("2024-01-01", "2024-01-03").sizes["timestamp"] == 3
-    assert daily.bar_before("2024-01-03", 2) == pd.Timestamp("2024-01-01")

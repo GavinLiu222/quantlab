@@ -125,7 +125,7 @@ class MassiveIpoDataset(MassiveRestEventPanel):
 
     Parameters
     ----------
-    dataset_config : MassiveIposConfig
+    config : MassiveIposConfig
         Sharadar's raw tier (calendar, universe), Massive's raw tier and the
         Ticker map.
 

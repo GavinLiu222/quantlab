@@ -196,7 +196,7 @@ class MassiveTenKChangesDataset(ReleasePanelDataset):
 
     Parameters
     ----------
-    dataset_config : MassiveTenKChangesConfig
+    config : MassiveTenKChangesConfig
         ``raw_data_dir_path`` is ``<download-dir>/sharadar`` (SEP, the
         calendar, and TICKERS); ``massive_dir`` is ``<download-dir>/massive``.
 

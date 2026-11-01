@@ -54,12 +54,6 @@ def test_a_day_at_a_time_equals_at_once_new_permatickers_at_the_end(built, tmp_p
     assert mapped.update().stored_days() == [FULL_DAY, HALF_DAY]  # nothing left to do
 
 
-def test_a_resample_equals_the_views(built, tmp_path):
-    mapped = _mapped(built, tmp_path).update()
-
-    _assert_same(mapped.resample("1d").panel(*RANGE), built[2].resample("1d").panel(*RANGE))
-
-
 def test_a_changed_map_is_refused_then_remapped_by_update(built, tmp_path):
     mapped = _mapped(built, tmp_path).update()
     ticker_map: TickerMap = built[1]
@@ -110,17 +104,3 @@ def test_workers_map_ahead_and_write_in_order(built, tmp_path, monkeypatch):
 
     assert mapped.stored_days() == [FULL_DAY, HALF_DAY]
     _assert_same(mapped.panel(*RANGE), built[2].panel(*RANGE))
-
-
-def test_a_resample_counts_its_own_bars(built, tmp_path):
-    """The daily resample's calendar is one bar per session, so warm-up counts sessions.
-
-    RED under: the store's one-minute calendar answering for the resampled dataset.
-    """
-    daily = _mapped(built, tmp_path).update().resample("1d")
-
-    calendar = daily.calendar(*RANGE)
-
-    assert len(calendar) == 2
-    assert calendar.equals(daily.panel(*RANGE).indexes["timestamp"])
-    assert daily.bar_before(calendar[1], 1) == calendar[0]

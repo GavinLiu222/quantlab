@@ -458,16 +458,18 @@ ETF store (same variables, different symbols) and prices plus fundamentals
 inputs' calendars. A merge never picks a value by input order: a cell holding
 a value in two inputs, or inputs on different bar spacings, raise
 `ValueError`. A KunQuant factor over a merge lists the shared names in
-`data_columns` (`close`, not `Close`); stream mode refuses a merge. Resample
-the inputs before merging them.
+`data_columns` (`close`, not `Close`); stream mode refuses a merge.
 
 ## Resample a factor and the factor calendar
 
 `resample(freq, how)` returns a copy of the factor whose `compute`, `read` and
 `build` answer on coarser bars. The factor is still computed on its dataset's
 own bars and only the output is aggregated, so a minute-bar momentum becomes
-a daily series of the last minute's value. `freq` and `how` take the values of
-the dataset's `resample` (see [Datasets](datasets.md)):
+a daily series of the last minute's value. `freq` is a bar size such as
+`"5m"`, `"1h"` or `"1d"`; `how` names one method per output (`first`, `last`,
+`max`, `min`, `sum`, `mean`, `count`) or one for every output, and NaN cells
+are skipped. The bars are cut as the dataset cuts them (its
+`resample_labels`, see [Datasets](datasets.md)):
 
 ```python
 >>> import numpy as np, pandas as pd, xarray as xr
@@ -505,8 +507,8 @@ timestamp
 `build()` on the copy writes its own store beside the source store; `read()`
 opens that store when it exists and otherwise resamples the source factor's
 store on read. The built resampled store is a cache: rebuilding the source
-factor does not refresh it. To compute a factor on already-resampled bars
-instead, give the factor a resampled dataset.
+factor does not refresh it. To compute a factor on coarser bars instead, give
+it a dataset whose store holds those bars.
 
 A factor answers for its own bars, the *factor calendar*, through
 {py:meth}`~quantlab.factor.base.Factor.calendar`,

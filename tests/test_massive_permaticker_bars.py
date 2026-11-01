@@ -174,23 +174,6 @@ def test_a_symbol_and_variable_request(built):
     assert _cell(narrow, 303, _utc(HALF_DAY, "14:32"))["close"] == 31.0
 
 
-def test_a_resampled_panel_equals_resampling_the_permaticker_panel(built):
-    from quantlab.backend.zarr import XrBackend
-
-    trade_bars, _, dataset = built
-    minute = dataset.panel("2024-11-27", "2024-11-30")
-    labels = pd.Series(trade_bars.resample_labels(minute.timestamp.values, "1h"), index=minute.timestamp.values)
-    expected = XrBackend().to_internal(minute).resample(labels, dict(trade_bars.DEFAULT_RESAMPLE_HOW)).data
-    hourly = dataset.resample("1h").panel("2024-11-27", "2024-11-30")
-    xr.testing.assert_identical(hourly.load(), expected.sel(timestamp=hourly.timestamp).load())
-    # A security without a ticker conflict reads as its ticker's hourly bars.
-    store = trade_bars.resample("1h").panel("2024-11-27", "2024-11-27T23:59").sel(symbol="RRR")
-    np.testing.assert_array_equal(
-        hourly["close"].sel(symbol=303, timestamp=slice("2024-11-27", "2024-11-27T23:59")).values,
-        store["close"].values,
-    )
-
-
 def test_the_data_fingerprint_records_both_stores(built):
     from quantlab.runs.record import DataRecorder
 
@@ -217,6 +200,55 @@ def test_the_view_has_no_store(built):
     assert not hasattr(dataset, "update") and not hasattr(dataset, "save")
 
 
+def test_the_ticker_stores_rows_and_lookup_are_not_the_views(built):
+    """The view's symbols are permatickers, so the store's ticker-keyed rows and names are not passed on.
+
+    RED under: ``head`` and ``ticker_lookup`` answered by the store on the Massive ticker.
+    """
+    trade_bars, _, dataset = built
+    assert trade_bars.head(1).collect()["symbol"].to_list() == ["AAA"]
+    assert dataset.ticker_lookup() is None
+    assert dataset.head(1).collect()["symbol"].to_list() == [101]
+
+
+def test_head_maps_the_stores_first_rows_to_permatickers(built):
+    """The store's first rows, 2024-11-27 14:31 and 14:32 over eight tickers, read as permatickers.
+
+    That day AAA is 101, OLD 202 and RRR 303; AAB, FFF, NEW, RRS and ZZZ have
+    no permaticker and are dropped. RED under: a refused ``head``, or rows on
+    the Massive ticker.
+    """
+    trade_bars, _, dataset = built
+    rows = dataset.head(12).collect()
+    assert rows["symbol"].to_list() == [101, 202, 303, 101]
+    assert rows["symbol"].dtype == pl.Int64
+    assert rows.drop("symbol").schema == trade_bars.head(0).collect().drop("symbol").schema
+    assert rows.filter(pl.col("symbol") == 101)["close"].to_list()[0] == 10.0
+    assert dataset.head(0).collect_schema().names() == trade_bars.head(0).collect_schema().names()
+
+
+def test_a_merge_with_the_view_reads_chosen_variables(built, tmp_path):
+    """A merge reads each input's column names from ``head``, so the view merges by variable.
+
+    RED under: ``head`` refused, which a merge asked for ``variables`` calls.
+    """
+    from quantlab.dataset.memory import FrameDataset
+    from quantlab.dataset.merged import MergedDataset
+
+    _, _, dataset = built
+    times = pd.DatetimeIndex(["2024-11-27 14:31", "2024-11-27 14:32"])
+    other = FrameDataset(xr.Dataset(
+        {"flag": (("timestamp", "symbol"), np.ones((2, 1)))},
+        coords={"timestamp": times, "symbol": ["SPY"]},
+    )).to_zarr(tmp_path / "other.zarr")
+
+    panel = MergedDataset([dataset, other]).panel("2024-11-27", "2024-11-30", variables=["close", "flag"])
+
+    assert sorted(panel.data_vars) == ["close", "flag"]
+    assert float(panel["close"].sel(symbol=101, timestamp="2024-11-27 14:31")) == 10.0
+    assert float(panel["flag"].sel(symbol="SPY", timestamp="2024-11-27 14:31")) == 1.0
+
+
 def test_the_busier_ticker_is_decided_over_the_whole_day(built):
     """A request for a few bars keeps the day's busier ticker, AAA, not AAB.
 
@@ -235,15 +267,13 @@ def test_the_view_has_the_trade_bars_calendar_and_market_rules(built):
     assert dataset.delisting_bars(panel, "close").dims == ("timestamp", "symbol")
 
 
-def test_a_resampled_view_counts_its_own_bars(built):
-    """The daily resample's calendar is one bar per session, as its panel.
+def test_a_symbol_priced_after_the_panel_is_not_delisted(built):
+    """101 (AAA) trades again on the half day, so a panel of the full day does not delist it.
 
-    RED under: the Trade bar store's one-minute calendar answering for the resampled view.
+    RED under: the Trade bar store's delisting rule answering for the view, which
+    looks for later prices of permatickers on the Massive ticker axis.
     """
-    daily = built[2].resample("1d")
-
-    calendar = daily.calendar("2024-11-27", "2024-11-30")
-
-    assert len(calendar) == 2
-    assert calendar.equals(daily.panel("2024-11-27", "2024-11-30").indexes["timestamp"])
-    assert daily.bar_before(calendar[1], 1) == calendar[0]
+    _, _, dataset = built
+    panel = dataset.panel("2024-11-27", "2024-11-27 23:59")
+    marks = dataset.delisting_bars(panel, "close")
+    assert not bool(marks.sel(symbol=101).any())

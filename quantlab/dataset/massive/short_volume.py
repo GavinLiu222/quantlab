@@ -125,7 +125,7 @@ class MassiveShortVolumeDataset(MassiveRestEventPanel):
 
     Parameters
     ----------
-    dataset_config : MassiveShortVolumeConfig
+    config : MassiveShortVolumeConfig
         Sharadar's raw tier (calendar, universe), Massive's raw tier and the
         Ticker map.
 

@@ -8,7 +8,9 @@ in the same process and from a fresh process cache; a changed graph or
 option compiles again, and so does a changed parameter of any quantlab
 operator (``kunquant_ts``, ``kunquant_cs``); an entry left unfinished or damaged on disk is
 compiled again rather than loaded; and the outputs are the same whether
-the cache is used or not.
+the cache is used or not. Processes compiling the same graph at once keep
+the entry the first of them published, so none removes a library another
+is loading.
 """
 
 import subprocess
@@ -106,6 +108,11 @@ def test_outputs_are_the_same_with_and_without_the_cache(compiles, monkeypatch) 
     np.testing.assert_array_equal(cached_again["y"].values, uncached["y"].values)
 
 
+def _entries(cache: Path) -> list[Path]:
+    """The entries of the cache directory: everything but the dot-named lock files and staging directories."""
+    return [path for path in cache.iterdir() if not path.name.startswith(".")]
+
+
 def _compile_in_another_process() -> None:
     """Compile ``_entry()`` into the cache from a separate Python process."""
     code = (
@@ -128,7 +135,7 @@ def test_a_damaged_entry_is_compiled_again(compiles, tmp_path) -> None:
     # has loaded would break its mapping (SIGBUS on Linux), and glibc's dlopen
     # would return the loaded handle for the same path anyway.
     _compile_in_another_process()
-    (entry,) = (tmp_path / "cache").iterdir()
+    (entry,) = _entries(tmp_path / "cache")
     (library,) = [path for path in entry.iterdir() if path.name.startswith("Scaled.")]
     library.write_bytes(b"not a library")
     lib = compile_graphs(_entry(), "Scaled")
@@ -138,12 +145,76 @@ def test_a_damaged_entry_is_compiled_again(compiles, tmp_path) -> None:
 
 def test_an_unfinished_entry_is_compiled_again(compiles, monkeypatch, tmp_path) -> None:
     compile_graphs(_entry(), "Scaled")
-    (entry,) = (tmp_path / "cache").iterdir()
+    (entry,) = _entries(tmp_path / "cache")
     (entry / kunquant_compile._COMPLETE).unlink()
     monkeypatch.setattr(kunquant_compile, "_LIBRARIES", {})
     compile_graphs(_entry(), "Scaled")
     assert len(compiles) == 2
     assert (entry / kunquant_compile._COMPLETE).exists()
+
+
+def test_a_compile_that_finishes_after_another_process_keeps_its_entry(monkeypatch, tmp_path) -> None:
+    # Processes compiling the same graph at once: another one renames its entry into place
+    # while this one is still compiling. Removing that intact entry to put this one's in its
+    # place would pull the library from under a third process loading it meanwhile.
+    monkeypatch.setenv(CACHE_ENV, str(tmp_path / "cache"))
+    monkeypatch.setattr(kunquant_compile, "_LIBRARIES", {})
+    compile_sources = kunquant_compile._compile_sources
+    written = {}
+
+    def finishes_second(*args, **kwargs):
+        library = compile_sources(*args, **kwargs)
+        _compile_in_another_process()
+        (entry,) = _entries(tmp_path / "cache")
+        written["inode"] = (entry / library.name).stat().st_ino
+        return library
+
+    monkeypatch.setattr(kunquant_compile, "_compile_sources", finishes_second)
+    lib = compile_graphs(_entry(), "Scaled")
+    (entry,) = _entries(tmp_path / "cache")
+    (library,) = [path for path in entry.iterdir() if path.name.startswith("Scaled.")]
+    assert library.stat().st_ino == written["inode"]
+    np.testing.assert_array_equal(_run(lib), np.arange(24, dtype=np.float32).reshape(3, 8) * 2)
+
+
+def _damaged_entry(cache: Path) -> Path:
+    """Leave a damaged entry (a library without its marker) at ``_entry()``'s key."""
+    entry = cache / graph_key(_entry(), "Scaled", cfake.CppCompilerConfig())
+    entry.mkdir(parents=True)
+    (entry / "Scaled.so").write_bytes(b"not a library")
+    return entry
+
+
+def test_a_damaged_entry_another_process_repaired_meanwhile_is_kept(monkeypatch, tmp_path) -> None:
+    # Two processes find the same damaged entry and compile: the other one replaces it with an
+    # intact entry while this one is still compiling, and this one must not remove that.
+    monkeypatch.setenv(CACHE_ENV, str(tmp_path / "cache"))
+    monkeypatch.setattr(kunquant_compile, "_LIBRARIES", {})
+    entry = _damaged_entry(tmp_path / "cache")
+    compile_sources = kunquant_compile._compile_sources
+    written = {}
+
+    def repaired_meanwhile(*args, **kwargs):
+        library = compile_sources(*args, **kwargs)
+        _compile_in_another_process()
+        (repaired,) = [path for path in entry.iterdir() if path.name.startswith("Scaled.")]
+        written["inode"] = repaired.stat().st_ino
+        return library
+
+    monkeypatch.setattr(kunquant_compile, "_compile_sources", repaired_meanwhile)
+    lib = compile_graphs(_entry(), "Scaled")
+    (library,) = [path for path in entry.iterdir() if path.name.startswith("Scaled.")]
+    assert library.stat().st_ino == written["inode"]
+    np.testing.assert_array_equal(_run(lib), np.arange(24, dtype=np.float32).reshape(3, 8) * 2)
+
+
+def test_a_file_at_the_key_is_replaced_by_the_entry(compiles, tmp_path) -> None:
+    entry = tmp_path / "cache" / graph_key(_entry(), "Scaled", cfake.CppCompilerConfig())
+    entry.parent.mkdir(parents=True)
+    entry.write_bytes(b"not an entry")
+    lib = compile_graphs(_entry(), "Scaled")
+    assert entry.is_dir() and (entry / kunquant_compile._COMPLETE).is_file()
+    np.testing.assert_array_equal(_run(lib), np.arange(24, dtype=np.float32).reshape(3, 8) * 2)
 
 
 def test_an_empty_cache_variable_writes_nothing(compiles, monkeypatch, tmp_path) -> None:

@@ -85,7 +85,7 @@ class SharadarFiscalYearsDataset(ReleasePanelDataset):
 
     Parameters
     ----------
-    dataset_config : SharadarFiscalYearsConfig
+    config : SharadarFiscalYearsConfig
         ``raw_data_dir_path`` is ``<download-dir>/sharadar``, holding the
         ``sf1``, ``sep`` (the calendar), ``tickers`` and ``indicators`` raw
         tables.

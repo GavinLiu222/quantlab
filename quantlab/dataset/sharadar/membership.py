@@ -196,7 +196,7 @@ class SharadarSP500ConstituentDataset(IndexConstituentDataset):
 
     Parameters
     ----------
-    dataset_config : FileConstituentDatasetConfig
+    config : FileConstituentDatasetConfig
         ``cache_dir`` is ``<download-dir>/sharadar``, holding the ``sp500``
         and ``tickers`` raw tables.
 

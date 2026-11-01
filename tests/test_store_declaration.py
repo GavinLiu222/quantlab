@@ -24,7 +24,6 @@ from quantlab.dataset.memory import FrameDataset
 from quantlab.dataset.merged import MergedDataset
 from quantlab.dataset.roster import RosterDataset
 from quantlab.dataset.stock import StockDataset
-from quantlab.runs.record import DataRecorder
 from tests.backtest_fixtures import write_price_store
 from tests.test_massive_permaticker_bars import built  # noqa: F401  (fixture)
 
@@ -46,17 +45,6 @@ def test_a_store_is_a_leaf_reading_its_store(stores):
     prices, _, _ = stores
     assert prices.inputs() == () and [u.relation for u in prices.store_uses()] == ["reads"]
     assert prices.stores() == [prices.store_path] == [prices.config.zarr_file_path]
-
-
-def test_a_resample_reads_its_source_until_its_own_store_is_saved(stores):
-    _, _, hourly = stores
-    daily = hourly.resample("1d", "last")
-    assert daily.store_path.endswith("hourly_resample_1d.zarr")
-    assert daily.stores() == [hourly.store_path]
-
-    daily.save()
-
-    assert daily.stores() == [daily.store_path]
 
 
 def test_a_held_panel_reads_no_store(stores, tmp_path):
@@ -97,15 +85,5 @@ def test_the_permaticker_view_reads_the_trade_bar_store(built):
 def test_a_mapped_store_is_a_leaf_not_a_view_of_its_source(built, tmp_path):
     path = str(tmp_path / "mapped.zarr")
     mapped = MappedTradeBarDataset(MappedTradeBarsConfig(source=built[2], zarr_file_path=path)).update()
-    for dataset in (mapped, mapped.resample("1d")):
-        assert dataset.inputs() == ()
-        assert dataset.stores() == [path]
-
-
-def test_a_resampled_read_records_the_store_it_declares(stores):
-    _, _, hourly = stores
-    daily = hourly.resample("1d", "last")
-    with DataRecorder(keys=[]) as recorder:
-        daily.panel("2024-01-01", "2024-01-02")
-    (key,) = recorder.records
-    assert key == f"StockDataset:{daily.stores()[0]}"
+    assert mapped.inputs() == ()
+    assert mapped.stores() == [path]

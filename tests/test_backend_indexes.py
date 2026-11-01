@@ -37,7 +37,7 @@ import polars as pl
 import pytest
 import xarray as xr
 
-from quantlab.dataset.config import BaseDatasetConfig
+from quantlab.dataset.config import RawDatasetConfig
 from quantlab.dataset.raw import RawDataset
 from quantlab.backend.parquet import PlBackend
 from quantlab.backend.zarr import XrBackend
@@ -65,7 +65,7 @@ class PanelDataset(RawDataset):
     `anomaly_flag` and numpy refuses to subtract booleans.
     """
 
-    def __init__(self, config: BaseDatasetConfig, gappy: bool = False):
+    def __init__(self, config: RawDatasetConfig, gappy: bool = False):
         self._times = GAPPY_TIMES if gappy else TIMES
         super().__init__(config)
 
@@ -260,7 +260,7 @@ def test_time_interval_works_under_xrbackend(tmp_path: Path):
     reproduces the first failure and exercises the `.mode()` the property
     uses for exactly that reason.
     """
-    config = BaseDatasetConfig(
+    config = RawDatasetConfig(
         zarr_file_path=str(tmp_path / "panel" / "interval.zarr")
     )
     dataset = PanelDataset(config)
@@ -275,7 +275,7 @@ def test_time_interval_takes_the_mode_not_the_first_gap(tmp_path: Path):
     """The `.mode()` is load-bearing: a daily panel with a weekend hole must
     still report 1 day. Without it the property would report whatever the
     first gap happened to be."""
-    config = BaseDatasetConfig(
+    config = RawDatasetConfig(
         zarr_file_path=str(tmp_path / "panel" / "gappy.zarr")
     )
     dataset = PanelDataset(config, gappy=True)

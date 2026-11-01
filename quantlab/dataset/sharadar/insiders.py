@@ -103,7 +103,7 @@ class SharadarInsidersDataset(FilingPanelDataset):
 
     Parameters
     ----------
-    dataset_config : SharadarInsidersConfig
+    config : SharadarInsidersConfig
         ``raw_data_dir_path`` is ``<download-dir>/sharadar``, holding the
         ``sf2``, ``sep`` (the calendar) and ``tickers`` raw tables.
 

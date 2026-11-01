@@ -29,6 +29,7 @@ import numpy as np
 import polars as pl
 import xarray as xr
 
+from quantlab.dataset._support.member_runs import member_runs
 from quantlab.dataset.raw import IndexConstituentDataset
 
 __all__ = ["ESTU_COVERAGE_START", "EstuConstituentDataset"]
@@ -75,20 +76,5 @@ class EstuConstituentDataset(IndexConstituentDataset):
         """
         estu = xr.open_zarr(self.config.kwargs["barra_store"])["estu"]
         estu = estu.sel(timestamp=slice(self.config.start_date, self.config.end_date))
-        days = estu["timestamp"].values.astype("datetime64[D]")
         mask = estu.transpose("timestamp", "symbol").values > 0
-        symbols = estu["symbol"].values
-        edge = np.zeros((1, mask.shape[1]), bool)
-        step = np.diff(np.vstack([edge, mask, edge]).astype(np.int8), axis=0)
-        start_t, start_s = np.nonzero(step == 1)
-        end_t, end_s = np.nonzero(step == -1)
-        # Both sides in (symbol, time) order, so the k-th start pairs with the k-th end.
-        order_start = np.lexsort((start_t, start_s))
-        order_end = np.lexsort((end_t, end_s))
-        return pl.DataFrame(
-            {
-                "symbol": symbols[start_s[order_start]].astype(np.int64),
-                "start_date": days[start_t[order_start]],
-                "end_date": days[end_t[order_end] - 1],
-            }
-        ).with_columns(pl.col("start_date").cast(pl.Date), pl.col("end_date").cast(pl.Date))
+        return member_runs(mask, estu["timestamp"].values, estu["symbol"].values.astype(np.int64))

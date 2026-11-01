@@ -70,7 +70,7 @@ class SharadarDailyDataset(RawDataset):
 
     Parameters
     ----------
-    dataset_config : SharadarDailyConfig
+    config : SharadarDailyConfig
         ``raw_data_dir_path`` is ``<download-dir>/sharadar``, holding the
         ``daily``, ``tickers`` and ``indicators`` raw tables.
 

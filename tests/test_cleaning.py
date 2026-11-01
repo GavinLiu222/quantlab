@@ -203,10 +203,6 @@ class _NoOpDataset:
     def _raw_data_to_xr(self) -> xr.Dataset:
         return self._data
 
-    def _refuse_if_resampled(self, method: str) -> None:
-        # The stand-in has no config, so it is never a resampled dataset.
-        return None
-
     def _clean(self, data: xr.Dataset) -> xr.Dataset:
         from quantlab.dataset.raw import RawDataset
 

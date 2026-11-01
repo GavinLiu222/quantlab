@@ -34,7 +34,7 @@ class FrameDataset(MarketDataset):
 
     Construction from a frame or panel performs no disk I/O. Alternatively,
     pass ``FrameDatasetConfig`` to load an existing Zarr store into memory.
-    ``to_zarr`` saves the held panel, and ``resample`` returns a new dataset.
+    ``to_zarr`` saves the held panel.
     Stream-mode factors are not supported. For stock factors, use the variable
     names they expect, such as ``adjOpen`` and ``adjClose``; ``quantlab.api``
     handles this renaming when using its predefined stock factor names.
@@ -110,7 +110,7 @@ class FrameDataset(MarketDataset):
     def _init_from_store(
         self, config: FrameDatasetConfig, columns: Mapping[str, str] | None
     ) -> None:
-        """Read the store ``config`` names into memory, resampling it if configured.
+        """Read the store ``config`` names into memory.
 
         Raises
         ------
@@ -131,12 +131,9 @@ class FrameDataset(MarketDataset):
                 f"names no store to read; pass the frame or panel itself instead."
             )
         super().__init__(config)
-        panel = XrBackend().read(str(config.zarr_file_path)).get_xarray_dataset(
+        self._panel = XrBackend().read(str(config.zarr_file_path)).get_xarray_dataset(
             ["timestamp", "symbol"]
         ).load()
-        if config.resample_freq is not None:
-            panel = self._resample_panel(panel)
-        self._panel = panel
 
     def __eq__(self, other: object) -> bool:
         """Return whether ``other`` is a ``FrameDataset`` with an equal config and panel.
@@ -162,52 +159,11 @@ class FrameDataset(MarketDataset):
         """Return the panel this dataset holds."""
         return self._panel
 
-    def copy(self) -> Self:
-        """Return a copy with its own config, holding the same panel.
-
-        The panel is shared, not duplicated: no method of this dataset changes it.
-
-        Examples
-        --------
-        >>> import pandas as pd
-        >>> from quantlab.dataset.memory import FrameDataset
-        >>> frame = pd.DataFrame({
-        ...     "timestamp": pd.to_datetime(["2024-01-02", "2024-01-02", "2024-01-03"]),
-        ...     "symbol": ["AAA", "BBB", "AAA"], "close": [10.0, 20.0, 11.0]})
-        >>> ds = FrameDataset(frame)
-        >>> other = ds.copy()
-        >>> other == ds, other.config is ds.config
-        (True, False)
-        """
-        return super().copy()
-
-    @property
-    def store_path(self) -> str | None:
-        """Return the source Zarr path, or ``None`` for unsaved in-memory data.
-
-        A dataset constructed from a frame has no source store. A resampled
-        dataset also returns ``None`` because its bars are aggregated in memory.
-
-        Examples
-        --------
-        >>> import pandas as pd
-        >>> from quantlab.dataset.memory import FrameDataset
-        >>> frame = pd.DataFrame({
-        ...     "timestamp": pd.to_datetime(["2024-01-02", "2024-01-02", "2024-01-03"]),
-        ...     "symbol": ["AAA", "BBB", "AAA"], "close": [10.0, 20.0, 11.0]})
-        >>> FrameDataset(frame).store_path is None
-        True
-        """
-        if self.config.resample_freq is not None:
-            return None
-        return self.config.zarr_file_path
-
     def to_zarr(self, path: "str | os.PathLike") -> Self:
         """Write the held panel to a new Zarr store and return a dataset reading it.
 
-        The panel is written as held: a resampled dataset writes its resampled bars,
-        and the returned dataset's config carries no resample fields. This dataset is
-        not changed. A backtest run directory's copies of held panels are written this way.
+        The panel is written as held. This dataset is not changed. A backtest
+        run directory's copies of held panels are written this way.
 
         Parameters
         ----------
@@ -251,12 +207,7 @@ class FrameDataset(MarketDataset):
             )
         XrBackend().to_internal(self._held()).write(str(target))
         return type(self)(
-            dataclasses.replace(
-                self.config,
-                zarr_file_path=str(target),
-                resample_freq=None,
-                resample_how=None,
-            )
+            dataclasses.replace(self.config, zarr_file_path=str(target))
         )
 
     def persist_with_run(self, run_dir: Path, store: str) -> dict:
@@ -356,67 +307,9 @@ class FrameDataset(MarketDataset):
             )
         return {**config, "zarr_file_path": str(Path(run_dir) / path)}
 
-    def resample(self, freq: str, how: Mapping[str, str] | str) -> Self:
-        """Return a dataset holding this panel resampled onto ``freq``, in memory.
-
-        The bars are cut and aggregated as on a Zarr-backed dataset: UTC-clock buckets
-        labelled at their start, one ``ResampleMethod`` per variable, NaN cells skipped.
-        Nothing is written or read: there is no sibling store, not even beside a store
-        this dataset was read from, and ``store_path`` is ``None``.
-        The copy is still a ``FrameDataset``: it has no build path and a stream-mode
-        factor refuses it. This dataset is not changed.
-
-        Parameters
-        ----------
-        freq : str
-            A ``ResampleFrequency`` token, coarser than the held bars.
-        how : mapping of str to str, or str
-            One ``ResampleMethod`` for every variable, or a ``{variable: method}``
-            mapping naming every variable.
-
-        Returns
-        -------
-        FrameDataset
-            A new dataset whose config carries ``resample_freq`` and ``resample_how``.
-
-        Raises
-        ------
-        ValueError
-            If ``freq`` or a method is not a known token, ``freq`` is not coarser than
-            the held bars, or ``how`` does not name every variable.
-
-        Examples
-        --------
-        >>> import pandas as pd
-        >>> from quantlab.dataset.memory import FrameDataset
-        >>> frame = pd.DataFrame({
-        ...     "timestamp": pd.date_range("2024-01-02", periods=4, freq="12h").repeat(2),
-        ...     "symbol": ["AAA", "BBB"] * 4,
-        ...     "close": [10.0, 20.0, 11.0, 21.0, 12.0, 22.0, 13.0, 23.0],
-        ...     "volume": [1.0] * 8,
-        ... })
-        >>> daily = FrameDataset(frame).resample("1d", {"close": "last", "volume": "sum"})
-        >>> panel = daily.panel("2024-01-02", "2024-01-03")
-        >>> panel["close"].values
-        array([[11., 21.],
-               [13., 23.]])
-        >>> panel["volume"].values
-        array([[2., 2.],
-               [2., 2.]])
-        >>> daily.store_path is None
-        True
-        """
-        other = super().resample(freq, how)
-        other._panel = other._resample_panel(self._held())
-        return other
-
     def _open_bars(self, start, end) -> xr.Dataset:
         """Return the held bars from ``start`` to ``end``: the read seam's bars (``BaseDataset.panel``)."""
         return self._held().sel(timestamp=slice(start, end))
-
-    def _resamples_on_read(self) -> bool:
-        """Return ``False``: a resampled copy already holds its resampled panel."""
-        return False
 
     def _calendar(self) -> pd.DatetimeIndex:
         """Return the held panel's timestamps."""

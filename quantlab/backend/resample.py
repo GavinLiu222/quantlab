@@ -1,16 +1,15 @@
-"""Resample a panel, and resample on read: one copy for datasets and factors.
+"""Resample a panel, and resample on read, for factors.
 
-A resampled dataset or factor whose own ``<stem>_resample_<freq>.zarr`` store
-has not been saved answers a request by *resampling on read*: it
-opens its source bars over the request widened by ``resample_padding(freq)``,
-aggregates them onto ``freq`` bars and cuts the request's window.
-``BaseDataset.panel`` and ``Factor.read`` both do it through
-``resample_on_read``; each supplies only how it opens its source bars and how
+A resampled factor whose own ``<stem>_resample_<freq>.zarr`` store has not
+been built answers a request by *resampling on read*: it opens its source
+bars over the request widened by ``resample_padding(freq)``, aggregates them
+onto ``freq`` bars and cuts the request's window. ``Factor.read`` does it
+through ``resample_on_read``, supplying how it opens its source bars and how
 it cuts bars (``BaseDataset.resample_labels``, which a factor takes from its
 dataset). ``resample_panel`` is the aggregation alone, which a factor's
-``compute`` and a dataset holding a panel use too. Two things stay the
-caller's: what a read records (the source bars, since the resampled panel is
-computed, not stored) and the range check, whose message names its method.
+``compute`` uses too. Two things stay the caller's: what a read records (the
+source bars, since the resampled panel is computed, not stored) and the range
+check, whose message names its method.
 
 Examples
 --------

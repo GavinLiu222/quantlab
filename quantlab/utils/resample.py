@@ -1,11 +1,11 @@
 """Shared pieces of the resample contract: config checks, bucket labels, paths.
 
 A *resample* aggregates a ``(timestamp, symbol)`` panel onto a coarser
-regular time grid, one aggregation method per variable. Datasets and factors
-carry the request in their config (``resample_freq`` and ``resample_how``),
-map each source timestamp to the bar it belongs to, and hand the grouping to
-their storage backend. The helpers here are the parts of that contract both
-layers share; the backend's ``resample`` does the grouping itself.
+regular time grid, one aggregation method per variable. A factor carries the
+request in its config (``resample_freq`` and ``resample_how``), its dataset
+maps each source timestamp to the bar it belongs to (``resample_labels``),
+and the storage backend does the grouping (its ``resample``). The helpers
+here are the parts of that contract the layers share.
 """
 
 from pathlib import Path
@@ -39,10 +39,10 @@ def validate_resample_config(
 
     Examples
     --------
-    >>> validate_resample_config("1d", {"close": "last"}, "StockDataset")
-    >>> validate_resample_config("1d", None, "StockDataset")
+    >>> validate_resample_config("1d", {"close": "last"}, "IntradayStats")
+    >>> validate_resample_config("1d", None, "IntradayStats")
     Traceback (most recent call last):
-    ValueError: StockDataset: resample_freq='1d' needs resample_how ...
+    ValueError: IntradayStats: resample_freq='1d' needs resample_how ...
     """
     if freq is None and how is None:
         return
@@ -96,11 +96,11 @@ def resolve_resample_how(
 
     Examples
     --------
-    >>> resolve_resample_how("last", ["bid", "ask"], "NbboPanelDataset")
+    >>> resolve_resample_how("last", ["bid", "ask"], "IntradayStats")
     {'bid': 'last', 'ask': 'last'}
-    >>> resolve_resample_how({"bid": "last"}, ["bid", "ask"], "NbboPanelDataset")
+    >>> resolve_resample_how({"bid": "last"}, ["bid", "ask"], "IntradayStats")
     Traceback (most recent call last):
-    ValueError: NbboPanelDataset: resample_how does not name ['ask'] ...
+    ValueError: IntradayStats: resample_how does not name ['ask'] ...
     """
     if isinstance(how, str):
         return {name: how for name in variables}
@@ -160,10 +160,10 @@ def assert_coarser(timestamps: np.ndarray, freq: str, owner: str) -> None:
     Examples
     --------
     >>> minutes = pd.date_range("2024-01-01", periods=10, freq="min")
-    >>> assert_coarser(minutes, "5m", "DemoDataset")
-    >>> assert_coarser(minutes, "1m", "DemoDataset")
+    >>> assert_coarser(minutes, "5m", "IntradayStats")
+    >>> assert_coarser(minutes, "1m", "IntradayStats")
     Traceback (most recent call last):
-    ValueError: DemoDataset: resample_freq='1m' (60s) is not coarser ...
+    ValueError: IntradayStats: resample_freq='1m' (60s) is not coarser ...
     """
     source = source_interval_seconds(timestamps)
     target = resample_seconds(freq)

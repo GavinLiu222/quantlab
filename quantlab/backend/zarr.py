@@ -1642,9 +1642,13 @@ class XrBackend(DataBackend):
         label and reduced with its method from ``how``; the other dimensions
         are kept as they are. A variable without a ``timestamp`` dimension
         is carried over unchanged. ``count`` yields integers; the other
-        methods keep pandas' skip-NaN semantics, so an all-NaN bar is NaN
-        under ``first``, ``last``, ``max``, ``min`` and ``mean`` and 0
-        under ``sum``.
+        methods skip NaN, so an all-NaN bar is NaN under ``first``,
+        ``last``, ``max``, ``min`` and ``mean`` and 0 under ``sum``.
+
+        The grouping is xarray's ``groupby``, one pass per method, which
+        loops in Python over the output bars: minute bars resampled to
+        ``"1d"`` (few output bars) are fast, while resampling to many
+        short bars such as ``"5m"`` is slower.
 
         Parameters
         ----------
@@ -1678,42 +1682,47 @@ class XrBackend(DataBackend):
             raise ValueError(
                 f"XrBackend.resample: no method for {missing}."
             )
-        groups = pd.DatetimeIndex(target.values)
-        new_timestamps = pd.DatetimeIndex(groups.unique()).sort_values()
+        # Named "timestamp", the grouper's labels become the result's
+        # timestamp axis, so the source timestamp coordinates go first.
+        groups = xr.DataArray(
+            target.values.astype("datetime64[ns]"),
+            dims="timestamp",
+            name="timestamp",
+        )
+        untimed_coords = data.drop_vars(
+            [name for name, coord in data.coords.items()
+             if "timestamp" in coord.dims]
+        )
 
         variables = {}
+        by_method: dict[str, list[str]] = {}
         for name, variable in data.data_vars.items():
-            if "timestamp" not in variable.dims:
+            if "timestamp" in variable.dims:
+                by_method.setdefault(how[name], []).append(name)
+            else:
                 variables[name] = variable
-                continue
-            ordered = variable.transpose("timestamp", ...)
-            other_dims = ordered.dims[1:]
-            other_shape = ordered.shape[1:]
-            frame = pd.DataFrame(
-                ordered.values.reshape(len(source), -1), index=source
-            )
-            reduced = frame.groupby(groups, sort=True).agg(how[name])
-            reduced = reduced.reindex(new_timestamps)
-            values = reduced.to_numpy().reshape(
-                (len(new_timestamps),) + other_shape
-            )
-            coords = {
-                dim: data[dim] for dim in other_dims if dim in data.coords
-            }
-            variables[name] = xr.DataArray(
-                values,
-                dims=("timestamp",) + other_dims,
-                coords=coords,
-                attrs=variable.attrs,
-            )
+        # Off for every method so the path does not depend on whether flox
+        # is installed; measured on minute bars resampled to "1d", flox was
+        # over 10x slower for first and last, the commonest methods here.
+        with xr.set_options(use_flox=False):
+            for method, names in by_method.items():
+                reduced = getattr(untimed_coords[names].groupby(groups), method)(
+                    keep_attrs=True
+                )
+                for name in names:
+                    variables[name] = reduced[name].transpose("timestamp", ...)
 
         coords = {
             name: coord
             for name, coord in data.coords.items()
             if "timestamp" not in coord.dims
         }
-        coords["timestamp"] = new_timestamps.values.astype("datetime64[ns]")
-        self.data = xr.Dataset(variables, coords=coords, attrs=data.attrs)
+        coords["timestamp"] = np.unique(groups.values)
+        self.data = xr.Dataset(
+            {name: variables[name] for name in data.data_vars},
+            coords=coords,
+            attrs=data.attrs,
+        )
         return self
 
     def get_xarray_dataset(

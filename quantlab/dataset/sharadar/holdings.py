@@ -97,7 +97,7 @@ class SharadarHoldingsDataset(ReleasePanelDataset):
 
     Parameters
     ----------
-    dataset_config : SharadarHoldingsConfig
+    config : SharadarHoldingsConfig
         ``raw_data_dir_path`` is ``<download-dir>/sharadar``, holding the
         ``sf3a``, ``sep`` (the calendar) and ``tickers`` raw tables.
 

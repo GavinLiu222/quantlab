@@ -155,8 +155,8 @@ panel = MassiveTradeBarDataset(config).panel("2016-11-25", "2016-11-26")
   regular hours, half days included.
 - **Auctions.** The closing auction reaches the SIP after the close, so it is in no OHLCV; it
   sets `close_auction_price` and `close_auction_volume` on the session's last bar, which
-  therefore holds information published after its label. A daily resample's
-  `close_auction_price` is the official close.
+  therefore holds information published after its label. Aggregated onto daily bars with
+  `last`, `close_auction_price` is the official close.
 - **Empty bars.** A bar without an eligible trade has NaN prices and zero volumes.
 - **Symbols.** Every ticker is kept, spelled as the trade file spells it (`BRK.A`). A new day's new
   tickers are appended at the end of the symbol axis without rewriting stored chunks.
@@ -188,12 +188,8 @@ fine = replace(config, zarr_file_path="/data/quantlab/zarrs/massive_trade_bars_1
                start_date="2016-11-25", end_date="2016-11-25")
 ```
 
-Coarser bars come from `resample`, cut per session and labelled at their end; `"1d"` is one bar per
-session:
-
-```python
-hourly = MassiveTradeBarDataset(config).resample("1h").panel("2016-11-25", "2016-11-26")
-```
+A factor resampled from the store onto coarser bars (`Factor.resample`) cuts them per session,
+right-closed and labelled at their end, as `resample_labels` says; `"1d"` is one bar per session.
 
 ## Day aggregates
 
@@ -265,7 +261,6 @@ from quantlab.dataset.massive.permaticker_bars import PermatickerTradeBarDataset
 
 bars = PermatickerTradeBarDataset(MassiveTradeBarDataset(config), ticker_map)
 panel = bars.panel("2020-03-02", "2020-03-03")                 # symbol: int64 permatickers
-hourly = bars.resample("1h").panel("2020-03-02", "2020-03-03")
 ```
 
 For each day, an unmapped ticker is dropped, two tickers of one permaticker keep the busier, and a
@@ -287,7 +282,6 @@ mapped = MappedTradeBarDataset(MappedTradeBarsConfig(
 ))
 mapped.update(workers=16)                              # build, or catch up
 panel = mapped.panel("2020-03-02", "2020-03-03")
-daily = mapped.resample("1d").panel("2020-03-02", "2020-03-06")
 
 mapped = load_component("/data/quantlab/market/massive/massive_permaticker_bars_1m")   # the shared one
 ```

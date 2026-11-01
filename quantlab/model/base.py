@@ -57,7 +57,7 @@ TORCH_RESERVED_HYPERPARAMETERS: frozenset[str] = frozenset(
 #: Keys of ``ModelConfig.hyperparameters`` a ``LibraryModel`` reads itself:
 #: ``early_stopping`` (default False) and ``early_stopping_patience``
 #: (default 5), the shipped library heads' native early stopping, and
-#: ``training_target`` (``"cs_rank"`` or ``"cs_zscore"``; unset trains on the
+#: ``training_target`` (``"cs_rank"``, ``"cs_rank_gauss"`` or ``"cs_zscore"``; unset trains on the
 #: raw label).
 LIBRARY_RESERVED_HYPERPARAMETERS: frozenset[str] = frozenset(
     {"early_stopping", "early_stopping_patience", "training_target"}

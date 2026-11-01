@@ -57,7 +57,7 @@ from quantlab.dataset.massive.raw import raw_days, raw_file, read_aggregates
 from quantlab.dataset.stock import StockDataset
 from quantlab.utils.symbol_axis import sort_symbol_axis
 
-__all__ = ["DAY_BAR_VARIABLES", "DAY_BAR_RESAMPLE_HOW", "MassiveDayBarDataset"]
+__all__ = ["DAY_BAR_VARIABLES", "MassiveDayBarDataset"]
 
 #: The panel's variables, from the file's columns of the same name
 #: (``n_trades`` from ``transactions``).
@@ -66,23 +66,12 @@ DAY_BAR_VARIABLES = ("open", "high", "low", "close", "volume", "n_trades")
 #: The variables a ticker without a bar reads as zero; prices stay NaN.
 _ZERO_WITHOUT_BAR = ("volume", "n_trades")
 
-#: Each variable's aggregation onto coarser bars.
-DAY_BAR_RESAMPLE_HOW = {
-    "open": "first",
-    "high": "max",
-    "low": "min",
-    "close": "last",
-    "volume": "sum",
-    "n_trades": "sum",
-}
-
-
 class MassiveDayBarDataset(StockDataset):
     """Dense Day aggregate panel on the Massive ticker axis; see the module docstring.
 
     Parameters
     ----------
-    dataset_config : MassiveDayBarsDatasetConfig
+    config : MassiveDayBarsDatasetConfig
         The raw tier, the store and the date range.
 
     Examples
@@ -99,9 +88,6 @@ class MassiveDayBarDataset(StockDataset):
 
     #: The data type the panel is built from.
     DATA_TYPE = "day_aggs"
-
-    #: ``resample(freq)`` aggregates each variable this way unless told otherwise.
-    DEFAULT_RESAMPLE_HOW = DAY_BAR_RESAMPLE_HOW
 
     #: No ``"rebuild"``: a ticker a new day brings has no bar before it, so
     #: the store is only refused or extended.

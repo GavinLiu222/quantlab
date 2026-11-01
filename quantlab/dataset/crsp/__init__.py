@@ -386,7 +386,7 @@ class CrspStockDataset(StockDataset):
 
     Parameters
     ----------
-    dataset_config : CrspDatasetConfig
+    config : CrspDatasetConfig
         Must have ``frequency="1d"`` and ``vendor="wrds"``. The inherited
         ticker-based ``symbols`` field must be unset; use ``permnos`` to
         convert only some securities. ``reference_dir`` points to the

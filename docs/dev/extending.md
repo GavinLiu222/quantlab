@@ -230,6 +230,10 @@ boundary from it. A real fetcher inherits the Wikipedia change-log parser and se
 overrides `fetch_changes` so that it runs offline. The panel subclasses
 {py:class}`~quantlab.dataset.raw.IndexConstituentDataset`; it reads the fetcher's cache, so it
 takes a {py:class}`~quantlab.dataset.config.FileConstituentDatasetConfig` (`config_cls`).
+It implements `_pit_coverage_start`, the first date the source answers for, and
+`_build_intervals`. The panel ends on the intervals' last date (or `as_of` while one is
+open); a source that observes days on which no symbol is a member also overrides
+`_pit_coverage_end(config)` with its last observed date, so those days stay on the panel.
 
 ```python
 >>> import os, tempfile
@@ -302,6 +306,12 @@ build path are two roots: {py:class}`~quantlab.dataset.base.BaseDataset` and
 and {py:class}`~quantlab.dataset.raw.RawMarketDataset` add the build path (`from_raw_data`,
 `save`, `from_raw_data_chunked`, `update`) for a dataset that converts raw files into a
 store it owns.
+
+Every dataset that is not a view is a *leaf*, built from raw data or not. A leaf overrides
+a root member only to change how it reads; setting `config_cls` (its config class) or
+`COLUMN_MAP` (its column names) declares the leaf and is not an override. Add a new leaf to
+the table in `tests/test_dataset_leaf_overrides.py` with one reason per root member it
+overrides: the test fails on an override the table does not list.
 
 ### Market bars
 
@@ -399,7 +409,8 @@ Further hooks:
 - **Config checks.** Override `_normalize_config(config)`: call the parent first, check the
   result and return a new config made with `dataclasses.replace`. It runs on every
   assignment, so an invalid config is refused when the dataset is created. Do not redefine
-  the `config` property.
+  the `config` property. State derived from the config (a resolved filter, a calendar, a
+  cache) is reset in `_on_config_installed()`, which runs once the new config is accepted.
 - **Registry.** Name the class as the `dataset_cls` of the vendor's capability, so that
   `convert()` reaches it.
 
@@ -409,10 +420,11 @@ A subclass that leaves out a required hook cannot be instantiated.
 
 The default cleaning step (`_clean`) requires `open`, `high`, `low`, `close` and `volume`
 and adds `anomaly_flag`. A panel without price columns derives from `RawDataset`, uses
-{py:class}`~quantlab.dataset.config.BaseDatasetConfig` and overrides `_clean`:
+{py:class}`~quantlab.dataset.config.RawDatasetConfig` (the store path plus the build
+dates, `symbols` and `kwargs`) and overrides `_clean`:
 
 ```python
->>> from quantlab.dataset.config import BaseDatasetConfig
+>>> from quantlab.dataset.config import RawDatasetConfig
 >>> from quantlab.dataset.raw import RawDataset
 >>> from quantlab.dataset._support.cleaning import clean_membership_panel
 >>> class InIndexDataset(RawDataset):
@@ -424,7 +436,7 @@ and adds `anomaly_flag`. A panel without price columns derives from `RawDataset`
 ...     def _clean(self, data: xr.Dataset) -> xr.Dataset:
 ...         return clean_membership_panel(data)
 ...
->>> member_config = BaseDatasetConfig(zarr_file_path=str(root / "member.zarr"))
+>>> member_config = RawDatasetConfig(zarr_file_path=str(root / "member.zarr"))
 >>> InIndexDataset(member_config).from_raw_data().save()
 >>> InIndexDataset(member_config).panel("2024-01-02", "2024-01-04")["is_member"].to_pandas()
 symbol       AAA   BBB
@@ -443,19 +455,103 @@ point-in-time rule, the trading calendar, the axes and the windows.
 ### Datasets that build nothing
 
 A dataset that converts no raw files derives from the read root alone and has no build
-methods to refuse.
+methods to refuse. Its config holds no build dates, `symbols` or `kwargs` either: those
+bound only a raw build and live on
+{py:class}`~quantlab.dataset.config.RawDatasetConfig`. The root config,
+{py:class}`~quantlab.dataset.config.BaseDatasetConfig`, holds the store path and the
+`name` the config setter fills, and the root class reads the Zarr store at that path
+between the requested dates.
 
-- A leaf whose bars do not come from its own Zarr store (a panel held in memory, a store
-  written from another dataset) does not override `panel`. It overrides
-  `_open_bars(start, end)`, which returns every symbol and variable from `start` to `end`,
-  and `_resamples_on_read()` when `panel` should resample those bars; `panel` applies the
-  query, the resample and the run record.
-  {py:class}`~quantlab.dataset.memory.FrameDataset` is the example.
-- A *view* only composes other datasets. It overrides `panel`, passes the request on,
-  records nothing itself and declares the datasets it reads with `inputs()`. Its
-  `store_path` is `None`, `store_uses()` declares nothing of its own, and `stores()` names
-  its inputs' stores. A component the view's store is only built from is declared a source
-  (`BuiltFrom`), not read on a day. See [Internals](internals.md#date-ranged-stores).
+Such a leaf overrides only the members whose read changes:
+
+- Bars that come from somewhere else (a panel held in memory, a store written from another
+  dataset, a store read under a prefix): override `_open_bars(start, end)`, which returns
+  every symbol and variable from `start` to `end`, not `panel`, which applies the query
+  and the run record. Override `_calendar`, `head` and `stored_symbols` too when they
+  would otherwise read a store the leaf does not have, and `_to_kunquant` to export its
+  columns. {py:class}`~quantlab.dataset.factor_store.FactorStoreDataset` puts a prefix on
+  every output this way; {py:class}`~quantlab.dataset.memory.FrameDataset` opens no store
+  at all (its `_read_store()` is `None`).
+- A store that can be stale: refuse it where it is opened (`_open_store`, `_open_bars`),
+  as the mapped bars refuse a day mapped by a ticker map that has since changed, and
+  record what the values do not show (the map's rules) in `_build_settings()`.
+- Config fields of its own: check them in `_normalize_config` and reset derived state in
+  `_on_config_installed`, as for a raw-built leaf (see Config checks above).
+- A panel held in memory also defines its identity: `__init__`, `__eq__` and `copy`, and
+  `persist_with_run`/`resolve_run_config` to write the panel with a run and read it back.
+
+[Internals](internals.md#dataset-leaves) describes the default read and every kind of
+override. A *view* only reads other datasets and keeps no store; it inherits
+{py:class}`~quantlab.dataset.view.DatasetView` (see [A dataset view](#a-dataset-view)).
+
+### A dataset view
+
+A dataset view reads other datasets, its inputs, keeps no store and drops in wherever the
+dataset it reads is used: a roster cut, a merge, a bad-print mask.
+{py:class}`~quantlab.dataset.view.DatasetView` is its root class, as `FactorView` and
+`PredictorView` are in the factor and model layers. A view:
+
+1. inherits `DatasetView` and declares `config_cls`, a frozen config that holds its inputs in
+   component fields (a `name` field and nothing else is required; a view reads no date
+   field);
+2. declares its inputs with `inputs()`, in order;
+3. defines `panel`, the one abstract member: what the view changes about its inputs' panels;
+4. overrides only the other members it changes.
+
+With one input, `DatasetView` by default answers every other member of the read interface
+from that input, until the view overrides it (step 4): the calendar (`_calendar`, and through it `calendar`, `bar_before`, `bar_after`),
+`resample_labels`, `ticker_lookup`, `stored_symbols`, `head`, `own_names`,
+`shared_name_map`, `tradable_bars`, `delisting_bars`, `_own_delisting_symbols` and the
+KunQuant export (`_to_kunquant`). A market rule added to `MarketDataset` later reaches the
+view without an edit. A view that reads a second dataset only for something it defines
+itself (the membership `RosterDataset` cuts by) overrides `_source()` to name the input it
+forwards to.
+
+With several inputs there is no input to answer from, so each of those members raises
+`NotImplementedError`, naming the member and the view, until the view defines it. A view
+of several inputs defines every forwarded member: `MergedDataset` answers the calendar as
+its inputs' union and each market rule by the input holding the symbol. A subclass of such
+a view (`BadPrintMaskedDataset` under `MergedDataset`) inherits those answers and changes
+only `panel`.
+
+`DatasetView` also decides the store: `store_path` is `None`, `store_uses()` declares no
+store of its own (its inputs declare the stores it reads, so `stores()` names them; a
+component it holds that is not an input is declared `BuiltFrom`).
+
+```python
+from dataclasses import dataclass
+
+import xarray as xr
+
+from quantlab.core.component import component
+from quantlab.core.config import FrozenConfig
+from quantlab.dataset.base import MarketDataset
+from quantlab.dataset.view import DatasetView
+
+
+@dataclass(kw_only=True, frozen=True)
+class ScaledDatasetConfig(FrozenConfig):
+    dataset: MarketDataset = component()
+    scale: float = 1.0
+    name: str | None = None
+
+
+class ScaledDataset(DatasetView):
+    """Every variable of the input times ``scale``."""
+
+    config_cls = ScaledDatasetConfig
+
+    def inputs(self):
+        return (self.config.dataset,)
+
+    def panel(self, start, end, symbols=None, variables=None) -> xr.Dataset:
+        return self.config.dataset.panel(start, end, symbols, variables) * self.config.scale
+```
+
+`tests/test_dataset_view.py` locks these rules: it collects the forwarded members from
+`MarketDataset` itself, checks the one-input forward and the several-input raise for each,
+that `MergedDataset` defines every one, and that the single-input views define only what
+they change. See [Internals](internals.md#dataset-views).
 
 ## A storage backend
 
@@ -535,8 +631,8 @@ round trip give:
 ```
 
 The build path (`from_raw_data`, `save`) goes through `data_backend`. The read path opens
-the store through a fresh instance of `type(data_backend)`, and `copy()` and `resample()`
-give the copy a backend of the same type, so a backend class must construct without
+the store through a fresh instance of `type(data_backend)`, and `copy()` gives the copy a
+backend of the same type, so a backend class must construct without
 arguments. For a medium that does not hold an xarray object, implement all nine methods;
 {py:class}`~quantlab.backend.parquet.PlBackend` is the reference for a table-shaped medium,
 and its `get_xarray_dataset(indexes)` shows how to turn named columns into dimensions.
@@ -908,7 +1004,7 @@ in training), `_transform_feature` (clip to ±3, NaN to 0), `_transform_target` 
 (`epochs`, `lr`, `batch_size`, `num_workers`, `pin_memory`, `prefetch`, `panel_device`,
 `panel_dtype`, `early_stopping`, `early_stopping_patience`), so read the head's own keys
 by name rather than splatting the dict into the network. {py:mod}`quantlab.model.torch_training`
-has helpers: `masked_mse`, `cs_rank_norm`, `cs_zscore`, `drop_extreme` and
+has helpers: `masked_mse`, `cs_rank_norm`, `cs_rank_gauss`, `cs_zscore`, `drop_extreme` and
 `TrainLossThreshold`.
 
 {py:class}`~quantlab.model.predefined.gats.GATsRegressor` and

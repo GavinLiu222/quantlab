@@ -2,11 +2,12 @@
 
 This page describes the machinery that keeps quantlab's long-running jobs safe to interrupt
 and its results safe to trust: how downloads and conversions resume, how a store is rebuilt
-without losing the old one, how files are written atomically, how date-ranged stores and
-store declarations work, how data fingerprints and code records tie a run to what it read
-and ran, and how models and ensembles share one evaluation and one walk-forward training.
-It is for contributors who change these parts or add a component that has to cooperate
-with them. The behaviour users see is described in the [user guide](../user-guide/index.md).
+without losing the old one, how files are written atomically, how date-ranged stores,
+store declarations, dataset leaves and views work, how data fingerprints and code records tie a
+run to what it read and ran, and how models and ensembles share one evaluation and one
+walk-forward training. It is for contributors who change these parts or add a component
+that has to cooperate with them. The behaviour users see is described in the
+[user guide](../user-guide/index.md).
 
 ## Resumable downloads
 
@@ -229,6 +230,79 @@ daily data update reads all three and extends a component's own `owns`. An `owns
 carries a {py:class}`~quantlab.core.store_uses.RangedStoreHandle` (`store_range()`,
 `extend(end)`); `Factor` and `RiskStore` are its two adapters.
 
+## Dataset leaves
+
+A dataset is a *leaf* or a *view*. A leaf answers `panel` from a store of its own, or a
+panel held in memory; a store written from other datasets is still a leaf's. A view reads
+other datasets, its inputs, and keeps no store. The dataset root class
+({py:class}`~quantlab.dataset.base.BaseDataset`) describes a leaf only: its `store_path`
+and `store_uses` read the leaf's config, and its `inputs()` returns nothing, so the store
+walk reaches every dataset. A dataset is read on the bars of its store and is not
+resampled; a factor is (`Factor.resample`), cutting its bars as the dataset's
+`resample_labels` says.
+
+The root class's defaults are the read of a Zarr leaf. Its config
+({py:class}`~quantlab.dataset.config.BaseDatasetConfig`) holds the store path and the
+`name`. `panel(start, end, symbols, variables)` asks `_open_bars(start, end)` for every
+symbol and variable between the dates, which opens `_read_store()` (the `store_path`)
+through `_open_store` and slices it; `panel` then applies the symbol and variable query
+and records the read, folding `_build_settings()` into its digest. The calendar,
+`stored_symbols` and `head` read the same store. A leaf built from raw data adds the build
+path and the build fields (the dates, `symbols`, `kwargs`) through
+{py:class}`~quantlab.dataset.raw.RawDataset` and
+{py:class}`~quantlab.dataset.config.RawDatasetConfig`; the root has neither.
+
+A leaf overrides a root member only to change how it reads, never to escape a default
+that does not fit it. The overrides fall into a few kinds:
+
+| What the leaf changes | Members it overrides | Examples |
+|---|---|---|
+| Its config: fields to check, state derived from them | `_normalize_config`, `_on_config_installed` | most leaves built from raw data check the fields their config class adds and drop what they cached from the previous config |
+| Where its bars come from | `_open_bars`, `_open_store`, `_read_store`, `_calendar`, `head`, `stored_symbols` | the factor store reads every output under a prefix; the mapped bars refuse a day mapped by a ticker map that has since changed; the in-memory panel opens no store |
+| What a read records | `_build_settings` | the Trade bars and the NBBO bars record the settings their bars were cut with |
+| A market rule or the KunQuant export | `tradable_bars`, `ticker_lookup`, `resample_labels`, `_to_kunquant` | the Sharadar bars need a real trade to be tradable; the Trade bars cut daily bars by exchange session |
+| Its identity, for a panel held in memory | `__init__`, `__eq__`, `copy`, `persist_with_run`, `resolve_run_config` | {py:class}`~quantlab.dataset.memory.FrameDataset` holds its panel, compares it, and writes it with a run |
+
+Setting `config_cls` (the config class a leaf rebuilds from) or `COLUMN_MAP` (its own
+column names mapped to the shared ones) declares the leaf and is not an override.
+`tests/test_dataset_leaf_overrides.py` holds the frozen table of every leaf's overrides,
+each with its reason, and fails on an override the table does not list; writing a leaf is
+described in [Extending quantlab](extending.md#a-dataset).
+
+## Dataset views
+
+Every view inherits
+{py:class}`~quantlab.dataset.view.DatasetView`, a `MarketDataset` that holds the view
+decisions:
+
+- `store_path` is `None`: a view keeps no store;
+- `store_uses()` declares no store of its own; its inputs declare the stores it reads, and
+  the walk reaches them, so `stores()` names its inputs' stores;
+- the config normalisation sets only `name`, as on the root class; a view's config holds
+  only its inputs and its own options.
+
+The forwarded members are the read interface of `MarketDataset` except `panel`: the
+calendar (`_calendar`, behind `calendar`, `bar_before` and `bar_after`),
+`resample_labels`, `ticker_lookup`, `stored_symbols`, `head`, `own_names`,
+`shared_name_map`, `tradable_bars`, `delisting_bars`, `_own_delisting_symbols` and
+`_to_kunquant`. With one input, `DatasetView` by default answers each from the input
+`_source()` returns, and a view overrides the members it changes (`RosterDataset` its
+stored symbols, `PermatickerDataset` its symbol axis, calendar and rows). With several
+inputs `_source()` returns `None` and each member raises `NotImplementedError` naming the
+member and the view: the calendar of a merge is a union and a market rule belongs to the
+input holding the symbol, so no single-input default is right there. `panel` is abstract.
+
+Whether a dataset delists symbols by a rule of its own is the explicit hook
+`_own_delisting_symbols()`, empty on `MarketDataset`. A leaf with such a rule returns the
+symbols it rules (a leaf that overrides `delisting_bars` and not the hook raises
+`TypeError` when its class is defined), a single-input view forwards the hook, and
+`MergedDataset` combines its inputs' answers, so a leaf's rule survives any stack of views.
+Views compose: a roster over
+a bad-print mask over a merge answers its calendar, market rules and store uses through
+each layer. `tests/test_dataset_view.py` locks the forwarding rule and
+`tests/test_dataset_hierarchy.py` the class layout; writing a view is described in
+[Extending quantlab](extending.md#a-dataset-view).
+
 ## Data fingerprints
 
 A run is reproducible only if the data under it has not changed, and data does change:
@@ -255,8 +329,7 @@ Nothing decides what to fingerprint: data is recorded where it is read. A run op
 while it is open:
 
 - `BaseDataset.panel(start, end, symbols=None, variables=None)` on a leaf dataset, keyed by
-  the store the leaf declares it reads (its own, or the source store while a resampled
-  dataset resamples on read);
+  the store the leaf declares it reads;
 - `Factor.read(start, end)`, a factor store;
 - `RiskStore.read(start, end)`, the regression or estimate store of a factor risk model,
   read by the decision inputs for the covariance estimator and by the backtest's factor

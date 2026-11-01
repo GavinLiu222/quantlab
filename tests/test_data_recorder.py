@@ -331,31 +331,6 @@ def test_a_merge_input_reads_its_own_name_of_a_shared_variable(spot_kline_zarr):
     assert recorder.records["held"][0]["variables"] == ["close"]
 
 
-def test_a_resample_view_records_the_source_store_it_read(tmp_path):
-    from quantlab.dataset.config import DatasetConfig
-    from quantlab.dataset.spot import SpotKlineDataset
-
-    timestamps = pd.date_range("2024-01-01", periods=5 * 24 * 60, freq="min")
-    store = tmp_path / "klines.zarr"
-    xr.Dataset(
-        {"Close": (["timestamp", "symbol"], np.arange(len(timestamps), dtype=float)[:, None])},
-        coords={"timestamp": timestamps, "symbol": ["AUSDT"]},
-    ).to_zarr(store, mode="w")
-    minute = SpotKlineDataset(DatasetConfig(
-        raw_data_dir_path=str(tmp_path / "raw"), zarr_file_path=str(store),
-        market="crypto_spot", frequency="1m",
-    ))
-    daily = minute.resample("1d", "last")
-
-    with DataRecorder() as recorder:
-        daily.panel("2024-01-02", "2024-01-03")
-
-    (key,) = recorder.records
-    assert key == f"SpotKlineDataset:{store}"  # the source store, not the sibling
-    (entry,) = recorder.records[key]
-    assert entry["n_timestamps"] > 2  # source minute bars, not resampled days
-
-
 def test_a_failing_diagnostic_after_a_successful_run_only_warns(warnings_logged, monkeypatch):
     held = FrameDataset(_frame())
 

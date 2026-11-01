@@ -81,7 +81,7 @@ class SharadarFundamentalsDataset(ReleasePanelDataset):
 
     Parameters
     ----------
-    dataset_config : SharadarFundamentalsConfig
+    config : SharadarFundamentalsConfig
         ``raw_data_dir_path`` is ``<download-dir>/sharadar``, holding the
         ``sf1``, ``sep`` (the calendar), ``tickers`` and ``indicators`` raw
         tables; ``dimension`` is ``"ARQ"`` or ``"ART"``.

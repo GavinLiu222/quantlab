@@ -38,6 +38,7 @@ the common stocks of a price store) names that store in `kwargs` and has no `cac
 | {py:class}`~quantlab.dataset.common_stock.CommonStockConstituentDataset` | the whole market | as the price store | a price store: every security from its first to its last priced bar |
 | {py:class}`~quantlab.dataset.sharadar.membership.SharadarSP500ConstituentDataset` | S&P 500 | permaticker | Sharadar's S&P 500 table |
 | {py:class}`~quantlab.dataset.estu.EstuConstituentDataset` | estimation universe | as the store | the `estu` variable of a BarraStyle store |
+| {py:class}`~quantlab.dataset.liquid.LiquidConstituentDataset` | a liquid universe | as the universe | another membership panel and a price dataset: its members whose median dollar volume before the bar clears a floor |
 | {py:class}`~quantlab.dataset.constituent.SP500ConstituentDataset`, {py:class}`~quantlab.dataset.constituent.Nasdaq100ConstituentDataset` | S&P 500, Nasdaq-100 | ticker | Wikipedia change logs, from 1976-07-01 and 2007-02-01 |
 | {py:class}`~quantlab.dataset.constituent.CrspSP500ConstituentDataset`, {py:class}`~quantlab.dataset.constituent.CompustatNasdaq100ConstituentDataset`, {py:class}`~quantlab.dataset.constituent.CrspMarketConstituentDataset` | S&P 500, Nasdaq-100, CRSP market | PERMNO | CRSP reference tables already on disk (see [WRDS](wrds.md)) |
 
@@ -81,6 +82,59 @@ whether it trades again is not yet known. `update()` appends new bars and keeps 
 ones, so those days stay non-member (what was known at the time). The shared store is
 `universe/sharadar/sharadar_common_stock_membership`, kept current by the
 [daily data update](data-update.md).
+
+**Liquid universe.** `LiquidConstituentDataset` keeps the members of another universe
+(`members`, such as the us3000 `EstuConstituentDataset`) whose median dollar volume, the
+unadjusted `close` times `volume`, over the `window` bars before t is at least `floor`.
+Bar t is not read, so membership at t is known at t's open. A bar without a price (a halt,
+or a bad print masked by `BadPrintMaskedDataset`, which is how `prices` should be passed)
+has no dollar volume rather than zero, while a priced bar on which nothing traded counts as
+$0. Fewer than `min_bars` priced bars in the window, or a member the prices do not hold, is
+not a member; `price_floor`, off by default, also requires the previous bar's price.
+The prices must be daily, one bar a date; intraday bars are refused. The panel runs to the
+last price bar, so days on which no member clears the floor read `False` for every symbol,
+and a floor no member ever clears gives a panel without symbols, on which every symbol reads
+`False`.
+Set the floor from the book the universe has to carry, not from backtest returns: an
+order of at most 5% of a day's volume needs a floor of 20 times the position per name.
+The config is a {py:class}`~quantlab.dataset.config.LiquidConstituentDatasetConfig`
+(defaults `window=60`, `min_bars=45`):
+
+```python
+>>> from quantlab.dataset.config import FrameDatasetConfig, LiquidConstituentDatasetConfig
+>>> from quantlab.dataset.liquid import LiquidConstituentDataset
+>>> from quantlab.dataset.memory import FrameDataset
+>>> days = pd.bdate_range("2024-01-01", periods=8)
+>>> _ = xr.Dataset(
+...     {"close": (("timestamp", "symbol"), np.ones((8, 2))),
+...      "volume": (("timestamp", "symbol"), np.tile([200.0, 100.0], (8, 1)))},
+...     coords={"timestamp": days, "symbol": np.array([1, 2])},
+... ).to_zarr("data/prices.zarr", mode="w")
+>>> universe = CommonStockConstituentDataset(ConstituentDatasetConfig(
+...     zarr_file_path="data/universe.zarr",
+...     kwargs={"price_store": "data/prices.zarr"},
+... )).update()
+>>> liquid = LiquidConstituentDataset(LiquidConstituentDatasetConfig(
+...     zarr_file_path="data/liquid.zarr",
+...     members=universe, prices=FrameDataset(FrameDatasetConfig(zarr_file_path="data/prices.zarr")),
+...     floor=150.0, window=6, min_bars=3,
+... ))
+>>> liquid.from_raw_data().get_xarray_dataset()["is_member"].sel(timestamp=days).to_pandas()
+symbol          1
+timestamp
+2024-01-01  False
+2024-01-02  False
+2024-01-03  False
+2024-01-04   True
+2024-01-05   True
+2024-01-08   True
+2024-01-09   True
+2024-01-10   True
+```
+
+Symbol `2` trades $100 a bar and never clears the floor, so it is not on the symbol axis.
+The shared store `universe/us3000/membership_liquid_1m` is the us3000 at a $1M floor over
+the bad-print-masked SEP store, kept current by the [daily data update](data-update.md).
 
 ### Properties of a membership panel
 

@@ -75,7 +75,7 @@ class SP500ConstituentDataset(IndexConstituentDataset):
 
     Parameters
     ----------
-    dataset_config : FileConstituentDatasetConfig
+    config : FileConstituentDatasetConfig
         Output Zarr path, cache directory, date range and ``as_of`` date.
 
     Examples
@@ -96,10 +96,6 @@ class SP500ConstituentDataset(IndexConstituentDataset):
 
     #: The config class a saved ``config.json`` is rebuilt with.
     config_cls = FileConstituentDatasetConfig
-
-    def __init__(self, dataset_config: FileConstituentDatasetConfig):
-        """Initialize the dataset; see the class docstring for parameters."""
-        super().__init__(dataset_config)
 
     def _pit_coverage_start(self, config) -> str:
         """Return the fetcher's coverage start, ``"1976-07-01"``."""
@@ -127,7 +123,7 @@ class Nasdaq100ConstituentDataset(IndexConstituentDataset):
 
     Parameters
     ----------
-    dataset_config : FileConstituentDatasetConfig
+    config : FileConstituentDatasetConfig
         Output Zarr path, cache directory, date range and ``as_of`` date.
 
     Examples
@@ -147,10 +143,6 @@ class Nasdaq100ConstituentDataset(IndexConstituentDataset):
 
     #: The config class a saved ``config.json`` is rebuilt with.
     config_cls = FileConstituentDatasetConfig
-
-    def __init__(self, dataset_config: FileConstituentDatasetConfig):
-        """Initialize the dataset; see the class docstring for parameters."""
-        super().__init__(dataset_config)
 
     def _pit_coverage_start(self, config) -> str:
         """Return the fetcher's coverage start, ``"2007-02-01"``."""
@@ -179,7 +171,7 @@ class CrspSP500ConstituentDataset(IndexConstituentDataset):
 
     Parameters
     ----------
-    dataset_config : FileConstituentDatasetConfig
+    config : FileConstituentDatasetConfig
         Output Zarr path, CRSP reference directory (``cache_dir``) and date
         range. ``kwargs["allow_unlinked"]`` is passed to ``CrspMembership``.
 
@@ -204,10 +196,6 @@ class CrspSP500ConstituentDataset(IndexConstituentDataset):
 
     #: The config class a saved ``config.json`` is rebuilt with.
     config_cls = FileConstituentDatasetConfig
-
-    def __init__(self, dataset_config: FileConstituentDatasetConfig):
-        """Initialize the dataset; see the class docstring for parameters."""
-        super().__init__(dataset_config)
 
     def _pit_coverage_start(self, config) -> str:
         """Return ``CrspMembership``'s coverage start for the S&P 500."""
@@ -248,7 +236,7 @@ class CompustatNasdaq100ConstituentDataset(IndexConstituentDataset):
 
     Parameters
     ----------
-    dataset_config : FileConstituentDatasetConfig
+    config : FileConstituentDatasetConfig
         Output Zarr path, CRSP reference directory (``cache_dir``), date
         range and optional ``kwargs["allow_unlinked"]``.
 
@@ -271,10 +259,6 @@ class CompustatNasdaq100ConstituentDataset(IndexConstituentDataset):
 
     #: The config class a saved ``config.json`` is rebuilt with.
     config_cls = FileConstituentDatasetConfig
-
-    def __init__(self, dataset_config: FileConstituentDatasetConfig):
-        """Initialize the dataset; see the class docstring for parameters."""
-        super().__init__(dataset_config)
 
     def _pit_coverage_start(self, config) -> str:
         """Return ``CrspMembership``'s coverage start for the Nasdaq-100."""
@@ -314,7 +298,7 @@ class CrspMarketConstituentDataset(IndexConstituentDataset):
 
     Parameters
     ----------
-    dataset_config : FileConstituentDatasetConfig
+    config : FileConstituentDatasetConfig
         Output Zarr path, CRSP reference directory (``cache_dir``), date
         range and optional ``kwargs["security_filter"]``.
 
@@ -338,10 +322,6 @@ class CrspMarketConstituentDataset(IndexConstituentDataset):
 
     #: The config class a saved ``config.json`` is rebuilt with.
     config_cls = FileConstituentDatasetConfig
-
-    def __init__(self, dataset_config: FileConstituentDatasetConfig):
-        """Initialize the dataset; see the class docstring for parameters."""
-        super().__init__(dataset_config)
 
     def _pit_coverage_start(self, config) -> str:
         """Return ``PIT_COVERAGE_START``, the first date CRSP has daily prices."""

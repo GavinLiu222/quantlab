@@ -39,11 +39,10 @@ returns the dense ``(timestamp, symbol)`` panel the store holds.
   conversion into a store recorded with other settings is refused before
   anything is written. Each bar interval has its own store
   (``trade_bar_store_name``).
-- **Coarser bars come from Resample.** Each variable declares its
-  aggregation (``DEFAULT_RESAMPLE_HOW``) and bars are cut per session, right
-  closed and labelled at their end, so ``resample("5m")`` of the one-minute
-  store equals converting the trades at 5m. ``"1d"`` gives one bar per
-  session, labelled with its date.
+- **Coarser bars are cut per session.** ``resample_labels`` cuts the bars
+  of a factor resampled from this store per session, right closed and
+  labelled at their end, as converting the trades at the coarser interval
+  would. ``"1d"`` gives one bar per session, labelled with its date.
 
 Convert one day per window (``granularity="day"``): a day of the whole
 market is tens of millions of trades.
@@ -133,18 +132,6 @@ COUNTING_RULES = {
     "close_auction_cutoff_seconds": CLOSE_AUCTION_CUTOFF_NS // 1_000_000_000,
 }
 
-#: Each Trade bar variable's aggregation onto coarser bars.
-TRADE_BAR_RESAMPLE_HOW = {
-    "open": "first",
-    "high": "max",
-    "low": "min",
-    "close": "last",
-    "open_auction_price": "first",
-    "close_auction_price": "last",
-    **{name: "sum" for name in TRADE_BAR_SUMS},
-}
-
-
 def no_trade_fills() -> dict[str, float]:
     """Return the values of a Trade bar column without a trade: 0 volumes and counts.
 
@@ -207,7 +194,7 @@ class MassiveTradeBarDataset(StockDataset):
 
     Parameters
     ----------
-    dataset_config : MassiveTradeBarsDatasetConfig
+    config : MassiveTradeBarsDatasetConfig
         The raw tier, the store, the date range, the bar size, the session
         window and the roster.
 
@@ -229,9 +216,6 @@ class MassiveTradeBarDataset(StockDataset):
 
     #: The data type the panel is built from.
     DATA_TYPE = "trades"
-
-    #: ``resample(freq)`` aggregates each variable this way unless told otherwise.
-    DEFAULT_RESAMPLE_HOW = TRADE_BAR_RESAMPLE_HOW
 
     #: No ``"rebuild"``: a ticker a day brings has no trades before it, so a
     #: store is only refused or extended (and rebuilding years of the whole

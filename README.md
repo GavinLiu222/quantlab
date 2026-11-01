@@ -41,7 +41,7 @@ A study in quantlab runs through six stages. Each stage is a root class in its o
 | Stage | What it does | Main classes | Output |
 |-------|--------------|--------------|--------|
 | 1. Data sources | Resumable downloads from WRDS (CRSP, TAQ), Sharadar, FRED, Tiingo and Alpaca, or your own DataFrame | `DataSourceRegistry`, `scripts/wrds/`, `scripts/sharadar/` | Raw files |
-| 2. Dataset | Turns raw bars into a panel; point-in-time universes, delisted stocks kept, resampling and merging | `MarketDataset`, `CrspStockDataset`, `FrameDataset` | Price panel |
+| 2. Dataset | Turns raw bars into a panel; point-in-time universes, delisted stocks kept, merging | `MarketDataset`, `CrspStockDataset`, `FrameDataset` | Price panel |
 | 3. Factors and labels | Compiled factor graphs (Alpha158, Alpha101, Barra-style exposures, neutralization) and forward-return labels | `Alpha158Stock`, `BarraStyle`, `Return` | Factor panel |
 | 4. Return model | Tree models and neural networks behind one interface, seed and model ensembles, purged walk-forward CV | `XGBoostRegressor`, `RealMLPRegressor`, `GATsRegressor`, `SeedEnsemble` | Checkpoint, `run.json` |
 | 5. Portfolio | Predictions to target weights: TopN, or mean-variance with a Ledoit-Wolf or USE4 factor risk model | `TopNConstructor`, `MeanVarianceOptimizer` | Target weights |

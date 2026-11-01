@@ -241,7 +241,8 @@ class QlibLibraryHead(LibraryModel):
         Raises
         ------
         ValueError
-            If it is set to anything but ``"cs_rank"``, ``"cs_zscore"`` or None.
+            If it is set to anything but ``"cs_rank"``, ``"cs_rank_gauss"``,
+            ``"cs_zscore"`` or None.
 
         Examples
         --------

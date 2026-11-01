@@ -40,7 +40,7 @@
 <circle cx="320.0" cy="347" r="3.5" fill="#0369a1"/>
 <text x="332.0" y="352.0" font-size="15" fill="#1e293b" font-weight="400" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', Helvetica, Arial, sans-serif">delistings kept</text>
 <circle cx="320.0" cy="381" r="3.5" fill="#0369a1"/>
-<text x="332.0" y="386.0" font-size="15" fill="#1e293b" font-weight="400" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', Helvetica, Arial, sans-serif">resample · merge</text>
+<text x="332.0" y="386.0" font-size="15" fill="#1e293b" font-weight="400" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', Helvetica, Arial, sans-serif">roster cut · merge</text>
 <rect x="312.0" y="422" width="202.0" height="40" rx="10" fill="#f0f9ff" stroke="#0369a1" stroke-opacity="0.35"/>
 <text x="413.0" y="448.0" font-size="14" fill="#0369a1" font-weight="600" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', Helvetica, Arial, sans-serif">price panel · Zarr</text>
 <line x1="531.0" y1="315.0" x2="553.0" y2="315.0" stroke="#64748b" stroke-width="2.5" marker-end="url(#ar)"/>

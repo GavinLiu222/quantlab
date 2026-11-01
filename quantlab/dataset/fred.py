@@ -60,7 +60,7 @@ class FredRateDataset(RawDataset):
 
     Parameters
     ----------
-    dataset_config : FredRateConfig
+    config : FredRateConfig
         ``raw_data_dir_path`` is the FRED raw tier; ``series`` picks the
         series, which is also the panel's one symbol.
 
